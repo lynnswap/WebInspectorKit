@@ -38,8 +38,9 @@ struct DOMContainerTests {
             reveal: .selectOnly
         )
 
-        #expect(await waitUntil {
-            viewController.contentUnavailableConfiguration != nil
+        #expect(
+            await waitUntil {
+                viewController.contentUnavailableConfiguration != nil
                 && viewController.collectionView.numberOfSections == 0
         })
         await fixture.close()
@@ -61,8 +62,9 @@ struct DOMContainerTests {
             nodeID: "body"
         )
 
-        #expect(await waitUntil {
-            fixture.model.selectedNodeID == nil
+        #expect(
+            await waitUntil {
+                fixture.model.selectedNodeID == nil
                 && viewController.contentUnavailableConfiguration != nil
                 && viewController.collectionView.numberOfSections == 0
         })
@@ -129,8 +131,9 @@ struct DOMContainerTests {
             parameters: try webInspectorTestJSONObject(#"{"nodeId":42}"#)
         )
 
-        #expect(await waitForObservedCondition(
-            deliveries: { [selectionDelivery] },
+        #expect(
+            await waitForObservedCondition(
+                deliveries: { [selectionDelivery] },
             sample: {
                 fixture.model.selectedNodeID == selectedNodeID
                     && treeView.routedSelectedNodeIDForTesting == selectedNodeID
@@ -162,8 +165,9 @@ struct DOMContainerTests {
                 #"{"parentNodeId":3,"nodeId":42}"#
             )
         )
-        #expect(await waitForObservedCondition(
-            deliveries: { [selectionDelivery] },
+        #expect(
+            await waitForObservedCondition(
+                deliveries: { [selectionDelivery] },
             sample: {
                 fixture.model.selectedNodeID == nil
                     && treeView.routedSelectedNodeIDForTesting == nil
@@ -209,14 +213,17 @@ struct DOMContainerTests {
             DOMElementStyleSectionHeaderText.fullDisplayText(for: location)
                 == "https://styles.example/assets/result-card.css:28:22165"
         )
-        #expect(DOMElementStyleSectionHeaderText.displayText(
-            for: .init(sourceURL: "styles.css", line: 1)
+        #expect(
+            DOMElementStyleSectionHeaderText.displayText(
+                for: .init(sourceURL: "styles.css", line: 1)
         ) == "styles.css:2")
-        #expect(DOMElementStyleSectionHeaderText.displayText(
-            for: .init(sourceURL: "styles.css", line: 0, column: 80)
+        #expect(
+            DOMElementStyleSectionHeaderText.displayText(
+                for: .init(sourceURL: "styles.css", line: 0, column: 80)
         ) == "styles.css:1")
-        #expect(DOMElementStyleSectionHeaderText.displayText(
-            for: .init(sourceURL: "styles.css", line: 0, column: 81)
+        #expect(
+            DOMElementStyleSectionHeaderText.displayText(
+                for: .init(sourceURL: "styles.css", line: 0, column: 81)
         ) == "styles.css:1:82")
     }
 
@@ -375,8 +382,9 @@ private final class DOMContainerFixture {
     }
 
     func nodeID(named localName: String) throws -> DOMNode.ID {
-        try #require(model.nodes.snapshot?.itemIDs.first { id in
-            runtime.container.mainContext.model(for: id)?.localName == localName
+        try #require(
+            model.nodes.snapshot?.itemIDs.first { id in
+                runtime.container.mainContext.model(for: id)?.localName == localName
         })
     }
 }
@@ -384,7 +392,6 @@ private final class DOMContainerFixture {
 @MainActor
 private final class DOMPickerSelectionFixture {
     enum FixtureError: Error {
-        case domFeatureUnavailable
         case domFeatureUpdatesEnded
     }
 
@@ -441,8 +448,9 @@ private final class DOMPickerSelectionFixture {
     }
 
     func nodeID(rawValue: String) throws -> DOMNode.ID {
-        try #require(model.nodes.snapshot?.itemIDs.first {
-            $0.canonicalStorage.rawNodeID.rawValue == rawValue
+        try #require(
+            model.nodes.snapshot?.itemIDs.first {
+                $0.canonicalStorage.rawNodeID.rawValue == rawValue
         })
     }
 
@@ -476,10 +484,10 @@ private final class DOMPickerSelectionFixture {
             switch state {
             case .ready:
                 return
-            case .unavailable:
-                throw FixtureError.domFeatureUnavailable
-            case .disabled, .synchronizing, .recovering:
+            case .disabled, .synchronizing:
                 continue
+            case .unsupported:
+                throw FixtureError.domFeatureUpdatesEnded
             }
         }
         throw FixtureError.domFeatureUpdatesEnded

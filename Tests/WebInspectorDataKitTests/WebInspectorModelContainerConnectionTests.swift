@@ -93,7 +93,7 @@ func webViewAttachmentReservationHasOneContainerOwner() async throws {
 
 @MainActor
 @Test
-func networkBootstrapFailureRemainsFeatureLocal() async throws {
+func networkBootstrapFailureFailsTheConnection() async throws {
     let container = WebInspectorModelContainer(
         configuration: .init(enabledFeatures: [.dom, .network])
     )
@@ -114,26 +114,70 @@ func networkBootstrapFailureRemainsFeatureLocal() async throws {
         await waitForFeature(.dom, toBecomeReadyIn: container)
 
         networkFailure.open()
-        let error = await waitForFeatureToBecomeUnavailable(
-            .network,
-            in: container
-        )
-
-        guard case let .bootstrap(description) = error else {
-            Issue.record("Expected a Network bootstrap failure, got \(error).")
+        let description = await waitForContainerFailure(in: container)
+        #expect(description.message.contains("injected Network bootstrap failure"))
+        guard case .failed = container.state else {
+            Issue.record("Network bootstrap failure did not fail the connection: \(container.state).")
             await container.close()
             return
         }
-        #expect(description.message.contains("injected Network bootstrap failure"))
+        #expect(container.dom.state == .disabled)
+        #expect(container.network.state == .disabled)
+
+        await container.close()
+    }
+}
+
+@MainActor
+@Test
+func unsupportedNetworkCapabilityDoesNotFailSiblingFeatures() async throws {
+    let container = WebInspectorModelContainer(
+        configuration: .init(enabledFeatures: [.dom, .network])
+    )
+
+    try await withDataKitTestRuntime { runtime in
+        try await queueDOMAndNetworkStartup(on: runtime)
+        let networkUnsupported = await runtime.wire.deferFailure(
+            to: "Page.getResourceTree",
+            code: -32_601,
+            message: "'Page.getResourceTree' was not found"
+        )
+        await queueDOMAndNetworkTeardown(on: runtime)
+
+        try await container.attach(owning: runtime.proxy)
+        _ = await runtime.wire.observations.waitForCommands(
+            method: "Page.getResourceTree",
+            count: 1
+        )
+        await waitForFeature(.dom, toBecomeReadyIn: container)
+
+        networkUnsupported.open()
+        let requirements = await waitForFeatureToBecomeUnsupported(
+            .network,
+            in: container
+        )
+        #expect(requirements == ["Page.getResourceTree"])
         guard case .attached = container.state else {
-            Issue.record("Network bootstrap failure changed container state to \(container.state).")
+            Issue.record(
+                "Static Network unsupported state failed the container: \(container.state)."
+            )
             await container.close()
             return
         }
         guard case .ready = container.dom.state else {
-            Issue.record("Network bootstrap failure changed DOM state to \(container.dom.state).")
+            Issue.record("DOM did not remain ready: \(container.dom.state).")
             await container.close()
             return
+        }
+        await #expect(
+            throws: WebInspectorFetchError.featureUnsupported(
+                .network,
+                requirements: ["Page.getResourceTree"]
+            )
+        ) {
+            _ = try await container.mainContext.fetchIdentifiers(
+                WebInspectorFetchDescriptor<NetworkEntry>()
+            )
         }
 
         await container.close()
@@ -359,16 +403,33 @@ private func waitForFeature(
     preconditionFailure("The \(featureID.name) state stream closed before becoming ready.")
 }
 
-private func waitForFeatureToBecomeUnavailable(
+private func waitForFeatureToBecomeUnsupported(
     _ featureID: WebInspectorFeatureID,
     in container: WebInspectorModelContainer
-) async -> WebInspectorFeatureError {
-    var states = container.featureStateUpdates(for: featureID).makeAsyncIterator()
+) async -> [String] {
+    var states = container.featureStateUpdates(for: featureID)
+        .makeAsyncIterator()
     while let state = await states.next() {
-        if case let .unavailable(_, error) = state { return error }
+        if case let .unsupported(requirements) = state {
+            return requirements
+        }
     }
     preconditionFailure(
-        "The \(featureID.name) state stream closed before publishing unavailable."
+        "The \(featureID.name) state stream closed before becoming unsupported."
+    )
+}
+
+private func waitForContainerFailure(
+    in container: WebInspectorModelContainer
+) async -> WebInspectorFailureDescription {
+    var states = container.stateUpdates.makeAsyncIterator()
+    while let state = await states.next() {
+        if case let .failed(_, .native(description)) = state {
+            return description
+        }
+    }
+    preconditionFailure(
+        "The container state stream closed before publishing connection failure."
     )
 }
 

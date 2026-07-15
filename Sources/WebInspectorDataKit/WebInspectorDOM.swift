@@ -8,11 +8,6 @@ package enum WebInspectorDOMWireEvent: Sendable {
     case page(WebInspectorRoutedEvent<Page.Event>)
 }
 
-private struct WebInspectorDOMRecoveryRequest: Error, Sendable {
-    let reason: WebInspectorRecoveryReason
-    let fingerprint: WebInspectorRecoveryFingerprint
-}
-
 /// Sole semantic owner of DOM, CSS, highlight, and element-picker state.
 package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     package static let id = WebInspectorFeatureID.dom
@@ -91,10 +86,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     private var styleCommitWaiters: [CheckedContinuation<Void, any Error>] = []
     private var styleCommitCloseWaiters: [CheckedContinuation<Void, Never>] = []
     private var state: WebInspectorFeatureState = .disabled
-    private var recoveryBudget = WebInspectorFeatureRecoveryBudget()
     private var closeRequested = false
-    private var explicitRetryRequested = false
-    private var retryWaiter: CheckedContinuation<Void, Never>?
 
     private var pickerState: PickerState = .idle
     private var nextPickerOperationID: UInt64 = 0
@@ -116,101 +108,47 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         self.store = store
         closeRequested = false
         reopenStyleCommitGate()
-        explicitRetryRequested = false
-        recoveryBudget = WebInspectorFeatureRecoveryBudget()
         // Do not replace the reducers here: after detach they still describe
         // the last committed records that the next bootstrap must delete in
         // its atomic attachment-generation replacement transaction.
         currentBindingScope = nil
-        await publish(.synchronizing(generation: await currentGeneration()))
-
-        while !closeRequested {
-            do {
-                try await runOrderedScope()
-                return closeRequested ? .detached : .connectionFailed(
+        do {
+            try await publish(.synchronizing(generation: try await currentGeneration()))
+            try await runOrderedScope()
+            return closeRequested
+                ? .detached
+                : .connectionFailed(
                     connectionFailure(
                         code: "dom.scope.ended",
                         phase: "events",
                         message: "The DOM event scope ended unexpectedly."
                     )
                 )
-            } catch is CancellationError {
+        } catch is CancellationError {
+            return .detached
+        } catch let WebInspectorProxyError.unsupported(requirements) {
+            await orderedScope?.close()
+            orderedScope = nil
+            guard !closeRequested else { return .detached }
+            do {
+                try await publish(
+                    .unsupported(requirements: requirements.sorted())
+                )
                 return .detached
-            } catch let request as WebInspectorDOMRecoveryRequest {
-                await orderedScope?.close()
-                orderedScope = nil
-                let generation = await currentGeneration()
-                let decision = recoveryBudget.consume(
-                    request.fingerprint,
-                    generation: generation
-                )
-                guard decision == .retry else {
-                    let summary = WebInspectorFailureDescription(
-                        code: "dom.recovery.exhausted",
-                        phase: request.fingerprint.phase,
-                        message: String(describing: request.reason)
-                    )
-                    await publish(
-                        .unavailable(
-                            generation: generation,
-                            error: .recoveryBudgetExhausted(summary)
-                        )
-                    )
-                    await waitForExplicitRetry()
-                    recoveryBudget.begin(
-                        generation: await currentGeneration(),
-                        explicitRetry: true
-                    )
-                    continue
-                }
-                await publish(
-                    .recovering(
-                        generation: generation,
-                        reason: request.reason
-                    )
-                )
             } catch {
-                await orderedScope?.close()
-                orderedScope = nil
-                if isConnectionTerminal(error) {
-                    return termination(for: error)
-                }
-                let generation = await currentGeneration()
-                let summary = webInspectorFailureDescription(
-                    error,
-                    code: "dom.bootstrap.failed",
-                    phase: "bootstrap"
-                )
-                await publish(
-                    .unavailable(
-                        generation: generation,
-                        error: .bootstrap(summary)
-                    )
-                )
-                await waitForExplicitRetry()
-                recoveryBudget.begin(
-                    generation: await currentGeneration(),
-                    explicitRetry: true
-                )
+                return termination(for: error)
             }
+        } catch {
+            await orderedScope?.close()
+            orderedScope = nil
+            return closeRequested ? .detached : termination(for: error)
         }
-        return .detached
-    }
-
-    package func retry() async {
-        guard case .unavailable = state else { return }
-        explicitRetryRequested = true
-        retryWaiter?.resume()
-        retryWaiter = nil
     }
 
     package func close() async {
         guard !closeRequested else { return }
         closeRequested = true
         await closeStyleCommitGate()
-        explicitRetryRequested = true
-        retryWaiter?.resume()
-        retryWaiter = nil
         await retirePicker(
             with: WebInspectorCommandError.containerClosed,
             disableBackend: true
@@ -219,7 +157,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         orderedScope = nil
         connection = nil
         store = nil
-        await publish(.disabled)
+        try? await publish(.disabled)
     }
 
     // MARK: DOM commands
@@ -295,7 +233,8 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                 )
             }
         }
-        let capability = applied.isEmpty
+        let capability =
+            applied.isEmpty
             ? nil
             : try await makeUndoCapabilityIfNeeded(undo)
         return DOMMutationOutcome(
@@ -314,8 +253,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         case .html:
             let rawID = try validatedRawNodeID(id)
             guard let connection else { throw WebInspectorCommandError.containerClosed }
-            do { return try await connection.page.dom.outerHTML(of: rawID) }
-            catch {
+            do { return try await connection.page.dom.outerHTML(of: rawID) } catch {
                 throw webInspectorCommandError(error, featureID: .dom, phase: "DOM.getOuterHTML")
             }
         case .selectorPath, .xPath:
@@ -330,16 +268,14 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     package func highlight(_ id: DOMNode.ID) async throws {
         let rawID = try validatedRawNodeID(id)
         guard let connection else { throw WebInspectorCommandError.containerClosed }
-        do { try await connection.page.dom.highlightNode(rawID) }
-        catch {
+        do { try await connection.page.dom.highlightNode(rawID) } catch {
             throw webInspectorCommandError(error, featureID: .dom, phase: "DOM.highlightNode")
         }
     }
 
     package func hideHighlight() async throws {
         guard let connection else { throw WebInspectorCommandError.containerClosed }
-        do { try await connection.page.dom.hideHighlight() }
-        catch {
+        do { try await connection.page.dom.hideHighlight() } catch {
             throw webInspectorCommandError(error, featureID: .dom, phase: "DOM.hideHighlight")
         }
     }
@@ -347,15 +283,17 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     package func undo(in scope: WebInspectorDOMDocumentScopeStorage) async throws {
         try validate(scope)
         guard let connection else { throw WebInspectorCommandError.containerClosed }
-        do { try await connection.page.dom.undo() }
-        catch { throw webInspectorCommandError(error, featureID: .dom, phase: "DOM.undo") }
+        do { try await connection.page.dom.undo() } catch {
+            throw webInspectorCommandError(error, featureID: .dom, phase: "DOM.undo")
+        }
     }
 
     package func redo(in scope: WebInspectorDOMDocumentScopeStorage) async throws {
         try validate(scope)
         guard let connection else { throw WebInspectorCommandError.containerClosed }
-        do { try await connection.page.dom.redo() }
-        catch { throw webInspectorCommandError(error, featureID: .dom, phase: "DOM.redo") }
+        do { try await connection.page.dom.redo() } catch {
+            throw webInspectorCommandError(error, featureID: .dom, phase: "DOM.redo")
+        }
     }
 
     // MARK: CSS commands
@@ -432,11 +370,13 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     ) async throws -> DOMUndoCapability? {
         guard let location = propertyLocation(for: propertyID), let connection
         else { throw WebInspectorCommandError.staleIdentifier }
-        guard let text = CSSStyleTextRewriter.rewrittenStyleText(
-            style: location.style,
+        guard
+            let text = CSSStyleTextRewriter.rewrittenStyleText(
+                style: location.style,
             propertyIndex: location.propertyIndex,
             enabled: enabled
-        ) else { throw WebInspectorCommandError.staleIdentifier }
+            )
+        else { throw WebInspectorCommandError.staleIdentifier }
         do {
             _ = try await connection.page.css.setStyleText(location.style.id, text: text)
             return try await makeUndoCapabilityIfNeeded(undo)
@@ -452,11 +392,13 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     ) async throws -> DOMUndoCapability? {
         guard let location = propertyLocation(for: propertyID), let connection
         else { throw WebInspectorCommandError.staleIdentifier }
-        guard let rewritten = CSSStyleTextRewriter.rewrittenStyleText(
-            style: location.style,
+        guard
+            let rewritten = CSSStyleTextRewriter.rewrittenStyleText(
+                style: location.style,
             propertyIndex: location.propertyIndex,
             replacementText: text
-        ) else { throw WebInspectorCommandError.staleIdentifier }
+            )
+        else { throw WebInspectorCommandError.staleIdentifier }
         do {
             _ = try await connection.page.css.setStyleText(location.style.id, text: rewritten)
             return try await makeUndoCapabilityIfNeeded(undo)
@@ -665,11 +607,13 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                         transaction: &canonical
                     )
                     var transaction = WebInspectorModelTransaction()
-                    transaction.append(contentsOf: oldIDs.map {
-                        webInspectorDOMNodeSchema.delete(id: $0)
+                    transaction.append(
+                        contentsOf: oldIDs.map {
+                            webInspectorDOMNodeSchema.delete(id: $0)
                     })
-                    transaction.append(contentsOf: oldStyleIDs.map {
-                        webInspectorCSSStylesSchema.delete(id: $0)
+                    transaction.append(
+                        contentsOf: oldStyleIDs.map {
+                            webInspectorCSSStylesSchema.delete(id: $0)
                     })
                     transaction.append(
                         contentsOf: webInspectorDOMSnapshotMutations(stagedDOM.snapshot())
@@ -773,15 +717,10 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
             }
             resolvePickerNodeWaiterIfAvailable()
         } catch let error as WebInspectorCanonicalDOMError {
-            throw WebInspectorDOMRecoveryRequest(
-                reason: .snapshotConflict(
-                    webInspectorFailureDescription(error, code: "dom.relation", phase: "events")
-                ),
-                fingerprint: WebInspectorRecoveryFingerprint(
-                    code: "dom.relation.\(String(describing: error))",
-                    phase: "events",
-                    method: method
-                )
+            throw connectionFailure(
+                code: "dom.relation.\(method)",
+                phase: "events",
+                message: String(describing: error)
             )
         }
     }
@@ -797,7 +736,8 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
             cssReducer = staged
             guard !canonical.isEmpty,
                   let domReducer = reducer,
-                  let store else {
+                let store
+            else {
                 return
             }
             try await withExclusiveStyleCommit {
@@ -814,15 +754,10 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                 refreshReadyRevision(revision)
             }
         } catch let error as WebInspectorCanonicalCSSError {
-            throw WebInspectorDOMRecoveryRequest(
-                reason: .snapshotConflict(
-                    webInspectorFailureDescription(error, code: "css.relation", phase: "events")
-                ),
-                fingerprint: WebInspectorRecoveryFingerprint(
-                    code: "css.relation.\(String(describing: error))",
-                    phase: "events",
-                    method: method
-                )
+            throw connectionFailure(
+                code: "css.relation.\(method)",
+                phase: "events",
+                message: String(describing: error)
             )
         }
     }
@@ -878,8 +813,9 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                     cssReducer = stagedCSS
                 }
                 var transaction = WebInspectorModelTransaction()
-                transaction.append(contentsOf: canonical.deletedRecordIDs.map {
-                    webInspectorDOMNodeSchema.delete(id: DOMNode.ID(canonical: $0))
+                transaction.append(
+                    contentsOf: canonical.deletedRecordIDs.map {
+                        webInspectorDOMNodeSchema.delete(id: DOMNode.ID(canonical: $0))
                 })
                 transaction.append(
                     contentsOf: loadedStyles.keys.map(webInspectorCSSStylesSchema.delete)
@@ -894,7 +830,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                 transition(to: .synchronizing(generation: generation))
             }
         } else {
-            await publish(.synchronizing(generation: generation))
+            try await publish(.synchronizing(generation: generation))
         }
     }
 
@@ -1033,11 +969,13 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         await closeStyleCommitGate()
     }
 
-    package var styleCommitGateStateForTesting: (
-        active: Bool,
+    package var styleCommitGateStateForTesting:
+        (
+            active: Bool,
         waiterCount: Int,
         closeWaiterCount: Int
-    ) {
+        )
+    {
         (
             isStyleCommitActive,
             styleCommitWaiters.count,
@@ -1096,7 +1034,8 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                           invalidation: $0,
                           domReducer: domReducer
                       )
-                  }) else {
+                })
+            else {
                 continue
             }
             let record = WebInspectorCSSStylesRecord(
@@ -1184,7 +1123,8 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         try await withExclusiveStyleCommit {
             guard let current = loadedStyles[id],
                   current.loadToken == token,
-                  current.record.phase == .loading else {
+                current.record.phase == .loading
+            else {
                 return false
             }
             loadedStyles[id] = LoadedStyleResource(
@@ -1277,19 +1217,10 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         from event: WebInspectorRoutedEvent<Value>
     ) throws -> WebInspectorFeatureEventScope {
         guard let semantic = event.semanticTarget, let agent = event.agentTarget else {
-            throw WebInspectorDOMRecoveryRequest(
-                reason: .malformedDomainEvent(
-                    WebInspectorFailureDescription(
-                        code: "dom.route.missing",
-                        phase: "events",
+            throw connectionFailure(
+                code: "dom.route.missing.\(event.method.rawValue)",
+                phase: "events",
                         message: "DOM event lacked semantic or agent target authority."
-                    )
-                ),
-                fingerprint: WebInspectorRecoveryFingerprint(
-                    code: "dom.route.missing",
-                    phase: "events",
-                    method: event.method.rawValue
-                )
             )
         }
         return WebInspectorFeatureEventScope(
@@ -1391,18 +1322,14 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         registry.publish(newState, for: .dom)
     }
 
-    private func publish(_ newState: WebInspectorFeatureState) async {
+    private func publish(_ newState: WebInspectorFeatureState) async throws {
         if let store {
             var transaction = WebInspectorModelTransaction()
             transaction.setFeatureState(newState, for: .dom)
-            do {
-                let revision = try await store.commit(transaction)
+            let revision = try await store.commit(transaction)
                 if case let .ready(generation, _) = newState {
                     transition(to: .ready(generation: generation, revision: revision))
                     return
-                }
-            } catch {
-                WebInspectorDataKitLog.debug("DOM state publication failed: \(error)")
             }
         }
         transition(to: newState)
@@ -1413,36 +1340,17 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         transition(to: .ready(generation: generation, revision: revision))
     }
 
-    private func currentGeneration() async -> WebInspectorPageGeneration {
-        guard let connection,
-            let generation = try? await connection.page.generation
-        else { return WebInspectorPageGeneration(rawValue: 0) }
+    private func currentGeneration() async throws -> WebInspectorPageGeneration {
+        guard let connection else { throw CancellationError() }
+        let generation = try await connection.page.generation
         return WebInspectorPageGeneration(rawValue: generation.rawValue)
-    }
-
-    private func waitForExplicitRetry() async {
-        if explicitRetryRequested {
-            explicitRetryRequested = false
-            return
-        }
-        await withCheckedContinuation { continuation in
-            retryWaiter = continuation
-        }
-        explicitRetryRequested = false
-    }
-
-    private func isConnectionTerminal(_ error: any Error) -> Bool {
-        guard let proxy = error as? WebInspectorProxyError else { return false }
-        switch proxy {
-        case .closed, .disconnected, .transportFailure:
-            return true
-        default:
-            return false
-        }
     }
 
     private func termination(for error: any Error) -> WebInspectorFeatureTermination {
         if error is CancellationError { return .detached }
+        if let failure = error as? WebInspectorConnectionFailure {
+            return .connectionFailed(failure)
+        }
         return .connectionFailed(
             connectionFailure(
                 code: "dom.connection",
@@ -1945,10 +1853,12 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     private func resolvePickerNodeWaiterIfAvailable() {
         guard let waiter = pickerNodeWaiter else { return }
         do {
-            guard let nodeID = try availablePickerNode(
-                waiter.rawNodeID,
+            guard
+                let nodeID = try availablePickerNode(
+                    waiter.rawNodeID,
                 binding: waiter.binding
-            ) else { return }
+                )
+            else { return }
             pickerNodeWaiter = nil
             waiter.continuation.resume(returning: nodeID)
         } catch {
@@ -2066,7 +1976,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
 }
 
 /// Public typed facade over the container-owned DOM feature actor.
-public final class WebInspectorDOM: WebInspectorRetryableFeatureHandle, Sendable {
+public final class WebInspectorDOM: WebInspectorFeatureHandle, Sendable {
     private let owner: WebInspectorDOMFeature
     private let registry: WebInspectorFeatureRegistry
     private let pickerPublisher: _WebInspectorStatePublisher<WebInspectorElementPickerState>
@@ -2092,7 +2002,6 @@ public final class WebInspectorDOM: WebInspectorRetryableFeatureHandle, Sendable
         pickerPublisher.updates()
     }
 
-    public func retry() async { await owner.retry() }
     public func pickElement() async throws -> DOMNode.ID { try await owner.pickElement() }
     public func cancelElementPicker() async { await owner.cancelElementPicker() }
     public func requestChildren(of id: DOMNode.ID, depth: Int = 1) async throws {

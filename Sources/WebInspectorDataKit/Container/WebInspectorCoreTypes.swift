@@ -93,23 +93,14 @@ public struct WebInspectorFailureDescription:
     }
 }
 
-/// Why one semantic feature is rebuilding its canonical projection.
-public enum WebInspectorRecoveryReason: Equatable, Sendable {
-    case eventGap(WebInspectorFailureDescription)
-    case snapshotConflict(WebInspectorFailureDescription)
-    case malformedDomainEvent(WebInspectorFailureDescription)
-    case targetChanged
-}
-
-/// A failure confined to one semantic feature.
+/// A semantic feature operation failure.
 public enum WebInspectorFeatureError: Error, Equatable, Sendable {
     case bootstrap(WebInspectorFailureDescription)
     case eventStream(WebInspectorFailureDescription)
     case command(WebInspectorFailureDescription)
-    case recoveryBudgetExhausted(WebInspectorFailureDescription)
 }
 
-/// The query-visible readiness of one feature.
+/// The query-visible availability of one feature.
 public enum WebInspectorFeatureState: Equatable, Sendable {
     case disabled
     case synchronizing(generation: WebInspectorPageGeneration)
@@ -117,14 +108,7 @@ public enum WebInspectorFeatureState: Equatable, Sendable {
         generation: WebInspectorPageGeneration,
         revision: WebInspectorStoreRevision
     )
-    case recovering(
-        generation: WebInspectorPageGeneration,
-        reason: WebInspectorRecoveryReason
-    )
-    case unavailable(
-        generation: WebInspectorPageGeneration,
-        error: WebInspectorFeatureError
-    )
+    case unsupported(requirements: [String])
 }
 
 /// Failures that invalidate the physical inspector connection.
@@ -148,7 +132,10 @@ public enum WebInspectorFetchError: Error, Equatable, Sendable {
     case invalidLimit(Int)
     case invalidOffset(Int)
     case unsupportedModel(String)
-    case featureUnavailable(WebInspectorFeatureID, WebInspectorFeatureError)
+    case featureUnsupported(
+        WebInspectorFeatureID,
+        requirements: [String]
+    )
     case predicateEvaluation(WebInspectorFailureDescription)
     case contextClosed
     case containerClosed

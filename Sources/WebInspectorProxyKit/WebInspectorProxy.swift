@@ -75,24 +75,23 @@ public final class WebInspectorProxy: Sendable {
     public func waitUntilClosed() async throws { try await core.waitUntilClosed() }
 
     package func generation() async throws -> WebInspectorPage.Generation {
-        do { return try await core.pageGeneration() }
-        catch { throw Self.mapConnectionError(error) }
+        do { return try await core.pageGeneration() } catch { throw Self.mapConnectionError(error) }
     }
 
     package func send<Result: Sendable>(
         _ command: WebInspectorWireCommand<Result>,
         route: WebInspectorRoute
     ) async throws -> Result {
-        do { return try await core.send(command, route: route) }
-        catch { throw Self.mapConnectionError(error) }
+        do { return try await core.send(command, route: route) } catch { throw Self.mapConnectionError(error) }
     }
 
     package func send<Result: Sendable>(
         _ command: WebInspectorWireCommand<Result>,
         in scopeID: WebInspectorOrderedScopeID
     ) async throws -> WebInspectorScopedReply<Result> {
-        do { return try await core.sendScoped(command, route: .currentPage, scopeID: scopeID) }
-        catch { throw Self.mapConnectionError(error) }
+        do { return try await core.sendScoped(command, route: .currentPage, scopeID: scopeID) } catch {
+            throw Self.mapConnectionError(error)
+        }
     }
 
     package func openScope<Element: Sendable>(
@@ -114,8 +113,7 @@ public final class WebInspectorProxy: Sendable {
         _ boundary: WebInspectorReplyBoundary,
         in scopeID: WebInspectorOrderedScopeID
     ) async throws {
-        do { try await core.completeBoundary(boundary, in: scopeID) }
-        catch { throw Self.mapConnectionError(error) }
+        do { try await core.completeBoundary(boundary, in: scopeID) } catch { throw Self.mapConnectionError(error) }
     }
 
     package func closeScope(_ id: WebInspectorOrderedScopeID) async {
@@ -134,8 +132,12 @@ public final class WebInspectorProxy: Sendable {
         case let .replyTimeout(method):
             let method = WebInspectorProtocolMethod(rawValue: method)
             return WebInspectorProxyError.timeout(domain: method.domain.rawValue, method: method.name)
-        case let .remoteError(method, message):
-            return WebInspectorProxyError.commandRejected(method: method, message: message)
+        case let .remoteError(method, code, message):
+            return webInspectorProxyRemoteError(
+                method: method,
+                code: code,
+                message: message
+            )
         }
     }
 

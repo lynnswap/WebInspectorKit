@@ -7,7 +7,7 @@ Observable Web Inspector models for building custom inspector interfaces.
 Use WebInspectorDataKit when an inspector UI needs identity-preserving DOM,
 Network, Console, Runtime, and CSS models instead of direct protocol payloads.
 One ``WebInspectorModelContainer`` owns the physical attachment, canonical
-feature stores, and bounded feature recovery. Container-issued
+feature stores, and fail-fast feature runners. Container-issued
 ``WebInspectorModelContext`` instances own only a caller-confined identity map
 and generic fetch registrations.
 
@@ -90,14 +90,17 @@ print(result.object.description ?? "")
 await scope.close()
 ```
 
-DOM and Console/Runtime failures use bounded feature-local recovery and may
-become unavailable. Observe ``WebInspectorFeatureHandle/stateUpdates`` and use
-the concrete retryable handle's `retry()` when explicit retry is appropriate.
-Network uses the same feature-local failure boundary but does not expose retry;
-an explicit detach/attach creates its next runner. Feature failure does not end
-the physical ``WebInspectorModelContainer`` attachment or disable sibling
-features. Reach for WebInspectorProxyKit when direct typed protocol access is
-preferable to the model layer.
+Page and target replacement are synchronized by each feature's active runner.
+A required Web Inspector method rejected with JSON-RPC `-32601` publishes a
+static ``WebInspectorFeatureState/unsupported(requirements:)`` state for only
+that feature. Dependent queries fail with
+``WebInspectorFetchError/featureUnsupported(_:requirements:)`` while sibling
+features remain attached. Any other bootstrap, protocol, route, or store
+failure ends the physical ``WebInspectorModelContainer`` attachment and is
+published as ``WebInspectorConnectionFailure``. Feature handles intentionally
+expose no retry or transient feature-local unavailable state; an explicit
+attachment creates new runners. Reach for WebInspectorProxyKit when direct
+typed protocol access is preferable to the model layer.
 
 ## Topics
 
@@ -148,7 +151,6 @@ preferable to the model layer.
 - ``WebInspectorFeatureID``
 - ``WebInspectorFeatureState``
 - ``WebInspectorFeatureHandle``
-- ``WebInspectorRetryableFeatureHandle``
 - ``WebInspectorConnectionFailure``
 - ``WebInspectorCommandError``
 - ``WebInspectorElementPickerState``

@@ -5,14 +5,12 @@ import WebInspectorDataKit
 @Observable
 final class WebInspectorQueryStorage<Model>
 where Model: WebInspectorPersistentModel {
-    private(set) var fetchedResultsController:
-        WebInspectorFetchedResultsController<Model>?
+    private(set) var fetchedResultsController: WebInspectorFetchedResultsController<Model>?
     private(set) var bindingError: (any Error)?
 
     @ObservationIgnored private var hasSubmittedBinding = false
     @ObservationIgnored private var desiredContextIdentity: ObjectIdentifier?
-    @ObservationIgnored private var attemptedSemanticIdentity:
-        WebInspectorQuerySemanticIdentity?
+    @ObservationIgnored private var attemptedSemanticIdentity: WebInspectorQuerySemanticIdentity?
     @ObservationIgnored private var bindingToken: UInt64 = 0
     @ObservationIgnored private var lifecycleTask: Task<Void, Never>?
 
@@ -48,7 +46,8 @@ where Model: WebInspectorPersistentModel {
         let context = container.mainContext
         let contextIdentity = ObjectIdentifier(context)
         if hasSubmittedBinding,
-           desiredContextIdentity == contextIdentity {
+            desiredContextIdentity == contextIdentity
+        {
             guard attemptedSemanticIdentity != semanticIdentity else { return }
             attemptedSemanticIdentity = semanticIdentity
             if let fetchedResultsController {
@@ -74,8 +73,10 @@ where Model: WebInspectorPersistentModel {
     private func submitMissingContext(
         semanticIdentity: WebInspectorQuerySemanticIdentity
     ) {
-        guard hasSubmittedBinding == false || desiredContextIdentity != nil
-                || attemptedSemanticIdentity != semanticIdentity else {
+        guard
+            hasSubmittedBinding == false || desiredContextIdentity != nil
+                || attemptedSemanticIdentity != semanticIdentity
+        else {
             return
         }
 
@@ -102,7 +103,8 @@ where Model: WebInspectorPersistentModel {
             await previousTask?.value
             await previousController?.close()
             guard Task.isCancelled == false,
-                  self?.bindingToken == token else {
+                self?.bindingToken == token
+            else {
                 return
             }
 
@@ -117,12 +119,14 @@ where Model: WebInspectorPersistentModel {
                 return
             } catch {
                 // Fetch failure is owned and observed by the controller. It
-                // remains registered so feature recovery can publish initial.
+                // remains registered so a later ready attachment can publish
+                // its initial result.
             }
 
             guard Task.isCancelled == false,
                   let self,
-                  bindingToken == token else {
+                bindingToken == token
+            else {
                 await controller.close()
                 return
             }
@@ -143,7 +147,8 @@ where Model: WebInspectorPersistentModel {
         lifecycleTask = Task { @MainActor [weak self] in
             await previousTask?.value
             guard Task.isCancelled == false,
-                  self?.bindingToken == token else {
+                self?.bindingToken == token
+            else {
                 return
             }
             do {

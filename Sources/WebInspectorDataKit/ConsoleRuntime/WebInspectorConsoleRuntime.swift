@@ -34,11 +34,6 @@ private let webInspectorConsoleRuntimeTargetEventDecoder = WebInspectorEventDeco
     return .targetDestroyed(WebInspectorTarget.ID(payload.targetID))
 }
 
-private struct WebInspectorConsoleRuntimeRecoveryRequest: Error, Sendable {
-    let reason: WebInspectorRecoveryReason
-    let fingerprint: WebInspectorRecoveryFingerprint
-}
-
 /// Sole semantic owner of Console messages, Runtime contexts, and remote
 /// object scope lifetimes.
 package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
@@ -93,10 +88,7 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
     private var orderedScope: WebInspectorOrderedEventScope<WebInspectorConsoleRuntimeWireEvent>?
     private var canonicalStore: CanonicalConsoleRuntimeStore?
     private var state: WebInspectorFeatureState = .disabled
-    private var recoveryBudget = WebInspectorFeatureRecoveryBudget()
     private var closeRequested = false
-    private var explicitRetryRequested = false
-    private var retryWaiter: CheckedContinuation<Void, Never>?
     private var runtimeBindingEpochs: [WebInspectorTarget.ID: UInt64] = [:]
     private var consoleBindingEpochs: [WebInspectorTarget.ID: UInt64] = [:]
     private var navigationEpochs: [WebInspectorTarget.ID: WebInspectorNavigationEpoch] = [:]
@@ -118,8 +110,6 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
         self.connection = connection
         storeSink = store
         closeRequested = false
-        explicitRetryRequested = false
-        recoveryBudget = WebInspectorFeatureRecoveryBudget()
         canonicalStore = CanonicalConsoleRuntimeStore(storeID: connection.storeID)
         objectScopes.removeAll(keepingCapacity: true)
         runtimeBindingEpochs.removeAll(keepingCapacity: true)
@@ -130,90 +120,44 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
         frameTargetBindings.removeAll(keepingCapacity: true)
         currentPageRuntimeRoute = nil
         currentPageMainFrameID = nil
-        await publish(.synchronizing(generation: await currentGeneration()))
-
-        while !closeRequested {
+        do {
+            try await publish(.synchronizing(generation: try await currentGeneration()))
+            try await runOrderedScope()
+            return closeRequested
+                ? .detached
+                : .connectionFailed(
+                    connectionFailure(
+                        code: "console-runtime.scope.ended",
+                        phase: "events",
+                        message: "The Console/Runtime event scope ended unexpectedly."
+                    )
+                )
+        } catch is CancellationError {
+            return .detached
+        } catch let WebInspectorProxyError.unsupported(requirements) {
+            await orderedScope?.close()
+            orderedScope = nil
+            await releaseAllObjectScopes()
+            guard !closeRequested else { return .detached }
             do {
-                try await runOrderedScope()
-                return closeRequested
-                    ? .detached
-                    : .connectionFailed(
-                        connectionFailure(
-                            code: "console-runtime.scope.ended",
-                            phase: "events",
-                            message: "The Console/Runtime event scope ended unexpectedly."
-                        )
-                    )
-            } catch is CancellationError {
+                try await publish(
+                    .unsupported(requirements: requirements.sorted())
+                )
                 return .detached
-            } catch let request as WebInspectorConsoleRuntimeRecoveryRequest {
-                await orderedScope?.close()
-                orderedScope = nil
-                await releaseAllObjectScopes()
-                let generation = await currentGeneration()
-                switch recoveryBudget.consume(request.fingerprint, generation: generation) {
-                case .retry:
-                    await publish(.recovering(generation: generation, reason: request.reason))
-                case .repeatedFingerprint, .generationBudgetExhausted:
-                    await publish(
-                        .unavailable(
-                            generation: generation,
-                            error: .recoveryBudgetExhausted(
-                                WebInspectorFailureDescription(
-                                    code: "console-runtime.recovery.exhausted",
-                                    phase: request.fingerprint.phase,
-                                    message: String(describing: request.reason)
-                                )
-                            )
-                        )
-                    )
-                    await waitForExplicitRetry()
-                    recoveryBudget.begin(
-                        generation: await currentGeneration(),
-                        explicitRetry: true
-                    )
-                }
             } catch {
-                await orderedScope?.close()
-                orderedScope = nil
-                await releaseAllObjectScopes()
-                if isConnectionTerminal(error) { return termination(for: error) }
-                let generation = await currentGeneration()
-                await publish(
-                    .unavailable(
-                        generation: generation,
-                        error: .bootstrap(
-                            webInspectorFailureDescription(
-                                error,
-                                code: "console-runtime.bootstrap.failed",
-                                phase: "bootstrap"
-                            )
-                        )
-                    )
-                )
-                await waitForExplicitRetry()
-                recoveryBudget.begin(
-                    generation: await currentGeneration(),
-                    explicitRetry: true
-                )
+                return termination(for: error)
             }
+        } catch {
+            await orderedScope?.close()
+            orderedScope = nil
+            await releaseAllObjectScopes()
+            return closeRequested ? .detached : termination(for: error)
         }
-        return .detached
-    }
-
-    package func retry() async {
-        guard case .unavailable = state else { return }
-        explicitRetryRequested = true
-        retryWaiter?.resume()
-        retryWaiter = nil
     }
 
     package func close() async {
         guard !closeRequested else { return }
         closeRequested = true
-        explicitRetryRequested = true
-        retryWaiter?.resume()
-        retryWaiter = nil
         await orderedScope?.close()
         orderedScope = nil
         await releaseAllObjectScopes()
@@ -451,7 +395,7 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
             if closeRequested { return }
             if case let .reset(generation) = event {
                 await releaseAllObjectScopes()
-                await publish(
+                try await publish(
                     .synchronizing(
                         generation: WebInspectorPageGeneration(
                             rawValue: generation.rawValue
@@ -473,16 +417,10 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
                     try await commit(canonical, staged: staged)
                 }
             } catch let error as CanonicalConsoleRuntimeProtocolViolation {
-                throw recovery(
+                throw connectionFailure(
                     code: "console-runtime.protocol.\(String(describing: error))",
                     phase: "events",
-                    reason: .malformedDomainEvent(
-                        webInspectorFailureDescription(
-                            error,
-                            code: "console-runtime.protocol",
-                            phase: "events"
-                        )
-                    )
+                    message: String(describing: error)
                 )
             }
         }
@@ -499,7 +437,7 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
             if closeRequested { throw CancellationError() }
             if prefix.contains(where: invalidatesBootstrap) {
                 await releaseAllObjectScopes()
-                await publish(.synchronizing(generation: await currentGeneration()))
+                try await publish(.synchronizing(generation: try await currentGeneration()))
                 continue
             }
 
@@ -1221,16 +1159,10 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
         from event: WebInspectorRoutedEvent<Value>
     ) throws -> WebInspectorFeatureEventScope {
         guard let semantic = event.semanticTarget, let agent = event.agentTarget else {
-            throw recovery(
+            throw connectionFailure(
                 code: "console-runtime.route.missing",
-                phase: "events",
-                reason: .malformedDomainEvent(
-                    WebInspectorFailureDescription(
-                        code: "console-runtime.route.missing",
                         phase: "events",
                         message: "Console/Runtime event lacked target authority."
-                    )
-                )
             )
         }
         let agentTarget = WebInspectorFeatureTarget(agent)
@@ -1275,30 +1207,18 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
         }
     }
 
-    private func recovery(
-        code: String,
-        phase: String,
-        reason: WebInspectorRecoveryReason
-    ) -> WebInspectorConsoleRuntimeRecoveryRequest {
-        WebInspectorConsoleRuntimeRecoveryRequest(
-            reason: reason,
-            fingerprint: WebInspectorRecoveryFingerprint(code: code, phase: phase)
-        )
-    }
-
     private func transition(to newState: WebInspectorFeatureState) {
         webInspectorLogFeatureTransition(feature: .consoleRuntime, from: state, to: newState)
         state = newState
         registry.publish(newState, for: .consoleRuntime)
     }
 
-    private func publish(_ newState: WebInspectorFeatureState) async {
+    private func publish(_ newState: WebInspectorFeatureState) async throws {
         if let storeSink {
             var transaction = WebInspectorModelTransaction()
             transaction.setFeatureState(newState, for: .consoleRuntime)
-            if let revision = try? await storeSink.commit(transaction),
-                case let .ready(generation, _) = newState
-            {
+            let revision = try await storeSink.commit(transaction)
+            if case let .ready(generation, _) = newState {
                 transition(to: .ready(generation: generation, revision: revision))
                 return
             }
@@ -1311,34 +1231,17 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
         transition(to: .ready(generation: generation, revision: revision))
     }
 
-    private func currentGeneration() async -> WebInspectorPageGeneration {
-        guard let connection,
-            let generation = try? await connection.page.generation
-        else { return WebInspectorPageGeneration(rawValue: 0) }
+    private func currentGeneration() async throws -> WebInspectorPageGeneration {
+        guard let connection else { throw CancellationError() }
+        let generation = try await connection.page.generation
         return WebInspectorPageGeneration(rawValue: generation.rawValue)
-    }
-
-    private func waitForExplicitRetry() async {
-        if explicitRetryRequested {
-            explicitRetryRequested = false
-            return
-        }
-        await withCheckedContinuation { retryWaiter = $0 }
-        explicitRetryRequested = false
-    }
-
-    private func isConnectionTerminal(_ error: any Error) -> Bool {
-        guard let proxy = error as? WebInspectorProxyError else { return false }
-        switch proxy {
-        case .closed, .disconnected, .transportFailure:
-            return true
-        default:
-            return false
-        }
     }
 
     private func termination(for error: any Error) -> WebInspectorFeatureTermination {
         if error is CancellationError { return .detached }
+        if let failure = error as? WebInspectorConnectionFailure {
+            return .connectionFailed(failure)
+        }
         return .connectionFailed(
             connectionFailure(
                 code: "console-runtime.connection",
@@ -1357,7 +1260,7 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
     }
 }
 
-public final class WebInspectorConsole: WebInspectorRetryableFeatureHandle, Sendable {
+public final class WebInspectorConsole: WebInspectorFeatureHandle, Sendable {
     private let owner: WebInspectorConsoleRuntimeFeature
     private let registry: WebInspectorFeatureRegistry
 
@@ -1370,7 +1273,6 @@ public final class WebInspectorConsole: WebInspectorRetryableFeatureHandle, Send
     public var stateUpdates: WebInspectorStateUpdates<WebInspectorFeatureState> {
         registry.updates(for: .consoleRuntime)
     }
-    public func retry() async { await owner.retry() }
     public func clear() async throws { try await owner.clearConsole() }
     public func setLoggingChannelLevel(
         _ source: Console.ChannelSource,
@@ -1380,7 +1282,7 @@ public final class WebInspectorConsole: WebInspectorRetryableFeatureHandle, Send
     }
 }
 
-public final class WebInspectorRuntime: WebInspectorRetryableFeatureHandle, Sendable {
+public final class WebInspectorRuntime: WebInspectorFeatureHandle, Sendable {
     private let owner: WebInspectorConsoleRuntimeFeature
     private let registry: WebInspectorFeatureRegistry
 
@@ -1393,7 +1295,6 @@ public final class WebInspectorRuntime: WebInspectorRetryableFeatureHandle, Send
     public var stateUpdates: WebInspectorStateUpdates<WebInspectorFeatureState> {
         registry.updates(for: .consoleRuntime)
     }
-    public func retry() async { await owner.retry() }
     public func makeObjectScope() async -> WebInspectorRuntimeObjectScope {
         await owner.makeObjectScope()
     }

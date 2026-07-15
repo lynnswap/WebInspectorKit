@@ -42,8 +42,21 @@ Across all three refs, `NetworkTabContentView` directly constructs
 `NetworkTableContentView`, `NetworkManager.initializeTarget` directly enables
 the Network agent, and there is no Network-specific retry presentation or
 frontend teardown path. A resource-tree error is logged and returned from the
-Network owner; it does not close the inspector. See `Docs/Architecture.md` for
-the resulting feature-local WebInspectorKit lifecycle contract.
+Network owner; it does not create a retry UI. WebInspectorKit likewise exposes
+no Network retry action. It distinguishes only the dispatcher's JSON-RPC
+`-32601` `MethodNotFound` response as static feature non-support; other
+bootstrap failures fail the attachment. See `Docs/Architecture.md` for the
+resulting lifecycle contract.
+
+The version-specific iOS 18.5 and iOS 26.5 sources and current upstream also
+agree on page-target replacement ordering in
+`WebPageInspectorController::didCommitProvisionalPage`: the new target is
+committed, `Target.didCommitProvisionalTarget(old, new)` is dispatched, and
+only then are retired targets reported through `Target.targetDestroyed`.
+WebInspectorKit therefore retargets the logical page at the commit event and
+ignores later destruction of the retired physical target for binding purposes.
+Destruction of the still-current target has no equivalent replacement evidence
+and remains terminal.
 
 ## Mapping Rule
 

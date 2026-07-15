@@ -35,6 +35,36 @@ func parserRejectsUnreadableOuterEnvelope() async {
 }
 
 @Test
+func parserPreservesProtocolErrorCodeAndMessage() async throws {
+    let parsed = try await ConnectionMessageParser.parse(
+        #"{"id":7,"error":{"code":-32601,"message":"Method not found"}}"#
+    )
+
+    #expect(
+        parsed.error
+            == ParsedProtocolError(code: -32_601, message: "Method not found")
+    )
+}
+
+@Test
+func parserAcceptsExplicitNullProtocolError() async throws {
+    let parsed = try await ConnectionMessageParser.parse(
+        #"{"id":7,"result":{},"error":null}"#
+    )
+
+    #expect(parsed.error == nil)
+}
+
+@Test
+func parserRejectsProtocolErrorWithoutMessage() async {
+    await #expect(throws: ConnectionError.unreadableEnvelope) {
+        _ = try await ConnectionMessageParser.parse(
+            #"{"id":7,"error":{"code":-32601}}"#
+        )
+    }
+}
+
+@Test
 func commandEncoderPreservesFragmentParameters() throws {
     let message = try ConnectionMessageParser.makeCommandString(
         id: 8,

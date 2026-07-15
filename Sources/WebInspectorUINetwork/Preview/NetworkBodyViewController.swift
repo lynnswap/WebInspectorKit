@@ -87,10 +87,10 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
     private var imageHeightConstraint: NSLayoutConstraint?
     private var shouldResetImageZoomOnNextLayout = false
     private var imagePreviewLayoutState: ImagePreviewLayoutState?
-#if DEBUG
+    #if DEBUG
     private var bodyObservationDelivery: PortableObservationTracking.Token?
     private var previewRenderObservationDelivery: PortableObservationTracking.Token?
-#endif
+    #endif
 
     package init(
         scrollEdgeSink: (any NetworkBodyScrollEdgeSink)? = nil,
@@ -117,9 +117,9 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
             }
         }
         configurePreviewViews()
-#if DEBUG
+        #if DEBUG
         startObservingPreviewRenderStateForTesting()
-#endif
+        #endif
     }
 
     override package func viewDidLayoutSubviews() {
@@ -130,9 +130,9 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
     isolated deinit {
         bodyObservation?.cancel()
         tearDownMoviePreviewObservation()
-#if DEBUG
+        #if DEBUG
         previewRenderObservationDelivery?.cancel()
-#endif
+        #endif
         mediaPreviewCoordinator.cancel()
         textPreviewCoordinator.cancel()
     }
@@ -164,9 +164,9 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         isRenderingActive = false
         bodyObservation?.cancel()
         bodyObservation = nil
-#if DEBUG
+        #if DEBUG
         bodyObservationDelivery = nil
-#endif
+        #endif
         textPreviewCoordinator.suspendPreparation()
         mediaPreviewCoordinator.suspendPreparation()
         pauseMediaPreviewPlayback()
@@ -250,28 +250,30 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
     private func startObserving(body: NetworkBody?) {
         bodyObservation?.cancel()
         bodyObservation = nil
-#if DEBUG
+        #if DEBUG
         bodyObservationDelivery = nil
-#endif
+        #endif
         guard isRenderingActive,
-              let body else {
+            let body
+        else {
             return
         }
         let token = withPortableContinuousObservation { [weak self, weak body] _ in
             guard let self,
-                  let body,
-                  body === self.surface.body else {
+                let body,
+                body === self.surface.body
+            else {
                 return
             }
             self.renderBody(body)
         }
         bodyObservation = token
-#if DEBUG
+        #if DEBUG
         bodyObservationDelivery = token
-#endif
+        #endif
     }
 
-#if DEBUG
+    #if DEBUG
     private func startObservingPreviewRenderStateForTesting() {
         previewRenderObservationDelivery?.cancel()
         previewRenderObservationDelivery = withPortableContinuousObservation { [weak self] _ in
@@ -281,7 +283,7 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
             _ = previewRenderState.revision
         }
     }
-#endif
+    #endif
 
     private func renderCurrentSurface() {
         switch surface {
@@ -327,7 +329,8 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
             }
             switch textAction {
             case .unavailable:
-                displayText = String(localized: "network.body.unavailable", bundle: WebInspectorUILocalization.bundle)
+                displayText = String(
+                    localized: "network.body.unavailable", bundle: WebInspectorUILocalization.bundle)
                 syntaxKind = .plainText
             case .active(let text, let preparedSyntaxKind), .ready(let text, let preparedSyntaxKind):
                 displayText = text
@@ -336,7 +339,8 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         case .failed(let error):
             textPreviewCoordinator.cancel()
             hideMediaPreview()
-            let text = body.textRepresentation
+            let text =
+                body.textRepresentation
                 ?? String(localized: "network.body.unavailable", bundle: WebInspectorUILocalization.bundle)
             displayText = text + "\n\n" + localizedDescription(for: error)
             syntaxKind = body.textRepresentationSyntaxKind
@@ -363,33 +367,22 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
             if errorText.isEmpty == false {
                 return errorText
             }
-            return String(localized: "network.body.fetch.error.unavailable", bundle: WebInspectorUILocalization.bundle)
+            return String(
+                localized: "network.body.fetch.error.unavailable", bundle: WebInspectorUILocalization.bundle)
         case .command(let error):
             switch error {
             case .rejected(let failure):
                 return localizedDescription(for: failure)
             case .connection(let error):
                 return localizedDescription(for: error)
-            case .featureUnavailable(_, let error):
-                return localizedDescription(for: error)
             case .staleIdentifier,
-                 .targetChanged,
-                 .timedOut,
-                 .containerClosed:
-                return String(localized: "network.body.fetch.error.unavailable", bundle: WebInspectorUILocalization.bundle)
+                .featureUnsupported,
+                .targetChanged,
+                .timedOut,
+                .containerClosed:
+                return String(
+                    localized: "network.body.fetch.error.unavailable", bundle: WebInspectorUILocalization.bundle)
             }
-        }
-    }
-
-    private func localizedDescription(
-        for error: WebInspectorFeatureError
-    ) -> String {
-        switch error {
-        case .bootstrap(let failure),
-             .eventStream(let failure),
-             .command(let failure),
-             .recoveryBudgetExhausted(let failure):
-            localizedDescription(for: failure)
         }
     }
 
@@ -398,8 +391,8 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
     ) -> String {
         switch error {
         case .native(let failure),
-             .transportEnvelope(let failure),
-             .targetControlPlane(let failure):
+            .transportEnvelope(let failure),
+            .targetControlPlane(let failure):
             localizedDescription(for: failure)
         }
     }
@@ -408,7 +401,8 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         for failure: WebInspectorFailureDescription
     ) -> String {
         guard failure.message.isEmpty == false else {
-            return String(localized: "network.body.fetch.error.unavailable", bundle: WebInspectorUILocalization.bundle)
+            return String(
+                localized: "network.body.fetch.error.unavailable", bundle: WebInspectorUILocalization.bundle)
         }
         return failure.message
     }
@@ -428,7 +422,8 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
     }
 
     private func renderMediaPreviewIfPossible(for body: NetworkBody) -> Bool {
-        let action = mediaPreviewCoordinator.preparePreview(for: body, metadata: surface.metadata) { [weak self] result in
+        let action = mediaPreviewCoordinator.preparePreview(for: body, metadata: surface.metadata) {
+            [weak self] result in
             self?.applyMediaPreviewResult(result)
         }
         switch action {
@@ -565,7 +560,8 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
             return
         }
         if mediaPlayerPreview == preview,
-           mediaPlayerViewController != nil {
+            mediaPlayerViewController != nil
+        {
             return
         }
 
@@ -586,7 +582,8 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         bodyID: ObjectIdentifier
     ) -> AVPlayer {
         if mediaPlayerSurfaceBodyID == bodyID,
-           let player = mediaPlayerViewController?.player {
+            let player = mediaPlayerViewController?.player
+        {
             return player
         }
 
@@ -618,17 +615,20 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         resetsFailure: Bool
     ) {
         guard mediaPlayerSurfaceBodyID == bodyID,
-              let player = mediaPlayerViewController?.player else {
+            let player = mediaPlayerViewController?.player
+        else {
             return
         }
         if resetsFailure {
             failedMediaPlayerPreview = nil
             failedMediaPlayerMessage = nil
         }
-        guard mediaPlayerPreview != nil
+        guard
+            mediaPlayerPreview != nil
                 || player.currentItem != nil
                 || mediaPlayerItemStatusObservation != nil
-                || mediaPlayerFailedToEndObserver != nil else {
+                || mediaPlayerFailedToEndObserver != nil
+        else {
             return
         }
         tearDownMoviePreviewObservation()
@@ -639,7 +639,8 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
 
     private func showMoviePreviewStatus(_ configuration: UIContentUnavailableConfiguration) {
         guard let playerViewController = mediaPlayerViewController,
-              let overlayView = playerViewController.contentOverlayView else {
+            let overlayView = playerViewController.contentOverlayView
+        else {
             return
         }
         let statusView: UIContentUnavailableView
@@ -715,7 +716,8 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         preview: NetworkMoviePreview
     ) {
         guard mediaPlayerItemID == itemID,
-              mediaPlayerPreview == preview else {
+            mediaPlayerPreview == preview
+        else {
             return
         }
         switch status {
@@ -736,7 +738,8 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         message: String?
     ) {
         guard mediaPlayerItemID == itemID,
-              mediaPlayerPreview == preview else {
+            mediaPlayerPreview == preview
+        else {
             return
         }
         failedMediaPlayerPreview = preview
@@ -750,18 +753,20 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         message: String?
     ) {
         guard isRenderingActive,
-              failedMediaPlayerPreview == preview,
-              mediaPlayerSurfaceBodyID == preview.bodyID else {
+            failedMediaPlayerPreview == preview,
+            mediaPlayerSurfaceBodyID == preview.bodyID
+        else {
             return
         }
-        let failureText = if let message, message.isEmpty == false {
-            message
-        } else {
-            String(
-                localized: "network.body.fetch.error.unavailable",
-                bundle: WebInspectorUILocalization.bundle
-            )
-        }
+        let failureText =
+            if let message, message.isEmpty == false {
+                message
+            } else {
+                String(
+                    localized: "network.body.fetch.error.unavailable",
+                    bundle: WebInspectorUILocalization.bundle
+                )
+            }
         showMoviePreviewUnavailableState(
             bodyID: preview.bodyID,
             message: failureText
@@ -846,11 +851,11 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
     @discardableResult
     private func updateImagePreviewLayout(resetZoom: Bool) -> Bool {
         guard imageScrollView.isHidden == false,
-              let image = imageView.image,
-              image.size.width > 0,
-              image.size.height > 0,
-              imageScrollView.bounds.width > 0,
-              imageScrollView.bounds.height > 0
+            let image = imageView.image,
+            image.size.width > 0,
+            image.size.height > 0,
+            imageScrollView.bounds.width > 0,
+            imageScrollView.bounds.height > 0
         else {
             return false
         }
@@ -868,12 +873,14 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         )
         let minimumZoomScale = min(1, fitScale)
         let maximumZoomScale = max(4, 1 / minimumZoomScale)
-        let isKeepingAutoFit = imagePreviewLayoutState.map { state in
-            state.imageSize == imageSize
-                && state.visibleBoundsSize != visibleBoundsSize
-                && abs(imageScrollView.zoomScale - state.minimumZoomScale) < Self.imageZoomScaleTolerance
-        } ?? false
-        let targetZoomScale = resetZoom || isKeepingAutoFit
+        let isKeepingAutoFit =
+            imagePreviewLayoutState.map { state in
+                state.imageSize == imageSize
+                    && state.visibleBoundsSize != visibleBoundsSize
+                    && abs(imageScrollView.zoomScale - state.minimumZoomScale) < Self.imageZoomScaleTolerance
+            } ?? false
+        let targetZoomScale =
+            resetZoom || isKeepingAutoFit
             ? minimumZoomScale
             : min(max(imageScrollView.zoomScale, minimumZoomScale), maximumZoomScale)
 
@@ -1105,8 +1112,9 @@ extension NetworkBodyViewController {
     var imagePreviewRenderSnapshotForTesting: NetworkBodyImagePreviewRenderSnapshot? {
         loadViewIfNeeded()
         guard case let .image(imageSize) = previewRenderState.surface,
-              let imageLayout = previewRenderState.imageLayout,
-              imageLayout.imageSize == imageSize else {
+            let imageLayout = previewRenderState.imageLayout,
+            imageLayout.imageSize == imageSize
+        else {
             return nil
         }
         return NetworkBodyImagePreviewRenderSnapshot(
@@ -1152,7 +1160,8 @@ extension NetworkBodyViewController {
     var isMoviePreviewStatusHostedInPlayerOverlayForTesting: Bool {
         loadViewIfNeeded()
         guard let mediaPlayerStatusView,
-              let contentOverlayView = mediaPlayerViewController?.contentOverlayView else {
+            let contentOverlayView = mediaPlayerViewController?.contentOverlayView
+        else {
             return false
         }
         return mediaPlayerStatusView.superview === contentOverlayView

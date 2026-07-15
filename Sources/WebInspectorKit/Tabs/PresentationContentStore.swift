@@ -38,29 +38,37 @@ package final class PresentationContentStore {
         private(set) var state: State = .idle
         private let makeValue: @MainActor () async throws -> Value
         private let retireValue: @MainActor (Value) async -> Void
-        private let failureDisposition: @MainActor (any Error)
-            -> ResourceFailureDisposition
+        private let failureDisposition:
+            @MainActor (any Error)
+                -> ResourceFailureDisposition
         private var task: Task<Void, Never>?
         private var closeTask: CloseTaskHandle?
 
         init(
             makeValue: @escaping @MainActor () async throws -> Value,
             retireValue: @escaping @MainActor (Value) async -> Void,
-            failureDisposition: @escaping @MainActor (any Error)
+            failureDisposition:
+                @escaping @MainActor (any Error)
                 -> ResourceFailureDisposition = { error in
                     if let commandError = error as? WebInspectorCommandError {
                         switch commandError {
                         case .connection, .containerClosed:
                             return .closed
-                        case let .featureUnavailable(featureID, _):
+                        case .featureUnsupported:
                             return .failed(
                                 error.localizedDescription,
-                                allowsRetry: featureID != .network
+                                allowsRetry: false
                             )
                         case .staleIdentifier, .targetChanged, .rejected,
                             .timedOut:
                             break
                         }
+                    }
+                    if error is WebInspectorTabFeatureError {
+                        return .failed(
+                            error.localizedDescription,
+                            allowsRetry: false
+                        )
                     }
                     return .failed(error.localizedDescription, allowsRetry: true)
                 }
@@ -102,7 +110,8 @@ package final class PresentationContentStore {
                     let value = try await makeValue()
                     guard Task.isCancelled == false,
                           let self,
-                          case .loading = state else {
+                        case .loading = state
+                    else {
                         await retireValue(value)
                         return
                     }
@@ -112,7 +121,8 @@ package final class PresentationContentStore {
                 } catch {
                     guard Task.isCancelled == false,
                           let self,
-                          case .loading = state else {
+                        case .loading = state
+                    else {
                         return
                     }
                     task = nil
@@ -211,11 +221,13 @@ package final class PresentationContentStore {
         let task: Task<Void, Never>
     }
 
-    package typealias NetworkPanelModelFactory = @MainActor (
-        WebInspectorModelContext
+    package typealias NetworkPanelModelFactory =
+        @MainActor (
+            WebInspectorModelContext
     ) async throws -> NetworkPanelModel
-    package typealias DOMPanelModelFactory = @MainActor (
-        WebInspectorModelContext
+    package typealias DOMPanelModelFactory =
+        @MainActor (
+            WebInspectorModelContext
     ) async throws -> DOMPanelModel
 
     private let context: WebInspectorTab.Context
@@ -225,13 +237,8 @@ package final class PresentationContentStore {
 
     private var domResource: Resource<DOMPanelModel>?
     private var networkResource: Resource<NetworkPanelModel>?
-    private var customResources: [
-        WebInspectorTab.ContentKey: Resource<UIViewController>
-    ] = [:]
-    private var domRetryTask: RetryTaskHandle?
-    private var customRetryTasks: [
-        WebInspectorTab.ContentKey: RetryTaskHandle
-    ] = [:]
+    private var customResources: [WebInspectorTab.ContentKey: Resource<UIViewController>] = [:]
+    private var customRetryTasks: [WebInspectorTab.ContentKey: RetryTaskHandle] = [:]
     private var containerStateTask: Task<Void, Never>?
     private var resourceAttachmentGeneration: WebInspectorAttachmentGeneration?
 
@@ -244,9 +251,8 @@ package final class PresentationContentStore {
 
     private var domViewControllers: [WeakBox<DOMTabResourceViewController>] = []
     private var networkViewControllers: [WeakBox<NetworkTabResourceViewController>] = []
-    private var customViewControllers: [
-        WebInspectorTab.ContentKey: [WeakBox<CustomTabResourceViewController>]
-    ] = [:]
+    private var customViewControllers: [WebInspectorTab.ContentKey: [WeakBox<CustomTabResourceViewController>]] =
+        [:]
 
     package init(
         context: WebInspectorTab.Context,
@@ -276,7 +282,6 @@ package final class PresentationContentStore {
     }
 
     isolated deinit {
-        domRetryTask?.task.cancel()
         for retryTask in customRetryTasks.values {
             retryTask.task.cancel()
         }
@@ -307,13 +312,13 @@ package final class PresentationContentStore {
     }
 
     package func domViewController(
-        makeReadyViewController: @escaping @MainActor (DOMPanelModel)
+        makeReadyViewController:
+            @escaping @MainActor (DOMPanelModel)
             -> UIViewController
     ) -> DOMTabResourceViewController {
         let resource = domResource ?? makeDOMResource()
         domResource = resource
         let viewController = DOMTabResourceViewController(
-            retryAction: { [weak self] in self?.retryDOM() },
             makeReadyViewController: makeReadyViewController
         )
         domViewControllers.append(WeakBox(viewController))
@@ -323,7 +328,8 @@ package final class PresentationContentStore {
     }
 
     package func networkViewController(
-        makeReadyViewController: @escaping @MainActor (NetworkPanelModel)
+        makeReadyViewController:
+            @escaping @MainActor (NetworkPanelModel)
             -> UIViewController
     ) -> NetworkTabResourceViewController {
         let resource = networkResource ?? makeNetworkResource()
@@ -341,7 +347,8 @@ package final class PresentationContentStore {
         for key: WebInspectorTab.ContentKey,
         context: WebInspectorTab.Context,
         requiredFeatures: Set<WebInspectorFeatureID>,
-        makeViewController: @escaping @MainActor (WebInspectorTab.Context)
+        makeViewController:
+            @escaping @MainActor (WebInspectorTab.Context)
             async throws -> UIViewController
     ) -> CustomTabResourceViewController {
         let resource: Resource<UIViewController>
@@ -364,10 +371,7 @@ package final class PresentationContentStore {
         }
 
         let viewController = CustomTabResourceViewController { [weak self] in
-            self?.retryCustomResource(
-                for: key,
-                requiredFeatures: requiredFeatures
-            )
+            self?.retryCustomResource(for: key)
         }
         customViewControllers[key, default: []].append(WeakBox(viewController))
         resource.start { [weak self] in self?.renderCustomResource(for: key) }
@@ -379,22 +383,18 @@ package final class PresentationContentStore {
         let domResource = domResource
         let networkResource = networkResource
         let customResources = Array(customResources.values)
-        let domRetryTask = domRetryTask?.task
         let customRetryTasks = customRetryTasks.values.map(\.task)
 
         self.domResource = nil
         self.networkResource = nil
         self.customResources.removeAll(keepingCapacity: false)
-        self.domRetryTask = nil
         self.customRetryTasks.removeAll(keepingCapacity: false)
         resetViewControllers()
         contentCache.removeAll()
 
-        domRetryTask?.cancel()
         for retryTask in customRetryTasks {
             retryTask.cancel()
         }
-        await domRetryTask?.value
         for retryTask in customRetryTasks {
             await retryTask.value
         }
@@ -412,11 +412,12 @@ package final class PresentationContentStore {
         switch state {
         case let .attaching(generation), let .attached(generation):
             if let resourceAttachmentGeneration,
-               resourceAttachmentGeneration != generation {
+                resourceAttachmentGeneration != generation
+            {
                 await closeResources()
             }
             resourceAttachmentGeneration = generation
-            restartResourcesAfterConnectionRecovery()
+            restartResourcesAfterAttachment()
             return true
         case let .failed(generation, _):
             resourceAttachmentGeneration = generation
@@ -466,7 +467,7 @@ package final class PresentationContentStore {
         }
     }
 
-    private func restartResourcesAfterConnectionRecovery() {
+    private func restartResourcesAfterAttachment() {
         var didRestartResource = false
         if domResource?.restart(onChange: { [weak self] in self?.renderDOM() }) == true {
             didRestartResource = true
@@ -517,46 +518,21 @@ package final class PresentationContentStore {
         )
     }
 
-    private func retryDOM() {
-        guard let resource = domResource,
-              case .failed = resource.state,
-              domRetryTask == nil else { return }
-        let retryTaskID = UUID()
-        let context = context
-        let task = Task { @MainActor [weak self, resource] in
-            defer { self?.finishDOMRetryTask(id: retryTaskID) }
-            await context.modelContainer.dom.retry()
-            guard Task.isCancelled == false,
-                  let self,
-                  self.domResource === resource else { return }
-            resource.retry { [weak self] in self?.renderDOM() }
-        }
-        domRetryTask = RetryTaskHandle(id: retryTaskID, task: task)
-    }
-
     private func retryCustomResource(
-        for key: WebInspectorTab.ContentKey,
-        requiredFeatures: Set<WebInspectorFeatureID>
+        for key: WebInspectorTab.ContentKey
     ) {
         guard let resource = customResources[key],
               case .failed = resource.state,
-              customRetryTasks[key] == nil else { return }
+            customRetryTasks[key] == nil
+        else { return }
         let retryTaskID = UUID()
-        let context = context
         let task = Task { @MainActor [weak self, resource] in
             defer {
                 self?.finishCustomRetryTask(for: key, id: retryTaskID)
             }
-            for feature in requiredFeatures {
-                if feature == .dom {
-                    await context.modelContainer.dom.retry()
-                } else if feature == .consoleRuntime {
-                    await context.modelContainer.console.retry()
-                }
-                guard Task.isCancelled == false else { return }
-            }
             guard let self,
-                  self.customResources[key] === resource else { return }
+                self.customResources[key] === resource
+            else { return }
             resource.retry { [weak self] in
                 self?.renderCustomResource(for: key)
             }
@@ -565,11 +541,6 @@ package final class PresentationContentStore {
             id: retryTaskID,
             task: task
         )
-    }
-
-    private func finishDOMRetryTask(id: UUID) {
-        guard domRetryTask?.id == id else { return }
-        domRetryTask = nil
     }
 
     private func finishCustomRetryTask(
@@ -604,18 +575,19 @@ package final class PresentationContentStore {
                         if case .attached = container.state {
                             return
                         }
-                    case let .unavailable(_, error):
-                        throw WebInspectorCommandError.featureUnavailable(
-                            feature,
-                            error
-                        )
                     case .disabled:
                         if case .attached = container.state,
-                           container.configuration.enabledFeatures.contains(feature) == false {
+                            container.configuration.enabledFeatures.contains(feature) == false
+                        {
                             throw WebInspectorTabFeatureError.disabled(feature)
                         }
-                    case .synchronizing, .recovering:
+                    case .synchronizing:
                         continue
+                    case let .unsupported(requirements):
+                        throw WebInspectorTabFeatureError.unsupported(
+                            feature,
+                            requirements: requirements
+                        )
                     }
                 }
                 try Task.checkCancellation()
@@ -630,17 +602,17 @@ package final class PresentationContentStore {
                         switch container.featureState(for: feature) {
                         case .ready:
                             return
-                        case let .unavailable(_, error):
-                            throw WebInspectorCommandError.featureUnavailable(
-                                feature,
-                                error
-                            )
                         case .disabled:
                             if container.configuration.enabledFeatures.contains(feature) == false {
                                 throw WebInspectorTabFeatureError.disabled(feature)
                             }
-                        case .synchronizing, .recovering:
+                        case .synchronizing:
                             continue
+                        case let .unsupported(requirements):
+                            throw WebInspectorTabFeatureError.unsupported(
+                                feature,
+                                requirements: requirements
+                            )
                         }
                     case let .failed(_, failure):
                         throw WebInspectorCommandError.connection(failure)
@@ -713,8 +685,9 @@ package final class PresentationContentStore {
     }
 
     private func renderCustomResource(for key: WebInspectorTab.ContentKey) {
-        customViewControllers[key] = customViewControllers[key]?.filter { box in
-            guard let viewController = box.value else { return false }
+        customViewControllers[key] =
+            customViewControllers[key]?.filter { box in
+                guard let viewController = box.value else { return false }
             renderCustomResource(for: key, on: viewController)
             return true
         } ?? []
@@ -775,7 +748,6 @@ package final class PresentationContentStore {
         networkResource?.readyValue()
     }
     package func waitForDOMResourceTaskForTesting() async {
-        await domRetryTask?.task.value
         await domResource?.waitForAttempt()
     }
     package func waitForNetworkResourceTaskForTesting() async {
@@ -816,11 +788,15 @@ package final class PresentationContentStore {
 
 private enum WebInspectorTabFeatureError: Error, LocalizedError {
     case disabled(WebInspectorFeatureID)
+    case unsupported(WebInspectorFeatureID, requirements: [String])
 
     var errorDescription: String? {
         switch self {
         case let .disabled(feature):
             "Required feature is disabled: \(feature.name)"
+        case let .unsupported(feature, requirements):
+            "Required feature is unsupported: \(feature.name) "
+                + "(\(requirements.joined(separator: ", ")))"
         }
     }
 }

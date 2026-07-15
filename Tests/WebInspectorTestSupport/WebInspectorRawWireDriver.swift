@@ -51,7 +51,7 @@ public actor WebInspectorRawWireDriver {
 
     private enum Response: Sendable {
         case result(WebInspectorTestJSONObject)
-        case failure(String)
+        case failure(code: Int?, message: String)
         indirect case deferred(UUID, WebInspectorTestGate.Waiter, Response)
     }
 
@@ -123,8 +123,12 @@ public actor WebInspectorRawWireDriver {
         enqueue(.result(result), for: method)
     }
 
-    public func fail(_ method: String, message: String) {
-        enqueue(.failure(message), for: method)
+    public func fail(
+        _ method: String,
+        code: Int? = nil,
+        message: String
+    ) {
+        enqueue(.failure(code: code, message: message), for: method)
     }
 
     public func deferReply(
@@ -136,9 +140,10 @@ public actor WebInspectorRawWireDriver {
 
     public func deferFailure(
         to method: String,
+        code: Int? = nil,
         message: String
     ) -> WebInspectorTestGate {
-        deferResponse(.failure(message), to: method)
+        deferResponse(.failure(code: code, message: message), to: method)
     }
 
     public func emitRootEvent(
@@ -193,7 +198,10 @@ public actor WebInspectorRawWireDriver {
             responses[method] = queued.isEmpty ? nil : queued
         } else {
             Issue.record("Unexpected raw Web Inspector command: \(method)")
-            response = .failure("No raw test reply registered for \(method).")
+            response = .failure(
+                code: nil,
+                message: "No raw test reply registered for \(method)."
+            )
         }
 
         let replyID = UUID()
@@ -220,8 +228,8 @@ public actor WebInspectorRawWireDriver {
                 switch resolved {
                 case let .result(result):
                     try await peer.reply(to: command, with: result)
-                case let .failure(message):
-                    try await peer.fail(command, message: message)
+                case let .failure(code, message):
+                    try await peer.fail(command, code: code, message: message)
                 case .deferred:
                     preconditionFailure("Nested deferred raw responses are not supported.")
                 }
@@ -337,8 +345,9 @@ private final class WebInspectorRawCommandObservationBroker: Sendable {
     }
 
     func finish() {
-        let resumptions = state.withLock { state -> [(
-            continuation: CheckedContinuation<[WebInspectorTestPeer.Command], Never>,
+        let resumptions = state.withLock {
+            state -> [(
+                continuation: CheckedContinuation<[WebInspectorTestPeer.Command], Never>,
             commands: [WebInspectorTestPeer.Command]
         )] in
             guard !state.isFinished else {
@@ -361,8 +370,9 @@ private final class WebInspectorRawCommandObservationBroker: Sendable {
         _ command: WebInspectorTestPeer.Command,
         to collection: Collection
     ) {
-        let resumptions = state.withLock { state -> [(
-            continuation: CheckedContinuation<[WebInspectorTestPeer.Command], Never>,
+        let resumptions = state.withLock {
+            state -> [(
+                continuation: CheckedContinuation<[WebInspectorTestPeer.Command], Never>,
             commands: [WebInspectorTestPeer.Command]
         )] in
             guard !state.isFinished else {
@@ -376,8 +386,9 @@ private final class WebInspectorRawCommandObservationBroker: Sendable {
             }
 
             var pending: [Waiter] = []
-            var resumptions: [(
-                continuation: CheckedContinuation<[WebInspectorTestPeer.Command], Never>,
+            var resumptions:
+                [(
+                    continuation: CheckedContinuation<[WebInspectorTestPeer.Command], Never>,
                 commands: [WebInspectorTestPeer.Command]
             )] = []
             for waiter in state.waiters {
@@ -423,11 +434,13 @@ private final class WebInspectorRawCommandObservationBroker: Sendable {
                     )
                     if state.registeringWaiterIDs.remove(waiterID) == nil
                         || state.isFinished
-                        || matches.count >= count {
+                        || matches.count >= count
+                    {
                         return .resume(matches)
                     }
-                    state.waiters.append(Waiter(
-                        id: waiterID,
+                    state.waiters.append(
+                        Waiter(
+                            id: waiterID,
                         collection: collection,
                         method: method,
                         count: count,
@@ -440,8 +453,9 @@ private final class WebInspectorRawCommandObservationBroker: Sendable {
                 }
             }
         } onCancel: {
-            let resumption = state.withLock { state -> (
-                continuation: CheckedContinuation<[WebInspectorTestPeer.Command], Never>,
+            let resumption = state.withLock {
+                state -> (
+                    continuation: CheckedContinuation<[WebInspectorTestPeer.Command], Never>,
                 commands: [WebInspectorTestPeer.Command]
             )? in
                 guard let index = state.waiters.firstIndex(where: { $0.id == waiterID }) else {

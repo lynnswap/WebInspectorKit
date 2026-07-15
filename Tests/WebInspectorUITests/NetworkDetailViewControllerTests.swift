@@ -20,8 +20,7 @@ final class CanonicalNetworkPanelFixture {
     private let runtime: WebInspectorProxyTestRuntime
     private let requests: WebInspectorFetchedResultsController<NetworkRequest>
     private let entries: WebInspectorFetchedResultsController<NetworkEntry>
-    private var requestUpdates:
-        WebInspectorFetchedResultsUpdateSequence<NetworkRequest.ID>.AsyncIterator
+    private var requestUpdates: WebInspectorFetchedResultsUpdateSequence<NetworkRequest.ID>.AsyncIterator
     private var isClosed = false
 
     init() async throws {
@@ -95,8 +94,9 @@ final class CanonicalNetworkPanelFixture {
         initiatorNodeID: String? = nil,
         timestamp: Double
     ) async throws -> NetworkRequest.ID {
-        try await apply(.requestWillBeSent(
-            id: Network.Request.ID(rawID),
+        try await apply(
+            .requestWillBeSent(
+                id: Network.Request.ID(rawID),
             request: Network.Request(
                 id: Network.Request.ID(rawID),
                 url: url,
@@ -125,8 +125,9 @@ final class CanonicalNetworkPanelFixture {
         resourceType: Network.ResourceType,
         timestamp: Double
     ) async throws {
-        try await apply(.responseReceived(
-            id: Network.Request.ID(rawID),
+        try await apply(
+            .responseReceived(
+                id: Network.Request.ID(rawID),
             response: Network.Response(
                 url: "https://example.test/\(rawID)",
                 status: status,
@@ -138,8 +139,9 @@ final class CanonicalNetworkPanelFixture {
     }
 
     func entryID(containing requestID: NetworkRequest.ID) -> NetworkEntry.ID {
-        guard let entry = entries.fetchedObjects?.first(where: {
-            $0.requestIDs.contains(requestID)
+        guard
+            let entry = entries.fetchedObjects?.first(where: {
+                $0.requestIDs.contains(requestID)
         })
         else {
             preconditionFailure(
@@ -208,10 +210,10 @@ final class CanonicalNetworkPanelFixture {
             switch state {
             case .ready:
                 return
-            case let .unavailable(_, error):
-                throw NetworkFixtureError.featureUnavailable(error)
-            case .disabled, .synchronizing, .recovering:
+            case .disabled, .synchronizing:
                 continue
+            case .unsupported:
+                throw NetworkFixtureError.featureStateEnded
             }
         }
         throw NetworkFixtureError.featureStateEnded
@@ -233,7 +235,6 @@ final class CanonicalNetworkPanelFixture {
 }
 
 private enum NetworkFixtureError: Error {
-    case featureUnavailable(WebInspectorFeatureError)
     case featureStateEnded
     case missingLifecycleScope
     case queryEnded
@@ -442,8 +443,9 @@ private enum NetworkEventWire {
         ):
             return (
                 "Network.requestWillBeSent",
-                try WebInspectorTestJSONObject(encoding: RequestWillBeSent(
-                    requestId: id.rawValue,
+                try WebInspectorTestJSONObject(
+                    encoding: RequestWillBeSent(
+                        requestId: id.rawValue,
                     request: Request(request),
                     initiator: Initiator(initiator),
                     type: resourceType?.rawValue,
@@ -461,8 +463,9 @@ private enum NetworkEventWire {
         ):
             return (
                 "Network.responseReceived",
-                try WebInspectorTestJSONObject(encoding: ResponseReceived(
-                    requestId: id.rawValue,
+                try WebInspectorTestJSONObject(
+                    encoding: ResponseReceived(
+                        requestId: id.rawValue,
                     type: resourceType?.rawValue,
                     response: Response(response),
                     timestamp: timestamp
@@ -476,8 +479,9 @@ private enum NetworkEventWire {
         ):
             return (
                 "Network.dataReceived",
-                try WebInspectorTestJSONObject(encoding: DataReceived(
-                    requestId: id.rawValue,
+                try WebInspectorTestJSONObject(
+                    encoding: DataReceived(
+                        requestId: id.rawValue,
                     dataLength: dataLength,
                     encodedDataLength: encodedDataLength,
                     timestamp: timestamp
@@ -486,8 +490,9 @@ private enum NetworkEventWire {
         case let .loadingFinished(id, timestamp, sourceMapURL, metrics):
             return (
                 "Network.loadingFinished",
-                try WebInspectorTestJSONObject(encoding: LoadingFinished(
-                    requestId: id.rawValue,
+                try WebInspectorTestJSONObject(
+                    encoding: LoadingFinished(
+                        requestId: id.rawValue,
                     timestamp: timestamp,
                     sourceMapURL: sourceMapURL,
                     metrics: metrics.map(Metrics.init)
@@ -496,8 +501,9 @@ private enum NetworkEventWire {
         case let .loadingFailed(id, errorText, canceled, timestamp):
             return (
                 "Network.loadingFailed",
-                try WebInspectorTestJSONObject(encoding: LoadingFailed(
-                    requestId: id.rawValue,
+                try WebInspectorTestJSONObject(
+                    encoding: LoadingFailed(
+                        requestId: id.rawValue,
                     errorText: errorText,
                     canceled: canceled,
                     timestamp: timestamp
@@ -527,8 +533,10 @@ struct NetworkDetailViewControllerTests {
     @Test
     func resourceFilterSpecialistTitlesFollowWebInspectorLabels() {
         #expect(NetworkDisplay.ResourceFilter.stylesheet.localizedTitle == "CSS")
-        #expect(NetworkDisplay.ResourceFilter.media.localizedTitle == String(localized: "network.filter.media", bundle: WebInspectorUILocalization.bundle))
-        #expect(localizedResourceString("network.filter.media", locale: "en") == "Media")
+            #expect(
+                NetworkDisplay.ResourceFilter.media.localizedTitle
+                    == String(localized: "network.filter.media", bundle: WebInspectorUILocalization.bundle))
+            #expect(localizedResourceString("network.filter.media", locale: "en") == "Media")
         #expect(NetworkDisplay.ResourceFilter.script.localizedTitle == "JS")
         #expect(NetworkDisplay.ResourceFilter.xhrFetch.localizedTitle == "XHR / Fetch")
     }
@@ -543,8 +551,9 @@ struct NetworkDetailViewControllerTests {
 
             #expect(viewController.collectionViewForTesting.isHidden)
             #expect(viewController.contentUnavailableConfiguration != nil)
-            let configuration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
-            #expect(configuration?.text?.isEmpty == false)
+                let configuration =
+                    viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
+                #expect(configuration?.text?.isEmpty == false)
             #expect(configuration?.secondaryText == nil)
             #expect(configuration?.image == nil)
             #expect(configuration?.textProperties.color == .secondaryLabel)
@@ -565,8 +574,9 @@ struct NetworkDetailViewControllerTests {
             #expect(viewController.previewViewForTesting.isHidden)
             #expect(viewController.headersTextViewForTesting.isHidden)
             #expect(viewController.contentUnavailableConfiguration != nil)
-            let configuration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
-            #expect(configuration?.text?.isEmpty == false)
+                let configuration =
+                    viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
+                #expect(configuration?.text?.isEmpty == false)
             #expect(configuration?.secondaryText == nil)
             #expect(configuration?.image == nil)
             #expect(configuration?.textProperties.color == .secondaryLabel)
@@ -619,8 +629,11 @@ struct NetworkDetailViewControllerTests {
             role: .response,
             kind: .text,
             sourceSyntaxKind: .plainText,
-            phase: .failed(.command(.rejected(.init(
-                code: "Network.getResponseBody",
+                phase: .failed(
+                    .command(
+                        .rejected(
+                            .init(
+                                code: "Network.getResponseBody",
                 phase: "responseBody",
                 message: "The response body is no longer available."
             ))))
@@ -823,8 +836,9 @@ struct NetworkDetailViewControllerTests {
 
         let didRenderRequestPreview = await waitUntilRendered(in: viewController) {
             viewController.currentPreviewRoleForTesting == .request
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
-        }
+                    && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text
+                        == "name=Jane Doe\ncity=Tokyo East"
+            }
         #expect(didRenderRequestPreview)
     }
 
@@ -904,8 +918,9 @@ struct NetworkDetailViewControllerTests {
         let redirectRequest = try #require(text.range(of: "POST /start"))
         let redirectResponse = try #require(text.range(of: "302 Found"))
         let finalRequest = try #require(text.range(of: "GET /final"))
-        let finalResponse = try #require(text.range(
-            of: "200 OK",
+            let finalResponse = try #require(
+                text.range(
+                    of: "200 OK",
             range: finalRequest.upperBound..<text.endIndex
         ))
         #expect(redirectRequest.lowerBound < redirectResponse.lowerBound)
@@ -943,21 +958,26 @@ struct NetworkDetailViewControllerTests {
         let didRenderBody = await waitUntilRendered(in: viewController) {
             viewController.currentModeForTesting == .preview
                 && viewController.currentPreviewRoleForTesting == .request
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
-        }
+                    && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text
+                        == "name=Jane Doe"
+            }
         #expect(didRenderBody)
 
         model.selectRequest(emptyRequest)
 
-        let unavailableText = String(localized: "network.body.unavailable", bundle: WebInspectorUILocalization.bundle)
-        let didReplaceBody = await waitUntilRendered(in: viewController) {
+            let unavailableText = String(
+                localized: "network.body.unavailable", bundle: WebInspectorUILocalization.bundle)
+            let didReplaceBody = await waitUntilRendered(in: viewController) {
             viewController.previewViewForTesting.isHidden == false
                 && viewController.isPreviewRoleControlHiddenForTesting
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == unavailableText
-        }
+                    && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text
+                        == unavailableText
+            }
         #expect(didReplaceBody)
-        #expect(viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text.contains("Jane") == false)
-    }
+            #expect(
+                viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text.contains("Jane")
+                    == false)
+        }
 
     @Test
     func responseOnlyPreviewRoleExpandsToBothWithoutChangingLogicalSelection() async throws {
@@ -1045,8 +1065,9 @@ struct NetworkDetailViewControllerTests {
             request: requestAndResponse,
             body: "both response body"
         )
-        applyResponseBody(to: fixture, request: responseOnlyRequest, body: "response only body", base64Encoded: false)
-        let model = try await NetworkPanelModel.make(context: context)
+            applyResponseBody(
+                to: fixture, request: responseOnlyRequest, body: "response only body", base64Encoded: false)
+            let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(requestAndResponse)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -1063,8 +1084,9 @@ struct NetworkDetailViewControllerTests {
 
         let didRenderRequestPreview = await waitUntilRendered(in: viewController) {
             viewController.currentPreviewRoleForTesting == .request
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
-        }
+                    && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text
+                        == "name=Jane Doe"
+            }
         #expect(didRenderRequestPreview)
 
         model.selectRequest(responseOnlyRequest)
@@ -1073,8 +1095,9 @@ struct NetworkDetailViewControllerTests {
             viewController.currentPreviewRoleForTesting == .response
                 && viewController.logicalPreviewRoleForTesting == .request
                 && viewController.isPreviewRoleControlHiddenForTesting
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "response only body"
-        }
+                    && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text
+                        == "response only body"
+            }
         #expect(didRenderResponseOnly)
 
         model.selectRequest(requestAndResponse)
@@ -1083,8 +1106,9 @@ struct NetworkDetailViewControllerTests {
             viewController.currentPreviewRoleForTesting == .request
                 && viewController.logicalPreviewRoleForTesting == .request
                 && viewController.isPreviewRoleControlHiddenForTesting == false
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
-        }
+                    && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text
+                        == "name=Jane Doe"
+            }
         #expect(didRestoreRequestPreview)
     }
 
@@ -1114,13 +1138,15 @@ struct NetworkDetailViewControllerTests {
 
         viewController.setModeForTesting(.preview)
 
-        let unavailableText = String(localized: "network.body.unavailable", bundle: WebInspectorUILocalization.bundle)
-        let didRenderPlaceholder = await waitUntilRendered(in: viewController) {
+            let unavailableText = String(
+                localized: "network.body.unavailable", bundle: WebInspectorUILocalization.bundle)
+            let didRenderPlaceholder = await waitUntilRendered(in: viewController) {
             viewController.currentModeForTesting == .preview
                 && viewController.previewViewForTesting.isHidden == false
                 && viewController.isPreviewRoleControlHiddenForTesting
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == unavailableText
-        }
+                    && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text
+                        == unavailableText
+            }
         #expect(didRenderPlaceholder)
     }
 
@@ -1157,8 +1183,9 @@ struct NetworkDetailViewControllerTests {
         )
 
         let didRenderResponseHeaders = await waitUntilRendered(in: viewController) {
-            viewController.headersTextViewForTesting.renderedTextForTesting.contains("content-type: application/json")
-        }
+                viewController.headersTextViewForTesting.renderedTextForTesting.contains(
+                    "content-type: application/json")
+            }
         #expect(didRenderResponseHeaders)
     }
 
@@ -1199,8 +1226,9 @@ struct NetworkDetailViewControllerTests {
         viewController.selectPreviewRoleForTesting(.request)
 
         let didRenderBody = await waitUntilRendered(in: viewController) {
-            viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
-        }
+                viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text
+                    == "name=Jane Doe\ncity=Tokyo East"
+            }
         #expect(didRenderBody)
     }
 
@@ -1267,13 +1295,15 @@ struct NetworkDetailViewControllerTests {
                     && viewController.currentPreviewRoleForTesting == .response
             }
             #expect(didFetch)
-            #expect(await waitUntilRendered(in: viewController) {
-                viewController.syntaxBodyViewControllerForTesting
+                #expect(
+                    await waitUntilRendered(in: viewController) {
+                        viewController.syntaxBodyViewControllerForTesting
                     .syntaxViewForTesting.text
                     .contains("Intentional response-body failure.")
             })
-            #expect(fixture.wire.observations.commands.filter {
-                $0.method == "Network.getResponseBody"
+                #expect(
+                    fixture.wire.observations.commands.filter {
+                        $0.method == "Network.getResponseBody"
             }.count == 1)
         }
     }
@@ -1299,8 +1329,9 @@ struct NetworkDetailViewControllerTests {
 
             let didRenderHeaders = await waitUntilRendered(in: viewController) {
                 viewController.currentModeForTesting == .headers
-                    && viewController.headersTextViewForTesting.renderedTextForTesting.contains("content-type: application/json")
-            }
+                        && viewController.headersTextViewForTesting.renderedTextForTesting.contains(
+                            "content-type: application/json")
+                }
             #expect(didRenderHeaders)
             #expect(request.responseBody.phase == .available)
 
@@ -1309,8 +1340,9 @@ struct NetworkDetailViewControllerTests {
             viewController.setModeForTesting(.preview)
 
             #expect(request.responseBody.phase == .available)
-            #expect(fixture.wire.observations.commands.contains {
-                $0.method == "Network.getResponseBody"
+                #expect(
+                    fixture.wire.observations.commands.contains {
+                        $0.method == "Network.getResponseBody"
             } == false)
             await fixture.wire.fail(
                 "Network.getResponseBody",
@@ -1328,8 +1360,9 @@ struct NetworkDetailViewControllerTests {
                     && viewController.currentPreviewRoleForTesting == .response
             }
             #expect(didFetchOnReturn)
-            #expect(fixture.wire.observations.commands.filter {
-                $0.method == "Network.getResponseBody"
+                #expect(
+                    fixture.wire.observations.commands.filter {
+                        $0.method == "Network.getResponseBody"
             }.count == 1)
         }
     }
@@ -1355,8 +1388,9 @@ struct NetworkDetailViewControllerTests {
         defer { window.isHidden = true }
 
         let didRenderVisibleBody = await waitUntilPreparedTextPreviewRendered(in: viewController) {
-            viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""visible" : true"#)
-        }
+                viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text.contains(
+                    #""visible" : true"#)
+            }
         #expect(didRenderVisibleBody)
         let renderedBodyBeforeHide = viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text
 
@@ -1364,14 +1398,17 @@ struct NetworkDetailViewControllerTests {
         viewController.endAppearanceTransition()
         applyResponseBody(to: fixture, request: request, body: #"{"hidden":true}"#, base64Encoded: false)
 
-        #expect(viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == renderedBodyBeforeHide)
+            #expect(
+                viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text
+                    == renderedBodyBeforeHide)
 
-        viewController.beginAppearanceTransition(true, animated: false)
+            viewController.beginAppearanceTransition(true, animated: false)
         viewController.endAppearanceTransition()
 
         let didRenderHiddenBody = await waitUntilPreparedTextPreviewRendered(in: viewController) {
-            viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""hidden" : true"#)
-        }
+                viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text.contains(
+                    #""hidden" : true"#)
+            }
         #expect(didRenderHiddenBody)
     }
 
@@ -1401,9 +1438,10 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRenderRawBody)
 
-        await viewController.syntaxBodyViewControllerForTesting.waitUntilTextPreviewPreparationFinishedForTesting()
+            await viewController.syntaxBodyViewControllerForTesting
+                .waitUntilTextPreviewPreparationFinishedForTesting()
 
-        #expect(viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == bodyText)
+            #expect(viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == bodyText)
     }
 
     @Test
@@ -1546,8 +1584,9 @@ struct NetworkDetailViewControllerTests {
         let fixture = try await CanonicalNetworkPanelFixture()
         let context = fixture.context
         let playlistURL = "https://media.example.com/live/master.m3u8"
-        let request = try #require(await applyRequest(
-                to: fixture,
+            let request = try #require(
+                await applyRequest(
+                    to: fixture,
             requestID: "playlist",
             url: playlistURL,
             responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -1567,8 +1606,9 @@ struct NetworkDetailViewControllerTests {
         defer { window.isHidden = true }
 
         let didShowPlayer = await waitUntilRendered(in: viewController) {
-            viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString == playlistURL
-        }
+                viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString
+                    == playlistURL
+            }
         #expect(didShowPlayer)
         #expect(playerCreationCount == 1)
     }
@@ -1583,8 +1623,9 @@ struct NetworkDetailViewControllerTests {
             phase: .available
         )
         let viewController = NetworkBodyViewController()
-        viewController.setSurface(.body(
-            body,
+            viewController.setSurface(
+                .body(
+                    body,
             metadata: NetworkMediaPreviewMetadata(
                 mimeType: "application/vnd.apple.mpegurl",
                 url: playlistURL,
@@ -1621,10 +1662,10 @@ struct NetworkDetailViewControllerTests {
                     domain: "WebInspectorUITests",
                     code: 1,
                     userInfo: [
-                        NSLocalizedDescriptionKey: "Simulated HLS playback failure.",
-                    ]
-                ),
-            ]
+                            NSLocalizedDescriptionKey: "Simulated HLS playback failure."
+                        ]
+                    )
+                ]
         )
 
         for _ in 0..<100 {
@@ -1657,8 +1698,9 @@ struct NetworkDetailViewControllerTests {
     func remoteHLSPreviewShowsPlayerWithoutFetchingResponseBody() async throws {
         try await withLiveNetworkContext { fixture in
             let playlistURL = "https://media.example.com/live/master.m3u8"
-            let request = try #require(try await applyRequest(
-                to: fixture,
+                let request = try #require(
+                    try await applyRequest(
+                        to: fixture,
                 requestID: "playlist",
                 url: playlistURL,
                 responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -1685,8 +1727,9 @@ struct NetworkDetailViewControllerTests {
             #expect(didShowPlayer)
             #expect(playerCreationCount == 1)
             #expect(request.responseBody.phase == .available)
-            #expect(fixture.wire.observations.commands.filter {
-                $0.method == "Network.getResponseBody"
+                #expect(
+                    fixture.wire.observations.commands.filter {
+                        $0.method == "Network.getResponseBody"
             }.isEmpty)
         }
     }
@@ -1753,8 +1796,9 @@ struct NetworkDetailViewControllerTests {
         ]
         try await withLiveNetworkContext { fixture in
             for (index, input) in inputs.enumerated() {
-                let request = try #require(try await applyRequest(
-                    to: fixture,
+                    let request = try #require(
+                        try await applyRequest(
+                            to: fixture,
                     requestID: "unavailable-media-\(index)",
                     url: "https://media.example.com/unavailable-\(index).\(input.pathExtension)",
                     responseHeaders: ["content-type": input.mimeType],
@@ -1779,8 +1823,9 @@ struct NetworkDetailViewControllerTests {
                 let window = showInWindow(viewController)
                 defer { window.isHidden = true }
 
-                #expect(await waitUntilRendered(in: viewController) {
-                    viewController.currentModeForTesting == .preview
+                    #expect(
+                        await waitUntilRendered(in: viewController) {
+                            viewController.currentModeForTesting == .preview
                         && viewController.syntaxBodyViewControllerForTesting
                             .syntaxViewForTesting.text.isEmpty == false
                         && viewController.responseBodyFetchObservationDeliveryForTesting == nil
@@ -1792,8 +1837,9 @@ struct NetworkDetailViewControllerTests {
                 )
                 #expect(playerCreationCount == 0, Comment(rawValue: input.name))
                 #expect(request.responseBody.phase == .available, Comment(rawValue: input.name))
-                #expect(fixture.wire.observations.commands.filter {
-                    $0.method == "Network.getResponseBody"
+                    #expect(
+                        fixture.wire.observations.commands.filter {
+                            $0.method == "Network.getResponseBody"
                 }.isEmpty, Comment(rawValue: input.name))
             }
         }
@@ -1802,8 +1848,9 @@ struct NetworkDetailViewControllerTests {
     @Test
     func movieInstallsVisiblePlayerSurfaceBeforeResponseBodyLoads() async throws {
         try await withLiveNetworkContext { fixture in
-            let request = try #require(try await applyRequest(
-                to: fixture,
+                let request = try #require(
+                    try await applyRequest(
+                        to: fixture,
                 requestID: "full-movie",
                 url: "https://media.example.com/full.mp4",
                 responseHeaders: ["content-type": "video/mp4"],
@@ -1850,12 +1897,14 @@ struct NetworkDetailViewControllerTests {
             #expect(request.responseBody.phase == .fetching)
 
             bodyReplyGate.open()
-            #expect(await waitForNetworkBodyPhase(in: request.responseBody) { phase in
-                phase == .loaded
+                #expect(
+                    await waitForNetworkBodyPhase(in: request.responseBody) { phase in
+                        phase == .loaded
             } != nil)
             await waitUntilMediaPreviewPrepared(in: viewController)
-            #expect(await waitUntilRendered(in: viewController) {
-                bodyViewController.mediaPlayerURLForTesting?.pathExtension == "mp4"
+                #expect(
+                    await waitUntilRendered(in: viewController) {
+                        bodyViewController.mediaPlayerURLForTesting?.pathExtension == "mp4"
                     && bodyViewController.mediaPlayerItemForTesting != nil
                     && bodyViewController.isMoviePreviewStatusVisibleForTesting == false
             })
@@ -1899,11 +1948,13 @@ struct NetworkDetailViewControllerTests {
 
         try await withLiveNetworkContext { fixture in
             for (index, input) in inputs.enumerated() {
-                let remoteURL = try #require(URL(
-                    string: "https://media.example.com/partial-\(index).mp4"
+                    let remoteURL = try #require(
+                        URL(
+                            string: "https://media.example.com/partial-\(index).mp4"
                 ))
-                let request = try #require(try await applyRequest(
-                    to: fixture,
+                    let request = try #require(
+                        try await applyRequest(
+                            to: fixture,
                     requestID: input.id,
                     url: remoteURL.absoluteString,
                     responseHeaders: input.headers,
@@ -1923,8 +1974,9 @@ struct NetworkDetailViewControllerTests {
                 bodyViewController.setMoviePreviewPlayerFactoryForTesting(playerFactory.makePlayer)
                 let window = showInWindow(viewController)
 
-                #expect(await waitUntilRendered(in: viewController) {
-                    bodyViewController.mediaPlayerURLForTesting == remoteURL
+                    #expect(
+                        await waitUntilRendered(in: viewController) {
+                            bodyViewController.mediaPlayerURLForTesting == remoteURL
                         && bodyViewController.mediaPlayerItemForTesting != nil
                 })
                 let playerViewControllerIdentity = try #require(
@@ -1938,8 +1990,9 @@ struct NetworkDetailViewControllerTests {
                 #expect(request.responseBody.phase == .available)
                 #expect(bodyViewController.isMoviePreviewStatusVisibleForTesting == false)
 
-                let updatedRemoteURL = try #require(URL(
-                    string: "https://media.example.com/updated-partial-\(index).mp4"
+                    let updatedRemoteURL = try #require(
+                        URL(
+                            string: "https://media.example.com/updated-partial-\(index).mp4"
                 ))
                 try await applyResponseReceived(
                     to: fixture,
@@ -1952,8 +2005,9 @@ struct NetworkDetailViewControllerTests {
                     timestamp: 4
                 )
 
-                #expect(await waitUntilRendered(in: viewController) {
-                    bodyViewController.mediaPlayerURLForTesting == updatedRemoteURL
+                    #expect(
+                        await waitUntilRendered(in: viewController) {
+                            bodyViewController.mediaPlayerURLForTesting == updatedRemoteURL
                         && bodyViewController.mediaPlayerItemForTesting.map(ObjectIdentifier.init)
                             != itemIdentity
                 })
@@ -1966,8 +2020,9 @@ struct NetworkDetailViewControllerTests {
                     (bodyViewController.mediaPlayerItemForTesting?.asset as? AVURLAsset)?.url
                         == updatedRemoteURL
                 )
-                #expect(fixture.wire.observations.commands.filter {
-                    $0.method == "Network.getResponseBody"
+                    #expect(
+                        fixture.wire.observations.commands.filter {
+                            $0.method == "Network.getResponseBody"
                 }.isEmpty)
 
                 viewController.setModeForTesting(.headers)
@@ -1981,8 +2036,9 @@ struct NetworkDetailViewControllerTests {
     @Test
     func nonMediaErrorResponseStillFetchesItsInspectableBody() async throws {
         try await withLiveNetworkContext { fixture in
-            let request = try #require(try await applyRequest(
-                to: fixture,
+                let request = try #require(
+                    try await applyRequest(
+                        to: fixture,
                 requestID: "error-json",
                 url: "https://example.com/error.json",
                 responseHeaders: ["content-type": "application/json"],
@@ -2003,16 +2059,18 @@ struct NetworkDetailViewControllerTests {
                 message: "Inspectable error body fetch reached the wire."
             )
 
-            #expect(await waitUntilRendered(in: viewController) {
-                guard case .failed = request.responseBody.phase else {
+                #expect(
+                    await waitUntilRendered(in: viewController) {
+                        guard case .failed = request.responseBody.phase else {
                     return false
                 }
                 return viewController.syntaxBodyViewControllerForTesting
                     .syntaxViewForTesting.text
                     .contains("Inspectable error body fetch reached the wire.")
             })
-            #expect(fixture.wire.observations.commands.filter {
-                $0.method == "Network.getResponseBody"
+                #expect(
+                    fixture.wire.observations.commands.filter {
+                        $0.method == "Network.getResponseBody"
             }.count == 1)
         }
     }
@@ -2022,8 +2080,9 @@ struct NetworkDetailViewControllerTests {
         let fixture = try await CanonicalNetworkPanelFixture()
         let context = fixture.context
         let nodeID = DOM.Node.ID("101")
-        let firstRequest = try #require(await applyRequest(
-                to: fixture,
+            let firstRequest = try #require(
+                await applyRequest(
+                    to: fixture,
             requestID: "first-unplayed-playlist",
             url: "https://media.example.com/first-unplayed.m3u8",
             responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -2049,8 +2108,9 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didShowFirstRequest)
 
-        let secondRequest = try #require(await applyRequest(
-                to: fixture,
+            let secondRequest = try #require(
+                await applyRequest(
+                    to: fixture,
             requestID: "second-unplayed-playlist",
             url: "https://media.example.com/second-unplayed.m3u8",
             responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -2076,8 +2136,9 @@ struct NetworkDetailViewControllerTests {
         let context = fixture.context
         let nodeID = DOM.Node.ID("102")
         let playlistURL = "https://media.example.com/master.m3u8"
-        let playlist = try #require(await applyRequest(
-                to: fixture,
+            let playlist = try #require(
+                await applyRequest(
+                    to: fixture,
             requestID: "master-playlist",
             url: playlistURL,
             responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -2086,8 +2147,9 @@ struct NetworkDetailViewControllerTests {
             timestamp: 1,
             initiatorNodeID: nodeID
         ))
-        let partialSegment = try #require(await applyRequest(
-                to: fixture,
+            let partialSegment = try #require(
+                await applyRequest(
+                    to: fixture,
             requestID: "partial-segment",
             url: "https://media.example.com/segment.mp4",
             responseHeaders: [
@@ -2109,8 +2171,9 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        #expect(await waitUntilRendered(in: viewController) {
-            model.selectedRequests.count == 2
+            #expect(
+                await waitUntilRendered(in: viewController) {
+                    model.selectedRequests.count == 2
                 && viewController.previewRequestIDForTesting == playlist.id
                 && viewController.syntaxBodyViewControllerForTesting
                     .mediaPlayerURLForTesting?.absoluteString == playlistURL
@@ -2122,8 +2185,9 @@ struct NetworkDetailViewControllerTests {
         let fixture = try await CanonicalNetworkPanelFixture()
         let context = fixture.context
         let nodeID = DOM.Node.ID("103")
-        let healthyRequest = try #require(await applyRequest(
-                to: fixture,
+            let healthyRequest = try #require(
+                await applyRequest(
+                    to: fixture,
             requestID: "healthy-playlist",
             url: "https://media.example.com/healthy.m3u8",
             responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -2132,8 +2196,9 @@ struct NetworkDetailViewControllerTests {
             timestamp: 1,
             initiatorNodeID: nodeID
         ))
-        let cancelledRequest = try #require(await applyRequest(
-                to: fixture,
+            let cancelledRequest = try #require(
+                await applyRequest(
+                    to: fixture,
             requestID: "cancelled-playlist",
             url: "https://media.example.com/cancelled.m3u8",
             responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -2150,8 +2215,9 @@ struct NetworkDetailViewControllerTests {
             canceled: true,
             timestamp: 2.2
         )
-        let noContentRequest = try #require(await applyRequest(
-                to: fixture,
+            let noContentRequest = try #require(
+                await applyRequest(
+                    to: fixture,
             requestID: "no-content-playlist",
             url: "https://media.example.com/no-content.m3u8",
             responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -2170,14 +2236,18 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        #expect(await waitUntilRendered(in: viewController) {
-            model.selectedRequests.count == 3
+            #expect(
+                await waitUntilRendered(in: viewController) {
+                    model.selectedRequests.count == 3
                 && viewController.previewRequestIDForTesting == healthyRequest.id
                 && viewController.syntaxBodyViewControllerForTesting
                     .mediaPlayerURLForTesting?.absoluteString == "https://media.example.com/healthy.m3u8"
         })
-        #expect(cancelledRequest.responseBody.phase == .failed(.loadingFailed(
-            errorText: "Cancelled",
+            #expect(
+                cancelledRequest.responseBody.phase
+                    == .failed(
+                        .loadingFailed(
+                            errorText: "Cancelled",
             canceled: true
         )))
     }
@@ -2188,8 +2258,9 @@ struct NetworkDetailViewControllerTests {
         let context = fixture.context
         let nodeID = DOM.Node.ID("104")
         let playlistURL = "https://media.example.com/shared.m3u8"
-        let firstRequest = try #require(await applyRequest(
-                to: fixture,
+            let firstRequest = try #require(
+                await applyRequest(
+                    to: fixture,
             requestID: "first-shared-playlist",
             url: playlistURL,
             responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -2208,16 +2279,18 @@ struct NetworkDetailViewControllerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        #expect(await waitUntilRendered(in: viewController) {
-            viewController.previewRequestIDForTesting == firstRequest.id
+            #expect(
+                await waitUntilRendered(in: viewController) {
+                    viewController.previewRequestIDForTesting == firstRequest.id
                 && playerFactory.players.count == 1
         })
         let firstPlayerID = try #require(
             viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting
         )
 
-        let secondRequest = try #require(await applyRequest(
-                to: fixture,
+            let secondRequest = try #require(
+                await applyRequest(
+                    to: fixture,
             requestID: "second-shared-playlist",
             url: playlistURL,
             responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -2227,8 +2300,9 @@ struct NetworkDetailViewControllerTests {
             initiatorNodeID: nodeID
         ))
 
-        #expect(await waitUntilRendered(in: viewController) {
-            viewController.previewRequestIDForTesting == secondRequest.id
+            #expect(
+                await waitUntilRendered(in: viewController) {
+                    viewController.previewRequestIDForTesting == secondRequest.id
                 && playerFactory.players.count == 2
         })
         #expect(
@@ -2243,8 +2317,9 @@ struct NetworkDetailViewControllerTests {
         let fixture = try await CanonicalNetworkPanelFixture()
         let context = fixture.context
         let nodeID = DOM.Node.ID("105")
-        let playlist = try #require(await applyRequest(
-                to: fixture,
+            let playlist = try #require(
+                await applyRequest(
+                    to: fixture,
             requestID: "playlist",
             url: "https://media.example.com/master.m3u8",
             responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
@@ -2258,8 +2333,9 @@ struct NetworkDetailViewControllerTests {
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
-        #expect(await waitUntilRendered(in: viewController) {
-            viewController.headersTextViewForTesting.renderedTextForTesting.contains("master.m3u8")
+            #expect(
+                await waitUntilRendered(in: viewController) {
+                    viewController.headersTextViewForTesting.renderedTextForTesting.contains("master.m3u8")
         })
 
         model.setSearchText("does-not-match")
@@ -2267,8 +2343,9 @@ struct NetworkDetailViewControllerTests {
         #expect(model.entries.snapshot?.itemIDs.isEmpty == true)
 
         let segmentProxyID = Network.Request.ID("segment")
-        try await fixture.apply(.requestWillBeSent(
-            id: segmentProxyID,
+            try await fixture.apply(
+                .requestWillBeSent(
+                    id: segmentProxyID,
             request: Network.Request(
                 id: segmentProxyID,
                 url: "https://media.example.com/segment-1.ts",
@@ -2298,8 +2375,9 @@ struct NetworkDetailViewControllerTests {
         let fixture = try await CanonicalNetworkPanelFixture()
         let context = fixture.context
         let nodeID = DOM.Node.ID("106")
-        let fullRequest = try #require(await applyRequest(
-                to: fixture,
+            let fullRequest = try #require(
+                await applyRequest(
+                    to: fixture,
             requestID: "full",
             url: "https://media.example.com/full.mp4",
             responseHeaders: ["content-type": "video/mp4"],
@@ -2308,8 +2386,9 @@ struct NetworkDetailViewControllerTests {
             timestamp: 1,
             initiatorNodeID: nodeID
         ))
-        let partialRequest = try #require(await applyRequest(
-                to: fixture,
+            let partialRequest = try #require(
+                await applyRequest(
+                    to: fixture,
             requestID: "partial",
             url: "https://media.example.com/partial.mp4",
             requestHeaders: ["range": "bytes=0-1023"],
@@ -2323,8 +2402,9 @@ struct NetworkDetailViewControllerTests {
             timestamp: 3,
             initiatorNodeID: nodeID
         ))
-        let ignoredRangeRequest = try #require(await applyRequest(
-            to: fixture,
+            let ignoredRangeRequest = try #require(
+                await applyRequest(
+                    to: fixture,
             requestID: "ignored-range",
             url: "https://media.example.com/ignored-range.mp4",
             requestHeaders: ["range": "bytes=0-1023"],
@@ -2383,8 +2463,9 @@ struct NetworkDetailViewControllerTests {
             viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
         }
         #expect(didRenderMediaPreview)
-        let temporaryFileURL = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
-        #expect(playerFactory.players.count == 1)
+            let temporaryFileURL = try #require(
+                viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
+            #expect(playerFactory.players.count == 1)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
         viewController.setModeForTesting(.headers)
@@ -2402,8 +2483,9 @@ struct NetworkDetailViewControllerTests {
 
         let didRestoreMediaPreview = await waitUntilRendered(in: viewController) {
             viewController.currentModeForTesting == .preview
-                && viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
-        }
+                    && viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension
+                        == "mp4"
+            }
         #expect(didRestoreMediaPreview)
         #expect(playerFactory.players.count == 2)
     }
@@ -2439,9 +2521,11 @@ struct NetworkDetailViewControllerTests {
                 && viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting != nil
         }
         #expect(didRenderMediaPreview)
-        let temporaryFileURL = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
-        let playerIdentity = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting)
-        #expect(playerFactory.players.count == 1)
+            let temporaryFileURL = try #require(
+                viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
+            let playerIdentity = try #require(
+                viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting)
+            #expect(playerFactory.players.count == 1)
 
         applyResponseBody(
             to: fixture,
@@ -2451,16 +2535,18 @@ struct NetworkDetailViewControllerTests {
         )
 
         #expect(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == temporaryFileURL)
-        #expect(viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting == playerIdentity)
-        #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
+            #expect(
+                viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting == playerIdentity)
+            #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
         #expect(playerFactory.players.count == 1)
     }
 
     @Test
     func movieBodyRevisionClearsSourceWithoutReplacingPlayerSurface() async throws {
         let fixture = try await CanonicalNetworkPanelFixture()
-        let request = try #require(await applyRequest(
-            to: fixture,
+            let request = try #require(
+                await applyRequest(
+                    to: fixture,
             requestID: "revisioned-movie",
             url: "https://media.example.com/revisioned.mp4",
             responseHeaders: ["content-type": "video/mp4"],
@@ -2583,8 +2669,9 @@ struct NetworkDetailViewControllerTests {
             viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
         }
         #expect(didRenderMediaPreview)
-        let temporaryFileURL = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
-        let player = try #require(playerFactory.players.first)
+            let temporaryFileURL = try #require(
+                viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
+            let player = try #require(playerFactory.players.first)
         #expect(playerFactory.players.count == 1)
         #expect(player.pauseCallCount == 0)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
@@ -2635,8 +2722,9 @@ struct NetworkDetailViewControllerTests {
             viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
         }
         #expect(didRenderMediaPreview)
-        let temporaryFileURL = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
-        #expect(playerFactory.players.count == 1)
+            let temporaryFileURL = try #require(
+                viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
+            #expect(playerFactory.players.count == 1)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
         model.selectRequest(nil)
@@ -2652,8 +2740,10 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func hiddenMediaResponsePreviewReleasesPlayerAndTemporaryFileWhenSelectionClearsBeforeReappearing() async throws {
-        let fixture = try await CanonicalNetworkPanelFixture()
+        func hiddenMediaResponsePreviewReleasesPlayerAndTemporaryFileWhenSelectionClearsBeforeReappearing()
+            async throws
+        {
+            let fixture = try await CanonicalNetworkPanelFixture()
         let context = fixture.context
         let request = try #require(
             await applyRequest(
@@ -2681,8 +2771,9 @@ struct NetworkDetailViewControllerTests {
             viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
         }
         #expect(didRenderMediaPreview)
-        let temporaryFileURL = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
-        #expect(playerFactory.players.count == 1)
+            let temporaryFileURL = try #require(
+                viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
+            #expect(playerFactory.players.count == 1)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
         viewController.beginAppearanceTransition(false, animated: false)
@@ -2720,8 +2811,9 @@ struct NetworkDetailViewControllerTests {
                 responseMimeType: "image/png"
             )
         )
-        applyResponseBody(to: fixture, request: request, body: pngBase64String(size: imageSize), base64Encoded: true)
-        let model = try await NetworkPanelModel.make(context: context)
+            applyResponseBody(
+                to: fixture, request: request, body: pngBase64String(size: imageSize), base64Encoded: true)
+            let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         viewController.syntaxBodyViewControllerForTesting.additionalSafeAreaInsets = UIEdgeInsets(
@@ -2738,8 +2830,9 @@ struct NetworkDetailViewControllerTests {
         let didRenderImage = await waitUntilRendered(in: viewController) {
             let bodyViewController = viewController.syntaxBodyViewControllerForTesting
             let imageLayout = bodyViewController.imagePreviewRenderSnapshotForTesting
-            let didCompleteImageLayout = imageLayout.map { layout in
-                let fitScale = min(
+                let didCompleteImageLayout =
+                    imageLayout.map { layout in
+                        let fitScale = min(
                     layout.visibleBoundsSize.width / layout.imageSize.width,
                     layout.visibleBoundsSize.height / layout.imageSize.height
                 )
@@ -2778,8 +2871,9 @@ struct NetworkDetailViewControllerTests {
                 responseMimeType: "image/png"
             )
         )
-        applyResponseBody(to: fixture, request: request, body: pngBase64String(size: imageSize), base64Encoded: true)
-        let model = try await NetworkPanelModel.make(context: context)
+            applyResponseBody(
+                to: fixture, request: request, body: pngBase64String(size: imageSize), base64Encoded: true)
+            let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -2826,8 +2920,9 @@ struct NetworkDetailViewControllerTests {
                 responseMimeType: "image/png"
             )
         )
-        applyResponseBody(to: fixture, request: request, body: pngBase64String(size: imageSize), base64Encoded: true)
-        let model = try await NetworkPanelModel.make(context: context)
+            applyResponseBody(
+                to: fixture, request: request, body: pngBase64String(size: imageSize), base64Encoded: true)
+            let model = try await NetworkPanelModel.make(context: context)
         model.selectRequest(request)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -2868,8 +2963,9 @@ struct NetworkDetailViewControllerTests {
             viewController.setModeForTesting(.preview)
 
             #expect(request.responseBody.phase == .available)
-            #expect(fixture.wire.observations.commands.contains {
-                $0.method == "Network.getResponseBody"
+                #expect(
+                    fixture.wire.observations.commands.contains {
+                        $0.method == "Network.getResponseBody"
             } == false)
 
             await fixture.wire.fail(
@@ -2889,8 +2985,9 @@ struct NetworkDetailViewControllerTests {
                 return true
             }
             #expect(didFetch)
-            #expect(fixture.wire.observations.commands.filter {
-                $0.method == "Network.getResponseBody"
+                #expect(
+                    fixture.wire.observations.commands.filter {
+                        $0.method == "Network.getResponseBody"
             }.count == 1)
         }
     }
@@ -2913,8 +3010,9 @@ struct NetworkDetailViewControllerTests {
                 message: "Intentional response-body failure."
             )
             model.fetchResponseBodyIfNeeded(for: request)
-            let didFailInitialFetch = await waitForNetworkBodyPhase(in: request.responseBody) { phase in
-                if case .failed = phase {
+                let didFailInitialFetch =
+                    await waitForNetworkBodyPhase(in: request.responseBody) { phase in
+                        if case .failed = phase {
                     return true
                 }
                 return false
@@ -2930,8 +3028,9 @@ struct NetworkDetailViewControllerTests {
             let didRenderFailure = await waitUntilRendered(in: viewController) {
                 viewController.currentModeForTesting == .preview
                     && viewController.currentPreviewRoleForTesting == .response
-                    && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text.isEmpty == false
-            }
+                        && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text.isEmpty
+                            == false
+                }
             #expect(didRenderFailure)
             let failedPhase = request.responseBody.phase
 
@@ -2941,8 +3040,9 @@ struct NetworkDetailViewControllerTests {
                 request.responseBody.phase == failedPhase
             }
             #expect(didStayIdle)
-            #expect(fixture.wire.observations.commands.filter {
-                $0.method == "Network.getResponseBody"
+                #expect(
+                    fixture.wire.observations.commands.filter {
+                        $0.method == "Network.getResponseBody"
             }.count == 1)
         }
     }
@@ -2969,8 +3069,9 @@ struct NetworkDetailViewControllerTests {
 
         let didRenderHeaders = await waitUntilRendered(in: viewController) {
             viewController.currentModeForTesting == .headers
-                && viewController.headersTextViewForTesting.renderedTextForTesting.contains("content-type: application/json")
-        }
+                    && viewController.headersTextViewForTesting.renderedTextForTesting.contains(
+                        "content-type: application/json")
+            }
         #expect(didRenderHeaders)
         #expect(request.responseBody.phase == .available)
     }
@@ -2997,8 +3098,9 @@ struct NetworkDetailViewControllerTests {
         viewController.setModeForTesting(.headers)
 
         let didRenderHeaders = await waitUntilRendered(in: viewController) {
-            viewController.headersTextViewForTesting.renderedTextForTesting.contains("content-type: application/json")
-        }
+                viewController.headersTextViewForTesting.renderedTextForTesting.contains(
+                    "content-type: application/json")
+            }
         #expect(didRenderHeaders)
 
         let selectedRange = NSRange(location: 2, length: 4)
@@ -3014,8 +3116,9 @@ struct NetworkDetailViewControllerTests {
         )
 
         #expect(request.encodedDataLength == 64)
-        #expect(viewController.headersTextViewForTesting.attributedTextAssignmentCountForTesting == assignmentCount)
-        #expect(viewController.headersTextViewForTesting.selectedRangeForTesting == selectedRange)
+            #expect(
+                viewController.headersTextViewForTesting.attributedTextAssignmentCountForTesting == assignmentCount)
+            #expect(viewController.headersTextViewForTesting.selectedRangeForTesting == selectedRange)
     }
 
     @Test
@@ -3172,9 +3275,11 @@ struct NetworkDetailViewControllerTests {
             timestamp: 4
         )
 
-        #expect(viewController.headersTextViewForTesting.renderedTextForTesting.contains("x-old-request: stale") == false)
+            #expect(
+                viewController.headersTextViewForTesting.renderedTextForTesting.contains("x-old-request: stale")
+                    == false)
 
-        try await applyResponseReceived(
+            try await applyResponseReceived(
             to: fixture,
             requestID: "2",
             url: "https://example.com/second.json",
@@ -3250,8 +3355,9 @@ struct NetworkDetailViewControllerTests {
     func compactContainerPushesAndPopsDetailFromSelection() async throws {
         let fixture = try await CanonicalNetworkPanelFixture()
         let context = fixture.context
-        let request = try #require(await applyRequest(to: fixture, requestID: "1", url: "https://example.com/app.js"))
-        let model = try await NetworkPanelModel.make(context: context)
+            let request = try #require(
+                await applyRequest(to: fixture, requestID: "1", url: "https://example.com/app.js"))
+            let model = try await NetworkPanelModel.make(context: context)
         let listViewController = NetworkListViewController(model: model)
         let detailViewController = makeNetworkDetailViewController(model: model)
         let navigationController = NetworkCompactNavigationController(
@@ -3304,8 +3410,9 @@ struct NetworkDetailViewControllerTests {
         #expect(didPush)
         await waitForNavigationTransitionToFinish(in: navigationController)
 
-        let poppedViewController = navigationController
-            .popDetailFromUserNavigationForTesting()
+            let poppedViewController =
+                navigationController
+                .popDetailFromUserNavigationForTesting()
         #expect(poppedViewController === detailViewController)
         let didReturnToList = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers == [listViewController]
@@ -3340,8 +3447,9 @@ struct NetworkDetailViewControllerTests {
         navigationController.syncStackForTesting()
         #expect(navigationController.viewControllers == [listViewController, detailViewController])
 
-        let poppedViewController = navigationController
-            .popDetailFromUserNavigationForTesting()
+            let poppedViewController =
+                navigationController
+                .popDetailFromUserNavigationForTesting()
         navigationController.syncStackForTesting()
 
         #expect(poppedViewController === detailViewController)
@@ -3404,8 +3512,9 @@ struct NetworkDetailViewControllerTests {
         model.selectRequest(firstRequest)
         navigationController.syncStackForTesting()
 
-        let poppedViewController = navigationController
-            .popDetailFromUserNavigationForTesting()
+            let poppedViewController =
+                navigationController
+                .popDetailFromUserNavigationForTesting()
         model.selectRequest(secondRequest)
         navigationController.syncStackForTesting()
 
@@ -3421,8 +3530,9 @@ struct NetworkDetailViewControllerTests {
         let fixture = try await CanonicalNetworkPanelFixture()
         let context = fixture.context
         let nodeID = DOM.Node.ID("107")
-        let firstRequest = try #require(await applyRequest(
-            to: fixture,
+            let firstRequest = try #require(
+                await applyRequest(
+                    to: fixture,
             requestID: "first",
             url: "https://media.example.com/first.ts",
             resourceType: .media,
@@ -3439,11 +3549,13 @@ struct NetworkDetailViewControllerTests {
         model.selectRequest(firstRequest)
         navigationController.syncStackForTesting()
 
-        let poppedViewController = navigationController
-            .popDetailFromUserNavigationForTesting()
+            let poppedViewController =
+                navigationController
+                .popDetailFromUserNavigationForTesting()
         try await fixture.clear()
-        let replacementRequest = try #require(try await applyRequest(
-            to: fixture,
+            let replacementRequest = try #require(
+                try await applyRequest(
+                    to: fixture,
             requestID: "replacement",
             url: "https://media.example.com/replacement.ts",
             resourceType: .media,
@@ -3499,11 +3611,13 @@ struct NetworkDetailViewControllerTests {
         await waitUntilMediaPreviewPrepared(in: detailViewController)
 
         let didRenderMediaPreview = await waitUntilRendered(in: detailViewController) {
-            detailViewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
-        }
+                detailViewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension
+                    == "mp4"
+            }
         #expect(didRenderMediaPreview)
-        let temporaryFileURL = try #require(detailViewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
-        #expect(playerFactory.players.count == 1)
+            let temporaryFileURL = try #require(
+                detailViewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
+            #expect(playerFactory.players.count == 1)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
         model.selectRequest(nil)
@@ -3522,8 +3636,9 @@ struct NetworkDetailViewControllerTests {
     func compactContainerPopsDetailWhenSelectedRequestDisappears() async throws {
         let fixture = try await CanonicalNetworkPanelFixture()
         let context = fixture.context
-        let request = try #require(await applyRequest(to: fixture, requestID: "1", url: "https://example.com/app.js"))
-        let model = try await NetworkPanelModel.make(context: context)
+            let request = try #require(
+                await applyRequest(to: fixture, requestID: "1", url: "https://example.com/app.js"))
+            let model = try await NetworkPanelModel.make(context: context)
         let listViewController = NetworkListViewController(model: model)
         let detailViewController = makeNetworkDetailViewController(model: model)
         let navigationController = NetworkCompactNavigationController(
@@ -3736,8 +3851,9 @@ struct NetworkDetailViewControllerTests {
     }
 
     private func withLiveNetworkContext<Output>(
-        _ operation: @MainActor (CanonicalNetworkPanelFixture) async throws
-            -> Output
+            _ operation:
+                @MainActor (CanonicalNetworkPanelFixture) async throws
+                -> Output
     ) async throws -> Output {
         let fixture = try await CanonicalNetworkPanelFixture()
         let result: Result<Output, any Error>
@@ -4036,8 +4152,9 @@ struct NetworkDetailViewControllerTests {
         if await waitUntilRendered(in: viewController, condition) {
             return true
         }
-        await viewController.syntaxBodyViewControllerForTesting.waitUntilTextPreviewPreparationFinishedForTesting()
-        return await waitUntilRendered(in: viewController, condition)
+            await viewController.syntaxBodyViewControllerForTesting
+                .waitUntilTextPreviewPreparationFinishedForTesting()
+            return await waitUntilRendered(in: viewController, condition)
     }
 
     private func waitUntilListShowsEntries(
@@ -4045,10 +4162,12 @@ struct NetworkDetailViewControllerTests {
         in viewController: NetworkListViewController,
         afterFetchedResultsRevision fetchedResultsRevision: UInt64
     ) async -> Bool {
-        guard await viewController.waitForFetchedResultsRevisionForTesting(
-            fetchedResultsRevision + 1
-        ) else {
-            return false
+            guard
+                await viewController.waitForFetchedResultsRevisionForTesting(
+                    fetchedResultsRevision + 1
+                )
+            else {
+                return false
         }
         await viewController.flushPendingSnapshotUpdateForTesting()
         return viewController.displayedEntryIDsForTesting == entryIDs
@@ -4057,8 +4176,9 @@ struct NetworkDetailViewControllerTests {
     private func waitUntilMediaPreviewPrepared(
         in viewController: NetworkDetailViewController
     ) async {
-        await viewController.syntaxBodyViewControllerForTesting.waitUntilMediaPreviewPreparationFinishedForTesting()
-        viewController.view.layoutIfNeeded()
+            await viewController.syntaxBodyViewControllerForTesting
+                .waitUntilMediaPreviewPreparationFinishedForTesting()
+            viewController.view.layoutIfNeeded()
     }
 
     private func waitUntilNavigationStackSynced(
@@ -4085,21 +4205,27 @@ struct NetworkDetailViewControllerTests {
         in navigationController: UINavigationController,
         _ condition: @escaping @MainActor @Sendable () -> Bool
     ) async -> Bool {
-        guard let compactNavigationController = navigationController as? NetworkCompactNavigationController else {
-            return condition()
+            guard let compactNavigationController = navigationController as? NetworkCompactNavigationController
+            else {
+                return condition()
         }
         return await waitUntilNavigationStackSynced(in: compactNavigationController, condition)
     }
 
-    private func observationDeliveries(in viewController: NetworkDetailViewController) -> [PortableObservationTracking.Token] {
-        var deliveries = [
+        private func observationDeliveries(in viewController: NetworkDetailViewController)
+            -> [PortableObservationTracking.Token]
+        {
+            var deliveries = [
             viewController.modelObservationDeliveryForTesting,
             viewController.selectedRequestRenderObservationDeliveryForTesting,
             viewController.responseBodyFetchObservationDeliveryForTesting,
         ].compactMap { $0 }
-        if let syntaxBodyViewController = viewController.bodyViewControllerForTesting as? NetworkBodyViewController {
-            deliveries.append(contentsOf: [
-                syntaxBodyViewController.bodyObservationDeliveryForTesting,
+            if let syntaxBodyViewController = viewController.bodyViewControllerForTesting
+                as? NetworkBodyViewController
+            {
+                deliveries.append(
+                    contentsOf: [
+                        syntaxBodyViewController.bodyObservationDeliveryForTesting,
                 syntaxBodyViewController.previewRenderObservationDeliveryForTesting,
             ].compactMap { $0 })
         }
@@ -4143,9 +4269,11 @@ struct NetworkDetailViewControllerTests {
     }
 
     private func localizedResourceString(_ key: String, locale: String) -> String? {
-        guard let bundleURL = WebInspectorUILocalization.bundle.url(forResource: locale, withExtension: "lproj"),
-              let bundle = Bundle(url: bundleURL) else {
-            return nil
+            guard
+                let bundleURL = WebInspectorUILocalization.bundle.url(forResource: locale, withExtension: "lproj"),
+                let bundle = Bundle(url: bundleURL)
+            else {
+                return nil
         }
         return bundle.localizedString(forKey: key, value: nil, table: nil)
     }
@@ -4167,7 +4295,8 @@ struct NetworkDetailViewControllerTests {
 private func makeNetworkDetailViewController(
     model: NetworkPanelModel,
     initialMode: NetworkDetailViewController.Mode = .headers,
-    makeBodyViewController: @escaping NetworkBodyViewControllerFactory = NetworkBodyPreviewFactory.make(scrollEdgeSink:)
+    makeBodyViewController: @escaping NetworkBodyViewControllerFactory = NetworkBodyPreviewFactory.make(
+        scrollEdgeSink:)
 ) -> NetworkDetailViewController {
     NetworkDetailViewController(
         model: model,

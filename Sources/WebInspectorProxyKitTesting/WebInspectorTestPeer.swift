@@ -219,17 +219,33 @@ public actor WebInspectorTestPeer {
     ) async throws {
         let route = try await takeReplyRoute(for: command)
         do {
-            try await receive(replyMessages(for: route, result: result, errorMessage: nil))
+            try await receive(
+                replyMessages(
+                    for: route,
+                    result: result,
+                    protocolError: nil
+                )
+            )
         } catch WebInspectorTestPeerError.connectionClosed {
             throw WebInspectorTestPeerError.staleCommand
         }
     }
 
     /// Sends one failing protocol reply for `command`.
-    public func fail(_ command: Command, message: String) async throws {
+    public func fail(
+        _ command: Command,
+        code: Int? = nil,
+        message: String
+    ) async throws {
         let route = try await takeReplyRoute(for: command)
         do {
-            try await receive(replyMessages(for: route, result: nil, errorMessage: message))
+            try await receive(
+                replyMessages(
+                    for: route,
+                    result: nil,
+                    protocolError: (code, message)
+                )
+            )
         } catch WebInspectorTestPeerError.connectionClosed {
             throw WebInspectorTestPeerError.staleCommand
         }
@@ -263,8 +279,9 @@ public actor WebInspectorTestPeer {
         from oldTargetID: String,
         to newTargetID: String
     ) async throws {
-        let parameters = try WebInspectorTestJSONObject(encoding:
-            TargetCommitParameters(oldTargetId: oldTargetID, newTargetId: newTargetID)
+        let parameters = try WebInspectorTestJSONObject(
+            encoding:
+                TargetCommitParameters(oldTargetId: oldTargetID, newTargetId: newTargetID)
         )
         try await emitRootEvent(
             method: "Target.didCommitProvisionalTarget",
@@ -274,8 +291,9 @@ public actor WebInspectorTestPeer {
 
     /// Emits a raw `Target.targetDestroyed` event and waits until Core applies it.
     public func destroyTarget(id: String) async throws {
-        let parameters = try WebInspectorTestJSONObject(encoding:
-            TargetDestroyedParameters(targetId: id)
+        let parameters = try WebInspectorTestJSONObject(
+            encoding:
+                TargetDestroyedParameters(targetId: id)
         )
         try await emitRootEvent(method: "Target.targetDestroyed", parameters: parameters)
     }
@@ -287,7 +305,7 @@ public actor WebInspectorTestPeer {
         parameters: WebInspectorTestJSONObject = .empty
     ) async throws {
         try await receive([
-            try Self.eventMessage(method: method, parameters: parameters),
+            try Self.eventMessage(method: method, parameters: parameters)
         ])
     }
 
@@ -300,7 +318,7 @@ public actor WebInspectorTestPeer {
     ) async throws {
         let innerMessage = try Self.eventMessage(method: method, parameters: parameters)
         try await receive([
-            try Self.targetDispatchMessage(targetID: targetID, message: innerMessage),
+            try Self.targetDispatchMessage(targetID: targetID, message: innerMessage)
         ])
     }
 
@@ -381,7 +399,8 @@ public actor WebInspectorTestPeer {
 
     private func takeReplyRoute(for command: Command) async throws -> ReplyRoute {
         guard command.correlation.peerID == peerID,
-              command.correlation.ordinal <= nextCommandOrdinal else {
+            command.correlation.ordinal <= nextCommandOrdinal
+        else {
             throw WebInspectorTestPeerError.foreignCommand
         }
         guard case .open = state else {
@@ -398,9 +417,11 @@ public actor WebInspectorTestPeer {
         guard case .open = state else {
             throw WebInspectorTestPeerError.staleCommand
         }
-        guard let route = outstandingCommands.removeValue(
-            forKey: command.correlation.ordinal
-        ) else {
+        guard
+            let route = outstandingCommands.removeValue(
+                forKey: command.correlation.ordinal
+            )
+        else {
             throw WebInspectorTestPeerError.commandAlreadyCompleted
         }
         return route
@@ -410,7 +431,8 @@ public actor WebInspectorTestPeer {
         let admittedCore = try await requireCoreAdmission()
         guard case .open = state,
               let receiver,
-              core === admittedCore else {
+            core === admittedCore
+        else {
             throw WebInspectorTestPeerError.connectionClosed
         }
         precondition(messages.isEmpty == false, "A test peer receive must contain at least one message.")
@@ -470,7 +492,7 @@ public actor WebInspectorTestPeer {
     private func replyMessages(
         for route: ReplyRoute,
         result: WebInspectorTestJSONObject?,
-        errorMessage: String?
+        protocolError: (code: Int?, message: String)?
     ) throws -> [String] {
         switch route {
         case let .root(commandID):
@@ -478,19 +500,19 @@ public actor WebInspectorTestPeer {
                 try Self.replyMessage(
                     commandID: commandID,
                     result: result,
-                    errorMessage: errorMessage
-                ),
+                    protocolError: protocolError
+                )
             ]
         case let .target(targetID, innerCommandID, outerCommandID):
             let outerAcknowledgement = try Self.replyMessage(
                 commandID: outerCommandID,
                 result: .empty,
-                errorMessage: nil
+                protocolError: nil
             )
             let innerReply = try Self.replyMessage(
                 commandID: innerCommandID,
                 result: result,
-                errorMessage: errorMessage
+                protocolError: protocolError
             )
             return [
                 outerAcknowledgement,
@@ -515,7 +537,8 @@ public actor WebInspectorTestPeer {
         guard let data = message.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let outerID = commandID(in: object),
-              let method = object["method"] as? String else {
+            let method = object["method"] as? String
+        else {
             throw WebInspectorTestPeerError.malformedOutboundCommand
         }
 
@@ -536,7 +559,8 @@ public actor WebInspectorTestPeer {
               let innerObject = try? JSONSerialization.jsonObject(with: innerData) as? [String: Any],
               let innerID = commandID(in: innerObject),
               let innerMethod = innerObject["method"] as? String,
-              innerMethod != "Target.sendMessageToTarget" else {
+            innerMethod != "Target.sendMessageToTarget"
+        else {
             throw WebInspectorTestPeerError.malformedOutboundCommand
         }
 
@@ -554,14 +578,16 @@ public actor WebInspectorTestPeer {
 
     private static func commandID(in object: [String: Any]) -> UInt64? {
         guard let number = object["id"] as? NSNumber,
-              CFGetTypeID(number) != CFBooleanGetTypeID() else {
+            CFGetTypeID(number) != CFBooleanGetTypeID()
+        else {
             return nil
         }
         let value = number.doubleValue
         guard value.isFinite,
               value >= 0,
               value.rounded(.towardZero) == value,
-              value <= Double(UInt64.max) else {
+            value <= Double(UInt64.max)
+        else {
             return nil
         }
         return number.uint64Value
@@ -589,10 +615,12 @@ public actor WebInspectorTestPeer {
     private static func replyMessage(
         commandID: UInt64,
         result: WebInspectorTestJSONObject?,
-        errorMessage: String?
+        protocolError: (code: Int?, message: String)?
     ) throws -> String {
-        if let errorMessage {
-            return "{\"id\":\(commandID),\"error\":{\"message\":\(try jsonStringLiteral(errorMessage))}}"
+        if let protocolError {
+            let code = protocolError.code.map { "\"code\":\($0)," } ?? ""
+            return
+                "{\"id\":\(commandID),\"error\":{\(code)\"message\":\(try jsonStringLiteral(protocolError.message))}}"
         }
         guard let result else {
             preconditionFailure("A successful test reply requires a result object.")
@@ -604,9 +632,8 @@ public actor WebInspectorTestPeer {
         targetID: String,
         message: String
     ) throws -> String {
-        "{\"method\":\"Target.dispatchMessageFromTarget\",\"params\":{" +
-            "\"targetId\":\(try jsonStringLiteral(targetID))," +
-            "\"message\":\(try jsonStringLiteral(message))}}"
+        "{\"method\":\"Target.dispatchMessageFromTarget\",\"params\":{"
+            + "\"targetId\":\(try jsonStringLiteral(targetID))," + "\"message\":\(try jsonStringLiteral(message))}}"
     }
 
     private static func jsonStringLiteral(_ value: String) throws -> String {
@@ -770,7 +797,8 @@ private final class WebInspectorTestCommandMailbox: Sendable {
 
     private func compactCommandsIfNeeded(in state: inout State) {
         guard state.commandStartIndex > 64,
-              state.commandStartIndex * 2 >= state.commands.count else {
+            state.commandStartIndex * 2 >= state.commands.count
+        else {
             return
         }
         state.commands.removeFirst(state.commandStartIndex)

@@ -6,11 +6,6 @@ package enum WebInspectorNetworkWireEvent: Sendable {
     case page(WebInspectorRoutedEvent<Page.Event>)
 }
 
-private struct WebInspectorNetworkRecoveryRequest: Error, Sendable {
-    let reason: WebInspectorRecoveryReason
-    let fingerprint: WebInspectorRecoveryFingerprint
-}
-
 private enum WebInspectorNetworkBodyLocator: Sendable {
     case network(
         rawID: Network.Request.ID,
@@ -34,12 +29,9 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
     private var orderedScope: WebInspectorOrderedEventScope<WebInspectorNetworkWireEvent>?
     private var canonicalStore: CanonicalNetworkStore?
     private var bodyLocators: [CanonicalNetworkRequestIDStorage: WebInspectorNetworkBodyLocator] = [:]
-    private var navigationEpochs: [
-        WebInspectorTarget.ID: WebInspectorNavigationEpoch
-    ] = [:]
+    private var navigationEpochs: [WebInspectorTarget.ID: WebInspectorNavigationEpoch] = [:]
     private var frameLoaderIDs: [FrameLoaderKey: String] = [:]
     private var state: WebInspectorFeatureState = .disabled
-    private var recoveryBudget = WebInspectorFeatureRecoveryBudget()
     private var closeRequested = false
     private var isConsumingOrderedScopeEvents = false
 
@@ -54,7 +46,6 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
         self.connection = connection
         storeSink = store
         closeRequested = false
-        recoveryBudget = WebInspectorFeatureRecoveryBudget()
         navigationEpochs.removeAll(keepingCapacity: true)
         frameLoaderIDs.removeAll(keepingCapacity: true)
         if let canonicalStore {
@@ -65,54 +56,37 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
         } else {
             canonicalStore = CanonicalNetworkStore(storeID: connection.storeID)
         }
-        await publish(.synchronizing(generation: await currentGeneration()))
-
-        while !closeRequested {
-            do {
-                try await runOrderedScope()
-                return closeRequested ? .detached : .connectionFailed(
+        do {
+            try await publish(.synchronizing(generation: try await currentGeneration()))
+            try await runOrderedScope()
+            return closeRequested
+                ? .detached
+                : .connectionFailed(
                     connectionFailure(
                         code: "network.scope.ended",
                         phase: "events",
                         message: "The Network event scope ended unexpectedly."
                     )
                 )
-            } catch is CancellationError {
+        } catch is CancellationError {
+            return .detached
+        } catch let WebInspectorProxyError.unsupported(requirements) {
+            await orderedScope?.close()
+            orderedScope = nil
+            guard !closeRequested else { return .detached }
+            do {
+                try await publish(
+                    .unsupported(requirements: requirements.sorted())
+                )
                 return .detached
-            } catch let request as WebInspectorNetworkRecoveryRequest {
-                let generation = await currentGeneration()
-                switch recoveryBudget.consume(request.fingerprint, generation: generation) {
-                case .retry:
-                    await publish(.recovering(generation: generation, reason: request.reason))
-                case .repeatedFingerprint, .generationBudgetExhausted:
-                    let summary = WebInspectorFailureDescription(
-                        code: "network.recovery.exhausted",
-                        phase: request.fingerprint.phase,
-                        message: String(describing: request.reason)
-                    )
-                    return await becomeUnavailable(
-                        .recoveryBudgetExhausted(summary),
-                        generation: generation
-                    )
-                }
             } catch {
-                if isConnectionTerminal(error) {
-                    await orderedScope?.close()
-                    orderedScope = nil
-                    return termination(for: error)
-                }
-                let featureError = (error as? WebInspectorFeatureError)
-                    ?? .bootstrap(
-                        webInspectorFailureDescription(
-                            error,
-                            code: "network.bootstrap.failed",
-                            phase: "bootstrap"
-                        )
-                    )
-                return await becomeUnavailable(featureError)
+                return termination(for: error)
             }
+        } catch {
+            await orderedScope?.close()
+            orderedScope = nil
+            return closeRequested ? .detached : termination(for: error)
         }
-        return .detached
     }
 
     package func close() async {
@@ -225,7 +199,7 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
             for try await event in scope.events {
                 if closeRequested { return }
                 if case let .reset(generation) = event {
-                    await publish(
+                    try await publish(
                         .synchronizing(
                             generation: WebInspectorPageGeneration(
                                 rawValue: generation.rawValue
@@ -254,16 +228,10 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                         publishesTransaction: true
                     )
                 } catch let error as CanonicalNetworkProtocolViolation {
-                    throw recovery(
+                    throw connectionFailure(
                         code: "network.protocol.\(String(describing: error))",
                         phase: "events",
-                        reason: .malformedDomainEvent(
-                            webInspectorFailureDescription(
-                                error,
-                                code: "network.protocol",
-                                phase: "events"
-                            )
-                        )
+                        message: String(describing: error)
                     )
                 }
                 canonicalStore = staged
@@ -290,7 +258,7 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
             let prefix = try await scope.drain(through: reply.boundary)
             if closeRequested { throw CancellationError() }
             if prefix.contains(where: invalidatesBootstrap) {
-                await publish(.synchronizing(generation: await currentGeneration()))
+                try await publish(.synchronizing(generation: try await currentGeneration()))
                 continue
             }
 
@@ -308,7 +276,8 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                 default: WebInspectorDOMBindingTimeline()
             )
             let oldSnapshot = canonicalStore?.snapshot
-            var staged = canonicalStore
+            var staged =
+                canonicalStore
                 ?? CanonicalNetworkStore(storeID: connection.storeID)
             try staged.prepareBootstrap(
                 attachmentGeneration: connection.attachmentGeneration,
@@ -390,7 +359,8 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                 frameLoaderIDs = frameLoaderIDs.filter {
                     $0.key.frameID != frameID
                 }
-                let lostTargetID = route.agentTarget.frameID == frameID
+                let lostTargetID =
+                    route.agentTarget.frameID == frameID
                     ? route.semanticTargetID
                     : WebInspectorTarget.ID(frameID.rawValue)
                 let transaction = try staged.targetWasLost(
@@ -413,11 +383,13 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                 timeline: timeline,
                 staged: staged
             )
-            guard let transaction = try staged.reduce(
-                routed.value,
+            guard
+                let transaction = try staged.reduce(
+                    routed.value,
                 scope: canonicalScope,
                 origin: origin
-            ) else {
+                )
+            else {
                 installLiveLocators(from: staged, into: &locators)
                 return
             }
@@ -458,14 +430,16 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
         let currentRequestIDs = Set(current.requests.map { NetworkRequest.ID(canonical: $0.record.id) })
         let currentEntryIDs = Set(current.entries.map { NetworkEntry.ID(canonical: $0.record.id) })
         if let previous {
-            transaction.append(contentsOf: previous.requests.compactMap { entry in
-                let id = NetworkRequest.ID(canonical: entry.record.id)
+            transaction.append(
+                contentsOf: previous.requests.compactMap { entry in
+                    let id = NetworkRequest.ID(canonical: entry.record.id)
                 return currentRequestIDs.contains(id)
                     ? nil
                     : webInspectorNetworkRequestSchema.delete(id: id)
             })
-            transaction.append(contentsOf: previous.entries.compactMap { entry in
-                let id = NetworkEntry.ID(canonical: entry.record.id)
+            transaction.append(
+                contentsOf: previous.entries.compactMap { entry in
+                    let id = NetworkEntry.ID(canonical: entry.record.id)
                 return currentEntryIDs.contains(id)
                     ? nil
                     : webInspectorNetworkEntrySchema.delete(id: id)
@@ -588,10 +562,12 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
             if rawOrigin.targetID == route.agentTargetID.rawValue {
                 semanticTargetID = route.semanticTargetID
             } else {
-                semanticTargetID = rawOrigin.targetID.map(WebInspectorTarget.ID.init)
+                semanticTargetID =
+                    rawOrigin.targetID.map(WebInspectorTarget.ID.init)
                     ?? route.semanticTargetID
             }
-            let origin: CanonicalNetworkRequestOrigin = rawOrigin.targetID == nil
+            let origin: CanonicalNetworkRequestOrigin =
+                rawOrigin.targetID == nil
                 ? .mappedFrame(frameID: rawOrigin.frameID, targetID: semanticTargetID)
                 : .protocolTarget(semanticTargetID)
             let binding = timeline.scope(
@@ -663,7 +639,8 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
         )
         let previous = frameLoaderIDs.updateValue(frame.loaderID, forKey: key)
         guard previous != frame.loaderID,
-            route.agentTarget.frameID == frame.id else {
+            route.agentTarget.frameID == frame.id
+        else {
             return
         }
         let current = navigationEpoch(for: route.semanticTargetID)
@@ -723,20 +700,15 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
         from event: WebInspectorRoutedEvent<Value>
     ) throws -> WebInspectorFeatureEventScope {
         guard let semantic = event.semanticTarget, let agent = event.agentTarget else {
-            throw recovery(
+            throw connectionFailure(
                 code: "network.route.missing",
-                phase: "events",
-                reason: .malformedDomainEvent(
-                    WebInspectorFailureDescription(
-                        code: "network.route.missing",
                         phase: "events",
                         message: "Network event lacked semantic or agent target authority."
-                    )
-                )
             )
         }
         let agentTarget = WebInspectorFeatureTarget(agent)
-        let semanticTarget = agentTarget.kind == .frame
+        let semanticTarget =
+            agentTarget.kind == .frame
             ? agentTarget
             : WebInspectorFeatureTarget(semantic)
         return WebInspectorFeatureEventScope(
@@ -776,33 +748,18 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
         }
     }
 
-    private func recovery(
-        code: String,
-        phase: String,
-        reason: WebInspectorRecoveryReason
-    ) -> WebInspectorNetworkRecoveryRequest {
-        WebInspectorNetworkRecoveryRequest(
-            reason: reason,
-            fingerprint: WebInspectorRecoveryFingerprint(
-                code: code,
-                phase: phase
-            )
-        )
-    }
-
     private func transition(to newState: WebInspectorFeatureState) {
         webInspectorLogFeatureTransition(feature: .network, from: state, to: newState)
         state = newState
         registry.publish(newState, for: .network)
     }
 
-    private func publish(_ newState: WebInspectorFeatureState) async {
+    private func publish(_ newState: WebInspectorFeatureState) async throws {
         if let storeSink {
             var transaction = WebInspectorModelTransaction()
             transaction.setFeatureState(newState, for: .network)
-            if let revision = try? await storeSink.commit(transaction),
-                case let .ready(generation, _) = newState
-            {
+            let revision = try await storeSink.commit(transaction)
+            if case let .ready(generation, _) = newState {
                 transition(to: .ready(generation: generation, revision: revision))
                 return
             }
@@ -815,25 +772,17 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
         transition(to: .ready(generation: generation, revision: revision))
     }
 
-    private func currentGeneration() async -> WebInspectorPageGeneration {
-        guard let connection,
-            let generation = try? await connection.page.generation
-        else { return WebInspectorPageGeneration(rawValue: 0) }
+    private func currentGeneration() async throws -> WebInspectorPageGeneration {
+        guard let connection else { throw CancellationError() }
+        let generation = try await connection.page.generation
         return WebInspectorPageGeneration(rawValue: generation.rawValue)
-    }
-
-    private func isConnectionTerminal(_ error: any Error) -> Bool {
-        guard let proxy = error as? WebInspectorProxyError else { return false }
-        switch proxy {
-        case .closed, .disconnected, .transportFailure:
-            return true
-        default:
-            return false
-        }
     }
 
     private func termination(for error: any Error) -> WebInspectorFeatureTermination {
         if error is CancellationError { return .detached }
+        if let failure = error as? WebInspectorConnectionFailure {
+            return .connectionFailed(failure)
+        }
         return .connectionFailed(
             connectionFailure(
                 code: "network.connection",
@@ -841,28 +790,6 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                 message: String(describing: error)
             )
         )
-    }
-
-    private func becomeUnavailable(
-        _ error: WebInspectorFeatureError,
-        generation: WebInspectorPageGeneration? = nil
-    ) async -> WebInspectorFeatureTermination {
-        await orderedScope?.close()
-        orderedScope = nil
-        guard !closeRequested else { return .detached }
-        let unavailableGeneration: WebInspectorPageGeneration
-        if let generation {
-            unavailableGeneration = generation
-        } else {
-            unavailableGeneration = await currentGeneration()
-        }
-        await publish(
-            .unavailable(
-                generation: unavailableGeneration,
-                error: error
-            )
-        )
-        return .detached
     }
 
     private func connectionFailure(

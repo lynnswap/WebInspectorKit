@@ -29,21 +29,15 @@ let entries = WebInspectorFetchedResultsController<NetworkEntry>(
 try await entries.performFetch()
 ```
 
-Feature retry is now capability-specific. `WebInspectorFeatureHandle` no
-longer declares `retry()`, `WebInspectorModelContainer.retryFeature(_:)` was
-removed, and `WebInspectorNetwork.retry()` is no longer available. DOM,
-Console, and Runtime expose retry through
-`WebInspectorRetryableFeatureHandle`; call the concrete handle when needed:
-
-```swift
-await container.dom.retry()
-```
-
-Network no longer exposes `retry()`. A bootstrap failure or exhausted recovery
-publishes feature-local `unavailable`; sibling features and the physical
-attachment remain live. The built-in Network tab reports the error without a
-retry action. A later explicit container attachment starts a new Network
-feature runner.
+Transient feature-local retry and unavailable state were removed.
+`WebInspectorFeatureHandle` exposes availability observation only; DOM,
+Network, Console, and Runtime have no `retry()` API. A required Web Inspector
+method rejected with JSON-RPC `-32601` publishes
+`WebInspectorFeatureState.unsupported` for only that feature. Dependent tabs
+show a non-retryable failure while sibling tabs remain usable. Any other
+bootstrap, protocol, route, or store failure fails the attachment through
+`WebInspectorConnectionFailure`. After fixing or replacing the underlying
+connection, explicitly attach again to start new feature runners.
 
 Network redirects and exact initiator groups are now represented by one flat
 `NetworkEntry`. Its ordered `requestIDs` contain every request in the logical
@@ -87,10 +81,10 @@ identity.
 
 `WebInspectorTab` factories are `async throws` and declare the semantic
 features they require. The root inspector joins concurrent requests for the same
-tab, presents native loading and factory/retryable-feature failure states,
-supports retry for those failures, and cancels and awaits unfinished factories
-during root teardown. A Network dependency failure is terminal for only that
-resource and does not present this retry UI:
+tab, presents native loading and factory failure states, supports retry for a
+factory's own failure, and cancels and awaits unfinished factories during root
+teardown. A built-in feature failure closes every presentation resource because
+it fails the attachment:
 
 ```swift
 let consoleTab = WebInspectorTab(
@@ -253,11 +247,11 @@ await entries.close()
 await runtime.close()
 ```
 
-The runtime waits for enabled feature owners to reach their supported boundary:
-ready or feature-local unavailable. Physical connection failure throws
-`WebInspectorDataKitTestRuntime.RuntimeError.connectionFailed`; Network feature
-failure remains in the boundary snapshot. Page replacement otherwise returns at
-the feature boundary. When a test requires a context or
+The runtime waits for every enabled feature owner to reach ready or static
+unsupported availability. An unexpected feature or physical connection failure throws
+`WebInspectorDataKitTestRuntime.RuntimeError.connectionFailed`; no failure is
+returned as a feature boundary. Page replacement otherwise returns at the
+feature boundary. When a test requires a context or
 fetched-results revision, subscribe to and await that consumer-owned update
 explicitly. Do not infer it from a testing-runtime counter.
 

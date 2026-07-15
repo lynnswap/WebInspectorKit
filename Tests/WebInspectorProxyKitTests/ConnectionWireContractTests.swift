@@ -34,6 +34,27 @@ func scopeRegistrationDoesNotSynthesizeAGenerationReset() async throws {
 }
 
 @Test
+func methodNotFoundReplyPreservesStaticUnsupportedSemantics() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    defer { Task { await runtime.close() } }
+
+    let documentTask = Task { try await runtime.page.dom.getDocument() }
+    let command = try await runtime.peer.commands.next()
+    #expect(command.method == "DOM.getDocument")
+    try await runtime.peer.fail(
+        command,
+        code: -32_601,
+        message: "'DOM.getDocument' was not found"
+    )
+
+    await #expect(
+        throws: WebInspectorProxyError.unsupported(["DOM.getDocument"])
+    ) {
+        _ = try await documentTask.value
+    }
+}
+
+@Test
 func currentPageReplacementResetsAnExistingScope() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     defer { Task { await runtime.close() } }
@@ -46,8 +67,9 @@ func currentPageReplacementResetsAnExistingScope() async throws {
         buffering: .bounded(4)
     )
 
-    try await runtime.peer.createTarget(.init(
-        id: "page-next",
+    try await runtime.peer.createTarget(
+        .init(
+            id: "page-next",
         type: "page",
         frameID: "next-main-frame",
         isProvisional: true
@@ -66,6 +88,23 @@ func currentPageReplacementResetsAnExistingScope() async throws {
         return
     }
     #expect(deliveredGeneration == replacementGeneration)
+
+    // WebKit commits the new binding before destroying retired targets. A
+    // delayed destruction for the old target must not clear the new current
+    // page or synthesize another generation boundary.
+    try await runtime.peer.destroyTarget(id: "page-main")
+    #expect(try await runtime.page.generation == replacementGeneration)
+
+    let documentTask = Task { try await scope.command(DOMWireCoding.getDocument()) }
+    let command = try await runtime.peer.commands.next()
+    #expect(command.method == "DOM.getDocument")
+    #expect(command.destination == .target("page-next"))
+    try await runtime.peer.reply(
+        to: command,
+        with: try WebInspectorTestJSONObject(json: domDocumentResult)
+    )
+    let document = try await documentTask.value
+    #expect(try await scope.drain(through: document.boundary).isEmpty)
     await scope.close()
 }
 
@@ -140,7 +179,8 @@ func compositeScopePreservesPageNetworkFIFOAndReplyBoundary() async throws {
     var iterator = scope.events.makeAsyncIterator()
     let postBoundary = try await iterator.next()
     guard case let .event(_, .network(event)) = postBoundary,
-          case let .dataReceived(id, _, _, _) = event.value else {
+        case let .dataReceived(id, _, _, _) = event.value
+    else {
         Issue.record("Expected the post-boundary Network event.")
         await closeCompositeScope(scope, peer: runtime.peer)
         return
@@ -478,8 +518,9 @@ func requestNodeRoutesUnscopedObjectToMainPageAndReturnsUnscopedNode() async thr
 func requestNodeRoutesScopedObjectToFrameAndScopesTheReply() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     defer { Task { await runtime.close() } }
-    try await runtime.peer.createTarget(.init(
-        id: "frame-one",
+    try await runtime.peer.createTarget(
+        .init(
+            id: "frame-one",
         type: "web-page",
         frameID: "child-frame",
         parentFrameID: "main-frame"
@@ -602,8 +643,9 @@ private func closeCompositeScope(
     peer: WebInspectorTestPeer
 ) async {
     let closeTask = Task { await scope.close() }
-    do { try await replyNext(peer, method: "Page.disable") }
-    catch { Issue.record("Failed to release Page capability: \(error)") }
+    do { try await replyNext(peer, method: "Page.disable") } catch {
+        Issue.record("Failed to release Page capability: \(error)")
+    }
     await closeTask.value
 }
 

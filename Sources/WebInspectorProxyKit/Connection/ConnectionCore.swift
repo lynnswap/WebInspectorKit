@@ -185,8 +185,10 @@ package actor ConnectionCore {
                         promise.fulfill(.failure(WebInspectorProxyError.replyBoundaryUnavailable))
                         return
                     }
-                    promise.fulfill(.success(WebInspectorScopedReply(
-                        value: value,
+                    promise.fulfill(
+                        .success(
+                            WebInspectorScopedReply(
+                                value: value,
                         boundary: boundary,
                         generation: metadata.generation,
                         semanticTargetID: metadata.semanticTargetID,
@@ -217,7 +219,8 @@ package actor ConnectionCore {
         in scopeID: WebInspectorOrderedScopeID
     ) throws {
         guard var scope = scopes.entries[scopeID],
-              scope.outstandingBoundary?.token == boundary.token else {
+            scope.outstandingBoundary?.token == boundary.token
+        else {
             throw WebInspectorProxyError.replyBoundaryUnavailable
         }
         scope.outstandingBoundary = nil
@@ -315,14 +318,16 @@ package actor ConnectionCore {
         if route != .root, physicalTargetID == nil {
             throw WebInspectorProxyError.pageUnavailable
         }
-        let semanticTargetID: WebInspectorTarget.ID? = switch route {
-        case .root: nil
+        let semanticTargetID: WebInspectorTarget.ID? =
+            switch route {
+            case .root: nil
         case .currentPage: .currentPage
         case let .target(id): id
         }
         let agentTargetID = physicalTargetID.map { WebInspectorTarget.ID($0.rawValue) }
-        let semanticTarget: WebInspectorTarget? = switch route {
-        case .root: nil
+        let semanticTarget: WebInspectorTarget? =
+            switch route {
+            case .root: nil
         case .currentPage: targets.target(for: physicalTargetID, identity: .currentPage)
         case let .target(id): targets.target(for: physicalTargetID, identity: id)
         }
@@ -390,9 +395,16 @@ package actor ConnectionCore {
 
     private func handleRoot(_ parsed: ParsedProtocolMessage) async throws {
         if let id = parsed.id, let targetKey = targetReplyByWrapperID.removeValue(forKey: id) {
-            if let error = parsed.errorMessage,
-               let pending = targetReplies.removeValue(forKey: targetKey) {
-                pending.fail(ConnectionError.remoteError(method: pending.method.rawValue, message: error))
+            if let error = parsed.error,
+                let pending = targetReplies.removeValue(forKey: targetKey)
+            {
+                pending.fail(
+                    ConnectionError.remoteError(
+                        method: pending.method.rawValue,
+                        code: error.code,
+                        message: error.message
+                    )
+                )
                 clearBoundary(for: pending.scopeID)
             }
             return
@@ -490,8 +502,14 @@ package actor ConnectionCore {
     }
 
     private func complete(_ pending: PendingReply, parsed: ParsedProtocolMessage) {
-        if let error = parsed.errorMessage {
-            pending.fail(ConnectionError.remoteError(method: pending.method.rawValue, message: error))
+        if let error = parsed.error {
+            pending.fail(
+                ConnectionError.remoteError(
+                    method: pending.method.rawValue,
+                    code: error.code,
+                    message: error.message
+                )
+            )
             clearBoundary(for: pending.scopeID)
             return
         }
@@ -504,7 +522,8 @@ package actor ConnectionCore {
             let prepared = try pending.prepare(parsed.result, context)
             if let scopeID = pending.scopeID {
                 guard var scope = scopes.entries[scopeID], scope.deliveryIsActive,
-                      let reserved = scope.outstandingBoundary else {
+                    let reserved = scope.outstandingBoundary
+                else {
                     pending.fail(WebInspectorProxyError.replyBoundaryUnavailable)
                     return
                 }
@@ -527,8 +546,9 @@ package actor ConnectionCore {
             }
         } catch {
             clearBoundary(for: pending.scopeID)
-            pending.fail(WebInspectorProxyError.commandFailed(
-                domain: pending.method.domain.rawValue,
+            pending.fail(
+                WebInspectorProxyError.commandFailed(
+                    domain: pending.method.domain.rawValue,
                 method: pending.method.name,
                 message: "Malformed command result: \(error)"
             ))
@@ -543,8 +563,9 @@ package actor ConnectionCore {
         switch method.rawValue {
         case "Target.targetCreated":
             let payload: TargetCreatedParameters
-            do { payload = try WebInspectorWireJSON.decode(TargetCreatedParameters.self, from: parameters) }
-            catch { throw ConnectionError.malformedTargetControlPlane(method.rawValue) }
+            do { payload = try WebInspectorWireJSON.decode(TargetCreatedParameters.self, from: parameters) } catch {
+                throw ConnectionError.malformedTargetControlPlane(method.rawValue)
+            }
             let info = payload.targetInfo
             let isProvisional = info.isProvisional ?? false
             let record = ProtocolTarget.Record(
@@ -569,8 +590,9 @@ package actor ConnectionCore {
 
         case "Target.targetDestroyed":
             let payload: TargetDestroyedParameters
-            do { payload = try WebInspectorWireJSON.decode(TargetDestroyedParameters.self, from: parameters) }
-            catch { throw ConnectionError.malformedTargetControlPlane(method.rawValue) }
+            do { payload = try WebInspectorWireJSON.decode(TargetDestroyedParameters.self, from: parameters) } catch {
+                throw ConnectionError.malformedTargetControlPlane(method.rawValue)
+            }
             let bindingChanged = targets.remove(payload.targetID)
             provisionalMessagesByTargetID.removeValue(forKey: payload.targetID)
             failPendingReplies(for: payload.targetID)
@@ -581,8 +603,9 @@ package actor ConnectionCore {
 
         case "Target.didCommitProvisionalTarget":
             let payload: TargetCommittedParameters
-            do { payload = try WebInspectorWireJSON.decode(TargetCommittedParameters.self, from: parameters) }
-            catch { throw ConnectionError.malformedTargetControlPlane(method.rawValue) }
+            do { payload = try WebInspectorWireJSON.decode(TargetCommittedParameters.self, from: parameters) } catch {
+                throw ConnectionError.malformedTargetControlPlane(method.rawValue)
+            }
             let mutation = targets.commit(old: payload.oldTargetID, new: payload.newTargetID)
             if let retiredTargetID = mutation.retiredTargetID {
                 failPendingReplies(for: retiredTargetID)
@@ -609,7 +632,8 @@ package actor ConnectionCore {
             guard var scope = scopes.entries[id], scope.deliveryIsActive,
                   scope.sink.domains.contains(method.domain),
                   let agentTargetID,
-                  scope.selectedTargets.contains(agentTargetID) else {
+                scope.selectedTargets.contains(agentTargetID)
+            else {
                 continue
             }
             let semanticTarget = targets.semanticTarget(for: scope.selection)
@@ -672,15 +696,18 @@ package actor ConnectionCore {
     ) {
         guard let scope = scopes.entries[scopeID],
               scope.deliveryIsActive,
-              scope.selectedTargets.contains(targetID) else {
+            scope.selectedTargets.contains(targetID)
+        else {
             return
         }
         let scheduledGeneration = generation
-        guard !scopeActivations.values.contains(where: {
-            $0.scopeID == scopeID
+        guard
+            !scopeActivations.values.contains(where: {
+                $0.scopeID == scopeID
                 && $0.targetID == targetID
                 && $0.generation == scheduledGeneration
-        }) else {
+            })
+        else {
             return
         }
         let activationID = UUID()
@@ -711,11 +738,13 @@ package actor ConnectionCore {
         defer { removeScopeActivation(activationID) }
         do {
             try Task.checkCancellation()
-            guard let entry = activeScope(
-                scopeID,
+            guard
+                let entry = activeScope(
+                    scopeID,
                 selecting: targetID,
                 generation: scheduledGeneration
-            ) else {
+                )
+            else {
                 return
             }
             try await acquireCapabilities(
@@ -725,12 +754,14 @@ package actor ConnectionCore {
                 scheduledGeneration: scheduledGeneration
             )
         } catch {
-            guard scopeActivationIsCurrent(
-                activationID,
+            guard
+                scopeActivationIsCurrent(
+                    activationID,
                 scopeID: scopeID,
                 targetID: targetID,
                 generation: scheduledGeneration
-            ) else {
+                )
+            else {
                 return
             }
             failScopeDelivery(scopeID, error: error)
@@ -768,7 +799,8 @@ package actor ConnectionCore {
               let scope = scopes.entries[scopeID],
               scope.deliveryIsActive,
               scope.selectedTargets.contains(targetID),
-              targets.record(for: targetID) != nil else {
+            targets.record(for: targetID) != nil
+        else {
             return nil
         }
         return scope
@@ -783,7 +815,8 @@ package actor ConnectionCore {
         guard let activation = scopeActivations[activationID],
               activation.scopeID == scopeID,
               activation.targetID == targetID,
-              activation.generation == expectedGeneration else {
+            activation.generation == expectedGeneration
+        else {
             return false
         }
         return activeScope(
@@ -867,7 +900,8 @@ package actor ConnectionCore {
 
         if let agentTargetID,
            let advertised = targets.record(for: agentTargetID)?.advertisedDomains,
-           !advertised.contains(descriptor.domain) {
+            !advertised.contains(descriptor.domain)
+        {
             throw WebInspectorProxyError.commandFailed(
                 domain: descriptor.domain.rawValue,
                 method: "enable",
@@ -909,7 +943,8 @@ package actor ConnectionCore {
         try Task.checkCancellation()
         guard let scope = scopes.entries[scopeID],
               scope.deliveryIsActive,
-              scope.selectedTargets.contains(targetID) else {
+            scope.selectedTargets.contains(targetID)
+        else {
             throw CancellationError()
         }
         if let scheduledGeneration, generation != scheduledGeneration {
@@ -958,7 +993,8 @@ package actor ConnectionCore {
                         throw WebInspectorProxyError.pageUnavailable
                     }
                     guard case let .enabling(activeID, _) = current.physical,
-                          activeID == operationID else {
+                        activeID == operationID
+                    else {
                         try await completion.valueIgnoringCancellation()
                         continue
                     }
@@ -969,7 +1005,8 @@ package actor ConnectionCore {
                 } catch {
                     if var current = capabilities.entries[key],
                        case let .enabling(activeID, _) = current.physical,
-                       activeID == operationID {
+                        activeID == operationID
+                    {
                         current.physical = .unknown
                         capabilities.set(current, for: key)
                     }
@@ -1114,8 +1151,9 @@ package actor ConnectionCore {
         state = .closing
         terminalResult = result
 
-        let failure: any Error = switch result {
-        case .success: WebInspectorProxyError.closed
+        let failure: any Error =
+            switch result {
+            case .success: WebInspectorProxyError.closed
         case let .failure(error): map(error, method: nil)
         }
         let pending = Array(rootReplies.values) + Array(targetReplies.values)
@@ -1135,8 +1173,7 @@ package actor ConnectionCore {
         self.closeAction = nil
         let backend = backend
         let task = Task { [weak self] in
-            if let closeAction { await closeAction() }
-            else { await backend.detach() }
+            if let closeAction { await closeAction() } else { await backend.detach() }
             for activation in activations { await activation.value }
             await self?.finishTerminal(result)
         }
@@ -1165,12 +1202,18 @@ package actor ConnectionCore {
             return WebInspectorProxyError.disconnected("Unreadable Web Inspector envelope.")
         case let .malformedTargetControlPlane(method):
             return WebInspectorProxyError.disconnected("Malformed \(method) control-plane message.")
-        case let .missingTarget(target): return WebInspectorProxyError.commandRejected(method: method?.rawValue ?? "", message: "Missing target \(target).")
+        case let .missingTarget(target):
+            return WebInspectorProxyError.commandRejected(
+                method: method?.rawValue ?? "", message: "Missing target \(target).")
         case let .replyTimeout(method):
             let parsed = WebInspectorProtocolMethod(rawValue: method)
             return WebInspectorProxyError.timeout(domain: parsed.domain.rawValue, method: parsed.name)
-        case let .remoteError(method, message):
-            return WebInspectorProxyError.commandRejected(method: method, message: message)
+        case let .remoteError(method, code, message):
+            return webInspectorProxyRemoteError(
+                method: method,
+                code: code,
+                message: message
+            )
         }
     }
 

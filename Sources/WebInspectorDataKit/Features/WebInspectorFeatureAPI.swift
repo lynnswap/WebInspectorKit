@@ -6,11 +6,6 @@ public protocol WebInspectorFeatureHandle: Sendable {
     var stateUpdates: WebInspectorStateUpdates<WebInspectorFeatureState> { get }
 }
 
-/// A feature whose semantic owner can recover after explicit user intent.
-public protocol WebInspectorRetryableFeatureHandle: WebInspectorFeatureHandle {
-    func retry() async
-}
-
 /// The backend-visible state of WebKit's element picker.
 public enum WebInspectorElementPickerState: Equatable, Sendable {
     case idle
@@ -23,9 +18,12 @@ public enum WebInspectorElementPickerState: Equatable, Sendable {
 /// Failures from commands whose model identity or feature authority changed.
 public enum WebInspectorCommandError: Error, Equatable, Sendable {
     case staleIdentifier
-    case featureUnavailable(WebInspectorFeatureID, WebInspectorFeatureError)
     case targetChanged
     case connection(WebInspectorConnectionFailure)
+    case featureUnsupported(
+        WebInspectorFeatureID,
+        requirements: [String]
+    )
     case rejected(WebInspectorFailureDescription)
     case timedOut
     case containerClosed
@@ -74,6 +72,11 @@ package func webInspectorCommandError(
                 )
             )
         )
+    case let .unsupported(requirements):
+        return .featureUnsupported(
+            featureID,
+            requirements: requirements.sorted()
+        )
     case let .commandFailed(domain, method, message):
         return .rejected(
             WebInspectorFailureDescription(
@@ -90,8 +93,7 @@ package func webInspectorCommandError(
                 message: message
             )
         )
-    case .unsupported,
-        .attachFailed,
+    case .attachFailed,
         .protocolViolation,
         .eventBufferOverflow,
         .invalidEventBufferCapacity,

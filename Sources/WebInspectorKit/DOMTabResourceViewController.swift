@@ -12,18 +12,17 @@ package final class DOMTabResourceViewController: UIViewController {
         case closed
     }
 
-    private let retryAction: @MainActor () -> Void
-    private let makeReadyViewController: @MainActor (DOMPanelModel)
-        -> UIViewController
+    private let makeReadyViewController:
+        @MainActor (DOMPanelModel)
+            -> UIViewController
     private var readyViewController: UIViewController?
     package private(set) var phase: Phase = .loading
 
     package init(
-        retryAction: @escaping @MainActor () -> Void,
-        makeReadyViewController: @escaping @MainActor (DOMPanelModel)
+        makeReadyViewController:
+            @escaping @MainActor (DOMPanelModel)
             -> UIViewController
     ) {
-        self.retryAction = retryAction
         self.makeReadyViewController = makeReadyViewController
         super.init(nibName: nil, bundle: nil)
         showLoading()
@@ -61,15 +60,6 @@ package final class DOMTabResourceViewController: UIViewController {
             bundle: WebInspectorUILocalization.bundle
         )
         configuration.secondaryText = message
-        configuration.button = .bordered()
-        configuration.button.title = String(
-            localized: "resource.retry",
-            defaultValue: "Retry",
-            bundle: WebInspectorUILocalization.bundle
-        )
-        configuration.buttonProperties.primaryAction = UIAction { [weak self] _ in
-            self?.retryAction()
-        }
         contentUnavailableConfiguration = configuration
     }
 

@@ -17,9 +17,9 @@ The migration has six structural decisions:
 
 1. WebInspectorProxyKit owns only native attachment, physical connection
    ordering, targets, command replies, and ordered protocol event scopes.
-2. WebInspectorDataKit owns one feature actor per semantic area. DOM,
-   Network, and Console/Runtime failures recover or become unavailable within
-   that owner without ending sibling features or the physical attachment.
+2. WebInspectorDataKit owns one feature actor per semantic area. Page/target
+   replacement is synchronized inside that owner; an unexpected bootstrap,
+   protocol, route, or store failure fails the container attachment.
 3. WebInspectorModelContainer owns the physical Proxy handle, the canonical
    record store, feature actors, and all context registrations.
    WebInspectorModelContext owns only its actor-confined identity map and
@@ -253,10 +253,10 @@ re-audited:
 | Picker is physically off before selection delivery | `Source/WebCore/inspector/agents/InspectorDOMAgent.cpp::inspect` calls `setSearchingForNode(..., false, ...)` before `focusNode` | receipt of Inspector/DOM inspect moves the backend state to idle before asynchronous node resolution. |
 | Resource tree is a current snapshot | `Source/WebCore/inspector/agents/InspectorPageAgent.cpp::getResourceTree` | initial Network state must reconcile this snapshot with ordered events instead of treating either source as complete alone. |
 | Network enable has no HTTP-history replay | `Source/WebCore/inspector/agents/InspectorNetworkAgent.cpp::enable` | enable starts instrumentation and replays active WebSockets only, so HTTP history comes from the Page snapshot. |
-| Network is a built-in frontend capability without a retry surface | `Source/WebInspectorUI/UserInterface/Base/Main.js` constructs `WI.networkManager` and includes `WI.NetworkTabContentView` in `productionTabClasses`; `Views/NetworkTabContentView.js` directly constructs its table | remove the local Network retry action and implicit resource retries; this does not make a Network failure terminal for the whole inspector. |
-| Network failure is not a frontend-wide teardown condition | `NetworkManager.js::_processMainFrameResourceTreePayload` clears its waiting state, logs the error, and returns; Network enable promises have no Network-specific close path in `InspectorBackend.js` / `Connection.js` | publish a terminal Network feature error while keeping DOM, Console/Runtime, and the physical attachment live. |
+| Unknown protocol domains and methods use JSON-RPC `-32601` | `Source/JavaScriptCore/inspector/InspectorBackendDispatcher.cpp::dispatch` and `sendPendingErrors` | preserve the reply error code and classify only `MethodNotFound` as static feature non-support; ordinary command errors remain failures. |
+| Network is a built-in frontend capability without a retry surface | `Source/WebInspectorUI/UserInterface/Base/Main.js` constructs `WI.networkManager` and includes `WI.NetworkTabContentView` in `productionTabClasses`; `Views/NetworkTabContentView.js` directly constructs its table | remove transient Network retry/unavailable UI. A required method's `-32601` response disables only Network-dependent tabs; unexpected runner failure fails the attachment. |
 | Current frontend bootstrap has an event-loss assumption | `Source/WebInspectorUI/UserInterface/Controllers/NetworkManager.js::initializeTarget` and `_processMainFrameResourceTreePayload` | WebKit sends resource-tree and Network enable back-to-back and ignores events while waiting; WebInspectorKit intentionally uses enable-first plus a reply boundary for its stronger lossless-initial contract. |
-| The frontend has no Network retry state | `Views/NetworkTabContentView.js` has only its table/content browser. `git log -S'Network Unavailable'` and the Network/retry history search have no matching frontend change | Network has no public/UI retry entry point. Its diagnostic failure surface has no action; a later explicit attachment creates a new runner. |
+| The frontend has no Network retry state | `Views/NetworkTabContentView.js` has only its table/content browser. `git log -S'Network Unavailable'` and the Network/retry history search have no matching frontend change | Network has no public/UI retry entry point. An unexpected Network runner failure fails the DataKit attachment; a later explicit attachment creates new runners. |
 | Response may arrive without request start | `NetworkManager.js::resourceRequestDidReceiveResponse` | reconcile by frame/URL when unique, otherwise create a request; opening mid-load is normal. |
 | Redirect reuses one resource | `NetworkManager.js::resourceRequestWillBeSent` and `Resource.updateForRedirectResponse` | one persistent request/entry owns ordered redirect hops. |
 | Initiator grouping is node-based | `Views/NetworkTableContentView.js::_tryLinkResourceToDOMNode`; `Controllers/NetworkManager.js::_initiatorNodeFromPayload`; `Source/WebCore/loader/FrameLoader.cpp::willLoadMediaElementURL` | group by exact scoped initiator node without adding a fetched-results section or resource-type guess. |
@@ -264,7 +264,7 @@ re-audited:
 WebKit frontend row nesting and its default-off UI setting are not copied.
 WebInspectorKit's product requirement is grouping on by default with one flat
 NetworkEntry row and all member requests/redirects rendered in its detail.
-The direct Network table and absence of a Network-specific teardown/retry path
+The direct Network table and absence of a Network-specific retry path
 are unchanged in the checked Safari 17.6/iOS 17.6 and Safari 18/iOS 18.0
 sources.
 
@@ -286,15 +286,21 @@ The current model feed is stored in ProxyKit's ConnectionCore. Its consumer
 termination and DataKit protocolViolation paths can claim the same terminal
 state as native disconnect and close every tab.
 
-Target contract: a known-domain decode or reducer error first enters bounded
-recovery in that feature owner. DOM, Network, and Console/Runtime may end that
-recovery in feature-local unavailable. Network exposes no retry action, but its
-failure does not change the physical container state or sibling feature state.
-Native fatal/disconnect, explicit close, an unreadable outer envelope, and a
-malformed Target control-plane wrapper that cannot be routed are the remaining
-physical connection failures. `Target.targetDestroyed`, a binding gap, and
-late events for a destroyed target are target-local reset/drop conditions, not
-a native disconnect.
+Target contract: the DataKit attachment is usable only while every enabled
+feature runner can maintain its canonical projection. A known-domain decode,
+reducer, route, bootstrap, or store error returns `connectionFailed` from that
+runner and fails the attachment. Native fatal/disconnect, an unreadable outer
+envelope, and an unroutable Target wrapper use the same terminal boundary.
+WebKit commits a replacement with `Target.didCommitProvisionalTarget(old, new)`
+before it emits `Target.targetDestroyed` for retired targets. This ordering is
+present in the iOS 18.5, iOS 26.5, and latest
+`WebPageInspectorController::didCommitProvisionalPage` implementations. The
+commit atomically retargets the logical current page; later destruction of the
+old physical target must neither clear that binding nor advance its generation.
+Document replacement and late events for a retired target remain normal
+lifecycle operations. Destruction of the current target without a committed
+replacement is instead terminal target loss, not a speculative synchronization
+gap, and fails the attachment rather than entering a retry or indefinite wait.
 
 ### Fetched results have two delivery owners
 
@@ -327,10 +333,10 @@ must remove rather than rename or wrap:
 | Current crash contract | Evidence | Target owner and behavior |
 | --- | --- | --- |
 | Record, query-value, rank, and operation arrays must remain aligned | `WebInspectorModelSchema.swift`, `WebInspectorModelContextTransaction.swift`, `WebInspectorModelContextQueryEngine.swift` | One typed mutation and one context operation queue make the alignment unrepresentable. No second projection array is checked at publication time. |
-| Canonical DOM/Network indexes must happen to agree after an external event | `WebInspectorCanonicalDOMReducer.swift`, `CanonicalNetworkStore.swift` | The feature actor normalizes external payloads before committing one store transaction. A WebKit sequence/snapshot conflict enters bounded owner-local recovery. Exhaustion makes only that feature unavailable; sibling features and attachment remain live. Neither path terminates the process. |
+| Canonical DOM/Network indexes must happen to agree after an external event | `WebInspectorCanonicalDOMReducer.swift`, `CanonicalNetworkStore.swift` | The feature actor normalizes external payloads before committing one store transaction. Page/document replacement uses its explicit lifecycle path; an unexpected sequence/reducer conflict fails the attachment before a partial projection can publish. |
 | A UI task, generation counter, selection, and retired panel must agree across asynchronous callbacks | `DOMPanelModel.swift`, `NetworkPanelModel.swift`, `PresentationContentStore.swift` | One presentation resource enum owns task and route lifetime. Cancellation and late completion are normal stale-token outcomes; commands report typed closed/stale errors and UI event handlers never call `preconditionFailure`. |
 | A persistent model also owns command task/lease/context state | `NetworkRequest.swift` (`NetworkBody`) and the CSS/runtime model command paths | Persistent models are context-local observable reads. Stable-ID commands and in-flight coalescing belong to the corresponding feature actor. |
-| Model-feed registration, capability leases, bootstrap tasks, and terminal claims must agree | `TransportSession.swift` | ProxyKit owns only connection FIFO, reply routing, target topology, and domain scopes. Feature registration/bootstrap/recovery move to DataKit feature actors, deleting the cross-owner state machine. |
+| Model-feed registration, capability leases, bootstrap tasks, and terminal claims must agree | `TransportSession.swift` | ProxyKit owns only connection FIFO, reply routing, target topology, and domain scopes. Feature registration/bootstrap and lifecycle synchronization move to DataKit feature actors, deleting the cross-owner state machine. |
 
 Public misuse remains a typed error. Cancellation, navigation, target loss,
 late WebKit events, malformed known-domain payloads, and reentrant UI teardown
@@ -348,7 +354,7 @@ reply routing, targets, event scopes, model feed bootstrap, domain capabilities,
 DOM/CSS epochs, picker leases, replay, and model-feed terminal policy.
 
 Target contract: TransportSession is split by owner. Model bootstrap, semantic
-epochs, grouping, and recovery move to DataKit feature actors.
+epochs, grouping, and page/target synchronization move to DataKit feature actors.
 
 ### Public contracts are not a build gate
 
@@ -387,9 +393,9 @@ replaced with per-event full fetch/filter/sort work.
 9. MainActor performs WKWebView/native bridge operations and MainActor-owned
    UI/context application only. Every custom context applies on its issued
    model-actor queue.
-10. A semantic feature failure cannot close another feature or the physical
-    connection. Only physical transport/envelope/control-plane failures own
-    container termination.
+10. Every enabled semantic feature is required by the DataKit attachment. An
+    unexpected feature bootstrap/protocol/route/store failure terminates that
+    attachment through the same container failure boundary as transport loss.
 11. Navigation and reattachment normally make old persistent IDs stale; this
     is not a protocol violation.
 12. An idle source produces no store commit, query publication, context apply,
@@ -541,7 +547,7 @@ it owns editor dependencies and a complete tab lifecycle. Storage remains a
 folder in an existing UI target until it has an independent dependency or
 distribution boundary.
 
-A DataKit feature is a semantic recovery/identity/lifecycle owner, not one
+A DataKit feature is a semantic identity/lifecycle owner, not one
 protocol domain. DOM+CSS and Console+Runtime intentionally share owners;
 future Sources can combine Page+Debugger+Runtime, and Storage/Security can
 combine the protocol domains needed by that lifetime.
@@ -597,7 +603,6 @@ flowchart LR
     I -->|IDs + flat differences| Q
     Q -->|one owner turn| C[Context models + FRC]
     C --> U[UIKit / SwiftUI]
-    F -. recover only this feature .-> F
 ~~~
 
 ### Attachment
@@ -644,7 +649,7 @@ is a no-op. Concurrent close callers join that same transition rather than
 starting another teardown. Reattaching a failed or detached container creates
 a new attachment generation. A failed state is published only after the old
 Proxy, feature runners, waiters, and reservation have been released or joined,
-so retry never overlaps the failed generation.
+so a later attachment never overlaps the failed generation.
 
 The app owns the WKWebView. The registry references the view and container
 weakly. The container strongly owns the Proxy/native attachment and feature
@@ -671,14 +676,16 @@ Attachment proceeds as follows:
 7. Contexts apply that reset; pending queries for the feature receive their
    first successful snapshot.
 8. The container reports physical state as attached independently from each
-   feature state. Every enabled feature may be ready, recovering, or
-   unavailable while the container remains attached.
+   feature state. Every enabled feature is synchronizing, ready, or statically
+   unsupported while that attachment remains usable.
 
 Attach succeeds when the physical connection and feature runtimes are adopted.
-A feature bootstrap failure makes only that feature unavailable; consumers
-read feature state or query fetchError while the other features remain attached.
-DOM and Console/Runtime may accept explicit retry. Network has no retry entry
-point and remains terminal until a later explicit attachment creates a runner.
+JSON-RPC `-32601` from a required feature method proves static non-support and
+publishes `unsupported(requirements:)` for only that feature. Any other feature
+bootstrap, protocol, route, or store failure returns a connection failure from
+its runner. The container joins teardown, publishes failed, and a later
+explicit attachment creates all new runners. There is no transient
+feature-local unavailable state or retry action.
 
 Container and feature handles expose a lock-protected current state snapshot
 and a last-value-first state sequence. State sequences are bounded and may
@@ -705,10 +712,10 @@ feature commits ready state, the query publishes the real initial result.
 Registering a pre-attach fetch records the query and its pending continuation,
 then returns the context-processor turn. It never suspends the single operation
 queue while waiting for feature readiness, because the future ready/reset
-transaction must enter that same queue. A feature-unavailable transition
-resumes a waiting performFetch with a typed error but keeps an FRC registration
-eligible for a later successful recovery. A one-shot context fetch removes its
-transient registration after success or failure.
+transaction must enter that same queue. A connection failure is owned by the
+container lifecycle rather than injected as a query result. A one-shot context
+fetch removes its transient registration after success or deterministic query
+failure.
 
 ### Delta and rebase
 
@@ -864,7 +871,8 @@ retains/reconciles that capability according to policy; dependencies acquire
 first and release in reverse. Partial acquisition rolls back in reverse order.
 Cancellation while enabling joins the enable reply and any required cleanup.
 A cleanup failure leaves that physical capability unknown for reconciliation
-by the next acquisition and fails only the affected scope/feature.
+by the next acquisition and fails the affected scope. A DataKit feature maps
+that unexpected scope failure to its container attachment boundary.
 
 An ordered-scope descriptor also owns a target-selection policy: fixed current
 page, selected physical agent, or dynamically enrolled descendants filtered by
@@ -873,26 +881,18 @@ event delivery are linearized in the same connection FIFO. This is the
 extension point for Sources workers and Storage root/page-agent differences;
 adding a policy/decoder does not add a central domain switch.
 
-Recovery opens and activates a replacement scope before releasing the old
-scope, so their capability leases overlap. This prevents a last-release
-disable followed by a first-acquire enable from creating an unobserved event
-gap or replaying active WebSocket state as a fresh bootstrap.
-
-Overflow terminally stops only that scope's event delivery with an explicit
-gap outcome, but moves the scope into a recovery-held state that still owns its
-capability leases. The feature treats the gap as a request to rebootstrap,
-opens and activates the replacement, and only then explicitly closes the old
-scope to release those leases. If recovery is abandoned because the feature
-or container is closing, that owner closes the held scope immediately instead.
-Consumer cancellation explicitly closes and removes only that scope. Neither
-path closes the Proxy. This two-stage delivery-terminal/lease-held state is
-what makes the replacement-overlap guarantee above implementable.
+Page/target replacement is delivered as an ordered reset inside the active
+scope, so a feature can bootstrap the replacement without releasing and
+reacquiring domain capabilities. Overflow terminally stops scope delivery. The
+feature closes that scope, returns `connectionFailed`, and the container joins
+all feature and Proxy teardown; it does not open a speculative replacement
+scope or maintain a retry budget.
 
 Malformed command results fail only that command. A malformed event that can
-still be assigned to a domain fails only that scope/feature. Target destruction
-resets the affected binding and late target events are dropped. Only an
-unreadable outer transport envelope or malformed Target control-plane wrapper
-that cannot be routed is physical terminal failure.
+still be assigned to a domain fails that Proxy scope; a DataKit feature maps
+the failure to the attachment. Target destruction resets the affected binding
+and late target events are dropped. An unreadable outer transport envelope or
+malformed Target control-plane wrapper fails the Proxy connection directly.
 
 ## DataKit feature contract
 
@@ -918,12 +918,13 @@ package enum WebInspectorFeatureTermination: Sendable {
 ~~~
 
 The common protocol owns runner start and close integration only. Event
-payloads, bootstrap commands, reducer state, explicit retry where supported,
-and recovery policy stay in concrete feature actors. A page/target replacement
-or recoverable domain failure is handled inside the running feature. Required
-Network failure is the deliberate exception: its runner returns a typed
-connection termination to the container. There is no central switch over
-every command or event.
+payloads, bootstrap commands, reducer state, and page/target lifecycle stay in
+concrete feature actors. A confirmed replacement is handled inside the running
+feature. A required method's JSON-RPC `-32601` reply publishes static
+`unsupported` availability and ends only that feature runner normally. Any
+unexpected bootstrap, protocol, route, scope, or store error returns a typed
+connection termination to the container. There is no central switch over every
+command or event.
 
 Feature actors stage a complete reducer result before committing. A failed
 reduction cannot partially mutate the canonical store.
@@ -938,14 +939,7 @@ public enum WebInspectorFeatureState: Equatable, Sendable {
         generation: WebInspectorPageGeneration,
         revision: WebInspectorStoreRevision
     )
-    case recovering(
-        generation: WebInspectorPageGeneration,
-        reason: WebInspectorRecoveryReason
-    )
-    case unavailable(
-        generation: WebInspectorPageGeneration,
-        error: WebInspectorFeatureError
-    )
+    case unsupported(requirements: [String])
 }
 
 public struct WebInspectorFeatureID: Hashable, Sendable {
@@ -956,13 +950,6 @@ public struct WebInspectorFeatureID: Hashable, Sendable {
     public static let dom: Self
     public static let network: Self
     public static let consoleRuntime: Self
-}
-
-public enum WebInspectorRecoveryReason: Equatable, Sendable {
-    case eventGap(WebInspectorFailureDescription)
-    case snapshotConflict(WebInspectorFailureDescription)
-    case malformedDomainEvent(WebInspectorFailureDescription)
-    case targetChanged
 }
 
 public struct WebInspectorFailureDescription:
@@ -978,7 +965,6 @@ public enum WebInspectorFeatureError: Error, Equatable, Sendable {
     case bootstrap(WebInspectorFailureDescription)
     case eventStream(WebInspectorFailureDescription)
     case command(WebInspectorFailureDescription)
-    case recoveryBudgetExhausted(WebInspectorFailureDescription)
 }
 
 public enum WebInspectorConnectionFailure: Error, Equatable, Sendable {
@@ -993,11 +979,10 @@ public enum WebInspectorElementPickerState: Equatable, Sendable {
     case active
     case resolvingSelection
     case disabling
-    case unavailable(WebInspectorFeatureError)
 }
 ~~~
 
-The public error families are typed at their recovery boundary:
+The public error families are typed at their owner boundary:
 
 ~~~swift
 public enum WebInspectorAttachmentError: Error, Equatable, Sendable {
@@ -1012,7 +997,10 @@ public enum WebInspectorFetchError: Error, Equatable, Sendable {
     case invalidLimit(Int)
     case invalidOffset(Int)
     case unsupportedModel(String)
-    case featureUnavailable(WebInspectorFeatureID, WebInspectorFeatureError)
+    case featureUnsupported(
+        WebInspectorFeatureID,
+        requirements: [String]
+    )
     case predicateEvaluation(WebInspectorFailureDescription)
     case contextClosed
     case containerClosed
@@ -1024,9 +1012,12 @@ public enum WebInspectorModelContextError: Error, Equatable, Sendable {
 
 public enum WebInspectorCommandError: Error, Equatable, Sendable {
     case staleIdentifier
-    case featureUnavailable(WebInspectorFeatureID, WebInspectorFeatureError)
     case targetChanged
     case connection(WebInspectorConnectionFailure)
+    case featureUnsupported(
+        WebInspectorFeatureID,
+        requirements: [String]
+    )
     case rejected(WebInspectorFailureDescription)
     case timedOut
     case containerClosed
@@ -1038,7 +1029,6 @@ public enum WebInspectorElementPickerError: Error, Equatable, Sendable {
     case enableFailed(WebInspectorFailureDescription)
     case disableFailed(WebInspectorFailureDescription)
     case selectionResolutionFailed(WebInspectorFailureDescription)
-    case unavailable(WebInspectorFeatureError)
 }
 
 public enum WebInspectorQueryError: Error, Equatable, Sendable {
@@ -1047,16 +1037,15 @@ public enum WebInspectorQueryError: Error, Equatable, Sendable {
 ~~~
 
 These error values are immutable, Equatable, and Sendable; they do not retain
-arbitrary framework objects. The thrown command/fetch error is the recovery
-contract, while the same value summary can safely appear in observable state.
+arbitrary framework objects. Command/fetch errors describe the operation that
+failed. Static required-method non-support is preserved as `featureUnsupported`.
+Unexpected runner failures use `WebInspectorConnectionFailure` and are
+reflected by the container lifecycle rather than duplicated in feature state.
 
-Feature `run` is started and restarted only by the container for attachment or
-page generation. DOM and Console/Runtime conform to
-`WebInspectorRetryableFeatureHandle`; their explicit `retry()` is accepted only
-from unavailable and joins the existing runner rather than creating another
-one. Retry is an idempotent no-op in disabled, synchronizing, ready, and
-recovering. Network conforms only to `WebInspectorFeatureHandle` and exposes no
-public, registry, container-generic, or UI retry entry point.
+Feature `run` is started only by the container for an attachment. Each public
+DOM, Network, Console, and Runtime facade conforms to
+`WebInspectorFeatureHandle`; none exposes public, registry, container-generic,
+or UI retry entry points.
 Feature `close()` is container-owned, awaited, terminal for that runner, and
 completes its command waiters with containerClosed. Detach or physical failure
 completes command waiters with cancellation/connection/targetChanged as
@@ -1065,36 +1054,24 @@ registrations ready for a later container reattach. Context close completes
 pending fetch waiters with contextClosed; container close uses containerClosed
 and joins every context registration.
 
-A feature automatically attempts at most one rebootstrap for each failure
-fingerprint and at most three automatic rebootstrap attempts in total in one
-attachment/page/binding generation. External sequence gaps, snapshot
-conflicts, and malformed known-domain payloads are recoverable input failures.
-For DOM and Console/Runtime, a repeated fingerprint, exhausted generation-wide
-budget, or failed recovery bootstrap moves that feature to unavailable with
-`recoveryBudgetExhausted`; explicit retry creates a new budget. The same Network
-outcomes publish feature-local unavailable and end only that feature runner; a
-later explicit container attachment creates the next Network runner. The
-per-fingerprint and aggregate limits are both tested, so
-neither policy can create unbounded ready/recovering churn or a timing-based
-retry loop.
+The bootstrap cut may repeat only when its ordered prefix proves that the page,
+target, or document changed while the snapshot command was in flight. This is
+stabilization of a moving source inside one bootstrap operation, not an error
+retry policy. Event gaps, malformed known-domain payloads, route loss, reducer
+conflicts, and store failures return `connectionFailed` immediately.
 
 A reducer transition that remains impossible after the external payload has
-been decoded and normalized is a programmer error, not a recovery reason. The
-closed internal state type makes such transitions unrepresentable where
-possible; only the residual private invariant may assert. An unreadable outer
-transport envelope or unroutable Target control-plane wrapper remains a
-physical connection failure. This taxonomy keeps external WebKit races out of
-preconditions without silently recovering framework implementation bugs.
+been decoded and normalized is a programmer error. The closed internal state
+type makes such transitions unrepresentable where possible; only the residual
+private invariant may assert. External WebKit input errors are surfaced at the
+connection boundary rather than converted into preconditions or fallback.
 
-Semantic phase, generation, failure, and recovery transitions are logged at
-the feature boundary. A ready-state refresh that changes only the canonical
-store revision is deliberately not logged; otherwise normal DOM commits turn
-the state log into an event trace. Recovery records contain the feature,
-generation, reason code, fingerprint, and relevant revision. A known malformed
-event additionally records its full method and connection sequence at the
-scope failure boundary. These structured records distinguish attachment loss,
-feature-local recovery/failure, and physical connection failure without permanently
-logging high-frequency protocol events or revision churn.
+Semantic phase and generation transitions are logged at the feature boundary.
+A ready-state refresh that changes only the canonical store revision is
+deliberately not logged; otherwise normal DOM commits turn the state log into
+an event trace. A malformed event records its method and connection sequence at
+the scope failure boundary without logging high-frequency protocol events or
+revision churn.
 
 ### Canonical model store
 
@@ -1320,11 +1297,6 @@ public protocol WebInspectorFeatureHandle: Sendable {
         WebInspectorStateUpdates<WebInspectorFeatureState> { get }
 }
 
-public protocol WebInspectorRetryableFeatureHandle:
-    WebInspectorFeatureHandle {
-    func retry() async
-}
-
 public final class WebInspectorPageCommands: Sendable {
     public func reload(ignoringCache: Bool = false) async throws
 }
@@ -1375,7 +1347,7 @@ public final class CSSStyles: WebInspectorPersistentModel {
     public private(set) var computedProperties: [CSSComputedProperty]
 }
 
-public final class WebInspectorDOM: WebInspectorRetryableFeatureHandle {
+public final class WebInspectorDOM: WebInspectorFeatureHandle {
     public var state: WebInspectorFeatureState { get }
     public var stateUpdates:
         WebInspectorStateUpdates<WebInspectorFeatureState> { get }
@@ -1383,10 +1355,8 @@ public final class WebInspectorDOM: WebInspectorRetryableFeatureHandle {
     public var elementPickerStateUpdates:
         WebInspectorStateUpdates<WebInspectorElementPickerState> { get }
 
-    public func retry() async
     public func pickElement() async throws -> DOMNode.ID
     public func cancelElementPicker() async
-    public func retryElementPicker() async
 
     public func requestChildren(
         of nodeID: DOMNode.ID,
@@ -1450,11 +1420,10 @@ public final class WebInspectorNetwork: WebInspectorFeatureHandle {
     ) async throws -> NetworkResponseBodyContent
 }
 
-public final class WebInspectorConsole: WebInspectorRetryableFeatureHandle {
+public final class WebInspectorConsole: WebInspectorFeatureHandle {
     public var state: WebInspectorFeatureState { get }
     public var stateUpdates:
         WebInspectorStateUpdates<WebInspectorFeatureState> { get }
-    public func retry() async
 }
 
 public struct RuntimeObject: Identifiable, Hashable, Sendable {
@@ -1514,12 +1483,10 @@ public struct WebInspectorRuntimeScopeError: Error {
     public let cleanupError: any Error
 }
 
-public final class WebInspectorRuntime: WebInspectorRetryableFeatureHandle {
+public final class WebInspectorRuntime: WebInspectorFeatureHandle {
     public var state: WebInspectorFeatureState { get }
     public var stateUpdates:
         WebInspectorStateUpdates<WebInspectorFeatureState> { get }
-    public func retry() async
-
     public func objectScope(
         named name: String? = nil,
         boundTo contextID: RuntimeContext.ID? = nil
@@ -1840,7 +1807,7 @@ Predicate<Model> is not evaluated on a background actor because Model is the
 context-owned observable reference. The immutable, Sendable QueryValue mirrors
 the queryable fields and is evaluated by the query actor.
 
-Invalid offset, limit, unsupported model type, or unavailable feature produces
+Invalid offset, limit, unsupported model type, or predicate evaluation produces
 a typed fetch error at fetch/performFetch. Mutable descriptor properties do not
 trap.
 
@@ -1961,18 +1928,12 @@ last-success result current, but they do not clear the requested replacement's
 error or make that descriptor appear accepted.
 
 Invalid limit/offset, unsupported model, and predicate-evaluation failures are
-deterministic query failures. They retry only through an explicit refetch (or
-a new SwiftUI semantic query ID/context binding). A feature-unavailable
-failure is retained as a pending requested descriptor and gets one
-event-driven reevaluation when that feature next reaches ready and publishes
-its authoritative source state; it starts no polling or retry task. If the
-controller has never accepted a result, successful reevaluation atomically
-accepts it and publishes `initial`. If it retains an accepted result from an
-earlier successful fetch, successful reevaluation atomically accepts the
-requested descriptor and publishes `reset`. Both clear fetchError. An
-ordinary delta/reset evaluated for the previously accepted descriptor cannot
-clear a pending replacement error. Context/container close closes the
-controller instead of retrying.
+deterministic query failures. They are reevaluated only through an explicit
+refetch (or a new SwiftUI semantic query ID/context binding). Feature runner
+failure is reported by container state, not converted into a query error. A
+pre-ready registration remains pending without polling until an authoritative
+ready source arrives or its context closes. An ordinary delta/reset evaluated
+for a previously accepted descriptor cannot clear a pending replacement error.
 
 An updates subscription created before the first successful fetch waits for
 the initial publication. A later subscription starts atomically with the
@@ -1995,8 +1956,8 @@ deltas coalesce into one latest reset. While that reset waits, its complete
 snapshot/revision is replaced by newer state, so the reset cannot itself be
 dropped. Cancelling an iterator removes only that subscriber.
 Controller/context close finishes all iterators after their current waiter is
-resumed; fetch or feature failure does not terminate the sequence and later
-recovery can publish again.
+resumed. A deterministic fetch failure does not terminate the sequence; an
+explicit successful refetch can publish again.
 
 close is the explicit cancellation and join authority. Deinitialization only
 cancels its registration as a best-effort backstop.
@@ -2051,7 +2012,7 @@ ready; source values accumulate in the bounded context mailbox and are applied
 after that linearization point. It never awaits future feature readiness from
 inside the queue. Pre-ready registrations and descriptor replacements are
 stored as pending operations, the processor turn returns, and a later
-ready/unavailable/close input resumes them. This separation prevents the
+ready/close input resumes them. This separation prevents the
 future source transaction from waiting behind the continuation it must
 complete.
 
@@ -2287,9 +2248,9 @@ they do not synthesize nodes.
 For childNodeInserted, `previousNodeId == 0` is the normal WebKit encoding of
 "no previous sibling" and inserts at index zero. It is never an invariant
 failure. A nonzero previous node that is unknown while the parent's children
-are fully loaded is an external tree gap and consumes the bounded DOM
-rebootstrap budget; for an incompletely loaded parent the event follows the
-unloaded-subtree rule instead of inventing a sibling.
+are fully loaded is an external tree gap and fails the attachment; for an
+incompletely loaded parent the event follows the unloaded-subtree rule instead
+of inventing a sibling.
 
 DOM bootstrap uses the same exact-order principle as Network:
 
@@ -2312,16 +2273,11 @@ No bootstrap event mutates the live tree until the snapshot and binding scope
 have committed together. Reply-adjacent, mid-bootstrap documentUpdated, and
 lazy-child event order are contract-tested against the single Proxy FIFO.
 
-A same-document event gap or relation conflict does not publish an empty DOM
-reset. The last successfully committed DOM/CSS records and every context's
-query result remain visible while the feature prepares a replacement cut; the
-replacement snapshot becomes visible in one store transaction. If that
-recovery budget is exhausted, the feature reports unavailable and commands
-fail with the typed feature error, but the last successful read-only result is
-still retained. Confirmed navigation, `documentUpdated`, target replacement,
-or attachment-generation change is different: it invalidates the old document
-identity immediately, so stale records are reset rather than presented as the
-current page.
+An unexpected same-document event gap or relation conflict fails the
+attachment without publishing a guessed or partially reduced tree. Confirmed
+`documentUpdated`, target replacement, or attachment-generation change is
+different: it invalidates the old document identity and bootstraps the known
+new source, so stale records are not presented as the current page.
 
 Picker state is a state machine, not a capability lease:
 
@@ -2365,12 +2321,11 @@ Enable rejection returns enableFailed and returns to idle. Selection resolution
 failure returns selectionResolutionFailed after backendIdle and cannot
 reactivate the picker.
 
-A failed disable leaves physical picker state unknown. The picker substate
-makes one bounded disable retry; if it still fails, it becomes unavailable and
-returns disableFailed while DOM data remains ready. An explicit picker retry or
-target reset is the only restart authority. The UI displays the picker as off
-unless the feature reports active; it never assumes success from the button's
-local state.
+A failed disable sends no automatic retry. It returns `disableFailed` and
+keeps the backend-active state authoritative. A later explicit cancel intent
+sends one new disable command; target reset retires the picker with its target.
+The UI displays the picker as active until the owner confirms disable and never
+assumes success from the button's local state.
 
 The UI observes this one feature state. It does not keep a second
 isElementPickerEnabled mirror.
@@ -2389,8 +2344,8 @@ generation, page generation, semantic target, agent target, and binding scope
 ID.
 
 Network asks the registry for the scope at each initiator event's connection
-sequence. Existing NetworkEntry identities are never rewritten when DOM alone
-rebootstraps; later events use the new scope and therefore cannot collide with
+sequence. Existing NetworkEntry identities are never rewritten when the DOM
+document binding advances; later events use the new scope and cannot collide with
 old raw node IDs. Pending initiator work at the cut is either reduced under the
 scope valid at its sequence or committed ungrouped; it is never guessed or
 carried into the new scope. DOM failure does not reset Network, and Network
@@ -2431,12 +2386,10 @@ transaction, not a second consumer-visible history.
 
 Page lifecycle events before W are reconciled against the resource tree's
 frame and loader identities rather than blindly replayed into it. Events for
-the same loader are already represented by the snapshot. A contradictory
-loader or reset means the tree and buffered events describe different
-documents; that bootstrap attempt is discarded and Network reboots under the
-bounded Network recovery policy. If that recovery budget is exhausted, Network
-becomes locally unavailable without changing sibling features or the container
-attachment.
+the same loader are already represented by the snapshot. An ordered target
+reset proves that the reply is stale, so that bootstrap cut is discarded and
+repeated against the replacement target. A malformed contradictory payload
+fails the attachment rather than creating a Network-local retry state.
 
 WebKit's current frontend sends `getResourceTree` and `Network.enable`
 back-to-back in the opposite order and ignores Network events while waiting
@@ -2459,16 +2412,10 @@ requestWillBeSent is not a protocol violation. Orphan dataReceived and finish
 events that cannot be reconciled are dropped; they do not close Network or the
 connection.
 
-An event-scope gap recovers only Network and starts a new bootstrap. The
-replacement scope is active before the old scope releases its capability
-lease, so Network.enable is not repeated merely to obtain WebSocket replay.
-Because Page.getResourceTree contains no WebSocket snapshot, same-generation
-recovery starts from the last canonical Network state, retains each existing
-WebSocket exactly once, and marks its post-gap continuity unknown until a later
-event resolves it. The new resource-tree/event cut then reconciles HTTP
-resources and later socket events by canonical/raw request identity. Entries
-are not falsely reported active or silently deleted merely because their
-close/failure may have occurred inside the gap. DOM remains usable.
+An event-scope gap makes Network continuity unknowable and fails the attachment.
+The runner closes its scope and does not synthesize WebSocket continuity from a
+new `Page.getResourceTree`, because that snapshot contains no WebSockets. A
+later explicit attachment starts a fresh authoritative bootstrap.
 
 ### Redirects and initiator grouping
 
@@ -2534,7 +2481,7 @@ container.runtime, not ModelContext.
 `WebInspectorFeatureID.consoleRuntime` is the single configuration and
 lifecycle identity for that actor. `container.console` and
 `container.runtime` are separate typed command/query facades over the same
-feature state; they cannot be enabled, retried, or closed independently.
+feature state; they cannot be enabled or closed independently.
 
 Object-group release, target replacement, and navigation make the associated
 RuntimeObject IDs stale without affecting DOM or Network.
@@ -2647,12 +2594,13 @@ public final class WebInspectorViewController: UIViewController {
 
 Catalog construction rejects an empty catalog and duplicate IDs with
 `WebInspectorTabCatalogError`; it never traps or silently drops a tab. Equality
-and hashing use ID only. The shell waits for required features. A retryable DOM
-or Console/Runtime failure may present a retryable feature error without
-discarding the last controller; Network failure instead arrives through the
-container terminal state, closes every presentation resource, and exposes no
-Network-local failure/retry controller. A later explicit attachment restarts
-closed resources. The store allows at most one factory attempt in flight per
+and hashing use ID only. The shell waits for required features. Any built-in
+feature runner failure arrives through the container terminal state and closes
+every presentation resource. Static `unsupported` availability fails only
+resources whose tabs require that feature and offers no retry action; the
+catalog and sibling resources remain intact. A later explicit attachment
+restarts resources closed by a connection failure. The store allows at most
+one factory attempt in flight per
 session/resource. Concurrent compact and regular requests join that attempt,
 and one successful controller is cached for the remaining resource lifetime.
 A factory's own failure is not cached, so an explicit retry may invoke the
@@ -2762,13 +2710,12 @@ manual screen interaction.
 | Stale persistent ID | nil or staleModel | Other models retained |
 | Command rejection/timeout | That command throws | Retained |
 | Response body failure | That body enters failed | Network retained |
-| DOM external tree gap/snapshot conflict | DOM recovering and rebootstrap | DOM last success plus Network/Console retained |
-| Network event gap | Network recovering and rebootstrap | Network last success plus DOM/Console retained |
-| DOM or Console/Runtime bootstrap failure | That retryable feature becomes unavailable | Other features retained |
-| Network bootstrap failure or exhausted recovery | Network becomes unavailable with no retry action | DOM/Console and attachment retained; a later explicit attachment starts a new Network runner |
+| DOM external tree gap/snapshot conflict | Attachment fails | All presentation resources close |
+| Network event gap | Attachment fails | All presentation resources close |
+| Any built-in feature bootstrap/route/store failure | Attachment fails | All presentation resources close |
 | Event scope consumer cancellation | That scope closes | Connection retained |
 | Target destroyed/binding gap/late target event | Target-local reset or drop | Connection retained |
-| Native disconnect/explicit close | Container connection closes/fails | Feature queries stop |
+| Native disconnect/explicit close | Container connection fails/closes | Feature queries stop |
 | Unreadable outer envelope or unroutable Target wrapper | Physical connection fails | All features stop |
 
 No raw WebKit payload, navigation race, cancellation, stale object, feature
@@ -2952,7 +2899,7 @@ is migration input, not a set of adapters to retain:
 | ModelActor synthesis | new compiler-plugin target; direct hand-written actor conformances are not carried forward | macro expansion/diagnostic tests plus repeated-binding/executor-identity ContractTests |
 | Generic query/FRC | fetch descriptor, current query engine, transaction, FRC/publication/update sequence | flat initial/delta/reset, refetch, slow-subscriber, 10,000-record, and confinement tests |
 | DOM/CSS/picker | canonical DOM/CSS reducers, DOM/CSS command gateway, element picker, old DOM tree projection stream | DOM feature actor, persistent CSS records, picker state-machine and scoped-bootstrap tests |
-| Network | canonical Network records/store, context Network commands, body loading | Network feature actor, flat grouped entries, body routing and scoped-bootstrap/recovery tests |
+| Network | canonical Network records/store, context Network commands, body loading | Network feature actor, flat grouped entries, body routing, scoped-bootstrap, and fail-fast tests |
 | Console/Runtime | canonical Console/Runtime records/store, runtime command gateway and object group | Console/Runtime feature actor, Sendable object scopes and release-order tests |
 | SwiftUI query | new target; no legacy observation wrapper is carried forward | `WebInspectorSwiftUITests` and import-only ContractTests |
 | DOM UIKit | `WebInspectorUIDOM` panel/tree/element controllers and their direct ProxyKit value spellings | generic DOM FRC/render coordinator tests and no ProxyKit target dependency |
@@ -3061,42 +3008,35 @@ branches/worktrees and is not merged as history into the integration branch.
   capability release, then detaches Proxy and releases the WKWebView reservation
   in that order.
 
-### Initial, delta, and recovery
+### Initial, delta, and failure
 
 - a pre-attach query does not report a successful empty initial.
 - attach mid-load yields current DOM and Network snapshots.
-- a first performFetch that reports featureUnavailable remains registered; its
-  first later success emits `initial`, while recovery after an accepted result
+- a pre-ready performFetch remains registered without a polling task; its first
+  ready source emits `initial`, while a new attachment after an accepted result
   emits `reset`.
 - initial is followed only by contiguous deltas or reset.
 - multiple slow context/query consumers independently receive a reset and
   continue; a pending reset cannot be dropped.
-- navigation resets generation and makes old IDs stale.
-- previousNodeId zero inserts at the first child repeatedly without recovery;
-  an unknown nonzero previous sibling under a fully loaded parent consumes the
-  DOM-only rebootstrap budget.
-- Network gap rebases/reboots Network only while preserving the documented
-  same-generation canonical/WebSocket baseline.
-- failed DOM or Console/Runtime bootstrap leaves the other features attached
-  and usable; failed Network bootstrap leaves DOM and Console/Runtime attached.
-- no semantic feature's protocolViolation, bootstrap, or recovery exhaustion
-  path detaches the whole inspector.
-- the same recovery fingerprint cannot cycle ready/recovering more than once
-  per attachment/page/binding generation; exhaustion makes DOM or
-  Console/Runtime unavailable until explicit retry, while Network exhaustion
-  leaves only Network unavailable.
-- three distinct recovery fingerprints consume the generation-wide automatic
-  budget. A fourth makes the feature unavailable without starting a fourth
-  rebootstrap.
-  Explicit retry is available only to retryable handles; a new attachment or
-  generation establishes the applicable bounded budget.
-- a malformed known domain event terminates only its scope with method and
-  sequence diagnostics; an unknown event preserves its full method and
+- navigation advances the appropriate document/navigation/binding identity and
+  makes prior-document IDs stale without replacing the attachment generation.
+- previousNodeId zero inserts at the first child repeatedly; an unknown nonzero
+  previous sibling under a fully loaded parent fails the attachment.
+- a required method's JSON-RPC `-32601` response publishes static unsupported
+  availability for only that feature; dependent tabs and queries fail without
+  a retry action while siblings remain usable.
+- every other enabled feature bootstrap/protocol/route/store failure fails and
+  tears down the attachment; no transient local unavailable state or retry
+  task is published.
+- an ordered target/document reset during bootstrap repeats that moving-source
+  cut; no other failure enters the stabilization loop.
+- a malformed known domain event terminates its Proxy scope with method and
+  sequence diagnostics and the DataKit runner fails the attachment; an unknown
+  event preserves its full method and
   semantic null, fragment, array, or object parameter shape without promising
   byte-identical whitespace/key order/number spelling.
-- scope overflow terminally stops delivery but retains its capability lease
-  until replacement activation or owner close; it never releases early through
-  AsyncSequence termination cleanup.
+- scope overflow terminally stops delivery; the DataKit runner closes the scope
+  and fails the attachment rather than activating a replacement scope.
 - one composite Page/Network scope preserves cross-domain FIFO order, and its
   reply marker is queued before command continuation resume; the same feature
   owner then drains exactly through that boundary before committing.
@@ -3123,10 +3063,7 @@ branches/worktrees and is not merged as history into the integration branch.
   later replacement.
 - while a requested replacement is failed, old-descriptor deltas can update
   the retained result but cannot clear that error; deterministic failures wait
-  for explicit refetch/new semantic ID, while feature-unavailable retries once
-  on the next authoritative ready source state and accepts atomically on
-  success, publishing `initial` when no result was previously accepted and
-  `reset` otherwise.
+  for explicit refetch/new semantic ID.
 - an unchanged SwiftUI query ID causes zero refetches; a changed ID in the
   same context causes exactly one atomic refetch on the same FRC.
 - DynamicProperty.update owns binding changes; repeated wrappedValue,
@@ -3156,11 +3093,11 @@ branches/worktrees and is not merged as history into the integration branch.
   nonduplicated updatedItemIDs set.
 - `initial` and every `reset` carry a full membership snapshot; reset causes
   include descriptor replacement, source rebase, generation/navigation reset,
-  feature recovery, and slow-subscriber recovery. A contiguous `changes`
+  new-attachment replacement, and slow-subscriber recovery. A contiguous `changes`
   publication carries no snapshot and performs no full-membership copy.
-- the update sequence's `Failure` is `Never`; fetch/feature failure changes
-  fetchError and may be followed by a recovery publication, while FRC or
-  context/container close finishes every iterator normally.
+- the update sequence's `Failure` is `Never`; deterministic fetch failure
+  changes fetchError and an explicit successful refetch may publish again,
+  while FRC or context/container close finishes every iterator normally.
 - no section API or ResultsObserver symbol remains.
 - 10,000-record tests retain zero full evaluations for single-record
   insert/update/delete and content-only updates.
@@ -3170,9 +3107,9 @@ branches/worktrees and is not merged as history into the integration branch.
 ### DOM and picker
 
 - DOM tree remains visible after supported child-count/live-tree events.
-- a same-document recovery retains the last successful tree until one
-  replacement commit; only a confirmed document/generation replacement
-  immediately resets the old identities.
+- an unexpected same-document relation gap fails the attachment; a confirmed
+  document replacement atomically retires old identities and bootstraps the
+  new document.
 - DOM.getDocument reply-adjacent events obey the watermark cut, and
   documentUpdated during bootstrap discards/restarts only that attempt.
 - picker enable, cancel, select, and re-enable work repeatedly.
@@ -3190,14 +3127,12 @@ branches/worktrees and is not merged as history into the integration branch.
 - requestWillBeSent, responseReceived-first, memory-cache, failure, WebSocket,
   and navigation cases are covered.
 - resource-tree reply-adjacent events obey the watermark cut.
-- a contradictory pre-boundary Page loader discards and retries only the
-  Network bootstrap attempt.
+- an ordered target reset before the reply boundary discards and repeats only
+  the moving-source bootstrap cut; malformed contradictions fail attachment.
 - a request starting after Network.enable but during resource-tree capture is
   present exactly once in the reconciled initial transaction.
-- Network gap recovery activates the replacement scope before releasing the
-  old capability lease, without a disable/enable gap or duplicate WebSocket
-  replay; pre-gap active WebSockets remain exactly once with explicit unknown
-  continuity until later evidence resolves them.
+- a Network event gap fails the attachment without opening a replacement scope
+  or inventing WebSocket continuity.
 - a snapshot request keeps its persistent ID when a raw requestId is learned.
 - redirects remain one request/entry and preserve ordered hops.
 - requests with one exact scoped initiator node are one flat NetworkEntry; a
@@ -3276,7 +3211,7 @@ deleted path and forbidden import absence; and `swift package dump-package`
 JSON validation of the target DAG. Broad words such as `section`, `load`,
 `domain`, `responseBody`, `protocolViolation`, and `precondition` are not
 searched bare. This keeps the deletion proof sensitive to the legacy owners
-without rejecting unrelated UIKit, CSS, or feature-local terminology.
+without rejecting unrelated UIKit or CSS terminology.
 
 If that simulator is not installed locally, a developer may substitute an
 available iOS Simulator for an exploratory run. CI and the documented required
@@ -3294,9 +3229,9 @@ Approval on 2026-07-15 accepts these coupled decisions:
   public executor/context escape hatch;
 - make Container the only physical/model-session owner;
 - keep WebInspectorSession only as a UIKit presentation facade;
-- move semantic features and recovery out of ProxyKit connection core;
-- use bounded owner-local recovery; every semantic feature may end in local
-  unavailable without changing the physical attachment;
+- move semantic feature ownership out of ProxyKit connection core;
+- keep target/document bootstrap stabilization inside each feature owner, but
+  fail the attachment on unexpected bootstrap/protocol/route/store errors;
 - use one context operation queue and one typed mutation pipeline;
 - ship one-parameter flat FRC and a separate WebInspectorSwiftUI overlay;
 - expose query results plus fetchError, with no projected phase;

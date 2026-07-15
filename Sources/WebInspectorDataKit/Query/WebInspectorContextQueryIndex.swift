@@ -55,9 +55,9 @@ package struct _WebInspectorQueryDelivery<
     package let clearsFetchError: Bool
 }
 
-private enum _WebInspectorQueryRetryDisposition: Equatable {
+private enum _WebInspectorQueryEvaluationDisposition: Equatable {
     case waitingForReadiness
-    case featureUnavailable
+    case featureUnsupported
     case deterministicFailure
 }
 
@@ -72,7 +72,7 @@ private struct _WebInspectorQueryRegistration<Model>
 where Model: WebInspectorPersistentModel {
     var accepted: _WebInspectorAcceptedQuery<Model>?
     var requestedDescriptor: WebInspectorFetchDescriptor<Model>
-    var retryDisposition: _WebInspectorQueryRetryDisposition?
+    var evaluationDisposition: _WebInspectorQueryEvaluationDisposition?
 }
 
 private final class _WebInspectorTypedQueryIndex<Model>
@@ -248,13 +248,13 @@ package actor WebInspectorContextQueryIndex {
                                 difference: difference
                             ),
                             clearsFetchError:
-                                registration.retryDisposition == nil
+                                registration.evaluationDisposition == nil
                         )
                     )
                 }
             } catch {
-                registration.retryDisposition =
-                    _WebInspectorQueryRetryDisposition.deterministicFailure
+                registration.evaluationDisposition =
+                    _WebInspectorQueryEvaluationDisposition.deterministicFailure
                 index.registrations[registrationID] = registration
                 deliveries.append(
                     _WebInspectorQueryDelivery(
@@ -285,7 +285,7 @@ package actor WebInspectorContextQueryIndex {
         var registration = _WebInspectorQueryRegistration<Model>(
             accepted: nil,
             requestedDescriptor: descriptor,
-            retryDisposition: nil
+            evaluationDisposition: nil
         )
         let attempt = evaluateRequested(
             registration: &registration,
@@ -310,7 +310,7 @@ package actor WebInspectorContextQueryIndex {
         }
 
         registration.requestedDescriptor = descriptor
-        registration.retryDisposition = nil
+        registration.evaluationDisposition = nil
         let disposition: _WebInspectorQueryAttempt<Model>.SuccessDisposition =
             registration.accepted == nil ? .initial : .reset
         let attempt = evaluateRequested(
@@ -334,16 +334,18 @@ package actor WebInspectorContextQueryIndex {
                 .unsupportedModel(String(reflecting: Model.self))
             )
         }
-        switch readinessFailure(
-            featureID: index.featureID,
-            state: index.featureState
-        ) {
-        case let .some(error):
-            return .failure(error)
-        case .none:
-            guard case .ready = index.featureState else {
-                return .failure(.contextClosed)
-            }
+        switch index.featureState {
+        case .ready:
+            break
+        case let .unsupported(requirements):
+            return .failure(
+                .featureUnsupported(
+                    index.featureID,
+                    requirements: requirements
+                )
+            )
+        case .disabled, .synchronizing:
+            return .failure(.contextClosed)
         }
         do {
             return .success(
@@ -378,37 +380,47 @@ package actor WebInspectorContextQueryIndex {
         in index: _WebInspectorTypedQueryIndex<Model>
     ) -> [_WebInspectorQueryDelivery<Model>]
     where Model: WebInspectorPersistentModel {
-        if let error = readinessFailure(
-            featureID: index.featureID,
-            state: index.featureState
-        ) {
-            return Array(index.registrations).map {
-                registrationID, currentRegistration in
+        switch index.featureState {
+        case let .unsupported(requirements):
+            var deliveries: [_WebInspectorQueryDelivery<Model>] = []
+            for (registrationID, currentRegistration) in Array(index.registrations) {
+                guard currentRegistration.evaluationDisposition != .featureUnsupported else {
+                    continue
+                }
                 var registration = currentRegistration
-                registration.retryDisposition = .featureUnavailable
+                registration.evaluationDisposition = .featureUnsupported
                 index.registrations[registrationID] = registration
-                return _WebInspectorQueryDelivery(
-                    registrationID: registrationID,
-                    kind: .failure(error),
-                    clearsFetchError: false
+                deliveries.append(
+                    _WebInspectorQueryDelivery(
+                        registrationID: registrationID,
+                        kind: .failure(
+                            .featureUnsupported(
+                                index.featureID,
+                                requirements: requirements
+                            )
+                        ),
+                        clearsFetchError: false
+                )
                 )
             }
-        }
-        guard case .ready = index.featureState else {
+            return deliveries
+        case .disabled, .synchronizing:
             for (registrationID, currentRegistration) in Array(index.registrations) {
                 var registration = currentRegistration
-                if registration.retryDisposition != .deterministicFailure {
-                    registration.retryDisposition = .waitingForReadiness
+                if registration.evaluationDisposition != .deterministicFailure {
+                    registration.evaluationDisposition = .waitingForReadiness
                     index.registrations[registrationID] = registration
                 }
             }
             return []
+        case .ready:
+            break
         }
 
         var deliveries: [_WebInspectorQueryDelivery<Model>] = []
         for (registrationID, currentRegistration) in Array(index.registrations) {
             var registration = currentRegistration
-            if registration.retryDisposition == .deterministicFailure {
+            if registration.evaluationDisposition == .deterministicFailure {
                 guard var accepted = registration.accepted else { continue }
                 do {
                     let evaluation = try evaluate(
@@ -433,7 +445,7 @@ package actor WebInspectorContextQueryIndex {
             }
             let hadAcceptedResult = registration.accepted != nil
             let descriptor =
-                registration.retryDisposition == nil
+                registration.evaluationDisposition == nil
                 ? registration.accepted?.descriptor
                     ?? registration.requestedDescriptor
                 : registration.requestedDescriptor
@@ -448,7 +460,7 @@ package actor WebInspectorContextQueryIndex {
                     itemIDs: evaluation.itemIDs
                 )
                 registration.requestedDescriptor = descriptor
-                registration.retryDisposition = nil
+                registration.evaluationDisposition = nil
                 index.registrations[registrationID] = registration
                 deliveries.append(
                     _WebInspectorQueryDelivery(
@@ -460,7 +472,7 @@ package actor WebInspectorContextQueryIndex {
                     )
                 )
             } catch {
-                registration.retryDisposition = .deterministicFailure
+                registration.evaluationDisposition = .deterministicFailure
                 index.registrations[registrationID] = registration
                 deliveries.append(
                     _WebInspectorQueryDelivery(
@@ -480,16 +492,20 @@ package actor WebInspectorContextQueryIndex {
         disposition: _WebInspectorQueryAttempt<Model>.SuccessDisposition
     ) -> _WebInspectorQueryAttempt<Model>
     where Model: WebInspectorPersistentModel {
-        if let error = readinessFailure(
-            featureID: index.featureID,
-            state: index.featureState
-        ) {
-            registration.retryDisposition = .featureUnavailable
-            return .failure(error)
-        }
-        guard case .ready = index.featureState else {
-            registration.retryDisposition = .waitingForReadiness
+        switch index.featureState {
+        case let .unsupported(requirements):
+            registration.evaluationDisposition = .featureUnsupported
+            return .failure(
+                .featureUnsupported(
+                    index.featureID,
+                    requirements: requirements
+                )
+            )
+        case .disabled, .synchronizing:
+            registration.evaluationDisposition = .waitingForReadiness
             return .pending
+        case .ready:
+            break
         }
         do {
             let evaluation = try evaluate(
@@ -501,13 +517,13 @@ package actor WebInspectorContextQueryIndex {
                 matchingItemIDs: evaluation.matchingItemIDs,
                 itemIDs: evaluation.itemIDs
             )
-            registration.retryDisposition = nil
+            registration.evaluationDisposition = nil
             return .success(
                 itemIDs: evaluation.itemIDs,
                 disposition: disposition
             )
         } catch {
-            registration.retryDisposition = .deterministicFailure
+            registration.evaluationDisposition = .deterministicFailure
             return .failure(normalizeFetchError(error))
         }
     }
@@ -610,16 +626,6 @@ package actor WebInspectorContextQueryIndex {
         if let offset = descriptor.fetchOffset, offset < 0 {
             throw WebInspectorFetchError.invalidOffset(offset)
         }
-    }
-
-    private func readinessFailure(
-        featureID: WebInspectorFeatureID,
-        state: WebInspectorFeatureState
-    ) -> WebInspectorFetchError? {
-        guard case let .unavailable(_, error) = state else {
-            return nil
-        }
-        return .featureUnavailable(featureID, error)
     }
 
     private func predicateFailure(_ error: any Error)

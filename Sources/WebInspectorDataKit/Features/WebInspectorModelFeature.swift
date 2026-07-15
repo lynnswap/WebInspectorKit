@@ -25,9 +25,9 @@ package struct WebInspectorFeatureConnection: Sendable {
 
 /// Common lifecycle integration for first-party semantic features.
 ///
-/// Protocol decoding, bootstrap, reducer state, command waiters, and recovery
-/// remain concrete actor responsibilities. The container is the only caller
-/// of `run` and `close`.
+/// Protocol decoding, bootstrap, reducer state, command waiters, and page
+/// replacement remain concrete actor responsibilities. The container is the
+/// only caller of `run` and `close`.
 package protocol WebInspectorModelFeature: Actor {
     static var id: WebInspectorFeatureID { get }
 
@@ -138,68 +138,6 @@ package struct WebInspectorFeatureEventScope: Equatable, Sendable {
     }
 }
 
-package struct WebInspectorRecoveryFingerprint: Hashable, Sendable {
-    package let code: String
-    package let phase: String
-    package let method: String?
-
-    package init(
-        code: String,
-        phase: String,
-        method: String? = nil
-    ) {
-        self.code = code
-        self.phase = phase
-        self.method = method
-    }
-}
-
-/// Bounds automatic feature-local recovery independently for one generation.
-package struct WebInspectorFeatureRecoveryBudget: Sendable {
-    package enum Decision: Equatable, Sendable {
-        case retry
-        case repeatedFingerprint
-        case generationBudgetExhausted
-    }
-
-    private(set) var generation: WebInspectorPageGeneration?
-    private(set) var attemptedFingerprints: Set<WebInspectorRecoveryFingerprint>
-    private(set) var automaticAttemptCount: Int
-    package let maximumAutomaticAttempts: Int
-
-    package init(maximumAutomaticAttempts: Int = 3) {
-        self.maximumAutomaticAttempts = maximumAutomaticAttempts
-        generation = nil
-        attemptedFingerprints = []
-        automaticAttemptCount = 0
-    }
-
-    package mutating func begin(
-        generation proposedGeneration: WebInspectorPageGeneration,
-        explicitRetry: Bool = false
-    ) {
-        guard explicitRetry || generation != proposedGeneration else { return }
-        generation = proposedGeneration
-        attemptedFingerprints.removeAll(keepingCapacity: true)
-        automaticAttemptCount = 0
-    }
-
-    package mutating func consume(
-        _ fingerprint: WebInspectorRecoveryFingerprint,
-        generation proposedGeneration: WebInspectorPageGeneration
-    ) -> Decision {
-        begin(generation: proposedGeneration)
-        guard attemptedFingerprints.insert(fingerprint).inserted else {
-            return .repeatedFingerprint
-        }
-        guard automaticAttemptCount < maximumAutomaticAttempts else {
-            return .generationBudgetExhausted
-        }
-        automaticAttemptCount += 1
-        return .retry
-    }
-}
-
 package final class WebInspectorFeatureCloseSignal: Sendable {
     private let closed = Atomic<Bool>(false)
 
@@ -230,7 +168,6 @@ package func webInspectorLogFeatureTransition(
     feature: WebInspectorFeatureID,
     from: WebInspectorFeatureState,
     to: WebInspectorFeatureState,
-    fingerprint: WebInspectorRecoveryFingerprint? = nil,
     revision: WebInspectorStoreRevision? = nil
 ) {
     guard webInspectorShouldLogFeatureTransition(from: from, to: to) else {
@@ -238,7 +175,6 @@ package func webInspectorLogFeatureTransition(
     }
     WebInspectorDataKitLog.debug(
         "feature=\(feature.name) from=\(from) to=\(to) "
-            + "fingerprint=\(String(describing: fingerprint)) "
             + "revision=\(String(describing: revision?.rawValue))"
     )
 }

@@ -88,10 +88,12 @@ let catalog = try WebInspectorTabCatalog([.dom, .network, consoleTab])
 let inspector = WebInspectorViewController(catalog: catalog)
 ```
 
-Each tab waits only for its own `requiredFeatures`. A Network failure remains
-feature-local, so DOM and Console content stay attached. Network does not expose
-a retry action; a new explicit attachment creates its next feature runner. DOM,
-Console, and Runtime remain independently retryable features.
+Each tab waits only for its own `requiredFeatures`. Static feature support is
+evaluated per tab, so an unsupported custom feature does not invalidate the
+catalog and has no retry action. A required Web Inspector method rejected with
+JSON-RPC `-32601` marks only that feature as statically unsupported. Other
+bootstrap, protocol, route, or store failures fail the attachment; the next
+explicit attachment creates a fresh set of feature runners.
 
 ## Testing the Raw Wire
 

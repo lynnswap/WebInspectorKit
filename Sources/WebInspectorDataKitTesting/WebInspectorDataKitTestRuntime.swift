@@ -225,13 +225,12 @@ public actor WebInspectorDataKitTestRuntime {
         }
     }
 
-    /// One enabled feature's terminal state at a testing boundary.
+    /// One enabled feature's terminal availability at a testing boundary.
     public struct FeatureBoundary: Equatable, Sendable {
         /// The enabled feature represented by this boundary.
         public let featureID: WebInspectorFeatureID
 
-        /// The feature's captured terminal boundary state. Any enabled feature
-        /// may be `unavailable` without ending sibling features or attachment.
+        /// The feature's captured ready or static-unsupported state.
         public let state: WebInspectorFeatureState
 
         fileprivate init(
@@ -245,11 +244,10 @@ public actor WebInspectorDataKitTestRuntime {
 
     /// A testing-only raw-input and feature-owner boundary.
     ///
-    /// Every listed feature has reached its supported boundary state when
-    /// captured. A replacement advances the generation of features that were
-    /// ready; already-unavailable features remain terminal without an implicit
-    /// retry. Only physical connection failure throws
-    /// `RuntimeError.connectionFailed` instead of producing a feature boundary.
+    /// Every listed feature is ready or statically unsupported when captured.
+    /// A replacement advances the generation of each supported feature. Any
+    /// unexpected feature failure throws `RuntimeError.connectionFailed`
+    /// instead of producing a boundary.
     /// This snapshot does not imply that a consumer's ModelContext or
     /// fetched-results controller has applied that revision.
     public struct BoundarySnapshot: Equatable, Sendable {
@@ -259,7 +257,7 @@ public actor WebInspectorDataKitTestRuntime {
         /// Terminal observations ordered by feature name.
         public let features: [FeatureBoundary]
 
-        /// Returns the terminal state captured for one enabled feature.
+        /// Returns the terminal availability captured for one enabled feature.
         public func featureState(
             for featureID: WebInspectorFeatureID
         ) -> WebInspectorFeatureState? {
@@ -288,8 +286,8 @@ public actor WebInspectorDataKitTestRuntime {
     private var isInputOperationActive: Bool
 
     /// Starts the production path and waits for each enabled feature to reach
-    /// its supported boundary state. Physical connection failure joins teardown
-    /// and throws `RuntimeError.connectionFailed`.
+    /// ready. Feature or physical connection failure joins teardown and throws
+    /// `RuntimeError.connectionFailed`.
     public nonisolated static func start(
         scenario: Scenario = .init()
     ) async throws -> WebInspectorDataKitTestRuntime {
@@ -329,8 +327,8 @@ public actor WebInspectorDataKitTestRuntime {
         await driver.counterSnapshot()
     }
 
-    /// Waits until all enabled features reach their supported boundary state.
-    /// Physical connection failure throws `RuntimeError.connectionFailed`.
+    /// Waits until all enabled features reach ready. Feature or physical
+    /// connection failure throws `RuntimeError.connectionFailed`.
     ///
     /// This boundary stops at feature owners. A consumer that needs context or
     /// query completion waits on its own fetched-results update sequence.
@@ -445,7 +443,7 @@ public actor WebInspectorDataKitTestRuntime {
     }
 
     /// Commits a provisional page target and waits for previously-ready feature
-    /// owners to reach terminal states in the replacement generation.
+    /// owners to reach ready in the replacement generation.
     ///
     /// The returned boundary does not wait for consumer ModelContext or FRC
     /// application. Observe the consumer-owned FRC update when that completion
@@ -577,7 +575,7 @@ public actor WebInspectorDataKitTestRuntime {
         switch state {
         case let .ready(generation, _):
             generation
-        case .disabled, .synchronizing, .recovering, .unavailable, nil:
+        case .disabled, .synchronizing, .unsupported, nil:
             nil
         }
     }
@@ -638,13 +636,14 @@ public actor WebInspectorDataKitTestRuntime {
             }
 
             switch state {
-            case let .ready(generation, _),
-                let .unavailable(generation, _):
+            case let .ready(generation, _):
                 guard requiredGeneration.map({ generation > $0 }) ?? true else {
                     continue
                 }
                 return FeatureBoundary(featureID: featureID, state: state)
-            case .disabled, .synchronizing, .recovering:
+            case .unsupported:
+                return FeatureBoundary(featureID: featureID, state: state)
+            case .disabled, .synchronizing:
                 continue
             }
         }

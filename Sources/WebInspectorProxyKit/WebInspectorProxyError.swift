@@ -61,5 +61,16 @@ package enum ConnectionError: Error, Sendable, Equatable {
     case malformedTargetControlPlane(String)
     case missingTarget(String)
     case replyTimeout(method: String)
-    case remoteError(method: String, message: String)
+    case remoteError(method: String, code: Int?, message: String)
+}
+
+package func webInspectorProxyRemoteError(
+    method: String,
+    code: Int?,
+    message: String
+) -> WebInspectorProxyError {
+    if code == -32_601 {
+        return .unsupported([method])
+    }
+    return .commandRejected(method: method, message: message)
 }

@@ -1,11 +1,16 @@
 import Foundation
 
+package struct ParsedProtocolError: Equatable, Sendable {
+    package let code: Int?
+    package let message: String
+}
+
 package struct ParsedProtocolMessage: Sendable {
     package let id: UInt64?
     package let method: WebInspectorProtocolMethod?
     package let parameters: Data
     package let result: Data
-    package let errorMessage: String?
+    package let error: ParsedProtocolError?
 }
 
 package struct ConnectionMessageParsePolicy: Equatable, Sendable {
@@ -80,7 +85,7 @@ package enum ConnectionMessageParser {
             method: method(object["method"]),
             parameters: try memberData(named: "params", in: object, absent: [:]),
             result: try memberData(named: "result", in: object, absent: [:]),
-            errorMessage: errorMessage(object["error"])
+            error: try protocolError(object["error"])
         )
     }
 
@@ -112,10 +117,39 @@ package enum ConnectionMessageParser {
         return nil
     }
 
-    private static func errorMessage(_ value: Any?) -> String? {
-        guard let object = value as? [String: Any] else { return nil }
-        if let message = object["message"] as? String { return message }
-        if let message = object["message"] as? NSNumber { return message.stringValue }
+    private static func protocolError(_ value: Any?) throws -> ParsedProtocolError? {
+        guard let value else { return nil }
+        if value is NSNull { return nil }
+        guard let object = value as? [String: Any] else {
+            throw ConnectionError.unreadableEnvelope
+        }
+        let message: String
+        if let value = object["message"] as? String {
+            message = value
+        } else if let value = object["message"] as? NSNumber {
+            message = value.stringValue
+        } else {
+            throw ConnectionError.unreadableEnvelope
+        }
+        return ParsedProtocolError(
+            code: protocolErrorCode(object["code"]),
+            message: message
+        )
+    }
+
+    private static func protocolErrorCode(_ value: Any?) -> Int? {
+        guard !(value is Bool) else { return nil }
+        if let value = value as? Int { return value }
+        if let value = value as? NSNumber {
+            let double = value.doubleValue
+            guard double.rounded(.towardZero) == double,
+                double >= Double(Int.min), double <= Double(Int.max)
+            else {
+                return nil
+            }
+            return value.intValue
+        }
+        if let value = value as? String { return Int(value) }
         return nil
     }
 

@@ -125,7 +125,7 @@ struct CustomTabResourceTests {
     }
 
     @Test
-    func nonRetryableFeatureFailureDoesNotExposeRetryAction() async {
+    func connectionFailureClosesFeatureDependentResource() async {
         let key = WebInspectorTab.ContentKey(
             tabID: .init(rawValue: "network-dependent"),
             contentID: "root"
@@ -134,19 +134,6 @@ struct CustomTabResourceTests {
             configuration: .init(enabledFeatures: [.network])
         )
         container.publishState(.attached(generation: .init(rawValue: 1)))
-        container.featureRegistry.publish(
-            .unavailable(
-                generation: .init(rawValue: 1),
-                error: .bootstrap(
-                    WebInspectorFailureDescription(
-                        code: "network.bootstrap.failed",
-                        phase: "bootstrap",
-                        message: "Injected Network failure."
-                    )
-                )
-            ),
-            for: .network
-        )
         let session = WebInspectorSession(modelContainer: container)
         let context = WebInspectorTab.Context(session: session)
         let store = PresentationContentStore(context: context)
@@ -159,24 +146,95 @@ struct CustomTabResourceTests {
             factoryCallCount += 1
             return UIViewController()
         }
-        await store.waitForCustomResourceTaskForTesting(for: key)
+        let retirementBaseline =
+            store.containerFailureRetirementCountForTesting
+        container.publishState(
+            .failed(
+                generation: .init(rawValue: 1),
+                failure: .native(
+                    WebInspectorFailureDescription(
+                        code: "network.bootstrap.failed",
+                        phase: "bootstrap",
+                        message: "Injected Network failure."
+                    )
+                )
+            )
+        )
+        await store.waitForContainerFailureRetirementForTesting(
+            after: retirementBaseline
+        )
 
-        guard case .failed = host.phase else {
-            Issue.record("The Network-dependent resource did not publish failure.")
+        #expect(host.phase == .closed)
+        #expect(factoryCallCount == 0)
+
+        await store.clear()
+        await container.close()
+    }
+
+    @Test
+    func staticUnsupportedDisablesOnlyDependentResourceWithoutRetry() async {
+        let dependentKey = WebInspectorTab.ContentKey(
+            tabID: .init(rawValue: "network-dependent"),
+            contentID: "root"
+        )
+        let independentKey = WebInspectorTab.ContentKey(
+            tabID: .init(rawValue: "independent"),
+            contentID: "root"
+        )
+        let container = WebInspectorModelContainer(
+            configuration: .init(enabledFeatures: [.network])
+        )
+        container.publishState(.attached(generation: .init(rawValue: 1)))
+        container.featureRegistry.publish(
+            .unsupported(requirements: ["Network.enable"]),
+            for: .network
+        )
+        let session = WebInspectorSession(modelContainer: container)
+        let context = WebInspectorTab.Context(session: session)
+        let store = PresentationContentStore(context: context)
+        var dependentFactoryCallCount = 0
+        var independentFactoryCallCount = 0
+
+        let dependentHost = store.customViewController(
+            for: dependentKey,
+            context: context,
+            requiredFeatures: [.network]
+        ) { _ in
+            dependentFactoryCallCount += 1
+            return UIViewController()
+        }
+        let independentHost = store.customViewController(
+            for: independentKey,
+            context: context,
+            requiredFeatures: []
+        ) { _ in
+            independentFactoryCallCount += 1
+            return UIViewController()
+        }
+        await store.waitForCustomResourceTaskForTesting(for: dependentKey)
+        await store.waitForCustomResourceTaskForTesting(for: independentKey)
+
+        #expect(dependentFactoryCallCount == 0)
+        guard case let .failed(message) = dependentHost.phase else {
+            Issue.record(
+                "Expected only the Network-dependent resource to fail: \(dependentHost.phase)."
+            )
             await store.clear()
             await container.close()
             return
         }
-        #expect(factoryCallCount == 0)
+        #expect(message.contains("Network.enable"))
         #expect(
-            (host.contentUnavailableConfiguration
+            (dependentHost.contentUnavailableConfiguration
                 as? UIContentUnavailableConfiguration)?
                 .buttonProperties.primaryAction == nil
         )
+        #expect(independentFactoryCallCount == 1)
+        #expect(independentHost.phase == .ready)
 
-        host.retryForTesting()
-        await store.waitForCustomResourceTaskForTesting(for: key)
-        #expect(factoryCallCount == 0)
+        dependentHost.retryForTesting()
+        await store.waitForCustomResourceTaskForTesting(for: dependentKey)
+        #expect(dependentFactoryCallCount == 0)
 
         await store.clear()
         await container.close()

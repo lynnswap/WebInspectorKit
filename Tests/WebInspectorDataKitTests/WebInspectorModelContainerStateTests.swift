@@ -64,10 +64,7 @@ func featureTransitionLoggingSkipsReadyRevisionChurn() {
                 generation: firstGeneration,
                 revision: secondRevision
             ),
-            to: .recovering(
-                generation: firstGeneration,
-                reason: .targetChanged
-            )
+            to: .synchronizing(generation: firstGeneration)
         )
     )
 }
