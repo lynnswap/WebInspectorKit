@@ -1223,7 +1223,9 @@ func canonicalReducerThrowingMutationsHaveStrongExceptionGuarantee() throws {
     var before = fixture.store
     #expect(throws: CanonicalConsoleRuntimeProtocolViolation.self) {
         try fixture.store.reduceRuntime(
-            .executionContextCreated(canonicalRuntimeContext(id: "context")),
+            .executionContextCreated(
+                canonicalRuntimeContext(id: "context", name: "conflicting")
+            ),
             scope: scope
         )
     }
