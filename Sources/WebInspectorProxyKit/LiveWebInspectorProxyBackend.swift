@@ -1105,7 +1105,7 @@ private enum LiveProxyCommandEncoder {
         command: WebInspectorProxyCommand<Payload, Result>
     ) throws -> [String: Any] {
         let rawValue = id.unscopedRawValue
-        let components = rawValue.split(separator: CSSStyleIDPayload.separator, omittingEmptySubsequences: false)
+        let components = rawValue.split(separator: CSS.styleIdentifierSeparator, omittingEmptySubsequences: false)
         guard components.count == 2,
               let ordinal = Int(components[1]) else {
             throw WebInspectorProxyError.commandFailed(
@@ -1125,7 +1125,7 @@ private enum LiveProxyCommandEncoder {
         command: WebInspectorProxyCommand<Payload, Result>
     ) throws -> [String: Any] {
         let rawValue = id.unscopedRawValue
-        let components = rawValue.split(separator: CSSStyleIDPayload.separator, omittingEmptySubsequences: false)
+        let components = rawValue.split(separator: CSS.styleIdentifierSeparator, omittingEmptySubsequences: false)
         guard components.count == 2,
               let ordinal = Int(components[1]) else {
             throw WebInspectorProxyError.commandFailed(
@@ -1574,13 +1574,11 @@ private struct CSSStylePayload: Decodable {
 }
 
 private struct CSSStyleIDPayload: Decodable {
-    static let separator: Character = "\u{1F}"
-
     var styleSheetId: String
     var ordinal: Int
 
     var rawValue: String {
-        "\(styleSheetId)\(Self.separator)\(ordinal)"
+        "\(styleSheetId)\(CSS.styleIdentifierSeparator)\(ordinal)"
     }
 }
 
@@ -1589,7 +1587,7 @@ private struct CSSRuleIDPayload: Decodable {
     var ordinal: Int
 
     var rawValue: String {
-        "\(styleSheetId)\(CSSStyleIDPayload.separator)\(ordinal)"
+        "\(styleSheetId)\(CSS.styleIdentifierSeparator)\(ordinal)"
     }
 }
 
@@ -1605,7 +1603,7 @@ private struct CSSPropertyPayload: Decodable {
 
     func proxyProperty(styleID: String, index: Int, isEditable: Bool) -> CSS.Property {
         CSS.Property(
-            id: CSS.Property.ID("\(styleID)\(CSSStyleIDPayload.separator)\(index)"),
+            id: CSS.Property.ID("\(styleID)\(CSS.styleIdentifierSeparator)\(index)"),
             name: name,
             value: value,
             priority: priority,

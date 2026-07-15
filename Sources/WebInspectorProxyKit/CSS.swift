@@ -706,6 +706,13 @@ package extension CSS.Rule.ID {
         }
         return String(parts[1])
     }
+
+    var owningStyleSheetID: CSS.StyleSheet.ID? {
+        CSS.owningStyleSheetID(
+            from: unscopedRawValue,
+            targetScopeRawValue: targetScopeRawValue
+        )
+    }
 }
 
 package extension CSS.Style.ID {
@@ -729,5 +736,34 @@ package extension CSS.Style.ID {
             return rawValue
         }
         return String(parts[1])
+    }
+
+    var owningStyleSheetID: CSS.StyleSheet.ID? {
+        CSS.owningStyleSheetID(
+            from: unscopedRawValue,
+            targetScopeRawValue: targetScopeRawValue
+        )
+    }
+}
+
+package extension CSS {
+    static var styleIdentifierSeparator: Character { "\u{1F}" }
+
+    private static func owningStyleSheetID(
+        from rawValue: String,
+        targetScopeRawValue: String?
+    ) -> CSS.StyleSheet.ID? {
+        let components = rawValue.split(
+            separator: styleIdentifierSeparator,
+            omittingEmptySubsequences: false
+        )
+        guard components.count == 2,
+              Int(components[1]) != nil else {
+            return nil
+        }
+        let styleSheetRawValue = String(components[0])
+        return targetScopeRawValue.map {
+            CSS.StyleSheet.ID(styleSheetRawValue, scopedToTargetRawValue: $0)
+        } ?? CSS.StyleSheet.ID(styleSheetRawValue)
     }
 }

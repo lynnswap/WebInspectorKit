@@ -6761,6 +6761,187 @@ func destroyedCSSTargetRejectsLateStyleSheetReply() async throws {
 
 @MainActor
 @Test
+func childFrameNavigationRejectsLateStyleSheetAndRuleReplies() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (pageTarget, context) = try await startContext(runtime: runtime)
+    let frameTargetID = WebInspectorTarget.ID("navigating-css-frame")
+    let frameID = FrameID("navigating-child-frame")
+    let styleSheetID = CSS.StyleSheet.ID(
+        "child-sheet",
+        scopedToTargetRawValue: frameTargetID.rawValue
+    )
+    let ruleProxyID = CSS.Rule.ID(
+        "child-sheet\u{1F}1",
+        scopedToTargetRawValue: frameTargetID.rawValue
+    )
+    let ruleID = CSSStyleRule.ID(ruleProxyID)
+
+    let firstHeaderBaseline = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(
+        .styleSheetAdded(CSS.StyleSheetHeader(
+            styleSheetID: styleSheetID,
+            frameID: frameID,
+            origin: CSS.Origin(rawValue: "author")
+        )),
+        target: pageTarget
+    )
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: firstHeaderBaseline))
+
+    let styleSheetGate = WebInspectorTestGate()
+    await runtime.backend.hold(domain: "CSS", method: "setStyleSheetText", gate: styleSheetGate)
+    await runtime.backend.enqueue((), for: "CSS", method: "setStyleSheetText")
+    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
+    let styleSheetTask = Task { @MainActor in
+        try await context.css.setStyleSheetText("body { color: red; }", for: styleSheetID)
+    }
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "CSS",
+        method: "setStyleSheetText",
+        count: 1
+    )
+
+    let firstNavigationBaseline = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(
+        .frameNavigated(WebInspectorPageFrameLifecycle(
+            id: frameID,
+            parentID: FrameID("main-frame"),
+            loaderID: "child-loader-2",
+            name: "Child",
+            url: "https://example.test/child-2",
+            securityOrigin: "https://example.test",
+            mimeType: "text/html"
+        )),
+        target: pageTarget
+    )
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: firstNavigationBaseline))
+    await styleSheetGate.open()
+
+    await #expect(throws: WebInspectorProxyError.disconnected("CSS mutation no longer belongs to the current document.")) {
+        try await styleSheetTask.value
+    }
+
+    let secondHeaderBaseline = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(
+        .styleSheetAdded(CSS.StyleSheetHeader(
+            styleSheetID: styleSheetID,
+            frameID: frameID,
+            origin: CSS.Origin(rawValue: "author")
+        )),
+        target: pageTarget
+    )
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: secondHeaderBaseline))
+
+    let ruleGate = WebInspectorTestGate()
+    await runtime.backend.hold(domain: "CSS", method: "setRuleSelector", gate: ruleGate)
+    await runtime.backend.enqueue(
+        CSS.Rule(
+            id: ruleProxyID,
+            selectorList: CSS.Rule.SelectorList(selectors: [".updated"], text: ".updated"),
+            origin: CSS.Origin(rawValue: "regular"),
+            style: CSS.Style(id: CSS.Style.ID(
+                "child-sheet\u{1F}1",
+                scopedToTargetRawValue: frameTargetID.rawValue
+            ))
+        ),
+        for: "CSS",
+        method: "setRuleSelector"
+    )
+    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
+    let ruleTask = Task { @MainActor in
+        try await context.css.setRuleSelector(".updated", for: ruleID)
+    }
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "CSS",
+        method: "setRuleSelector",
+        count: 1
+    )
+
+    let secondNavigationBaseline = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(
+        .frameNavigated(WebInspectorPageFrameLifecycle(
+            id: frameID,
+            parentID: FrameID("main-frame"),
+            loaderID: "child-loader-3",
+            name: "Child",
+            url: "https://example.test/child-3",
+            securityOrigin: "https://example.test",
+            mimeType: "text/html"
+        )),
+        target: pageTarget
+    )
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: secondNavigationBaseline))
+    await ruleGate.open()
+
+    await #expect(throws: WebInspectorProxyError.disconnected("CSS mutation no longer belongs to the current document.")) {
+        try await ruleTask.value
+    }
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands.contains(RecordedCommand(domain: "DOM", method: "markUndoableState")) == false)
+}
+
+@MainActor
+@Test
+func childFrameNavigationPreservesUnrelatedStyleSheetMutation() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (pageTarget, context) = try await startContext(runtime: runtime)
+    let navigatingFrameID = FrameID("navigating-frame")
+    let stableFrameID = FrameID("stable-frame")
+    let stableTargetID = WebInspectorTarget.ID("stable-css-frame")
+    let stableStyleSheetID = CSS.StyleSheet.ID(
+        "stable-sheet",
+        scopedToTargetRawValue: stableTargetID.rawValue
+    )
+
+    let headerBaseline = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(
+        .styleSheetAdded(CSS.StyleSheetHeader(
+            styleSheetID: stableStyleSheetID,
+            frameID: stableFrameID,
+            origin: CSS.Origin(rawValue: "author")
+        )),
+        target: pageTarget
+    )
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: headerBaseline))
+
+    let mutationGate = WebInspectorTestGate()
+    await runtime.backend.hold(domain: "CSS", method: "setStyleSheetText", gate: mutationGate)
+    await runtime.backend.enqueue((), for: "CSS", method: "setStyleSheetText")
+    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
+    let mutationTask = Task { @MainActor in
+        try await context.css.setStyleSheetText("body { color: green; }", for: stableStyleSheetID)
+    }
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "CSS",
+        method: "setStyleSheetText",
+        count: 1
+    )
+
+    let navigationBaseline = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(
+        .frameNavigated(WebInspectorPageFrameLifecycle(
+            id: navigatingFrameID,
+            parentID: FrameID("main-frame"),
+            loaderID: "navigating-loader-2",
+            name: "Navigating",
+            url: "https://example.test/navigating",
+            securityOrigin: "https://example.test",
+            mimeType: "text/html"
+        )),
+        target: pageTarget
+    )
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: navigationBaseline))
+    await mutationGate.open()
+
+    try await mutationTask.value
+    let commands = await runtime.backend.recordedCommands()
+    let undo = try #require(commands.first {
+        $0.domain == "DOM" && $0.method == "markUndoableState"
+    })
+    #expect(undo.targetID == stableTargetID)
+}
+
+@MainActor
+@Test
 func removingLoadedChildPurgesDescendantsFromIdentityMap() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()

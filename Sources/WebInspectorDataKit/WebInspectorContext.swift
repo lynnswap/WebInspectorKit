@@ -205,6 +205,11 @@ public final class WebInspectorContext {
     }
 
     private struct CSSMutationAuthority {
+        struct StyleSheet {
+            var id: CSS.StyleSheet.ID
+            var revision: UInt64
+        }
+
         var pageGeneration: Int
         var documentGeneration: Int
         var targetID: WebInspectorTarget.ID
@@ -213,6 +218,13 @@ public final class WebInspectorContext {
         var pageBindingID: String?
         var node: DOMNode?
         var styles: CSSStyles?
+        var styleSheet: StyleSheet?
+    }
+
+    private struct CSSStyleSheetLifetime {
+        var frameID: FrameID?
+        var revision: UInt64
+        var isPresent: Bool
     }
 
     private final class StyleToggleOperation {
@@ -361,6 +373,7 @@ public final class WebInspectorContext {
     private var styleRefreshGeneration: Int
     private var isStyleHydrationActive: Bool
     private var styleToggleOperations: [CSSStyleProperty.ID: StyleToggleOperation]
+    private var cssStyleSheetLifetimesByID: [CSS.StyleSheet.ID: CSSStyleSheetLifetime]
     private var styleTrackingTargets: [StyleTrackingKey: WebInspectorTarget]
     private var styleTrackingAcquisitions: [StyleTrackingKey: StyleTrackingAcquisition]
     private var nextStyleTrackingAcquisitionGeneration: UInt64
@@ -441,6 +454,7 @@ public final class WebInspectorContext {
         styleRefreshGeneration = 0
         isStyleHydrationActive = false
         styleToggleOperations = [:]
+        cssStyleSheetLifetimesByID = [:]
         styleTrackingTargets = [:]
         styleTrackingAcquisitions = [:]
         nextStyleTrackingAcquisitionGeneration = 0
@@ -3076,6 +3090,7 @@ extension WebInspectorContext {
             return
         }
         guard frame.parentID == nil || frame.id == currentPage.frameID else {
+            invalidateCSSStyleSheets(frameID: frame.id)
             detachProjectedFrameDocument(forFrameID: frame.id, isolation: isolation)
             clearExecutionContexts(frameID: frame.id)
             return
@@ -3094,6 +3109,7 @@ extension WebInspectorContext {
         _ frameID: FrameID,
         isolation: isolated (any Actor)
     ) {
+        invalidateCSSStyleSheets(frameID: frameID)
         detachProjectedFrameDocument(forFrameID: frameID, isolation: isolation)
         clearExecutionContexts(frameID: frameID)
     }
@@ -3104,6 +3120,11 @@ extension WebInspectorContext {
     ) {
         let authorityTargetID = runtimeAuthorityTargetID(for: targetID)
         advanceTargetRevision(for: authorityTargetID)
+        if authorityTargetID == currentPage?.id {
+            invalidateAllCSSStyleSheets()
+        } else {
+            invalidateCSSStyleSheets(targetID: authorityTargetID)
+        }
         clearExecutionContexts(targetID: authorityTargetID)
         guard targetID == .currentPage else {
             discardStyleTrackingLeases(forDestroyedTargetID: targetID)
@@ -3362,6 +3383,7 @@ extension WebInspectorContext {
     private func resetDOM(isolation: isolated (any Actor)) {
         invalidateElementPickerOperation()
         cancelStyleToggleOperations()
+        cssStyleSheetLifetimesByID = [:]
         inspectResolutionTask?.cancel()
         inspectResolutionTask = nil
         styleRefreshTask?.cancel()
@@ -4086,14 +4108,71 @@ extension WebInspectorContext {
         requireOwner(isolation)
         switch event {
         case .styleSheetChanged,
-             .styleSheetAdded,
-             .styleSheetRemoved,
              .mediaQueryResultChanged:
+            markSelectedStylesNeedsRefresh()
+        case let .styleSheetAdded(header):
+            recordCSSStyleSheet(header)
+            markSelectedStylesNeedsRefresh()
+        case let .styleSheetRemoved(id):
+            invalidateCSSStyleSheet(id)
             markSelectedStylesNeedsRefresh()
         case let .nodeLayoutFlagsChanged(id):
             markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
         case .unknown:
             break
+        }
+    }
+
+    private func recordCSSStyleSheet(_ header: CSS.StyleSheetHeader) {
+        let id = header.styleSheetID
+        guard let lifetime = cssStyleSheetLifetimesByID[id] else {
+            cssStyleSheetLifetimesByID[id] = CSSStyleSheetLifetime(
+                frameID: header.frameID,
+                revision: 0,
+                isPresent: true
+            )
+            return
+        }
+        guard lifetime.isPresent == false || lifetime.frameID != header.frameID else {
+            return
+        }
+        cssStyleSheetLifetimesByID[id] = CSSStyleSheetLifetime(
+            frameID: header.frameID,
+            revision: lifetime.revision + 1,
+            isPresent: true
+        )
+    }
+
+    private func invalidateCSSStyleSheet(_ id: CSS.StyleSheet.ID) {
+        let lifetime = cssStyleSheetLifetimesByID[id]
+        cssStyleSheetLifetimesByID[id] = CSSStyleSheetLifetime(
+            frameID: lifetime?.frameID,
+            revision: (lifetime?.revision ?? 0) + 1,
+            isPresent: false
+        )
+    }
+
+    private func invalidateCSSStyleSheets(frameID: FrameID) {
+        let ids = cssStyleSheetLifetimesByID.compactMap { id, lifetime in
+            lifetime.frameID == frameID ? id : nil
+        }
+        for id in ids {
+            invalidateCSSStyleSheet(id)
+        }
+    }
+
+    private func invalidateCSSStyleSheets(targetID: WebInspectorTarget.ID) {
+        let ids = cssStyleSheetLifetimesByID.keys.filter {
+            $0.targetScopeRawValue == targetID.rawValue
+        }
+        for id in ids {
+            invalidateCSSStyleSheet(id)
+        }
+    }
+
+    private func invalidateAllCSSStyleSheets() {
+        for id in Array(cssStyleSheetLifetimesByID.keys) {
+            invalidateCSSStyleSheet(id)
         }
     }
 
@@ -4276,7 +4355,12 @@ extension WebInspectorContext {
         }
 
         let target = try cssTarget(owning: intent.styleID)
-        let authority = cssMutationAuthority(target: target, node: node, styles: styles)
+        let authority = cssMutationAuthority(
+            target: target,
+            styleSheetID: intent.styleID.owningStyleSheetID,
+            node: node,
+            styles: styles
+        )
         let result = try await target.css.setStyleText(intent.styleID, text: intent.text)
         try validateCSSMutationAuthority(authority)
         try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
@@ -4310,7 +4394,12 @@ extension WebInspectorContext {
         }
 
         let target = try cssTarget(owning: intent.styleID)
-        let authority = cssMutationAuthority(target: target, node: node, styles: styles)
+        let authority = cssMutationAuthority(
+            target: target,
+            styleSheetID: intent.styleID.owningStyleSheetID,
+            node: node,
+            styles: styles
+        )
         let result = try await target.css.setStyleText(intent.styleID, text: intent.text)
         try validateCSSMutationAuthority(authority)
         try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
@@ -4329,7 +4418,10 @@ extension WebInspectorContext {
         requireOwner(isolation)
         let proxyID = id.proxyID
         let target = try cssTarget(owning: proxyID)
-        let authority = cssMutationAuthority(target: target)
+        let authority = cssMutationAuthority(
+            target: target,
+            styleSheetID: proxyID.owningStyleSheetID
+        )
         _ = try await target.css.setRuleSelector(proxyID, selector: selector)
         try validateCSSMutationAuthority(authority)
         try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
@@ -4346,7 +4438,7 @@ extension WebInspectorContext {
     ) async throws {
         requireOwner(isolation)
         let target = try cssTarget(owning: id)
-        let authority = cssMutationAuthority(target: target)
+        let authority = cssMutationAuthority(target: target, styleSheetID: id)
         try await target.css.setStyleSheetText(id, text: text)
         try validateCSSMutationAuthority(authority)
         try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
@@ -4381,7 +4473,12 @@ extension WebInspectorContext {
             failIfTerminal(error, operation: "CSS.setStyleText")
             return false
         }
-        let authority = cssMutationAuthority(target: target, node: node, styles: styles)
+        let authority = cssMutationAuthority(
+            target: target,
+            styleSheetID: intent.styleID.owningStyleSheetID,
+            node: node,
+            styles: styles
+        )
         let operation = beginStyleToggleOperation(for: id)
 
         let task = Task { [weak self, target, styles, authority, operation] in
@@ -4435,6 +4532,7 @@ extension WebInspectorContext {
 
     private func cssMutationAuthority(
         target: WebInspectorTarget,
+        styleSheetID: CSS.StyleSheet.ID?,
         node: DOMNode? = nil,
         styles: CSSStyles? = nil
     ) -> CSSMutationAuthority {
@@ -4446,7 +4544,13 @@ extension WebInspectorContext {
             isCurrentPage: target.id == currentPage?.id,
             pageBindingID: target.pageBindingID,
             node: node,
-            styles: styles
+            styles: styles,
+            styleSheet: styleSheetID.map { id in
+                CSSMutationAuthority.StyleSheet(
+                    id: id,
+                    revision: cssStyleSheetLifetimesByID[id]?.revision ?? 0
+                )
+            }
         )
     }
 
@@ -4455,6 +4559,10 @@ extension WebInspectorContext {
         guard authority.pageGeneration == currentPageGeneration,
               authority.documentGeneration == domDocumentGeneration,
               authority.targetRevision == targetRevision(for: authority.targetID) else {
+            throw Self.staleCSSMutationError
+        }
+        if let styleSheet = authority.styleSheet,
+           styleSheet.revision != (cssStyleSheetLifetimesByID[styleSheet.id]?.revision ?? 0) {
             throw Self.staleCSSMutationError
         }
         if authority.isCurrentPage {
