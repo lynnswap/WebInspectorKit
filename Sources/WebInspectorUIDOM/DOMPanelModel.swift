@@ -208,8 +208,7 @@ package final class DOMPanelModel {
     }
 
     private func hasPublishedNode(_ nodeID: DOMNode.ID) -> Bool {
-        nodes.snapshot?.contains(nodeID) == true
-            && context.model(for: nodeID) != nil
+        nodes.contains(nodeID)
     }
 
     private func publishSelection(

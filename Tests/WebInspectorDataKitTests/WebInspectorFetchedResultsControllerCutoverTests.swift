@@ -1,7 +1,33 @@
 import Foundation
 import Observation
+import Synchronization
 import Testing
 @testable import WebInspectorDataKit
+
+private enum FetchedResultsSnapshotHashProbe {
+    static let count = Mutex(0)
+
+    static func reset() {
+        count.withLock { $0 = 0 }
+    }
+
+    static func recordHash() {
+        count.withLock { $0 += 1 }
+    }
+
+    static var value: Int {
+        count.withLock { $0 }
+    }
+}
+
+private struct FetchedResultsSnapshotCountingID: Hashable, Sendable {
+    let rawValue: Int
+
+    func hash(into hasher: inout Hasher) {
+        FetchedResultsSnapshotHashProbe.recordHash()
+        hasher.combine(rawValue)
+    }
+}
 
 @Observable
 private final class CutoverQueryModel: WebInspectorPersistentModel {
@@ -45,6 +71,17 @@ private let cutoverQuerySchema = WebInspectorModelSchema<
     },
     invalidateModel: { _, _ in }
 )
+
+@Test
+func fetchedResultsSnapshotDoesNotBuildADuplicateMembershipIndex() {
+    let itemIDs = (0..<512).map(FetchedResultsSnapshotCountingID.init)
+    FetchedResultsSnapshotHashProbe.reset()
+
+    let snapshot = WebInspectorFetchedResultsSnapshot(itemIDs: itemIDs)
+
+    #expect(snapshot.itemIDs == itemIDs)
+    #expect(FetchedResultsSnapshotHashProbe.value == 0)
+}
 
 @MainActor
 @Test
@@ -96,6 +133,8 @@ func fetchedResultsPerformsInitialThenAppliesOneAtomicDelta() async throws {
     #expect(
         controller.fetchedQueryValue(for: .init(rawValue: 1))?.score == 10
     )
+    #expect(controller.contains(.init(rawValue: 1)))
+    #expect(controller.contains(.init(rawValue: 3)) == false)
     let firstModel = try #require(controller.fetchedObjects?.first)
 
     var updates = controller.updates.makeAsyncIterator()
@@ -158,6 +197,20 @@ func fetchedResultsPerformsInitialThenAppliesOneAtomicDelta() async throws {
     #expect(rankChanges.isEmpty)
     #expect(Set(rankUpdatedItemIDs.map(\.rawValue)) == Set([1, 2]))
     #expect(controller.fetchedObjects?.last === firstModel)
+
+    var deletionTransaction = WebInspectorModelTransaction()
+    deletionTransaction.append(
+        cutoverQuerySchema.delete(id: .init(rawValue: 2))
+    )
+    _ = try await container.modelStoreSink.commit(deletionTransaction)
+
+    guard case .changes = await updates.next() else {
+        Issue.record("Expected one fetched-results deletion.")
+        return
+    }
+    #expect(controller.contains(.init(rawValue: 1)))
+    #expect(controller.contains(.init(rawValue: 2)) == false)
+    #expect(controller.snapshot?.itemIDs.map(\.rawValue) == [1])
 
     await controller.close()
     #expect(await updates.next() == nil)

@@ -212,6 +212,10 @@ public final class WebInspectorFetchedResultsController<
     @ObservationIgnored private let publisher =
         _WebInspectorFetchedResultsUpdatePublisher<Model.ID>()
 
+    #if DEBUG
+        @ObservationIgnored package private(set) var containsCallCountForTesting = 0
+    #endif
+
     public var fetchDescriptor: WebInspectorFetchDescriptor<Model> {
         switch state {
         case let .pending(_, descriptor, _): descriptor
@@ -245,6 +249,14 @@ public final class WebInspectorFetchedResultsController<
     /// The lookup and ``fetchedQueryValues`` are replaced in the same owner turn.
     package func fetchedQueryValue(for id: Model.ID) -> Model.QueryValue? {
         successfulState?.fetchedQueryValuesByID[id]
+    }
+
+    /// Returns whether the currently accepted result owns this identity.
+    package func contains(_ id: Model.ID) -> Bool {
+        #if DEBUG
+            containsCallCountForTesting += 1
+        #endif
+        return successfulState?.fetchedObjectsByID[id] != nil
     }
 
     public var revision: WebInspectorFetchedResultsRevision? {

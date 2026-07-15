@@ -529,9 +529,14 @@ struct DOMTreeTextViewTests {
             ])
         )
         let view = await fixture.makeView()
+        let selectedNodeID = try fixture.nodeID("row-20")
+        fixture.model.selectNode(selectedNodeID, reveal: .selectAndScroll)
+        #expect(fixture.model.selectedNodeID == selectedNodeID)
         let maximumOffset = view.contentSize.height - view.bounds.height
         #expect(maximumOffset > view.rowHeightForTesting)
         view.resetPerformanceCountersForTesting()
+        let membershipLookupCount =
+            fixture.model.nodes.containsCallCountForTesting
 
         view.setContentOffset(
             CGPoint(
@@ -544,6 +549,10 @@ struct DOMTreeTextViewTests {
 
         #expect(view.fragmentSubviewCountForTesting > 0)
         #expect(view.updateContentDecorationsCallCountForTesting == 0)
+        #expect(
+            fixture.model.nodes.containsCallCountForTesting
+                == membershipLookupCount
+        )
         await fixture.close(view: view)
     }
 
