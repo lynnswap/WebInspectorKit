@@ -9,7 +9,7 @@ import WebInspectorDataKit
 /// projected loading/ready phase.
 @MainActor
 @propertyWrapper
-public struct WebInspectorQuery<Model>: DynamicProperty
+public struct WebInspectorQuery<Model>: @MainActor DynamicProperty
 where Model: WebInspectorPersistentModel {
     @Environment(\.webInspectorModelContainer)
     private var container
@@ -75,6 +75,12 @@ where Model: WebInspectorPersistentModel {
             semanticIdentity: semanticIdentity
         )
     }
+}
+
+/// An error raised while binding a SwiftUI query to its model context.
+public enum WebInspectorQueryError: Error, Equatable, Sendable {
+    /// No model container is installed in the view environment.
+    case missingModelContext
 }
 
 @MainActor
