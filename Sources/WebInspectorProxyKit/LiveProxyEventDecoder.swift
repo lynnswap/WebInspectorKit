@@ -1,7 +1,7 @@
 import Foundation
 
-enum LiveProxyEventDecoder {
-    static func proxyEvent(
+package enum LiveProxyEventDecoder {
+    package static func proxyEvent(
         from event: ProtocolEvent,
         targetID: WebInspectorTarget.ID,
         lifecycleTarget: WebInspectorLifecycleTarget? = nil
@@ -48,7 +48,10 @@ enum LiveProxyEventDecoder {
             ))
         case "Target.targetDestroyed":
             _ = try decode(TargetDestroyedParams.self, from: event)
-            return .targetDestroyed(targetID: targetID)
+            let destroyedTargetID = event.destroyedProvisionalTargetInCurrentPageHierarchy
+                ? event.targetID.map { WebInspectorTarget.ID($0.rawValue) } ?? targetID
+                : targetID
+            return .targetDestroyed(targetID: destroyedTargetID)
         default:
             return .unknown(rawEvent(from: event))
         }
@@ -58,7 +61,9 @@ enum LiveProxyEventDecoder {
         switch event.method {
         case "Page.frameNavigated":
             let params = try decode(PageFrameNavigatedParams.self, from: event)
-            return .frameNavigated(params.frame.proxyFrame)
+            return .frameNavigated(params.frame.proxyFrame(
+                pageBindingID: event.pageBindingTargetID?.rawValue
+            ))
         case "Page.frameDetached":
             let params = try decode(PageFrameDetachedParams.self, from: event)
             return .frameDetached(frameID: FrameID(params.frameId))
@@ -165,7 +170,12 @@ enum LiveProxyEventDecoder {
                 id: Network.Request.ID(params.requestId),
                 request: params.request.proxyRequest(
                     id: params.requestId,
-                    backendResourceIdentifier: params.backendResourceIdentifier?.proxyIdentifier
+                    backendResourceIdentifier: params.backendResourceIdentifier?.proxyIdentifier,
+                    origin: Network.Request.Origin(
+                        frameID: FrameID(params.frameId),
+                        loaderID: params.loaderId,
+                        targetID: event.networkOriginTargetID?.rawValue
+                    )
                 ),
                 initiator: params.initiator.proxyInitiator,
                 resourceType: params.type.map(Network.ResourceType.init(rawValue:)),
@@ -176,7 +186,14 @@ enum LiveProxyEventDecoder {
             let params = try decode(ResponseReceivedParams.self, from: event)
             return .responseReceived(
                 id: Network.Request.ID(params.requestId),
-                response: params.response.proxyResponse(fallbackURL: nil),
+                response: params.response.proxyResponse(
+                    fallbackURL: nil,
+                    origin: Network.Request.Origin(
+                        frameID: FrameID(params.frameId),
+                        loaderID: params.loaderId,
+                        targetID: event.networkOriginTargetID?.rawValue
+                    )
+                ),
                 resourceType: params.type.map(Network.ResourceType.init(rawValue:)),
                 timestamp: params.timestamp
             )
@@ -206,9 +223,14 @@ enum LiveProxyEventDecoder {
             )
         case "Network.requestServedFromMemoryCache":
             let params = try decode(RequestServedFromMemoryCacheParams.self, from: event)
+            let origin = Network.Request.Origin(
+                frameID: FrameID(params.frameId),
+                loaderID: params.loaderId,
+                targetID: event.networkOriginTargetID?.rawValue
+            )
             return .requestServedFromMemoryCache(
                 id: Network.Request.ID(params.requestId),
-                response: params.resource.proxyResponse,
+                response: params.resource.proxyResponse(origin: origin),
                 initiator: params.initiator.proxyInitiator,
                 resourceType: Network.ResourceType(rawValue: params.resource.type),
                 timestamp: params.timestamp
@@ -329,10 +351,11 @@ private struct PageFramePayload: Decodable {
     var securityOrigin: String?
     var mimeType: String?
 
-    var proxyFrame: WebInspectorPageFrameLifecycle {
+    func proxyFrame(pageBindingID: String?) -> WebInspectorPageFrameLifecycle {
         WebInspectorPageFrameLifecycle(
             id: FrameID(id),
             parentID: parentId.map(FrameID.init),
+            pageBindingID: pageBindingID,
             loaderID: loaderId,
             name: name,
             url: url,
@@ -639,6 +662,8 @@ private struct StyleSheetHeaderPayload: Decodable {
 
 private struct RequestWillBeSentParams: Decodable {
     var requestId: String
+    var frameId: String
+    var loaderId: String
     var request: RequestPayload
     var initiator: InitiatorPayload
     var type: String?
@@ -658,6 +683,8 @@ private struct BackendResourceIdentifierPayload: Decodable {
 
 private struct ResponseReceivedParams: Decodable {
     var requestId: String
+    var frameId: String
+    var loaderId: String
     var type: String?
     var response: ResponsePayload
     var timestamp: Double
@@ -686,6 +713,9 @@ private struct LoadingFailedParams: Decodable {
 
 private struct RequestServedFromMemoryCacheParams: Decodable {
     var requestId: String
+    var frameId: String
+    var loaderId: String
+    var documentURL: String
     var timestamp: Double
     var initiator: InitiatorPayload
     var resource: CachedResourcePayload
@@ -744,7 +774,8 @@ private struct RequestPayload: Decodable {
 
     func proxyRequest(
         id: String,
-        backendResourceIdentifier: Network.BackendResourceID? = nil
+        backendResourceIdentifier: Network.BackendResourceID? = nil,
+        origin: Network.Request.Origin? = nil
     ) -> Network.Request {
         Network.Request(
             id: Network.Request.ID(id),
@@ -754,7 +785,8 @@ private struct RequestPayload: Decodable {
             postData: postData,
             referrerPolicy: referrerPolicy.map(Network.ReferrerPolicy.init(rawValue:)),
             integrity: integrity,
-            backendResourceIdentifier: backendResourceIdentifier
+            backendResourceIdentifier: backendResourceIdentifier,
+            origin: origin
         )
     }
 }
@@ -768,7 +800,11 @@ private struct ResponsePayload: Decodable {
     var source: String?
     var requestHeaders: [String: String]?
 
-    func proxyResponse(fallbackURL: String?, bodySize: Int? = nil) -> Network.Response {
+    func proxyResponse(
+        fallbackURL: String?,
+        bodySize: Int? = nil,
+        origin: Network.Request.Origin? = nil
+    ) -> Network.Response {
         Network.Response(
             url: url ?? fallbackURL,
             status: status,
@@ -777,7 +813,8 @@ private struct ResponsePayload: Decodable {
             headers: headers ?? [:],
             source: source.map(Network.Source.init(rawValue:)),
             requestHeaders: requestHeaders,
-            bodySize: bodySize
+            bodySize: bodySize,
+            origin: origin
         )
     }
 }
@@ -812,9 +849,9 @@ private struct CachedResourcePayload: Decodable {
     var bodySize: Int?
     var response: ResponsePayload?
 
-    var proxyResponse: Network.Response {
-        response?.proxyResponse(fallbackURL: url, bodySize: bodySize)
-            ?? Network.Response(url: url, bodySize: bodySize)
+    func proxyResponse(origin: Network.Request.Origin) -> Network.Response {
+        response?.proxyResponse(fallbackURL: url, bodySize: bodySize, origin: origin)
+            ?? Network.Response(url: url, bodySize: bodySize, origin: origin)
     }
 }
 

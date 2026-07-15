@@ -127,6 +127,8 @@ package struct ProtocolEvent: Equatable, Sendable {
     package var method: String
     package var targetID: ProtocolTarget.ID?
     package var sourceTargetID: ProtocolTarget.ID?
+    package var pageBindingTargetID: ProtocolTarget.ID?
+    package var networkOriginTargetID: ProtocolTarget.ID?
     package var receivedDomainSequences: [ProtocolDomain: UInt64]
     package var paramsData: Data
     /// Event-time fact for `Target.targetDestroyed`: whether the destroyed
@@ -134,6 +136,10 @@ package struct ProtocolEvent: Equatable, Sendable {
     /// registry forgets the destroyed record before subscribers consume the
     /// event, so consumers cannot reconstruct this from a snapshot.
     package var destroyedCurrentMainPageTarget: Bool
+    /// Event-time fact for a destroyed provisional target. This lets the
+    /// semantic page route retire navigation state after the registry removes
+    /// the target record.
+    package var destroyedProvisionalTargetInCurrentPageHierarchy: Bool
 
     package init(
         sequence: UInt64,
@@ -141,18 +147,24 @@ package struct ProtocolEvent: Equatable, Sendable {
         method: String,
         targetID: ProtocolTarget.ID?,
         sourceTargetID: ProtocolTarget.ID? = nil,
+        pageBindingTargetID: ProtocolTarget.ID? = nil,
+        networkOriginTargetID: ProtocolTarget.ID? = nil,
         receivedDomainSequences: [ProtocolDomain: UInt64] = [:],
         paramsData: Data,
-        destroyedCurrentMainPageTarget: Bool = false
+        destroyedCurrentMainPageTarget: Bool = false,
+        destroyedProvisionalTargetInCurrentPageHierarchy: Bool = false
     ) {
         self.sequence = sequence
         self.domain = domain
         self.method = method
         self.targetID = targetID
         self.sourceTargetID = sourceTargetID
+        self.pageBindingTargetID = pageBindingTargetID
+        self.networkOriginTargetID = networkOriginTargetID
         self.receivedDomainSequences = receivedDomainSequences
         self.paramsData = paramsData
         self.destroyedCurrentMainPageTarget = destroyedCurrentMainPageTarget
+        self.destroyedProvisionalTargetInCurrentPageHierarchy = destroyedProvisionalTargetInCurrentPageHierarchy
     }
 
     package func receivedSequence(for domain: ProtocolDomain) -> UInt64 {

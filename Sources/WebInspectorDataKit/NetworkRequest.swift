@@ -681,6 +681,22 @@ public final class NetworkBody {
     }
 }
 
+/// Stable identity for one frame visit within a DataKit context.
+///
+/// WebKit may reuse a loader identifier after a back/forward navigation, so
+/// the frame/loader pair is content, not visit identity.
+package struct NetworkNavigationVisit: Hashable, Sendable {
+    package let attachmentEpoch: UInt64
+    package let frameID: FrameID
+    package let epoch: UInt64
+
+    package init(attachmentEpoch: UInt64, frameID: FrameID, epoch: UInt64) {
+        self.attachmentEpoch = attachmentEpoch
+        self.frameID = frameID
+        self.epoch = epoch
+    }
+}
+
 /// Observable model for one network request.
 @Observable
 public final class NetworkRequest: WebInspectorFetchableModel {
@@ -752,6 +768,9 @@ public final class NetworkRequest: WebInspectorFetchableModel {
 
     /// Information about what initiated the first request in this redirect chain.
     public private(set) var initiator: Network.Initiator?
+
+    /// Immutable frame-visit membership for the current request chain.
+    package private(set) var navigationVisit: NetworkNavigationVisit?
 
     /// The current request lifecycle state.
     public private(set) var state: State
@@ -838,6 +857,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     init(
         request: Network.Request,
         initiator: Network.Initiator?,
+        navigationVisit: NetworkNavigationVisit? = nil,
         resourceType: Network.ResourceType?,
         timestamp: Double?,
         modelContext: WebInspectorContext
@@ -846,6 +866,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         url = request.url
         method = request.method
         self.initiator = initiator
+        self.navigationVisit = navigationVisit
         self.resourceType = resourceType
         state = .pending
         status = nil
@@ -965,6 +986,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     func applyRequestWillBeSent(
         request: Network.Request,
         initiator: Network.Initiator?,
+        navigationVisit: NetworkNavigationVisit?,
         resourceType: Network.ResourceType?,
         timestamp: Double
     ) {
@@ -972,6 +994,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         url = request.url
         method = request.method
         self.initiator = initiator
+        self.navigationVisit = navigationVisit
         self.resourceType = resourceType
         requestHeaders = request.headers
         status = nil
@@ -1203,7 +1226,8 @@ public final class NetworkRequest: WebInspectorFetchableModel {
             postData: request.postData,
             referrerPolicy: request.referrerPolicy,
             integrity: request.integrity,
-            backendResourceIdentifier: request.backendResourceIdentifier
+            backendResourceIdentifier: request.backendResourceIdentifier,
+            origin: request.origin
         )
     }
 
@@ -1216,7 +1240,8 @@ public final class NetworkRequest: WebInspectorFetchableModel {
             postData: currentRequest.postData,
             referrerPolicy: currentRequest.referrerPolicy,
             integrity: currentRequest.integrity,
-            backendResourceIdentifier: currentRequest.backendResourceIdentifier
+            backendResourceIdentifier: currentRequest.backendResourceIdentifier,
+            origin: currentRequest.origin
         )
     }
 
@@ -1238,7 +1263,8 @@ public final class NetworkRequest: WebInspectorFetchableModel {
             postData: currentRequest.postData,
             referrerPolicy: currentRequest.referrerPolicy,
             integrity: currentRequest.integrity,
-            backendResourceIdentifier: currentRequest.backendResourceIdentifier
+            backendResourceIdentifier: currentRequest.backendResourceIdentifier,
+            origin: currentRequest.origin
         )
     }
 

@@ -148,9 +148,9 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
             if event.domain == .target,
                event.method == "Target.targetDestroyed" {
                 // The registry has already dropped the destroyed record, so
-                // route by the event-time fact: only the destruction of the
-                // then-current main page belongs to the semantic page route.
+                // route by event-time facts retained by the transport.
                 return event.destroyedCurrentMainPageTarget
+                    || event.destroyedProvisionalTargetInCurrentPageHierarchy
             }
             guard let currentMainPageTargetID = snapshot.currentMainPageTargetID else {
                 return false
@@ -656,7 +656,8 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
             postData: request.postData,
             referrerPolicy: request.referrerPolicy,
             integrity: request.integrity,
-            backendResourceIdentifier: request.backendResourceIdentifier
+            backendResourceIdentifier: request.backendResourceIdentifier,
+            origin: request.origin
         )
     }
 

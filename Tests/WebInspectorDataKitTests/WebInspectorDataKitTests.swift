@@ -2190,7 +2190,7 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
         transport,
         targetID: oldTargetID,
         method: "Network.requestWillBeSent",
-        params: #"{"requestId":"commit-retained-request","request":{"url":"https://example.test/retained","method":"GET"},"initiator":{"type":"other"},"type":"Fetch","timestamp":1}"#
+        params: #"{"requestId":"commit-retained-request","frameId":"main-frame","loaderId":"loader-1","request":{"url":"https://example.test/retained","method":"GET"},"initiator":{"type":"other"},"type":"Fetch","timestamp":1}"#
     )
     try await waitUntil {
         networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)]
@@ -2309,7 +2309,7 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
         transport,
         targetID: newTargetID,
         method: "Network.requestWillBeSent",
-        params: #"{"requestId":"commit-post-request","request":{"url":"https://example.test/after-commit","method":"GET"},"initiator":{"type":"other"},"type":"Fetch","timestamp":2}"#
+        params: #"{"requestId":"commit-post-request","frameId":"new-main-frame","loaderId":"loader-2","request":{"url":"https://example.test/after-commit","method":"GET"},"initiator":{"type":"other"},"type":"Fetch","timestamp":2}"#
     )
     try await waitUntil {
         Set(networkResults.items.map(\.id)) == [
@@ -2394,7 +2394,7 @@ func currentPageTargetDestroyedDuringRetargetDoesNotDetachOrClearNetwork() async
         transport,
         targetID: oldTargetID,
         method: "Network.requestWillBeSent",
-        params: #"{"requestId":"destroy-retained-request","request":{"url":"https://example.test/retained","method":"GET"},"initiator":{"type":"other"},"type":"Fetch","timestamp":1}"#
+        params: #"{"requestId":"destroy-retained-request","frameId":"main-frame","loaderId":"loader-1","request":{"url":"https://example.test/retained","method":"GET"},"initiator":{"type":"other"},"type":"Fetch","timestamp":1}"#
     )
     try await waitUntil {
         networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)]
@@ -2526,6 +2526,71 @@ func startBeginsFreshNetworkAttachmentEpoch() async throws {
             && context.state == .attached
     }
     #expect(networkResults.items.isEmpty)
+}
+
+@MainActor
+@Test
+func networkNavigationVisitIdentityDoesNotRepeatAcrossRestart() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: Network.Request.ID("before-restart"),
+            request: Network.Request(
+                id: Network.Request.ID("before-restart"),
+                url: "https://example.test/before-restart",
+                method: "GET",
+                origin: Network.Request.Origin(
+                    frameID: FrameID("main-frame"),
+                    loaderID: "main-loader",
+                    targetID: nil
+                )
+            ),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 1
+        ),
+        target: target
+    )
+    try await waitUntil { networkResults.items.count == 1 }
+    let retainedVisit = try #require(networkResults.items.first?.navigationVisit)
+
+    await enqueueDomainDisableReplies(on: runtime.backend)
+    await enqueueStartupReplies(
+        on: runtime.backend,
+        document: DOM.Node(id: DOM.Node.ID("restart-identity-root"), nodeType: 9, nodeName: "#document")
+    )
+    context.start()
+    try await waitUntil { networkResults.items.isEmpty }
+    try await waitUntil {
+        context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restart-identity-root"))
+            && context.state == .attached
+    }
+
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: Network.Request.ID("after-restart"),
+            request: Network.Request(
+                id: Network.Request.ID("after-restart"),
+                url: "https://example.test/after-restart",
+                method: "GET",
+                origin: Network.Request.Origin(
+                    frameID: FrameID("main-frame"),
+                    loaderID: "main-loader",
+                    targetID: nil
+                )
+            ),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 2
+        ),
+        target: target
+    )
+    try await waitUntil { networkResults.items.count == 1 }
+    let restartedVisit = try #require(networkResults.items.first?.navigationVisit)
+    #expect(restartedVisit != retainedVisit)
 }
 
 @MainActor
@@ -2785,7 +2850,7 @@ func mainFrameNavigatedReloadsDOMAndClearsRuntimeContexts() async throws {
         transport,
         targetID: targetID,
         method: "Network.requestWillBeSent",
-        params: #"{"requestId":"navigated-request","request":{"url":"https://example.test/after-frame-navigation","method":"GET"},"initiator":{"type":"other"},"type":"Document","timestamp":3}"#
+        params: #"{"requestId":"navigated-request","frameId":"main-frame","loaderId":"loader-2","request":{"url":"https://example.test/after-frame-navigation","method":"GET"},"initiator":{"type":"other"},"type":"Document","timestamp":3}"#
     )
     try await waitUntil {
         networkResults.items.map(\.id) == [NetworkRequest.ID(navigatedRequestID)]
@@ -2798,6 +2863,794 @@ func mainFrameNavigatedReloadsDOMAndClearsRuntimeContexts() async throws {
         try transportTargetMessageMethod(message.message)
     }
     #expect(!sentMethods.contains("DOM.undo"))
+}
+
+@MainActor
+@Test
+func networkNavigationGroupsEachAtoBtoAFrameVisitSeparately() async throws {
+    let targetID = ProtocolTarget.ID("page-main")
+    let (_, transport, context) = try await startTransportBackedContext(
+        targetID: targetID,
+        documentID: "navigation-visit-root"
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+
+    for (index, visit) in [
+        ("loader-a", "a-first", 1.0),
+        ("loader-b", "b", 2.0),
+        ("loader-a", "a-return", 3.0),
+    ].enumerated() {
+        let (loaderID, prefix, timestamp) = visit
+        await emitTransportNetworkRequest(
+            id: "\(prefix)-provisional",
+            frameID: "child-frame",
+            loaderID: loaderID,
+            timestamp: timestamp,
+            targetID: targetID,
+            transport: transport
+        )
+        try await waitUntil { results.items.count == index * 2 + 1 }
+
+        await emitTransportFrameNavigated(
+            frameID: "child-frame",
+            loaderID: loaderID,
+            targetID: targetID,
+            transport: transport
+        )
+        await emitTransportNetworkRequest(
+            id: "\(prefix)-committed",
+            frameID: "child-frame",
+            loaderID: loaderID,
+            timestamp: timestamp + 0.5,
+            targetID: targetID,
+            transport: transport
+        )
+        try await waitUntil { results.items.count == (index + 1) * 2 }
+    }
+
+    let visits = try results.items.map { request in
+        try #require(request.navigationVisit)
+    }
+    #expect(visits.count == 6)
+    #expect(Dictionary(grouping: visits, by: { $0 }).values.map(\.count).sorted() == [2, 2, 2])
+    #expect(visits[0] == visits[1])
+    #expect(visits[2] == visits[3])
+    #expect(visits[4] == visits[5])
+    #expect(visits[0] != visits[4])
+}
+
+@MainActor
+@Test
+func networkRequestBeforeFrameCommitSharesVisitWithCommittedRequest() async throws {
+    let targetID = ProtocolTarget.ID("page-main")
+    let (_, transport, context) = try await startTransportBackedContext(
+        targetID: targetID,
+        documentID: "provisional-visit-root"
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+
+    await emitTransportNetworkRequest(
+        id: "before-commit",
+        frameID: "child-frame",
+        loaderID: "child-loader",
+        timestamp: 1,
+        targetID: targetID,
+        transport: transport
+    )
+    try await waitUntil { results.items.count == 1 }
+    await emitTransportFrameNavigated(
+        frameID: "child-frame",
+        loaderID: "child-loader",
+        targetID: targetID,
+        transport: transport
+    )
+    await emitTransportNetworkRequest(
+        id: "after-commit",
+        frameID: "child-frame",
+        loaderID: "child-loader",
+        timestamp: 2,
+        targetID: targetID,
+        transport: transport
+    )
+    try await waitUntil { results.items.count == 2 }
+
+    let provisionalVisit = try #require(results.items[0].navigationVisit)
+    let committedVisit = try #require(results.items[1].navigationVisit)
+    #expect(provisionalVisit == committedVisit)
+}
+
+@MainActor
+@Test
+func ambiguousFrameCommitDoesNotGuessBetweenPendingNetworkTargets() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+
+    await applyOriginatedNetworkRequest(
+        id: "ambiguous-current",
+        loaderID: "current-loader",
+        originTargetID: "page-current",
+        timestamp: 1,
+        context: context
+    )
+    await applyOriginatedNetworkRequest(
+        id: "ambiguous-first-pending",
+        loaderID: "shared-pending-loader",
+        originTargetID: "page-next-1",
+        timestamp: 2,
+        context: context
+    )
+    await applyOriginatedNetworkRequest(
+        id: "ambiguous-second-pending",
+        loaderID: "shared-pending-loader",
+        originTargetID: "page-next-2",
+        timestamp: 3,
+        context: context
+    )
+    let firstPendingVisit = try #require(results.items[1].navigationVisit)
+    let secondPendingVisit = try #require(results.items[2].navigationVisit)
+    await applyOriginatedNetworkRequest(
+        id: "ambiguous-unattributed-pending",
+        loaderID: "shared-pending-loader",
+        originTargetID: nil,
+        timestamp: 4,
+        context: context
+    )
+    let unattributedPendingVisit = try #require(results.items[3].navigationVisit)
+
+    context.apply(.frameNavigated(WebInspectorPageFrameLifecycle(
+        id: FrameID("main-frame"),
+        parentID: nil,
+        loaderID: "shared-pending-loader",
+        name: "Main",
+        url: "https://example.test/next",
+        securityOrigin: "https://example.test",
+        mimeType: "text/html"
+    )))
+    await applyOriginatedNetworkRequest(
+        id: "ambiguous-committed",
+        loaderID: "shared-pending-loader",
+        originTargetID: nil,
+        timestamp: 5,
+        context: context
+    )
+
+    let committedVisit = try #require(results.items[4].navigationVisit)
+    #expect(firstPendingVisit != secondPendingVisit)
+    #expect(unattributedPendingVisit != firstPendingVisit)
+    #expect(unattributedPendingVisit != secondPendingVisit)
+    #expect(committedVisit == unattributedPendingVisit)
+}
+
+@MainActor
+@Test
+func frameCommitUsesExactPageBindingForPendingNetworkTarget() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+
+    await applyOriginatedNetworkRequest(
+        id: "exact-current",
+        loaderID: "current-loader",
+        originTargetID: "page-current",
+        timestamp: 1,
+        context: context
+    )
+    await applyOriginatedNetworkRequest(
+        id: "exact-first-pending",
+        loaderID: "shared-pending-loader",
+        originTargetID: "page-next-1",
+        timestamp: 2,
+        context: context
+    )
+    await applyOriginatedNetworkRequest(
+        id: "exact-second-pending",
+        loaderID: "shared-pending-loader",
+        originTargetID: "page-next-2",
+        timestamp: 3,
+        context: context
+    )
+    let firstPendingVisit = try #require(results.items[1].navigationVisit)
+    let secondPendingVisit = try #require(results.items[2].navigationVisit)
+
+    context.apply(.frameNavigated(WebInspectorPageFrameLifecycle(
+        id: FrameID("main-frame"),
+        parentID: nil,
+        pageBindingID: "page-next-2",
+        loaderID: "shared-pending-loader",
+        name: "Main",
+        url: "https://example.test/next",
+        securityOrigin: "https://example.test",
+        mimeType: "text/html"
+    )))
+    await applyOriginatedNetworkRequest(
+        id: "exact-committed",
+        loaderID: "shared-pending-loader",
+        originTargetID: "page-next-2",
+        timestamp: 4,
+        context: context
+    )
+
+    let committedVisit = try #require(results.items[3].navigationVisit)
+    #expect(firstPendingVisit != secondPendingVisit)
+    #expect(committedVisit == secondPendingVisit)
+}
+
+@MainActor
+@Test
+func frameDetachmentRetainsNetworkHistoryAndLateTerminalEvents() async throws {
+    let targetID = ProtocolTarget.ID("page-main")
+    let (_, transport, context) = try await startTransportBackedContext(
+        targetID: targetID,
+        documentID: "detached-frame-root"
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+
+    await emitTransportNetworkRequest(
+        id: "detached-request",
+        frameID: "child-frame",
+        loaderID: "child-loader",
+        timestamp: 1,
+        targetID: targetID,
+        transport: transport
+    )
+    try await waitUntil { results.items.count == 1 }
+    let retainedRequest = try #require(results.items.first)
+    let retainedVisit = try #require(retainedRequest.navigationVisit)
+
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: targetID,
+        method: "Network.responseReceived",
+        params: #"{"requestId":"detached-request","frameId":"child-frame","loaderId":"child-loader","type":"Fetch","response":{"url":"https://example.test/detached-request","status":200,"statusText":"OK","headers":{},"mimeType":"text/plain","source":"network"},"timestamp":1.5}"#
+    )
+    try await waitUntil { retainedRequest.status == 200 }
+
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: targetID,
+        method: "Page.frameDetached",
+        params: #"{"frameId":"child-frame"}"#
+    )
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: targetID,
+        method: "Network.loadingFinished",
+        params: #"{"requestId":"detached-request","timestamp":2}"#
+    )
+    try await waitUntil { retainedRequest.state == .finished }
+
+    #expect(results.items == [retainedRequest])
+    #expect(retainedRequest.navigationVisit == retainedVisit)
+
+    await emitTransportNetworkRequest(
+        id: "reused-detached-frame",
+        frameID: "child-frame",
+        loaderID: "child-loader",
+        timestamp: 3,
+        targetID: targetID,
+        transport: transport
+    )
+    try await waitUntil { results.items.count == 2 }
+    let reusedFrameRequest = try #require(results.items.last)
+    #expect(reusedFrameRequest.navigationVisit != retainedVisit)
+}
+
+@MainActor
+@Test
+func memoryCacheOnlyRequestSharesFrameNavigationVisit() async throws {
+    let targetID = ProtocolTarget.ID("page-main")
+    let (_, transport, context) = try await startTransportBackedContext(
+        targetID: targetID,
+        documentID: "memory-cache-visit-root"
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+
+    await emitTransportFrameNavigated(
+        frameID: "child-frame",
+        loaderID: "child-loader",
+        targetID: targetID,
+        transport: transport
+    )
+    await emitTransportNetworkRequest(
+        id: "committed-request",
+        frameID: "child-frame",
+        loaderID: "child-loader",
+        timestamp: 1,
+        targetID: targetID,
+        transport: transport
+    )
+    try await waitUntil { results.items.count == 1 }
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: targetID,
+        method: "Network.requestServedFromMemoryCache",
+        params: #"{"requestId":"cached-only","frameId":"child-frame","loaderId":"child-loader","documentURL":"https://example.test/","timestamp":2,"initiator":{"type":"other"},"resource":{"url":"https://example.test/cached.css","type":"Stylesheet","bodySize":1234,"response":{"url":"https://example.test/cached.css","status":200,"mimeType":"text/css","headers":{}}}}"#
+    )
+    try await waitUntil { results.items.count == 2 }
+
+    let committedVisit = try #require(results.items[0].navigationVisit)
+    let cachedVisit = try #require(results.items[1].navigationVisit)
+    #expect(cachedVisit == committedVisit)
+}
+
+@MainActor
+@Test
+func responseOnlyRequestSharesFrameNavigationVisit() async throws {
+    let targetID = ProtocolTarget.ID("page-main")
+    let (_, transport, context) = try await startTransportBackedContext(
+        targetID: targetID,
+        documentID: "response-only-visit-root"
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+
+    await emitTransportFrameNavigated(
+        frameID: "child-frame",
+        loaderID: "child-loader",
+        targetID: targetID,
+        transport: transport
+    )
+    await emitTransportNetworkRequest(
+        id: "committed-request",
+        frameID: "child-frame",
+        loaderID: "child-loader",
+        timestamp: 1,
+        targetID: targetID,
+        transport: transport
+    )
+    try await waitUntil { results.items.count == 1 }
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: targetID,
+        method: "Network.responseReceived",
+        params: #"{"requestId":"response-only","frameId":"child-frame","loaderId":"child-loader","type":"Fetch","response":{"url":"https://example.test/response-only","status":200,"statusText":"OK","headers":{},"mimeType":"text/plain","source":"network"},"timestamp":2}"#
+    )
+    try await waitUntil { results.items.count == 2 }
+
+    let committedVisit = try #require(results.items[0].navigationVisit)
+    let responseVisit = try #require(results.items[1].navigationVisit)
+    #expect(responseVisit == committedVisit)
+}
+
+@MainActor
+@Test
+func subframeDetachmentDoesNotAdvanceTopLevelNetworkVisit() async throws {
+    let targetID = ProtocolTarget.ID("page-main")
+    let (_, transport, context) = try await startTransportBackedContext(
+        targetID: targetID,
+        documentID: "subframe-detach-top-level-root"
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+
+    await emitTransportNetworkRequest(
+        id: "top-level-before-detach",
+        frameID: "main-frame",
+        loaderID: "top-level-loader",
+        timestamp: 1,
+        targetID: targetID,
+        transport: transport
+    )
+    await emitTransportNetworkRequest(
+        id: "subframe-before-detach",
+        frameID: "child-frame",
+        loaderID: "child-loader",
+        timestamp: 2,
+        targetID: targetID,
+        transport: transport
+    )
+    try await waitUntil { results.items.count == 2 }
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: targetID,
+        method: "Page.frameDetached",
+        params: #"{"frameId":"child-frame"}"#
+    )
+    await emitTransportNetworkRequest(
+        id: "top-level-after-detach",
+        frameID: "main-frame",
+        loaderID: "top-level-loader",
+        timestamp: 3,
+        targetID: targetID,
+        transport: transport
+    )
+    try await waitUntil { results.items.count == 3 }
+
+    let beforeDetach = try #require(results.items[0].navigationVisit)
+    let afterDetach = try #require(results.items[2].navigationVisit)
+    #expect(beforeDetach == afterDetach)
+}
+
+@MainActor
+@Test
+func networkEventWithoutFrameMembershipHasNoNavigationVisit() async throws {
+    let targetID = ProtocolTarget.ID("page-main")
+    let (_, transport, context) = try await startTransportBackedContext(
+        targetID: targetID,
+        documentID: "missing-frame-membership-root"
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: targetID,
+        method: "Network.responseReceived",
+        params: #"{"requestId":"missing-membership","frameId":"","loaderId":"","response":{"url":"https://example.test/missing-membership","status":200,"statusText":"OK","headers":{},"mimeType":"text/plain","source":"network"},"timestamp":1}"#
+    )
+    try await waitUntil { results.items.count == 1 }
+
+    #expect(results.items[0].navigationVisit == nil)
+}
+
+@MainActor
+@Test
+func delayedNetworkConsumerUsesEventTimeTargetAfterFrameRetarget() async throws {
+    let transport = TransportSession(backend: FakeTransportBackend(), responseTimeout: .milliseconds(750))
+    await installTransportPageTarget(
+        in: transport,
+        targetID: ProtocolTarget.ID("page-current"),
+        frameID: "main-frame"
+    )
+    let stream = await transport.events(for: .network)
+    var iterator = stream.makeAsyncIterator()
+
+    await transport.receiveRootMessage(
+        #"{"method":"Network.responseReceived","params":{"requestId":"event-time-old","frameId":"main-frame","loaderId":"reused-loader","response":{"url":"https://example.test/old","status":200,"headers":{}},"timestamp":1}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-provisional","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+
+    let protocolEvent = try #require(await iterator.next())
+    let proxyEvent = try LiveProxyEventDecoder.proxyEvent(
+        from: protocolEvent,
+        targetID: .currentPage
+    )
+    guard case let .network(oldNetworkEvent) = proxyEvent else {
+        Issue.record("Expected delayed Network event.")
+        return
+    }
+
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    await context.apply(oldNetworkEvent)
+    let newID = Network.Request.ID("event-time-new")
+    await context.apply(.requestWillBeSent(
+        id: newID,
+        request: Network.Request(
+            id: newID,
+            url: "https://example.test/new",
+            method: "GET",
+            origin: Network.Request.Origin(
+                frameID: FrameID("main-frame"),
+                loaderID: "reused-loader",
+                targetID: "page-provisional"
+            )
+        ),
+        resourceType: .document,
+        redirectResponse: nil,
+        timestamp: 2
+    ))
+
+    let oldVisit = try #require(results.items[0].navigationVisit)
+    let newVisit = try #require(results.items[1].navigationVisit)
+    #expect(oldVisit != newVisit)
+}
+
+@MainActor
+@Test
+func workerInitiatedRequestSharesOwningFrameNavigationVisit() async throws {
+    let transport = TransportSession(backend: FakeTransportBackend(), responseTimeout: .milliseconds(750))
+    await installTransportPageTarget(
+        in: transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        frameID: "main-frame"
+    )
+    let stream = await transport.events(for: .network)
+    var iterator = stream.makeAsyncIterator()
+
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Network.requestWillBeSent",
+        params: #"{"requestId":"document-request","frameId":"main-frame","loaderId":"main-loader","documentURL":"https://example.test/","request":{"url":"https://example.test/","method":"GET"},"initiator":{"type":"other"},"timestamp":1}"#
+    )
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Network.requestWillBeSent",
+        params: #"{"requestId":"worker-request","frameId":"main-frame","loaderId":"main-loader","documentURL":"https://example.test/","request":{"url":"https://example.test/worker-data","method":"GET"},"initiator":{"type":"script"},"timestamp":2,"targetId":"worker-1"}"#
+    )
+
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    for _ in 0..<2 {
+        let protocolEvent = try #require(await iterator.next())
+        let proxyEvent = try LiveProxyEventDecoder.proxyEvent(
+            from: protocolEvent,
+            targetID: .currentPage
+        )
+        guard case let .network(networkEvent) = proxyEvent else {
+            Issue.record("Expected Network.requestWillBeSent.")
+            return
+        }
+        await context.apply(networkEvent)
+    }
+
+    let documentVisit = try #require(results.items[0].navigationVisit)
+    let workerVisit = try #require(results.items[1].navigationVisit)
+    #expect(workerVisit == documentVisit)
+}
+
+@MainActor
+@Test
+func abandonedProvisionalTargetDoesNotReuseNetworkNavigationVisit() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+
+    await emitOriginatedNetworkRequest(
+        id: "abandoned-provisional",
+        frameID: "main-frame",
+        loaderID: "reused-loader",
+        originTargetID: "page-abandoned",
+        timestamp: 1,
+        target: target,
+        backend: runtime.backend
+    )
+    await emitOriginatedNetworkRequest(
+        id: "abandoned-child-provisional",
+        frameID: "child-frame",
+        loaderID: "child-reused-loader",
+        originTargetID: "page-abandoned",
+        timestamp: 1.5,
+        target: target,
+        backend: runtime.backend
+    )
+    try await waitUntil { results.items.count == 2 }
+    await runtime.backend.emit(
+        .targetDestroyed(targetID: WebInspectorTarget.ID("page-abandoned")),
+        target: target
+    )
+    await emitOriginatedNetworkRequest(
+        id: "later-provisional",
+        frameID: "main-frame",
+        loaderID: "reused-loader",
+        originTargetID: "page-abandoned",
+        timestamp: 2,
+        target: target,
+        backend: runtime.backend
+    )
+    await emitOriginatedNetworkRequest(
+        id: "later-child-provisional",
+        frameID: "child-frame",
+        loaderID: "child-reused-loader",
+        originTargetID: "page-abandoned",
+        timestamp: 2.5,
+        target: target,
+        backend: runtime.backend
+    )
+    try await waitUntil { results.items.count == 4 }
+
+    let abandonedVisit = try #require(results.items[0].navigationVisit)
+    let abandonedChildVisit = try #require(results.items[1].navigationVisit)
+    let laterVisit = try #require(results.items[2].navigationVisit)
+    let laterChildVisit = try #require(results.items[3].navigationVisit)
+    #expect(abandonedVisit != laterVisit)
+    #expect(abandonedChildVisit != laterChildVisit)
+}
+
+@MainActor
+@Test
+func targetCommitBeforeFrameCommitDoesNotAdvanceNetworkVisitTwice() async throws {
+    let visits = try await networkVisitsAcrossTopLevelCommit(order: .targetThenFrame)
+
+    #expect(visits.provisional == visits.committed)
+}
+
+@MainActor
+@Test
+func frameCommitBeforeTargetCommitDoesNotAdvanceNetworkVisitTwice() async throws {
+    let visits = try await networkVisitsAcrossTopLevelCommit(order: .frameThenTarget)
+
+    #expect(visits.provisional == visits.committed)
+}
+
+@MainActor
+@Test
+func targetCommitBeforeFrameCommitPreservesUnattributedNetworkVisit() async throws {
+    let visits = try await networkVisitsAcrossTopLevelCommit(
+        order: .targetThenFrame,
+        provisionalOriginTargetID: nil,
+        currentLoaderID: "current-loader",
+        provisionalLoaderID: "provisional-loader"
+    )
+
+    #expect(visits.provisional == visits.committed)
+}
+
+@MainActor
+@Test
+func frameCommitBeforeTargetCommitPreservesUnattributedNetworkVisit() async throws {
+    let visits = try await networkVisitsAcrossTopLevelCommit(
+        order: .frameThenTarget,
+        provisionalOriginTargetID: nil,
+        currentLoaderID: "current-loader",
+        provisionalLoaderID: "provisional-loader"
+    )
+
+    #expect(visits.provisional == visits.committed)
+}
+
+@MainActor
+@Test
+func ambiguousFrameCommitPreservesCandidatesUntilExactTargetCommit() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+
+    await emitOriginatedNetworkRequest(
+        id: "candidate-current",
+        loaderID: "current-loader",
+        originTargetID: "page-current",
+        timestamp: 1,
+        target: target,
+        backend: runtime.backend
+    )
+    await emitOriginatedNetworkRequest(
+        id: "candidate-a",
+        loaderID: "shared-loader",
+        originTargetID: "page-next-1",
+        timestamp: 2,
+        target: target,
+        backend: runtime.backend
+    )
+    await emitOriginatedNetworkRequest(
+        id: "candidate-b",
+        loaderID: "shared-loader",
+        originTargetID: "page-next-2",
+        timestamp: 3,
+        target: target,
+        backend: runtime.backend
+    )
+    try await waitUntil { results.items.count == 3 }
+    let candidateAVisit = try #require(results.items[1].navigationVisit)
+    let candidateBVisit = try #require(results.items[2].navigationVisit)
+
+    try await emitTopLevelFrameCommit(
+        target: target,
+        context: context,
+        backend: runtime.backend,
+        documentID: "ambiguous-frame-root",
+        loaderID: "shared-loader"
+    )
+    try await emitTopLevelTargetCommit(
+        target: target,
+        context: context,
+        backend: runtime.backend,
+        documentID: "exact-target-root",
+        pageBindingID: "page-next-2"
+    )
+    await emitOriginatedNetworkRequest(
+        id: "candidate-b-committed",
+        loaderID: "shared-loader",
+        originTargetID: "page-next-2",
+        timestamp: 4,
+        target: target,
+        backend: runtime.backend
+    )
+    try await waitUntil { results.items.count == 4 }
+
+    let committedVisit = try #require(results.items[3].navigationVisit)
+    #expect(candidateAVisit != candidateBVisit)
+    #expect(committedVisit == candidateBVisit)
+}
+
+@MainActor
+@Test
+func networkTargetCommitCommitsPendingNavigationVisit() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+
+    await emitOriginatedNetworkRequest(
+        id: "a-first",
+        loaderID: "loader-a",
+        originTargetID: "page-a",
+        timestamp: 1,
+        target: target,
+        backend: runtime.backend
+    )
+    await emitOriginatedNetworkRequest(
+        id: "b-provisional",
+        loaderID: "loader-b",
+        originTargetID: "page-b",
+        timestamp: 2,
+        target: target,
+        backend: runtime.backend
+    )
+    await emitOriginatedNetworkRequest(
+        id: "a-during-b-provisional",
+        loaderID: "loader-a",
+        originTargetID: "page-a",
+        timestamp: 2.5,
+        target: target,
+        backend: runtime.backend
+    )
+    try await waitUntil { results.items.count == 3 }
+
+    await enqueueStartupReplies(
+        on: runtime.backend,
+        document: DOM.Node(id: DOM.Node.ID("page-b-root"), nodeType: 9, nodeName: "#document")
+    )
+    await runtime.backend.emit(
+        .didCommitProvisionalTarget(WebInspectorTargetCommitLifecycle(
+            oldTargetID: .currentPage,
+            newTarget: WebInspectorLifecycleTarget(
+                id: .currentPage,
+                kind: .page,
+                frameID: FrameID("main-frame"),
+                isProvisional: false,
+                pageBindingID: "page-b"
+            )
+        )),
+        target: target
+    )
+    try await waitUntil {
+        context.rootNode?.id == DOMNode.ID(DOM.Node.ID("page-b-root"))
+            && context.state == .attached
+    }
+    await emitOriginatedNetworkRequest(
+        id: "b-committed",
+        loaderID: "loader-b",
+        originTargetID: "page-b",
+        timestamp: 3,
+        target: target,
+        backend: runtime.backend
+    )
+    await emitOriginatedNetworkRequest(
+        id: "a-return-provisional",
+        loaderID: "loader-a",
+        originTargetID: "page-a-return",
+        timestamp: 4,
+        target: target,
+        backend: runtime.backend
+    )
+    try await waitUntil { results.items.count == 5 }
+
+    await enqueueStartupReplies(
+        on: runtime.backend,
+        document: DOM.Node(id: DOM.Node.ID("page-a-return-root"), nodeType: 9, nodeName: "#document")
+    )
+    await runtime.backend.emit(
+        .didCommitProvisionalTarget(WebInspectorTargetCommitLifecycle(
+            oldTargetID: .currentPage,
+            newTarget: WebInspectorLifecycleTarget(
+                id: .currentPage,
+                kind: .page,
+                frameID: FrameID("main-frame"),
+                isProvisional: false,
+                pageBindingID: "page-a-return"
+            )
+        )),
+        target: target
+    )
+    try await waitUntil {
+        context.rootNode?.id == DOMNode.ID(DOM.Node.ID("page-a-return-root"))
+            && context.state == .attached
+    }
+    await emitOriginatedNetworkRequest(
+        id: "a-return-committed",
+        loaderID: "loader-a",
+        originTargetID: "page-a-return",
+        timestamp: 5,
+        target: target,
+        backend: runtime.backend
+    )
+    try await waitUntil { results.items.count == 6 }
+
+    let visits = try results.items.map { try #require($0.navigationVisit) }
+    #expect(visits[0] == visits[2])
+    #expect(visits[1] == visits[3])
+    #expect(visits[4] == visits[5])
+    #expect(visits[0] != visits[4])
 }
 
 @MainActor
@@ -6740,11 +7593,21 @@ func networkRequestPreservesInitialInitiatorAcrossRedirects() async throws {
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("initiator-redirect")
     let initialNodeID = DOM.Node.ID("17")
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
 
     await runtime.backend.emit(
         .requestWillBeSent(
             id: requestID,
-            request: Network.Request(id: requestID, url: "https://example.com/start", method: "GET"),
+            request: Network.Request(
+                id: requestID,
+                url: "https://example.com/start",
+                method: "GET",
+                origin: Network.Request.Origin(
+                    frameID: FrameID("main-frame"),
+                    loaderID: "initial-loader",
+                    targetID: "page-initial"
+                )
+            ),
             initiator: Network.Initiator(kind: "other", nodeID: initialNodeID),
             resourceType: .document,
             redirectResponse: nil,
@@ -6752,10 +7615,21 @@ func networkRequestPreservesInitialInitiatorAcrossRedirects() async throws {
         ),
         target: target
     )
+    try await waitUntil { results.items.count == 1 }
+    let initialVisit = try #require(results.items.first?.navigationVisit)
     await runtime.backend.emit(
         .requestWillBeSent(
             id: requestID,
-            request: Network.Request(id: requestID, url: "https://example.com/final", method: "GET"),
+            request: Network.Request(
+                id: requestID,
+                url: "https://example.com/final",
+                method: "GET",
+                origin: Network.Request.Origin(
+                    frameID: FrameID("main-frame"),
+                    loaderID: "redirect-loader",
+                    targetID: "page-redirect"
+                )
+            ),
             initiator: Network.Initiator(kind: "other", nodeID: DOM.Node.ID("99")),
             resourceType: .document,
             redirectResponse: Network.Response(
@@ -6768,10 +7642,10 @@ func networkRequestPreservesInitialInitiatorAcrossRedirects() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
     try await waitUntil { results.items.first?.redirects.count == 1 }
     let request = try #require(results.items.first)
     #expect(request.initiator?.nodeID == initialNodeID)
+    #expect(request.navigationVisit == initialVisit)
 }
 
 @MainActor
@@ -8455,6 +9329,234 @@ private func receiveTransportTargetEvent(
         targetID: targetID,
         message: #"{"method":"\#(method)","params":\#(params)}"#
     ))
+}
+
+private func emitTransportNetworkRequest(
+    id: String,
+    frameID: String,
+    loaderID: String,
+    timestamp: Double,
+    targetID: ProtocolTarget.ID,
+    transport: TransportSession
+) async {
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: targetID,
+        method: "Network.requestWillBeSent",
+        params: #"{"requestId":"\#(jsonEscapedString(id))","frameId":"\#(jsonEscapedString(frameID))","loaderId":"\#(jsonEscapedString(loaderID))","request":{"url":"https://example.test/\#(jsonEscapedString(id))","method":"GET"},"initiator":{"type":"parser","nodeId":42},"type":"Fetch","timestamp":\#(timestamp)}"#
+    )
+}
+
+private func emitOriginatedNetworkRequest(
+    id: String,
+    frameID: String = "main-frame",
+    loaderID: String,
+    originTargetID: String?,
+    timestamp: Double,
+    target: WebInspectorTarget,
+    backend: WebInspectorTestBackend
+) async {
+    let requestID = Network.Request.ID(id)
+    await backend.emit(
+        .requestWillBeSent(
+            id: requestID,
+            request: Network.Request(
+                id: requestID,
+                url: "https://example.test/\(id)",
+                method: "GET",
+                origin: Network.Request.Origin(
+                    frameID: FrameID(frameID),
+                    loaderID: loaderID,
+                    targetID: originTargetID
+                )
+            ),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: timestamp
+        ),
+        target: target
+    )
+}
+
+@MainActor
+private func applyOriginatedNetworkRequest(
+    id: String,
+    frameID: String = "main-frame",
+    loaderID: String,
+    originTargetID: String?,
+    timestamp: Double,
+    context: WebInspectorContext
+) async {
+    let requestID = Network.Request.ID(id)
+    await context.apply(.requestWillBeSent(
+        id: requestID,
+        request: Network.Request(
+            id: requestID,
+            url: "https://example.test/\(id)",
+            method: "GET",
+            origin: Network.Request.Origin(
+                frameID: FrameID(frameID),
+                loaderID: loaderID,
+                targetID: originTargetID
+            )
+        ),
+        resourceType: .fetch,
+        redirectResponse: nil,
+        timestamp: timestamp
+    ))
+}
+
+private enum NetworkTopLevelCommitOrder {
+    case targetThenFrame
+    case frameThenTarget
+}
+
+@MainActor
+private func networkVisitsAcrossTopLevelCommit(
+    order: NetworkTopLevelCommitOrder,
+    provisionalOriginTargetID: String? = "page-next",
+    currentLoaderID: String = "reused-loader",
+    provisionalLoaderID: String = "reused-loader"
+) async throws -> (provisional: NetworkNavigationVisit, committed: NetworkNavigationVisit) {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+
+    await emitOriginatedNetworkRequest(
+        id: "commit-order-current",
+        loaderID: currentLoaderID,
+        originTargetID: "page-current",
+        timestamp: 1,
+        target: target,
+        backend: runtime.backend
+    )
+    await emitOriginatedNetworkRequest(
+        id: "commit-order-provisional",
+        loaderID: provisionalLoaderID,
+        originTargetID: provisionalOriginTargetID,
+        timestamp: 2,
+        target: target,
+        backend: runtime.backend
+    )
+    try await waitUntil { results.items.count == 2 }
+    let provisionalVisit = try #require(results.items[1].navigationVisit)
+
+    switch order {
+    case .targetThenFrame:
+        try await emitTopLevelTargetCommit(
+            target: target,
+            context: context,
+            backend: runtime.backend,
+            documentID: "target-before-frame-root"
+        )
+        try await emitTopLevelFrameCommit(
+            target: target,
+            context: context,
+            backend: runtime.backend,
+            documentID: "frame-after-target-root",
+            loaderID: provisionalLoaderID
+        )
+    case .frameThenTarget:
+        try await emitTopLevelFrameCommit(
+            target: target,
+            context: context,
+            backend: runtime.backend,
+            documentID: "frame-before-target-root",
+            loaderID: provisionalLoaderID
+        )
+        try await emitTopLevelTargetCommit(
+            target: target,
+            context: context,
+            backend: runtime.backend,
+            documentID: "target-after-frame-root"
+        )
+    }
+
+    await emitOriginatedNetworkRequest(
+        id: "commit-order-committed",
+        loaderID: provisionalLoaderID,
+        originTargetID: provisionalOriginTargetID,
+        timestamp: 3,
+        target: target,
+        backend: runtime.backend
+    )
+    try await waitUntil { results.items.count == 3 }
+    return (provisionalVisit, try #require(results.items[2].navigationVisit))
+}
+
+@MainActor
+private func emitTopLevelTargetCommit(
+    target: WebInspectorTarget,
+    context: WebInspectorContext,
+    backend: WebInspectorTestBackend,
+    documentID: String,
+    pageBindingID: String = "page-next"
+) async throws {
+    await enqueueStartupReplies(
+        on: backend,
+        document: DOM.Node(id: DOM.Node.ID(documentID), nodeType: 9, nodeName: "#document")
+    )
+    await backend.emit(
+        .didCommitProvisionalTarget(WebInspectorTargetCommitLifecycle(
+            oldTargetID: .currentPage,
+            newTarget: WebInspectorLifecycleTarget(
+                id: .currentPage,
+                kind: .page,
+                frameID: FrameID("main-frame"),
+                isProvisional: false,
+                pageBindingID: pageBindingID
+            )
+        )),
+        target: target
+    )
+    try await waitUntil {
+        context.rootNode?.id == DOMNode.ID(DOM.Node.ID(documentID))
+            && context.state == .attached
+    }
+}
+
+@MainActor
+private func emitTopLevelFrameCommit(
+    target: WebInspectorTarget,
+    context: WebInspectorContext,
+    backend: WebInspectorTestBackend,
+    documentID: String,
+    loaderID: String
+) async throws {
+    await backend.enqueue(
+        DOM.Node(id: DOM.Node.ID(documentID), nodeType: 9, nodeName: "#document"),
+        for: "DOM",
+        method: "getDocument"
+    )
+    await backend.emit(
+        .frameNavigated(WebInspectorPageFrameLifecycle(
+            id: FrameID("main-frame"),
+            parentID: nil,
+            loaderID: loaderID,
+            name: "Main",
+            url: "https://example.test/next",
+            securityOrigin: "https://example.test",
+            mimeType: "text/html"
+        )),
+        target: target
+    )
+    try await waitUntil {
+        context.rootNode?.id == DOMNode.ID(DOM.Node.ID(documentID))
+    }
+}
+
+private func emitTransportFrameNavigated(
+    frameID: String,
+    loaderID: String,
+    targetID: ProtocolTarget.ID,
+    transport: TransportSession
+) async {
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: targetID,
+        method: "Page.frameNavigated",
+        params: #"{"frame":{"id":"\#(jsonEscapedString(frameID))","parentId":"main-frame","loaderId":"\#(jsonEscapedString(loaderID))","name":"","url":"https://example.test/","securityOrigin":"https://example.test","mimeType":"text/html"}}"#
+    )
 }
 
 private func transportDocumentResult(nodeID: String) -> String {

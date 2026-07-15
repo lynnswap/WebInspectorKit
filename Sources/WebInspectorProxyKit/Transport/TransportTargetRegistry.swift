@@ -21,6 +21,54 @@ struct TransportTargetRegistry: Sendable {
         frameTargetIDsByFrameID[frameID]
     }
 
+    func soleTargetID(forFrameID frameID: ProtocolFrame.ID) -> ProtocolTarget.ID? {
+        let candidates = targetsByID.values.lazy.filter {
+            $0.frameID == frameID && ($0.kind == .page || $0.kind == .frame)
+        }
+        var iterator = candidates.makeIterator()
+        guard let candidate = iterator.next(), iterator.next() == nil else {
+            return nil
+        }
+        return candidate.id
+    }
+
+    func targetCount(forFrameID frameID: ProtocolFrame.ID) -> Int {
+        targetsByID.values.lazy.filter {
+            $0.frameID == frameID && ($0.kind == .page || $0.kind == .frame)
+        }.count
+    }
+
+    func isTargetInCurrentPageHierarchy(_ targetID: ProtocolTarget.ID) -> Bool {
+        guard let currentMainPageTargetID,
+              let mainRecord = targetsByID[currentMainPageTargetID],
+              let mainFrameID = mainRecord.frameID,
+              let record = targetsByID[targetID] else {
+            return false
+        }
+        if record.frameID == mainFrameID {
+            return true
+        }
+        if record.kind == .frame,
+           record.frameID != nil,
+           record.parentFrameID == nil {
+            return true
+        }
+        var visitedFrameIDs: Set<ProtocolFrame.ID> = []
+        var parentFrameID = record.parentFrameID
+        while let frameID = parentFrameID,
+              visitedFrameIDs.insert(frameID).inserted {
+            if frameID == mainFrameID {
+                return true
+            }
+            guard let parentTargetID = frameTargetIDsByFrameID[frameID],
+                  let parentRecord = targetsByID[parentTargetID] else {
+                return false
+            }
+            parentFrameID = parentRecord.parentFrameID
+        }
+        return false
+    }
+
     func targetKind(
         protocolType: String,
         frameID: ProtocolFrame.ID?,

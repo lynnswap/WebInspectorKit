@@ -69,6 +69,27 @@ public enum Network {
 
     /// A network request payload reported by WebKit.
     public struct Request: Identifiable, Sendable {
+        /// Exact frame/loader membership carried by
+        /// `Network.requestWillBeSent` before DataKit reduction.
+        package struct Origin: Equatable, Sendable {
+            package let frameID: FrameID
+            package let loaderID: String
+            /// Transport target owning the frame navigation. WebKit's
+            /// `requestWillBeSent.targetId` is instead the initiating context
+            /// and may identify a Worker.
+            package let targetID: String?
+
+            package init(
+                frameID: FrameID,
+                loaderID: String,
+                targetID: String?
+            ) {
+                self.frameID = frameID
+                self.loaderID = loaderID
+                self.targetID = targetID
+            }
+        }
+
         /// Stable identity for a network request.
         public struct ID: Hashable, Sendable {
             package let rawValue: String
@@ -102,6 +123,10 @@ public enum Network {
         /// The backend resource identity used for some body lookups.
         public let backendResourceIdentifier: BackendResourceID?
 
+        /// Protocol-reported membership. Public command callers cannot
+        /// manufacture event provenance.
+        package let origin: Origin?
+
         /// Creates a network request payload.
         public init(
             id: ID,
@@ -121,6 +146,29 @@ public enum Network {
             self.referrerPolicy = referrerPolicy
             self.integrity = integrity
             self.backendResourceIdentifier = backendResourceIdentifier
+            origin = nil
+        }
+
+        package init(
+            id: ID,
+            url: String,
+            method: String,
+            headers: [String: String] = [:],
+            postData: String? = nil,
+            referrerPolicy: ReferrerPolicy? = nil,
+            integrity: String? = nil,
+            backendResourceIdentifier: BackendResourceID? = nil,
+            origin: Origin?
+        ) {
+            self.id = id
+            self.url = url
+            self.method = method
+            self.headers = headers
+            self.postData = postData
+            self.referrerPolicy = referrerPolicy
+            self.integrity = integrity
+            self.backendResourceIdentifier = backendResourceIdentifier
+            self.origin = origin
         }
     }
 
@@ -167,6 +215,10 @@ public enum Network {
         /// The response body size, if reported.
         public let bodySize: Int?
 
+        /// Protocol-reported request membership for events that create a
+        /// response without a preceding request payload.
+        package let origin: Request.Origin?
+
         /// Creates a network response payload.
         public init(
             url: String? = nil,
@@ -186,6 +238,29 @@ public enum Network {
             self.source = source
             self.requestHeaders = requestHeaders
             self.bodySize = bodySize
+            origin = nil
+        }
+
+        package init(
+            url: String? = nil,
+            status: Int? = nil,
+            statusText: String? = nil,
+            mimeType: String? = nil,
+            headers: [String: String] = [:],
+            source: Source? = nil,
+            requestHeaders: [String: String]? = nil,
+            bodySize: Int? = nil,
+            origin: Request.Origin?
+        ) {
+            self.url = url
+            self.status = status
+            self.statusText = statusText
+            self.mimeType = mimeType
+            self.headers = headers
+            self.source = source
+            self.requestHeaders = requestHeaders
+            self.bodySize = bodySize
+            self.origin = origin
         }
     }
 

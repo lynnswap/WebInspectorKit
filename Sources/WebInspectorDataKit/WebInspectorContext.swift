@@ -1,6 +1,148 @@
 import Foundation
 import WebInspectorProxyKit
 
+private struct NetworkFrameNavigationTimeline {
+    private struct Visit {
+        let loaderID: String
+        let targetID: String?
+        let epoch: UInt64
+    }
+
+    private struct PendingVisitKey: Hashable {
+        let loaderID: String
+        let targetID: String?
+    }
+
+    private var committed: Visit?
+    private var pendingEpochByVisit: [PendingVisitKey: UInt64]
+    private var lastAllocatedEpoch: UInt64
+
+    init(initialLoaderID: String, targetID: String?) {
+        committed = Visit(loaderID: initialLoaderID, targetID: targetID, epoch: 0)
+        pendingEpochByVisit = [:]
+        lastAllocatedEpoch = 0
+    }
+
+    mutating func epoch(for loaderID: String, targetID: String?) -> UInt64 {
+        let key = PendingVisitKey(loaderID: loaderID, targetID: targetID)
+        if let pending = pendingEpochByVisit[key] {
+            return pending
+        }
+        let pendingVisits = pendingVisits(for: loaderID)
+        if let current = committed, current.loaderID == loaderID {
+            if let targetID {
+                if current.targetID == targetID {
+                    return current.epoch
+                }
+                if current.targetID == nil, pendingVisits.isEmpty {
+                    committed = Visit(loaderID: loaderID, targetID: targetID, epoch: current.epoch)
+                    return current.epoch
+                }
+            } else if pendingVisits.isEmpty {
+                return current.epoch
+            }
+        }
+        if targetID == nil, pendingVisits.count == 1, let pending = pendingVisits.first {
+            return pending.epoch
+        }
+        let epoch = allocateEpoch()
+        pendingEpochByVisit[key] = epoch
+        return epoch
+    }
+
+    mutating func commit(loaderID: String, targetID: String? = nil) -> UInt64 {
+        let pending: (targetID: String?, epoch: UInt64)?
+        if let targetID {
+            pending = pendingEpochByVisit[PendingVisitKey(loaderID: loaderID, targetID: targetID)].map {
+                (targetID, $0)
+            }
+        } else {
+            let pendingVisits = pendingVisits(for: loaderID)
+            let unattributed = pendingEpochByVisit[PendingVisitKey(loaderID: loaderID, targetID: nil)].map {
+                (targetID: Optional<String>.none, epoch: $0)
+            }
+            pending = unattributed ?? (pendingVisits.count == 1 ? pendingVisits.first : nil)
+            if let unattributed, pendingVisits.count > 1 {
+                committed = Visit(loaderID: loaderID, targetID: nil, epoch: unattributed.epoch)
+                return unattributed.epoch
+            }
+            if unattributed == nil, pendingVisits.count > 1 {
+                let visit = Visit(loaderID: loaderID, targetID: nil, epoch: allocateEpoch())
+                committed = visit
+                pendingEpochByVisit[PendingVisitKey(loaderID: loaderID, targetID: nil)] = visit.epoch
+                return visit.epoch
+            }
+        }
+        if let pending {
+            committed = Visit(loaderID: loaderID, targetID: pending.targetID, epoch: pending.epoch)
+            pendingEpochByVisit.removeAll(keepingCapacity: true)
+            return pending.epoch
+        }
+        if let current = committed, current.loaderID == loaderID {
+            if targetID == nil || current.targetID == targetID {
+                pendingEpochByVisit.removeAll(keepingCapacity: true)
+                return current.epoch
+            }
+            if current.targetID == nil, pendingEpochByVisit.isEmpty, let targetID {
+                committed = Visit(loaderID: loaderID, targetID: targetID, epoch: current.epoch)
+                return current.epoch
+            }
+        }
+        let visit = Visit(loaderID: loaderID, targetID: targetID, epoch: allocateEpoch())
+        committed = visit
+        pendingEpochByVisit.removeAll(keepingCapacity: true)
+        return visit.epoch
+    }
+
+    mutating func retire() {
+        committed = nil
+        pendingEpochByVisit.removeAll(keepingCapacity: true)
+    }
+
+    mutating func abandon(targetID: String) {
+        if committed?.targetID == targetID {
+            committed = nil
+        }
+        pendingEpochByVisit = pendingEpochByVisit.filter { $0.key.targetID != targetID }
+    }
+
+    mutating func bindSoleUnattributedVisit(to targetID: String) -> Bool {
+        if pendingEpochByVisit.count == 1,
+           let pending = pendingEpochByVisit.first,
+           pending.key.targetID == nil {
+            committed = Visit(
+                loaderID: pending.key.loaderID,
+                targetID: targetID,
+                epoch: pending.value
+            )
+            pendingEpochByVisit.removeAll(keepingCapacity: true)
+            return true
+        }
+        if let current = committed, current.targetID == nil {
+            committed = Visit(
+                loaderID: current.loaderID,
+                targetID: targetID,
+                epoch: current.epoch
+            )
+            return true
+        }
+        return false
+    }
+
+    private func pendingVisits(for loaderID: String) -> [(targetID: String?, epoch: UInt64)] {
+        Array(pendingEpochByVisit.lazy
+            .filter { $0.key.loaderID == loaderID }
+            .map { (targetID: $0.key.targetID, epoch: $0.value) })
+    }
+
+    private mutating func allocateEpoch() -> UInt64 {
+        let (epoch, overflow) = lastAllocatedEpoch.addingReportingOverflow(1)
+        precondition(!overflow, "Network navigation epoch exhausted.")
+        lastAllocatedEpoch = epoch
+        return epoch
+    }
+}
+
 /// The identity-preserving model context for an inspected page.
 ///
 /// A context owns observable DOM, Network, Console, Runtime, and CSS models.
@@ -222,6 +364,9 @@ public final class WebInspectorContext {
     private var orderedRequestIDs: [NetworkRequest.ID]
     private var networkRequestOrderIndicesByID: [NetworkRequest.ID: Int]
     private var clearedNetworkRequestIDs: Set<NetworkRequest.ID>
+    private var networkAttachmentEpoch: UInt64
+    private var networkNavigationTimelines: [FrameID: NetworkFrameNavigationTimeline]
+    private var pendingNetworkNavigationsByTargetID: [String: [FrameID: String]]
     private let networkRequestIndex: NetworkRequestIndex
     private var networkRequestIndexSequence: UInt64
     private var networkRequestIndexNeedsRebuild: Bool
@@ -297,6 +442,9 @@ public final class WebInspectorContext {
         orderedRequestIDs = []
         networkRequestOrderIndicesByID = [:]
         clearedNetworkRequestIDs = []
+        networkAttachmentEpoch = 0
+        networkNavigationTimelines = [:]
+        pendingNetworkNavigationsByTargetID = [:]
         networkRequestIndex = NetworkRequestIndex()
         networkRequestIndexSequence = 0
         networkRequestIndexNeedsRebuild = false
@@ -2138,7 +2286,12 @@ public final class WebInspectorContext {
     }
 
     private func resetNetworkModelsForNewAttachment() {
+        let (nextAttachmentEpoch, overflow) = networkAttachmentEpoch.addingReportingOverflow(1)
+        precondition(!overflow, "Network attachment epoch exhausted.")
+        networkAttachmentEpoch = nextAttachmentEpoch
         clearedNetworkRequestIDs = []
+        networkNavigationTimelines = [:]
+        pendingNetworkNavigationsByTargetID = [:]
         requestsByID = [:]
         orderedRequestIDs = []
         networkRequestOrderIndicesByID = [:]
@@ -2684,10 +2837,13 @@ extension WebInspectorContext {
         case let .didCommitProvisionalTarget(commit):
             applyCurrentPageTargetCommit(commit, isolation: isolation)
         case let .frameNavigated(frame):
+            commitNetworkNavigation(frame)
             applyCurrentPageFrameNavigated(frame, isolation: isolation)
         case let .targetDestroyed(targetID):
+            abandonNetworkNavigation(targetID: targetID)
             applyCurrentPageTargetDestroyed(targetID, isolation: isolation)
         case let .frameDetached(frameID):
+            retireNetworkNavigation(frameID: frameID)
             applyCurrentPageFrameDetached(frameID, isolation: isolation)
         case .unknown:
             break
@@ -2711,6 +2867,7 @@ extension WebInspectorContext {
             fail(.disconnected("Current page target committed while WebInspectorDataKit had no current page."))
             return
         }
+        commitNetworkNavigation(commit)
         let refreshedTarget = target.withPageBinding(from: commit.newTarget)
         currentPage = refreshedTarget
 
@@ -4185,6 +4342,7 @@ extension WebInspectorContext {
             request.applyRequestWillBeSent(
                 request: payload,
                 initiator: nil,
+                navigationVisit: nil,
                 resourceType: resourceType,
                 timestamp: timestamp
             )
@@ -4362,6 +4520,7 @@ extension WebInspectorContext {
                 request.applyRequestWillBeSent(
                     request: payload,
                     initiator: initiator,
+                    navigationVisit: networkNavigationVisit(for: payload),
                     resourceType: resourceType,
                     timestamp: timestamp
                 )
@@ -4371,6 +4530,7 @@ extension WebInspectorContext {
             request = NetworkRequest(
                 request: payload,
                 initiator: initiator,
+                navigationVisit: networkNavigationVisit(for: payload),
                 resourceType: resourceType,
                 timestamp: timestamp,
                 modelContext: self
@@ -4383,6 +4543,117 @@ extension WebInspectorContext {
             await notifyNetworkRequestInserted(request, isolation: isolation)
         } else if topologyMayHaveChanged {
             await notifyNetworkRequestMutated(request, isolation: isolation)
+        }
+    }
+
+    private func networkNavigationVisit(
+        for request: Network.Request
+    ) -> NetworkNavigationVisit? {
+        guard let origin = request.origin,
+              !origin.frameID.rawValue.isEmpty,
+              !origin.loaderID.isEmpty else {
+            return nil
+        }
+        let targetID = origin.targetID.flatMap { $0.isEmpty ? nil : $0 }
+        var timeline = networkNavigationTimelines[origin.frameID]
+            ?? NetworkFrameNavigationTimeline(initialLoaderID: origin.loaderID, targetID: targetID)
+        let epoch = timeline.epoch(for: origin.loaderID, targetID: targetID)
+        networkNavigationTimelines[origin.frameID] = timeline
+        if let targetID {
+            pendingNetworkNavigationsByTargetID[targetID, default: [:]][origin.frameID] = origin.loaderID
+        }
+        return NetworkNavigationVisit(
+            attachmentEpoch: networkAttachmentEpoch,
+            frameID: origin.frameID,
+            epoch: epoch
+        )
+    }
+
+    private func commitNetworkNavigation(_ frame: WebInspectorPageFrameLifecycle) {
+        guard let loaderID = frame.loaderID else {
+            return
+        }
+        commitNetworkNavigation(
+            frameID: frame.id,
+            loaderID: loaderID,
+            targetID: frame.pageBindingID
+        )
+    }
+
+    private func commitNetworkNavigation(_ commit: WebInspectorTargetCommitLifecycle) {
+        guard let bindingID = commit.newTarget.pageBindingID, !bindingID.isEmpty else {
+            if let frameID = commit.newTarget.frameID {
+                retireNetworkNavigation(frameID: frameID)
+            }
+            return
+        }
+        guard let pendingByFrameID = pendingNetworkNavigationsByTargetID[bindingID] else {
+            if let frameID = commit.newTarget.frameID,
+               var timeline = networkNavigationTimelines[frameID] {
+                if timeline.bindSoleUnattributedVisit(to: bindingID) {
+                    networkNavigationTimelines[frameID] = timeline
+                } else {
+                    retireNetworkNavigation(frameID: frameID)
+                }
+            }
+            return
+        }
+        let pending: (frameID: FrameID, loaderID: String)
+        if let committedFrameID = commit.newTarget.frameID {
+            guard let loaderID = pendingByFrameID[committedFrameID] else {
+                skipEvent(
+                    "Target.didCommitProvisionalTarget frame did not match its pending Network navigation"
+                )
+                return
+            }
+            pending = (committedFrameID, loaderID)
+        } else if pendingByFrameID.count == 1,
+                  let entry = pendingByFrameID.first {
+            pending = (entry.key, entry.value)
+        } else {
+            skipEvent("Target.didCommitProvisionalTarget had ambiguous pending Network frames")
+            return
+        }
+        commitNetworkNavigation(
+            frameID: pending.frameID,
+            loaderID: pending.loaderID,
+            targetID: bindingID
+        )
+        removePendingNetworkNavigations(frameID: pending.frameID)
+    }
+
+    private func commitNetworkNavigation(
+        frameID: FrameID,
+        loaderID: String,
+        targetID: String? = nil
+    ) {
+        var timeline = networkNavigationTimelines[frameID]
+            ?? NetworkFrameNavigationTimeline(initialLoaderID: loaderID, targetID: targetID)
+        _ = timeline.commit(loaderID: loaderID, targetID: targetID)
+        networkNavigationTimelines[frameID] = timeline
+    }
+
+    private func retireNetworkNavigation(frameID: FrameID) {
+        networkNavigationTimelines[frameID]?.retire()
+        removePendingNetworkNavigations(frameID: frameID)
+    }
+
+    private func abandonNetworkNavigation(targetID: WebInspectorTarget.ID) {
+        guard targetID != .currentPage,
+              let pendingByFrameID = pendingNetworkNavigationsByTargetID.removeValue(forKey: targetID.rawValue) else {
+            return
+        }
+        for frameID in pendingByFrameID.keys {
+            networkNavigationTimelines[frameID]?.abandon(targetID: targetID.rawValue)
+        }
+    }
+
+    private func removePendingNetworkNavigations(frameID: FrameID) {
+        for targetID in Array(pendingNetworkNavigationsByTargetID.keys) {
+            pendingNetworkNavigationsByTargetID[targetID]?.removeValue(forKey: frameID)
+            if pendingNetworkNavigationsByTargetID[targetID]?.isEmpty == true {
+                pendingNetworkNavigationsByTargetID.removeValue(forKey: targetID)
+            }
         }
     }
 
@@ -4411,11 +4682,13 @@ extension WebInspectorContext {
                 id: proxyID,
                 url: url,
                 method: "GET",
-                headers: response.requestHeaders ?? [:]
+                headers: response.requestHeaders ?? [:],
+                origin: response.origin
             )
             request = NetworkRequest(
                 request: payload,
                 initiator: initiator,
+                navigationVisit: networkNavigationVisit(for: payload),
                 resourceType: resourceType,
                 timestamp: timestamp,
                 modelContext: self
@@ -4469,11 +4742,13 @@ extension WebInspectorContext {
                 id: proxyID,
                 url: url,
                 method: "GET",
-                headers: response.requestHeaders ?? [:]
+                headers: response.requestHeaders ?? [:],
+                origin: response.origin
             )
             request = NetworkRequest(
                 request: payload,
                 initiator: nil,
+                navigationVisit: networkNavigationVisit(for: payload),
                 resourceType: resourceType,
                 timestamp: timestamp,
                 modelContext: self
