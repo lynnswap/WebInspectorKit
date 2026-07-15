@@ -11,6 +11,20 @@ private struct TestDecodedPayload: Decodable, Equatable, Sendable {
 }
 
 @Test
+func defaultProxyConfigurationWaitsForWebKitWithoutSyntheticTimeouts() {
+    let configuration = WebInspectorProxy.Configuration()
+    let finiteConfiguration = WebInspectorProxy.Configuration(
+        responseTimeout: .seconds(30),
+        bootstrapTimeout: .seconds(45)
+    )
+
+    #expect(configuration.responseTimeout == nil)
+    #expect(configuration.bootstrapTimeout == nil)
+    #expect(finiteConfiguration.responseTimeout == .seconds(30))
+    #expect(finiteConfiguration.bootstrapTimeout == .seconds(45))
+}
+
+@Test
 func transportMessageParserUsesPolicyForInlineAndDetachedParsing() async throws {
     let message = #"{"id":42,"method":"Runtime.consoleAPICalled","params":{"type":"log"},"result":{"ok":true}}"#
     let inline = try await TransportMessageParser.parse(

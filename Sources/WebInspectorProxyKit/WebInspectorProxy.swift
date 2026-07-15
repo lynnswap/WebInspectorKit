@@ -40,19 +40,26 @@ private struct ProtocolCommandTarget: Sendable {
 /// await proxy.close()
 /// ```
 public actor WebInspectorProxy {
-    /// Timeout configuration for command replies and current-page bootstrap.
+    /// Optional timeout configuration for command replies and current-page bootstrap.
     public struct Configuration: Equatable, Sendable {
         /// The maximum time to wait for an individual protocol command reply.
-        public var responseTimeout: Duration
+        ///
+        /// `nil` waits until WebKit replies, the connection closes, or the
+        /// calling task is cancelled. The default is `nil`.
+        public var responseTimeout: Duration?
 
         /// The maximum time to wait while discovering or refreshing the current
         /// page target.
-        public var bootstrapTimeout: Duration
+        ///
+        /// `nil` waits until WebKit publishes a target, the connection closes,
+        /// or the calling task is cancelled. The default is `nil`.
+        public var bootstrapTimeout: Duration?
 
-        /// Creates proxy timeout configuration.
+        /// Creates proxy timeout configuration. Pass a duration only when the
+        /// consumer explicitly owns a finite deadline.
         public init(
-            responseTimeout: Duration = .seconds(5),
-            bootstrapTimeout: Duration = .seconds(5)
+            responseTimeout: Duration? = nil,
+            bootstrapTimeout: Duration? = nil
         ) {
             self.responseTimeout = responseTimeout
             self.bootstrapTimeout = bootstrapTimeout
@@ -226,7 +233,7 @@ public actor WebInspectorProxy {
         return pageTarget
     }
 
-    package var bootstrapGracePeriod: Duration {
+    package var bootstrapGracePeriod: Duration? {
         configuration.bootstrapTimeout
     }
 

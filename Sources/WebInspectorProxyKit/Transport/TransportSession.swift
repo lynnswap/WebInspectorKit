@@ -22,7 +22,7 @@ package actor TransportSession {
 
     package init(
         backend: any TransportBackend,
-        responseTimeout: Duration? = .seconds(5),
+        responseTimeout: Duration? = nil,
         timeoutSleep: TimeoutSleep? = nil,
         responseTimeoutDidFire: ResponseTimeoutDidFire? = nil
     ) {
