@@ -563,6 +563,7 @@ expected_dependencies = {
     "WebInspectorProxyKitTesting": {"target:WebInspectorProxyKit@*"},
     "WebInspectorDataKitMacros": {
         "product:SwiftCompilerPlugin@swift-syntax@*",
+        "product:SwiftDiagnostics@swift-syntax@*",
         "product:SwiftSyntax@swift-syntax@*",
         "product:SwiftSyntaxBuilder@swift-syntax@*",
         "product:SwiftSyntaxMacros@swift-syntax@*",

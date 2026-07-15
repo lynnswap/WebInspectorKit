@@ -2885,9 +2885,10 @@ feed fixtures but retains its direct dependencies on ProxyKit and
 ProxyKitTesting.
 
 The `swift-syntax` edge expands to the host products required by the macro
-implementation: `SwiftCompilerPlugin`, `SwiftSyntax`, `SwiftSyntaxBuilder`,
-and `SwiftSyntaxMacros`. `WebInspectorDataKitMacroTests` additionally depends
-on `SwiftSyntaxMacrosTestSupport`. These are compiler-host dependencies, not
+implementation: `SwiftCompilerPlugin`, `SwiftDiagnostics`, `SwiftSyntax`,
+`SwiftSyntaxBuilder`, and `SwiftSyntaxMacros`.
+`WebInspectorDataKitMacroTests` additionally depends on
+`SwiftSyntaxMacrosTestSupport`. These are compiler-host dependencies, not
 runtime dependencies of DataKit consumers.
 
 `swift package dump-package` must match those direct production, testing, and
