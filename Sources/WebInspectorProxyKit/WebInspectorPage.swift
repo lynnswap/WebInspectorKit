@@ -41,7 +41,13 @@ public struct WebInspectorPage: Sendable {
 }
 
 public enum WebInspectorPageEvent<Element: Sendable>: Sendable {
+    /// The current-page binding advanced after this event scope was registered.
+    ///
+    /// Scope registration does not emit an initial reset. The generation on a
+    /// scoped reply or event establishes the scope's initial page identity.
     case reset(WebInspectorPage.Generation)
+
+    /// A protocol event delivered under the accompanying page generation.
     case event(WebInspectorPage.Generation, Element)
 }
 

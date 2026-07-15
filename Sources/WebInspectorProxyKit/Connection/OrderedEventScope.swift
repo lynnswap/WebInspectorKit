@@ -119,7 +119,9 @@ package final class WebInspectorOrderedScopeMailbox<Element: Sendable>: Sendable
 
     package init(capacity: Int?) { self.capacity = capacity }
 
-    package func yieldReset(_ generation: WebInspectorPage.Generation) -> WebInspectorScopeDeliveryResult {
+    package func yieldGenerationChange(
+        _ generation: WebInspectorPage.Generation
+    ) -> WebInspectorScopeDeliveryResult {
         yield(.reset(generation), countsAgainstCapacity: false)
     }
 
@@ -248,7 +250,9 @@ package final class WebInspectorOrderedScopeMailbox<Element: Sendable>: Sendable
 package struct ConnectionOrderedScopeSink: Sendable {
     package let domains: Set<WebInspectorProtocolDomainToken>
     package let deliver: @Sendable (WebInspectorRoutedEventEnvelope) -> WebInspectorScopeDeliveryResult
-    package let reset: @Sendable (WebInspectorPage.Generation) -> WebInspectorScopeDeliveryResult
+    package let generationDidChange: @Sendable (
+        WebInspectorPage.Generation
+    ) -> WebInspectorScopeDeliveryResult
     package let boundary: @Sendable (WebInspectorReplyBoundary) -> WebInspectorScopeDeliveryResult
     package let finish: @Sendable ((any Error)?) -> Void
 
@@ -269,7 +273,7 @@ package struct ConnectionOrderedScopeSink: Sendable {
                 return .terminated
             }
         }
-        reset = { mailbox.yieldReset($0) }
+        generationDidChange = { mailbox.yieldGenerationChange($0) }
         boundary = { mailbox.yieldBoundary($0) }
         finish = { mailbox.finish(throwing: $0) }
     }

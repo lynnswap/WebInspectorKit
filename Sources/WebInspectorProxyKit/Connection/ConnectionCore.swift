@@ -240,7 +240,6 @@ package actor ConnectionCore {
             deliveryIsActive: true,
             outstandingBoundary: nil
         )
-        _ = sink.reset(generation)
 
         do {
             for targetID in selectedTargets.sorted(by: { $0.rawValue < $1.rawValue }) {
@@ -628,7 +627,7 @@ package actor ConnectionCore {
         for id in scopes.entries.keys {
             guard var entry = scopes.entries[id], entry.deliveryIsActive else { continue }
             if case .currentPage = entry.selection.anchor {
-                if case .enqueued = entry.sink.reset(generation) {
+                if case .enqueued = entry.sink.generationDidChange(generation) {
                     entry.outstandingBoundary = nil
                 } else {
                     entry.deliveryIsActive = false

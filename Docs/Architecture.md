@@ -795,6 +795,14 @@ wrappers needed to maintain physical routing.
 Opening a scope is atomic with respect to the connection FIFO. The scope exists
 before its operation enables a domain or sends a snapshot command.
 
+Scope registration establishes its initial generation without enqueuing a
+synthetic reset. The generation carried by a scoped reply or event identifies
+that initial page. `WebInspectorPageEvent.reset` is reserved for a current-page
+binding generation that advances after registration, including one that
+advances while capability acquisition is suspended. `ConnectionCore` owns this
+distinction; feature consumers treat every delivered reset as a real target
+change and do not suppress a first reset locally.
+
 The package primitive can atomically register multiple domain decoders into
 one output enum and one raw FIFO mailbox. Network uses one composite scope for
 Page and Network, so cross-domain event order is not reconstructed from two

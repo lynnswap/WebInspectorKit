@@ -9,6 +9,67 @@ private enum CompositeEvent: Sendable {
 }
 
 @Test
+func scopeRegistrationDoesNotSynthesizeAGenerationReset() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    defer { Task { await runtime.close() } }
+    let scope = try await runtime.page.orderedScope(
+        descriptor: WebInspectorOrderedScopeDescriptor(
+            decoders: [DOMWireCoding.eventDecoder],
+            capabilities: []
+        ),
+        buffering: .bounded(4)
+    )
+
+    let documentTask = Task { try await scope.command(DOMWireCoding.getDocument()) }
+    let command = try await runtime.peer.commands.next()
+    #expect(command.method == "DOM.getDocument")
+    try await runtime.peer.reply(
+        to: command,
+        with: try WebInspectorTestJSONObject(json: domDocumentResult)
+    )
+    let document = try await documentTask.value
+
+    #expect(try await scope.drain(through: document.boundary).isEmpty)
+    await scope.close()
+}
+
+@Test
+func currentPageReplacementResetsAnExistingScope() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    defer { Task { await runtime.close() } }
+    let initialGeneration = try await runtime.page.generation
+    let scope = try await runtime.page.orderedScope(
+        descriptor: WebInspectorOrderedScopeDescriptor(
+            decoders: [DOMWireCoding.eventDecoder],
+            capabilities: []
+        ),
+        buffering: .bounded(4)
+    )
+
+    try await runtime.peer.createTarget(.init(
+        id: "page-next",
+        type: "page",
+        frameID: "next-main-frame",
+        isProvisional: true
+    ))
+    try await runtime.peer.commitProvisionalTarget(
+        from: "page-main",
+        to: "page-next"
+    )
+
+    let replacementGeneration = try await runtime.page.generation
+    #expect(replacementGeneration != initialGeneration)
+    var iterator = scope.events.makeAsyncIterator()
+    guard case let .reset(deliveredGeneration) = try await iterator.next() else {
+        Issue.record("Expected the existing scope to observe the replacement generation.")
+        await scope.close()
+        return
+    }
+    #expect(deliveredGeneration == replacementGeneration)
+    await scope.close()
+}
+
+@Test
 func compositeScopePreservesPageNetworkFIFOAndReplyBoundary() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     defer { Task { await runtime.close() } }
@@ -101,7 +162,6 @@ func malformedKnownDomainEventTerminatesOnlyItsScope() async throws {
         buffering: .bounded(4)
     )
     var iterator = scope.events.makeAsyncIterator()
-    _ = try await iterator.next()
 
     try await runtime.peer.emitTargetEvent(
         targetID: "page-main",
@@ -157,7 +217,6 @@ func networkOverflowStopsDeliveryButRetainsThePhysicalLease() async throws {
     )
 
     var iterator = first.events.makeAsyncIterator()
-    _ = try await iterator.next()
     _ = try await iterator.next()
     await #expect(throws: WebInspectorProxyError.self) {
         _ = try await iterator.next()
@@ -260,7 +319,6 @@ func descendantWorkerIsEnrolledAndEnabledAfterScopeRegistration() async throws {
         parameters: try WebInspectorTestJSONObject(json: #"{"context":{"id":9,"name":"worker","type":"normal"}}"#)
     )
     var iterator = scope.events.makeAsyncIterator()
-    _ = try await iterator.next()
     guard case let .event(_, routed) = try await iterator.next() else {
         Issue.record("Expected a worker Runtime event.")
         return
@@ -293,7 +351,6 @@ func currentPageScopeIncludesWebPageTypedFrameDescendants() async throws {
         buffering: .bounded(4)
     )
     var iterator = scope.events.makeAsyncIterator()
-    _ = try await iterator.next()
     try await runtime.peer.emitTargetEvent(
         targetID: "frame-one",
         method: "DOM.documentUpdated"
@@ -348,7 +405,6 @@ func provisionalTargetTrafficIsDeliveredOnlyAfterCommit() async throws {
         buffering: .bounded(4)
     )
     var iterator = scope.events.makeAsyncIterator()
-    _ = try await iterator.next()
 
     try await runtime.peer.createTarget(.init(
         id: "frame-provisional",
