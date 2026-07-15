@@ -5,7 +5,7 @@ import WebInspectorProxyKit
 
 @MainActor
 @Test
-func dataKitTestingStartsContainerReadyWithCanonicalNetworkEntryAndBodyGateway()
+func dataKitTestingStartsWithProductionContextsAndFeatureGateways()
     async throws
 {
     let replay = WebInspectorDataKitTestRuntime.NetworkRequest(
@@ -16,85 +16,142 @@ func dataKitTestingStartsContainerReadyWithCanonicalNetworkEntryAndBodyGateway()
     )
     let runtime = try await WebInspectorDataKitTestRuntime.start(
         scenario: .init(
-            configuration: .init(domains: [.dom, .network]),
+            configuration: .init(enabledFeatures: [.dom, .network]),
             document: .init(children: [
                 .element(id: "button", name: "button")
             ]),
             networkReplay: [replay]
-        ),
-        isolation: MainActor.shared
+        )
     )
+    let context = runtime.container.mainContext
 
-    #expect(runtime.container.state == .attached)
-    let domResults = try await WebInspectorFetchedResultsController<DOMNode, Never>(
-        modelContext: runtime.model
+    #expect(runtime.container.state.isAttached)
+    let domResults = WebInspectorFetchedResultsController<DOMNode>(
+        modelContext: context
     )
-    #expect(domResults.snapshot.itemIDs.count == 2)
-    #expect(domResults.snapshot.itemIDs.contains { id in
-        runtime.model.model(for: id)?.nodeName == "#document"
-    })
+    try await domResults.performFetch()
+    #expect(domResults.snapshot?.itemIDs.count == 2)
+    #expect(domResults.fetchedObjects?.contains { $0.nodeName == "#document" } == true)
 
-    let entryResults = try await WebInspectorFetchedResultsController<NetworkEntry, Never>(
-        modelContext: runtime.model
+    let entryResults = WebInspectorFetchedResultsController<NetworkEntry>(
+        modelContext: context
     )
-    let entryID = try #require(entryResults.snapshot.itemIDs.first)
-    let entry = try #require(runtime.model.model(for: entryID))
-    let request = try #require(runtime.model.model(for: entry.primaryRequestID))
+    try await entryResults.performFetch()
+    let entry = try #require(entryResults.fetchedObjects?.first)
+    let request = try #require(context.model(for: entry.primaryRequestID))
     #expect(request.statusCode == 201)
     #expect(request.state == .finished)
 
-    let body = try await request.responseBody.load()
-    #expect(body.text == "ready body")
+    let body = try await runtime.container.network.responseBody(for: request.id)
+    #expect(body.data == "ready body")
+    #expect(!body.base64Encoded)
+    #expect((await runtime.counterSnapshot()).completedCommandCount > 0)
 
     await entryResults.close()
     await domResults.close()
     await runtime.close()
     #expect(runtime.container.state == .closed)
-    #expect(runtime.model.isPersistentModelProjectionClosed)
+    #expect(await runtime.lifecycleState == .closed)
 }
 
 @MainActor
 @Test
-func dataKitTestingScopesReusedRawIDsToTheSynchronizedReplacementPage() async throws {
+func dataKitTestingReplacementSeparatesFeatureAndConsumerBoundaries()
+    async throws
+{
     let runtime = try await WebInspectorDataKitTestRuntime.start(
         scenario: .init(
-            configuration: .init(domains: [.dom, .network]),
-            document: .init(id: "shared-document", children: [
-                .element(id: "shared-node", name: "main")
-            ])
-        ),
-        isolation: MainActor.shared
+            configuration: .init(
+                enabledFeatures: [.dom, .network, .consoleRuntime]
+            ),
+            document: .init(
+                id: "shared-document",
+                children: [
+                    .element(id: "shared-node", name: "main")
+                ]),
+            networkReplay: [
+                .init(
+                    id: "shared-request",
+                    url: "https://example.test/initial"
+                )
+            ]
+        )
     )
-    let domResults = try await WebInspectorFetchedResultsController<DOMNode, Never>(
-        modelContext: runtime.model
+    let context = runtime.container.mainContext
+    let domResults = WebInspectorFetchedResultsController<DOMNode>(
+        modelContext: context
     )
-    let oldID = try #require(domResults.snapshot.itemIDs.first { id in
-        runtime.model.model(for: id)?.localName == "main"
-    })
-    _ = try #require(runtime.model.model(for: oldID))
+    let networkResults = WebInspectorFetchedResultsController<NetworkRequest>(
+        modelContext: context
+    )
+    try await domResults.performFetch()
+    try await networkResults.performFetch()
+    var domUpdates = domResults.updates.makeAsyncIterator()
+    var networkUpdates = networkResults.updates.makeAsyncIterator()
+    guard case .initial = await domUpdates.next() else {
+        preconditionFailure("A fetched DOM query must publish its initial state.")
+    }
+    guard case .initial = await networkUpdates.next() else {
+        preconditionFailure("A fetched Network query must publish its initial state.")
+    }
 
-    try await runtime.replacePage(
-        with: .init(id: "shared-document", children: [
-            .element(id: "shared-node", name: "article")
-        ]),
+    let oldNode = try #require(
+        domResults.fetchedObjects?.first { $0.localName == "main" }
+    )
+    let oldRequest = try #require(networkResults.fetchedObjects?.first)
+    let baseline = try await runtime.boundarySnapshot()
+
+    let replacement = try await runtime.replacePage(
+        with: .init(
+            id: "shared-document",
+            children: [
+                .element(id: "shared-node", name: "article")
+            ]),
         networkReplay: [
-            .init(id: "replacement-request", url: "https://example.test/new")
+            .init(
+                id: "shared-request",
+                url: "https://example.test/replacement"
+            )
         ]
     )
 
-    #expect(runtime.container.state == .attached)
-    let newNode = try #require(domResults.snapshot.itemIDs.compactMap { id in
-        runtime.model.model(for: id)
-    }.first { $0.localName == "article" })
-    #expect(newNode.localName == "article")
-    #expect(newNode.id != oldID)
-    #expect(runtime.model.registeredModel(for: oldID) == nil)
+    for featureID in [
+        WebInspectorFeatureID.dom,
+        .network,
+        .consoleRuntime,
+    ] {
+        let oldGeneration = try #require(
+            baseline.readyGeneration(for: featureID)
+        )
+        let newGeneration = try #require(
+            replacement.readyGeneration(for: featureID)
+        )
+        #expect(newGeneration > oldGeneration)
+    }
 
-    let networkResults = try await WebInspectorFetchedResultsController<NetworkRequest, Never>(
-        modelContext: runtime.model
+    while domResults.fetchedObjects?.contains(where: {
+        $0.localName == "article"
+    }) != true {
+        guard await domUpdates.next() != nil else {
+            preconditionFailure("The DOM query closed before applying the replacement.")
+        }
+    }
+    while networkResults.fetchedObjects?.contains(where: {
+        $0.url == "https://example.test/replacement"
+    }) != true {
+        guard await networkUpdates.next() != nil else {
+            preconditionFailure("The Network query closed before applying the replacement.")
+        }
+    }
+
+    let newNode = try #require(
+        domResults.fetchedObjects?.first { $0.localName == "article" }
     )
-    let requestID = try #require(networkResults.snapshot.itemIDs.first)
-    #expect(runtime.model.model(for: requestID)?.state == .finished)
+    let newRequest = try #require(networkResults.fetchedObjects?.first)
+    #expect(newNode.id != oldNode.id)
+    #expect(newRequest.id != oldRequest.id)
+    #expect(context.registeredModel(for: oldNode.id) == nil)
+    #expect(context.registeredModel(for: oldRequest.id) == nil)
 
     await networkResults.close()
     await domResults.close()
@@ -103,258 +160,109 @@ func dataKitTestingScopesReusedRawIDsToTheSynchronizedReplacementPage() async th
 
 @MainActor
 @Test
-func dataKitTestingDrivesIncrementalDOMEventsThroughTheProductionTreeStream()
+func dataKitTestingRawDOMInputCompletesThroughConsumerOwnedQueries()
     async throws
 {
     let runtime = try await WebInspectorDataKitTestRuntime.start(
         scenario: .init(
-            configuration: .init(domains: [.dom]),
+            configuration: .init(enabledFeatures: [.dom]),
             document: .init(children: [
                 .element(id: "body", name: "body")
             ])
-        ),
-        isolation: MainActor.shared
+        )
     )
-    let updates = runtime.model.domTreeUpdates()
-    var iterator = updates.makeAsyncIterator()
-    guard case let .initial(_, initialSnapshot) = await iterator.next() else {
-        preconditionFailure("A DOM test runtime must publish its initial tree.")
+    let context = runtime.container.mainContext
+    let results = WebInspectorFetchedResultsController<DOMNode>(
+        modelContext: context
+    )
+    try await results.performFetch()
+    var updates = results.updates.makeAsyncIterator()
+    guard case .initial = await updates.next() else {
+        preconditionFailure("A fetched DOM query must publish its initial state.")
     }
-    let bodyID = try #require(initialSnapshot.rowsByID.keys.first { id in
-        id.canonicalStorage.rawNodeID.rawValue == "body"
-    })
-    let body = try #require(runtime.model.model(for: bodyID))
+    let body = try #require(
+        results.fetchedObjects?.first { $0.localName == "body" }
+    )
 
     try await runtime.emitDOMAttributeModified(
         nodeID: "body",
         name: "data-state",
         value: "ready"
     )
-    guard case let .changes(_, _, .delta(attributeDelta)) =
-        await iterator.next()
-    else {
-        preconditionFailure("DOM.attributeModified must publish a tree delta.")
-    }
-    #expect(attributeDelta.upsertedRows.map(\.id) == [bodyID])
+    _ = try #require(await updates.next())
     #expect(body.attributes["data-state"] == "ready")
-    #expect(runtime.model.model(for: bodyID) === body)
+    #expect(context.model(for: body.id) === body)
 
     try await runtime.emitDOMChildNodeInserted(
         parentID: "body",
-        node: .element(
-            id: "first",
-            name: "em",
-            children: [.text(id: "first-whitespace", value: "\n    ")]
-        )
+        node: .element(id: "inserted", name: "strong")
     )
-    guard case let .changes(_, _, .delta(firstInsertionDelta)) =
-        await iterator.next()
-    else {
-        preconditionFailure("An empty requested parent must accept its first inserted child.")
-    }
-    let firstID = try #require(firstInsertionDelta.upsertedRows.first { row in
-        row.id.canonicalStorage.rawNodeID.rawValue == "first"
-    }?.id)
-    #expect(runtime.model.model(for: firstID)?.localName == "em")
-    #expect(runtime.model.model(for: firstID)?.childNodeCount == 1)
-
-    try await runtime.emitDOMSetChildNodes(
-        parentID: "body",
-        children: [.element(id: "span", name: "span")]
+    _ = try #require(await updates.next())
+    let inserted = try #require(
+        results.fetchedObjects?.first { $0.localName == "strong" }
     )
-    guard case let .changes(_, _, .delta(childrenDelta)) =
-        await iterator.next()
-    else {
-        preconditionFailure("DOM.setChildNodes must publish a tree delta.")
-    }
-    let spanID = try #require(childrenDelta.upsertedRows.first { row in
-        row.id.canonicalStorage.rawNodeID.rawValue == "span"
-    }?.id)
-    #expect(runtime.model.model(for: spanID)?.localName == "span")
-
-    try await runtime.emitDOMChildNodeCountUpdated(
-        nodeID: "body",
-        count: 99
-    )
-    try await runtime.emitDOMAttributeModified(
-        nodeID: "body",
-        name: "data-after-count",
-        value: "alive"
-    )
-    guard case .changes(_, _, .delta) =
-        await iterator.next()
-    else {
-        preconditionFailure("A count-only event must not terminate the production tree stream.")
-    }
-    #expect(body.childNodeCount == 1)
-    #expect(body.attributes["data-after-count"] == "alive")
-
-    try await runtime.emitDOMChildNodeInserted(
-        parentID: "body",
-        previousNodeID: "span",
-        node: .element(id: "strong", name: "strong")
-    )
-    guard case let .changes(_, _, .delta(insertionDelta)) =
-        await iterator.next()
-    else {
-        preconditionFailure("DOM.childNodeInserted must publish a tree delta.")
-    }
-    let strongID = try #require(insertionDelta.upsertedRows.first { row in
-        row.id.canonicalStorage.rawNodeID.rawValue == "strong"
-    }?.id)
-    #expect(runtime.model.model(for: strongID)?.localName == "strong")
 
     try await runtime.emitDOMChildNodeRemoved(
         parentID: "body",
-        nodeID: "span"
+        nodeID: "inserted"
     )
-    guard case let .changes(_, _, .delta(removalDelta)) =
-        await iterator.next()
-    else {
-        preconditionFailure("DOM.childNodeRemoved must publish a tree delta.")
-    }
-    #expect(removalDelta.deletedRowIDs == [spanID])
-    #expect(runtime.model.registeredModel(for: spanID) == nil)
-    #expect(runtime.model.model(for: strongID) != nil)
+    _ = try #require(await updates.next())
+    #expect(context.registeredModel(for: inserted.id) == nil)
 
-    try await runtime.emitDOMChildNodeInserted(
-        parentID: "body",
-        previousNodeID: "strong",
-        node: .element(
-            id: "old-frame-owner",
-            name: "iframe",
-            children: [.text(id: "preserved-whitespace", value: "\n    ")]
-        )
-    )
-    guard case let .changes(_, _, .delta(oldFrameDelta)) =
-        await iterator.next()
-    else {
-        preconditionFailure("The old frame owner must enter the production tree stream.")
-    }
-    let oldFrameID = try #require(oldFrameDelta.upsertedRows.first { row in
-        row.id.canonicalStorage.rawNodeID.rawValue == "old-frame-owner"
-    }?.id)
-    let preservedID = try #require(oldFrameDelta.upsertedRows.first { row in
-        row.id.canonicalStorage.rawNodeID.rawValue == "preserved-whitespace"
-    }?.id)
-    let firstPreservedModel = try #require(runtime.model.model(for: preservedID))
-
-    try await runtime.emitDOMChildNodeRemoved(
-        parentID: "body",
-        nodeID: "old-frame-owner"
-    )
-    guard case let .changes(_, _, .delta(oldFrameRemoval)) =
-        await iterator.next()
-    else {
-        preconditionFailure("The old frame owner removal must publish a tree delta.")
-    }
-    #expect(oldFrameRemoval.deletedRowIDs == [oldFrameID, preservedID])
-    #expect(runtime.model.registeredModel(for: preservedID) == nil)
-
-    try await runtime.emitDOMChildNodeInserted(
-        parentID: "body",
-        previousNodeID: "strong",
-        node: .element(
-            id: "new-frame-owner",
-            name: "iframe",
-            children: [.text(id: "preserved-whitespace", value: "\n    ")]
-        )
-    )
-    guard case let .changes(_, _, .delta(newFrameDelta)) =
-        await iterator.next()
-    else {
-        preconditionFailure("A backend-preserved child identity must be rematerialized.")
-    }
-    let rematerializedID = try #require(newFrameDelta.upsertedRows.first { row in
-        row.id.canonicalStorage.rawNodeID.rawValue == "preserved-whitespace"
-    }?.id)
-    let rematerializedModel = try #require(runtime.model.model(for: rematerializedID))
-    #expect(rematerializedID == preservedID)
-    #expect(rematerializedModel !== firstPreservedModel)
-
-    iterator.cancel()
+    await results.close()
     await runtime.close()
 }
 
 @MainActor
 @Test
-func dataKitTestingVendsContextLocalIdentityFromOneContainer() async throws {
+func dataKitTestingSupportsContainerIssuedModelActors() async throws {
     let runtime = try await WebInspectorDataKitTestRuntime.start(
         scenario: .init(
-            configuration: .init(domains: [.network]),
+            configuration: .init(enabledFeatures: [.network]),
             networkReplay: [
-                .init(id: "shared-request", url: "https://example.test/shared")
+                .init(
+                    id: "shared-request",
+                    url: "https://example.test/shared"
+                )
             ]
-        ),
-        isolation: MainActor.shared
+        )
     )
-    let secondContext = try await runtime.container.makeContext(
-        isolation: MainActor.shared
+    let context = runtime.container.mainContext
+    let mainResults = WebInspectorFetchedResultsController<NetworkEntry>(
+        modelContext: context
     )
-    let firstResults = try await WebInspectorFetchedResultsController<NetworkEntry, Never>(
-        modelContext: runtime.model
-    )
-    let secondResults = try await WebInspectorFetchedResultsController<NetworkEntry, Never>(
-        modelContext: secondContext
-    )
-    let firstID = try #require(firstResults.snapshot.itemIDs.first)
-    let secondID = try #require(secondResults.snapshot.itemIDs.first)
-    let firstEntry = try #require(runtime.model.model(for: firstID))
-    let secondEntry = try #require(secondContext.model(for: secondID))
+    try await mainResults.performFetch()
+    let mainEntry = try #require(mainResults.fetchedObjects?.first)
 
-    #expect(firstID == secondID)
-    #expect(firstEntry !== secondEntry)
+    let worker = try ProductTestModelActor(modelContainer: runtime.container)
+    let workerSnapshot = try await worker.networkEntries()
+    #expect(workerSnapshot.ids == [mainEntry.id])
+    #expect(workerSnapshot.objectIdentities != [ObjectIdentifier(mainEntry)])
 
-    try await runtime.replacePage(
-        with: .init(),
-        networkReplay: [
-            .init(
-                id: "shared-request",
-                url: "https://example.test/replacement"
-            )
-        ]
-    )
-    let replacementFirstID = try #require(
-        firstResults.snapshot.itemIDs.first
-    )
-    let replacementSecondID = try #require(
-        secondResults.snapshot.itemIDs.first
-    )
-    let replacementFirstEntry = try #require(
-        runtime.model.model(for: replacementFirstID)
-    )
-    let replacementSecondEntry = try #require(
-        secondContext.model(for: replacementSecondID)
-    )
-    #expect(replacementFirstID == replacementSecondID)
-    #expect(replacementFirstID != firstID)
-    #expect(replacementFirstEntry !== replacementSecondEntry)
-    #expect(runtime.model.registeredModel(for: firstID) == nil)
-    #expect(secondContext.registeredModel(for: secondID) == nil)
-
-    await secondResults.close()
-    await firstResults.close()
-    await secondContext.close()
+    await worker.closeModelContext()
+    await mainResults.close()
     await runtime.close()
 }
 
 @MainActor
 @Test
-func dataKitTestingPreservesRequestBodyIdentityAcrossResponseHeaderEnrichment()
+func dataKitTestingPreservesRequestBodyIdentityAcrossEnrichment()
     async throws
 {
     let runtime = try await WebInspectorDataKitTestRuntime.start(
         scenario: .init(
-            configuration: .init(domains: [.network])
-        ),
-        isolation: MainActor.shared
+            configuration: .init(enabledFeatures: [.network])
+        )
     )
-    let results = try await WebInspectorFetchedResultsController<
-        NetworkRequest,
-        Never
-    >(modelContext: runtime.model)
-    var updates = results.updates().makeAsyncIterator()
-    _ = try #require(try await updates.next())
+    let context = runtime.container.mainContext
+    let results = WebInspectorFetchedResultsController<NetworkRequest>(
+        modelContext: context
+    )
+    try await results.performFetch()
+    var updates = results.updates.makeAsyncIterator()
+    guard case .initial = await updates.next() else {
+        preconditionFailure("A fetched Network query must publish its initial state.")
+    }
     let request = WebInspectorDataKitTestRuntime.NetworkRequest(
         id: "staged-request",
         url: "https://example.test/form",
@@ -366,95 +274,149 @@ func dataKitTestingPreservesRequestBodyIdentityAcrossResponseHeaderEnrichment()
     )
 
     try await runtime.emitNetworkRequestWillBeSent(request)
-    _ = try #require(try await updates.next())
-    let requestID = try #require(results.snapshot.itemIDs.first)
-    let model = try #require(runtime.model.model(for: requestID))
+    _ = try #require(await updates.next())
+    let model = try #require(results.fetchedObjects?.first)
     let body = try #require(model.requestBody)
     #expect(body.kind == .text)
 
     try await runtime.emitNetworkResponseReceived(request)
-    _ = try #require(try await updates.next())
-
+    _ = try #require(await updates.next())
     #expect(model.requestBody === body)
     #expect(body.kind == .form)
     #expect(body.text == "name=Jane+Doe")
-    #expect(model.requestHeaders["content-type"] == "application/x-www-form-urlencoded")
+    #expect(
+        model.requestHeaders["content-type"]
+            == "application/x-www-form-urlencoded"
+    )
 
     try await runtime.emitNetworkLoadingFinished(request)
-    _ = try #require(try await updates.next())
+    _ = try #require(await updates.next())
+    #expect(model.state == .finished)
+
     await results.close()
     await runtime.close()
 }
 
 @MainActor
 @Test
-func dataKitTestingWaitsForAnEmptyNetworkReplacementRevision() async throws {
-    let runtime = try await WebInspectorDataKitTestRuntime.start(
-        scenario: .init(
-            configuration: .init(domains: [.network])
-        ),
-        isolation: MainActor.shared
-    )
-    let baselineRevision = await runtime.container.core.currentRevision
-
-    try await runtime.replacePage(with: .init())
-
-    let replacementRevision = await runtime.container.core.currentRevision
-    #expect(replacementRevision > baselineRevision)
-    #expect(
-        runtime.model.appliedContainerRevisionForTesting
-            == replacementRevision
-    )
-    await runtime.close()
-}
-
-@MainActor
-@Test
-func dataKitTestingWaitsForConsoleAndRuntimeReplacementRevisions()
+func dataKitTestingCountsReplacementBoundaryAndClosesDeterministically()
     async throws
 {
     let runtime = try await WebInspectorDataKitTestRuntime.start(
         scenario: .init(
-            configuration: .init(domains: [.console, .runtime])
-        ),
-        isolation: MainActor.shared
+            configuration: .init(enabledFeatures: [.network])
+        )
     )
-    let baselineRevision = await runtime.container.core.currentRevision
+    let context = runtime.container.mainContext
+    let results = WebInspectorFetchedResultsController<NetworkRequest>(
+        modelContext: context
+    )
+    try await results.performFetch()
+    var updates = results.updates.makeAsyncIterator()
+    guard case .initial = await updates.next() else {
+        preconditionFailure("A fetched Network query must publish its initial state.")
+    }
+    let baseline = try await runtime.boundarySnapshot()
 
-    try await runtime.replacePage(with: .init())
-
-    let replacementRevision = await runtime.container.core.currentRevision
-    #expect(replacementRevision > baselineRevision)
+    let replacement = try await runtime.replacePage(with: .init())
+    let oldGeneration = try #require(
+        baseline.readyGeneration(for: .network)
+    )
+    let newGeneration = try #require(
+        replacement.readyGeneration(for: .network)
+    )
+    #expect(newGeneration > oldGeneration)
     #expect(
-        runtime.model.appliedContainerRevisionForTesting
-            == replacementRevision
+        replacement.counters.acceptedRawInputCount
+            == baseline.counters.acceptedRawInputCount + 2
     )
+    #expect(
+        replacement.counters.pageReplacementCount
+            == baseline.counters.pageReplacementCount + 1
+    )
+    _ = try #require(await updates.next())
+
+    await results.close()
     await runtime.close()
+    await runtime.close()
+    #expect(await runtime.lifecycleState == .closed)
+    do {
+        try await runtime.emitNetworkRequest(
+            .init(id: "after-close", url: "https://example.test/closed")
+        )
+        Issue.record("A closed testing runtime accepted raw input.")
+    } catch let error as WebInspectorDataKitTestRuntime.RuntimeError {
+        #expect(error == .closed)
+    } catch {
+        Issue.record("Expected RuntimeError.closed, got \(error).")
+    }
 }
 
 @MainActor
 @Test
-func dataKitTestingInjectsAttachmentFailureWithoutLeakingRuntimeOwnership() async {
-    do {
-        _ = try await WebInspectorDataKitTestRuntime.start(
-            scenario: .init(
-                configuration: .init(domains: [.network]),
-                attachFailure: .init(
-                    domain: .network,
-                    message: "injected Network startup failure"
-                )
-            ),
-            isolation: MainActor.shared
+func dataKitTestingPublishesFeatureLocalBootstrapFailure() async throws {
+    let runtime = try await WebInspectorDataKitTestRuntime.start(
+        scenario: .init(
+            configuration: .init(enabledFeatures: [.network]),
+            attachFailure: .init(
+                domain: .network,
+                message: "injected Network startup failure"
+            )
         )
-        Issue.record("Expected the injected DataKit attachment failure.")
-    } catch let failure as WebInspectorModelContainer.Failure {
-        guard case let .bootstrap(domain, message) = failure else {
-            Issue.record("Expected a bootstrap failure, got \(failure).")
-            return
+    )
+    let boundary = try await runtime.boundarySnapshot()
+
+    #expect(runtime.container.state.isAttached)
+    guard
+        case let .unavailable(_, .bootstrap(failure)) =
+            boundary.featureState(for: .network)
+    else {
+        preconditionFailure("An injected bootstrap failure must stay feature-local.")
+    }
+    #expect(failure.message.contains("injected Network startup failure"))
+
+    await runtime.close()
+}
+
+private struct ProductTestActorSnapshot: Sendable {
+    let ids: [NetworkEntry.ID]
+    let objectIdentities: [ObjectIdentifier]
+}
+
+@WebInspectorModelActor
+private actor ProductTestModelActor {
+    func networkEntries() async throws -> ProductTestActorSnapshot {
+        let results = WebInspectorFetchedResultsController<NetworkEntry>(
+            modelContext: modelContext
+        )
+        try await results.performFetch()
+        let models = results.fetchedObjects ?? []
+        let snapshot = ProductTestActorSnapshot(
+            ids: models.map(\.id),
+            objectIdentities: models.map(ObjectIdentifier.init)
+        )
+        await results.close()
+        return snapshot
+    }
+}
+
+private extension WebInspectorDataKitTestRuntime.BoundarySnapshot {
+    func readyGeneration(
+        for featureID: WebInspectorFeatureID
+    ) -> WebInspectorPageGeneration? {
+        guard case let .ready(generation, _) = featureState(for: featureID) else {
+            return nil
         }
-        #expect(domain == .network)
-        #expect(message.contains("injected Network startup failure"))
-    } catch {
-        Issue.record("Expected a DataKit model failure, got \(error).")
+        return generation
+    }
+}
+
+private extension WebInspectorModelContainer.State {
+    var isAttached: Bool {
+        if case .attached = self {
+            true
+        } else {
+            false
+        }
     }
 }

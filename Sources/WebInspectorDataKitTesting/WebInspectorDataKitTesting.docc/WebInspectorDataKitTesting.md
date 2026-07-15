@@ -1,61 +1,95 @@
 # ``WebInspectorDataKitTesting``
 
-Create ready DataKit model scenarios without scripting protocol startup.
+Drive deterministic raw inspector input through DataKit's production owners.
 
-`WebInspectorDataKitTesting` drives the same raw peer and production connection
-core as `WebInspectorProxyKitTesting`, then owns the model bootstrap replies and
-resource teardown needed by a DataKit consumer test.
+`WebInspectorDataKitTesting` creates an in-memory
+`WebInspectorModelContainer`, supplies protocol replies and events through
+`WebInspectorProxyKitTesting`, and joins those resources during teardown. The
+container remains the sole owner of models, feature state, and model contexts.
 
 ```swift
 import WebInspectorDataKit
 import WebInspectorDataKitTesting
 
-let runtime = try await WebInspectorDataKitTestRuntime.start(
-    scenario: .init(
-        document: .init(children: [
-            .element(id: "button", name: "button")
-        ]),
-        networkReplay: [
-            .init(
-                id: "initial-request",
-                url: "https://example.test/"
-            )
-        ]
+@MainActor
+func inspectScenario() async throws {
+    let runtime = try await WebInspectorDataKitTestRuntime.start(
+        scenario: .init(
+            configuration: .init(enabledFeatures: [.dom, .network]),
+            document: .init(children: [
+                .element(id: "button", name: "button")
+            ]),
+            networkReplay: [
+                .init(
+                    id: "initial-request",
+                    url: "https://example.test/"
+                )
+            ]
+        )
     )
-)
 
-let nodes = try await WebInspectorFetchedResultsController<DOMNode, Never>(
-    modelContext: runtime.model
-)
-precondition(nodes.snapshot.itemIDs.contains { id in
-    runtime.model.model(for: id)?.localName == "button"
-})
+    let context = runtime.container.mainContext
+    let nodes = WebInspectorFetchedResultsController<DOMNode>(
+        modelContext: context
+    )
+    try await nodes.performFetch()
+    precondition(
+        nodes.fetchedObjects?.contains { $0.localName == "button" } == true
+    )
 
-await nodes.close()
-await runtime.close()
+    await nodes.close()
+    await runtime.close()
+}
 ```
 
-The runtime owns a ``WebInspectorModelContainer`` and a context vended by that
-container. The context inherits the actor passed to
-``WebInspectorDataKitTestRuntime/start(scenario:isolation:)``. Immutable fixture
-values are `Sendable`. Always await ``WebInspectorDataKitTestRuntime/close()``;
-deinitialization only cancels the command consumer as a synchronous backstop.
-``WebInspectorDataKitTestRuntime/replacePage(with:networkReplay:isolation:)``
-returns after the production feed reaches its next synchronization marker and
-every Context registered with the Container has applied and acknowledged that
-revision.
+Use `WebInspectorModelContainer.mainContext` for main-actor consumers. A
+custom actor declares `@WebInspectorModelActor` and initializes itself with
+`WebInspectorModelActor.init(modelContainer:)` so its context and executor
+come from the same production binding.
+
+``WebInspectorDataKitTestRuntime/start(scenario:)`` waits until every enabled
+feature is either `ready` or feature-local `unavailable`.
+``WebInspectorDataKitTestRuntime/replacePage(with:networkReplay:)`` additionally
+waits for previously-ready feature owners to reach a terminal state in the
+replacement generation. An already-unavailable feature remains terminal without
+an implicit retry. The returned
+``WebInspectorDataKitTestRuntime/BoundarySnapshot`` does not assert that a
+consumer context or fetched-results controller has applied that store revision.
+When a test needs consumer completion, subscribe to
+`WebInspectorFetchedResultsController.updates` and await that consumer-owned
+sequence.
+
+The counters in ``WebInspectorDataKitTestRuntime/CounterSnapshot`` describe
+only the testing driver boundary: accepted raw input, completed command replies,
+and accepted page replacements. Always await
+``WebInspectorDataKitTestRuntime/close()``. The runtime reports an explicit
+``WebInspectorDataKitTestRuntime/LifecycleState`` and rejects later input with
+``WebInspectorDataKitTestRuntime/RuntimeError/closed``.
 
 ## Topics
 
-### Runtime
+### Runtime lifecycle
 
 - ``WebInspectorDataKitTestRuntime``
-- ``WebInspectorDataKitTestRuntime/Scenario``
+- ``WebInspectorDataKitTestRuntime/start(scenario:)``
+- ``WebInspectorDataKitTestRuntime/LifecycleState``
+- ``WebInspectorDataKitTestRuntime/RuntimeError``
 - ``WebInspectorDataKitTestRuntime/close()``
 
-### Fixtures
+### Deterministic boundaries
 
+- ``WebInspectorDataKitTestRuntime/BoundarySnapshot``
+- ``WebInspectorDataKitTestRuntime/FeatureBoundary``
+- ``WebInspectorDataKitTestRuntime/CounterSnapshot``
+- ``WebInspectorDataKitTestRuntime/boundarySnapshot()``
+- ``WebInspectorDataKitTestRuntime/counterSnapshot()``
+- ``WebInspectorDataKitTestRuntime/replacePage(with:networkReplay:)``
+
+### Fixtures and raw input
+
+- ``WebInspectorDataKitTestRuntime/Scenario``
 - ``WebInspectorDataKitTestRuntime/Document``
 - ``WebInspectorDataKitTestRuntime/Node``
 - ``WebInspectorDataKitTestRuntime/NetworkRequest``
 - ``WebInspectorDataKitTestRuntime/AttachFailure``
+- ``WebInspectorDataKitTestRuntime/AttachFailureDomain``

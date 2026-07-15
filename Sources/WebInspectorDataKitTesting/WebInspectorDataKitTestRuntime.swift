@@ -5,9 +5,10 @@ import WebInspectorProxyKitTesting
 
 /// A ready-to-use DataKit model runtime backed by ProxyKit's production wire path.
 ///
-/// The runtime is confined to the actor that calls ``start(scenario:isolation:)``.
-/// Call ``close()`` and await completion before releasing it.
-public final class WebInspectorDataKitTestRuntime {
+/// The runtime owns only the raw scenario driver and resource lifecycle. Obtain
+/// model contexts from ``container`` so tests use DataKit's production context
+/// ownership. Call ``close()`` and await completion before releasing the runtime.
+public actor WebInspectorDataKitTestRuntime {
     /// One DOM node in a test document.
     public struct Node: Equatable, Sendable {
         public let id: String
@@ -133,8 +134,8 @@ public final class WebInspectorDataKitTestRuntime {
         }
     }
 
-    /// The model bootstrap domain that should fail.
-    public enum AttachFailureDomain: Sendable {
+    /// The protocol bootstrap domain that should fail.
+    public enum AttachFailureDomain: Equatable, Sendable {
         case dom
         case network
         case console
@@ -142,8 +143,8 @@ public final class WebInspectorDataKitTestRuntime {
         case css
     }
 
-    /// A deterministic model attachment failure.
-    public struct AttachFailure: Sendable {
+    /// A deterministic feature bootstrap failure.
+    public struct AttachFailure: Equatable, Sendable {
         public let domain: AttachFailureDomain
         public let message: String
 
@@ -177,79 +178,115 @@ public final class WebInspectorDataKitTestRuntime {
         }
     }
 
+    /// Failures from the testing runtime's lifecycle and input boundary.
     public enum RuntimeError: Error, Equatable, Sendable {
+        /// The runtime has started or completed resource teardown.
+        case closed
+
+        /// Another raw-input operation is suspended on the runtime.
+        case inputOperationInProgress
+
+        /// The production connection reached a physical terminal failure.
+        case connectionFailed(WebInspectorConnectionFailure)
+    }
+
+    /// The runtime's explicit resource-lifecycle phase.
+    public enum LifecycleState: Equatable, Sendable {
+        /// The runtime accepts raw input.
+        case running
+
+        /// Resource owners are joining their asynchronous close work.
+        case closing
+
+        /// All owned resources have completed teardown.
         case closed
     }
 
-    private enum ReplacementObservation {
-        case dom(
-            WebInspectorFetchedResultsController<
-                WebInspectorDataKit.DOMNode,
-                Never
-            >,
-            baselineRevision: UInt64,
-            oldIDs: Set<WebInspectorDataKit.DOMNode.ID>,
-            expectedCount: Int
-        )
-        case network(
-            WebInspectorFetchedResultsController<
-                WebInspectorDataKit.NetworkRequest,
-                Never
-            >,
-            baselineRevision: UInt64,
-            oldIDs: Set<WebInspectorDataKit.NetworkRequest.ID>,
-            expectedCount: Int
-        )
-        func validate(
-            isolation: isolated (any Actor)
-        ) {
-            _ = isolation
-            switch self {
-            case let .dom(results, baselineRevision, oldIDs, expectedCount):
-                WebInspectorDataKitTestRuntime.validateReplacement(
-                    results,
-                    baselineRevision: baselineRevision,
-                    oldIDs: oldIDs,
-                    expectedCount: expectedCount
-                )
-            case let .network(results, baselineRevision, oldIDs, expectedCount):
-                WebInspectorDataKitTestRuntime.validateReplacement(
-                    results,
-                    baselineRevision: baselineRevision,
-                    oldIDs: oldIDs,
-                    expectedCount: expectedCount
-                )
-            }
-        }
+    /// Monotonic observations owned by the raw scenario driver.
+    public struct CounterSnapshot: Equatable, Sendable {
+        /// Raw target/root events accepted by ProxyKit's connection boundary.
+        public let acceptedRawInputCount: UInt64
 
-        func close(
-            isolation: isolated (any Actor)
-        ) async {
-            _ = isolation
-            switch self {
-            case let .dom(results, _, _, _):
-                await results.close()
-            case let .network(results, _, _, _):
-                await results.close()
-            }
+        /// Outbound commands for which the scenario driver completed a reply.
+        public let completedCommandCount: UInt64
+
+        /// Provisional target replacements accepted by the raw peer.
+        public let pageReplacementCount: UInt64
+
+        fileprivate init(
+            acceptedRawInputCount: UInt64,
+            completedCommandCount: UInt64,
+            pageReplacementCount: UInt64
+        ) {
+            self.acceptedRawInputCount = acceptedRawInputCount
+            self.completedCommandCount = completedCommandCount
+            self.pageReplacementCount = pageReplacementCount
         }
     }
 
-    /// The model container that owns the production feed and every context.
-    public let container: WebInspectorModelContainer
+    /// One enabled feature's terminal state at a testing boundary.
+    public struct FeatureBoundary: Equatable, Sendable {
+        /// The enabled feature represented by this boundary.
+        public let featureID: WebInspectorFeatureID
 
-    /// The ready, actor-confined context vended by ``container``.
-    public let model: WebInspectorModelContext
+        /// The feature's captured `ready` or `unavailable` state.
+        public let state: WebInspectorFeatureState
+
+        fileprivate init(
+            featureID: WebInspectorFeatureID,
+            state: WebInspectorFeatureState
+        ) {
+            self.featureID = featureID
+            self.state = state
+        }
+    }
+
+    /// A testing-only raw-input and feature-owner boundary.
+    ///
+    /// Every listed feature is either `ready` or `unavailable` when captured.
+    /// A replacement advances the generation of features that were ready;
+    /// already-unavailable features remain terminal without an implicit retry.
+    /// This snapshot does not imply that a consumer's ModelContext or
+    /// fetched-results controller has applied that revision.
+    public struct BoundarySnapshot: Equatable, Sendable {
+        /// Raw-driver counters captured after the feature observations.
+        public let counters: CounterSnapshot
+
+        /// Terminal observations ordered by feature name.
+        public let features: [FeatureBoundary]
+
+        /// Returns the terminal state captured for one enabled feature.
+        public func featureState(
+            for featureID: WebInspectorFeatureID
+        ) -> WebInspectorFeatureState? {
+            features.first { $0.featureID == featureID }?.state
+        }
+
+        fileprivate init(
+            counters: CounterSnapshot,
+            features: [FeatureBoundary]
+        ) {
+            self.counters = counters
+            self.features = features
+        }
+    }
+
+    /// The model container that owns production models and every context.
+    public nonisolated let container: WebInspectorModelContainer
+
+    /// The runtime's current resource-lifecycle phase.
+    public private(set) var lifecycleState: LifecycleState
 
     private let proxyRuntime: WebInspectorProxyTestRuntime
     private let driver: ScenarioDriver
     private let driverTask: Task<Void, Never>
-    private var isClosed: Bool
+    private var closeTask: Task<Void, Never>?
+    private var isInputOperationActive: Bool
 
-    /// Starts the production ProxyKit path and returns after DataKit is ready.
-    public static func start(
-        scenario: Scenario = .init(),
-        isolation: isolated (any Actor) = #isolation
+    /// Starts the production path and waits for each enabled feature to reach
+    /// `ready` or feature-local `unavailable`.
+    public nonisolated static func start(
+        scenario: Scenario = .init()
     ) async throws -> WebInspectorDataKitTestRuntime {
         let proxyRuntime = try await WebInspectorProxyTestRuntime.start()
         let driver = ScenarioDriver(
@@ -266,74 +303,80 @@ public final class WebInspectorDataKitTestRuntime {
             configuration: scenario.configuration
         )
 
+        let runtime = WebInspectorDataKitTestRuntime(
+            container: container,
+            proxyRuntime: proxyRuntime,
+            driver: driver,
+            driverTask: driverTask
+        )
         do {
-            let model = try await container.makeContext(isolation: isolation)
             try await container.attach(owning: proxyRuntime.proxy)
-            return WebInspectorDataKitTestRuntime(
-                container: container,
-                model: model,
-                proxyRuntime: proxyRuntime,
-                driver: driver,
-                driverTask: driverTask
-            )
+            _ = try await runtime.boundarySnapshot()
+            return runtime
         } catch {
-            await container.close()
-            await proxyRuntime.close()
-            driverTask.cancel()
-            await driverTask.value
+            await runtime.close()
             throw error
         }
     }
 
+    /// Returns the scenario driver's current immutable counters.
+    public func counterSnapshot() async -> CounterSnapshot {
+        await driver.counterSnapshot()
+    }
+
+    /// Waits until all enabled features are currently `ready` or `unavailable`.
+    ///
+    /// This boundary stops at feature owners. A consumer that needs context or
+    /// query completion waits on its own fetched-results update sequence.
+    public func boundarySnapshot() async throws -> BoundarySnapshot {
+        try requireRunning()
+        return try await makeBoundarySnapshot(after: nil)
+    }
+
     /// Emits a complete Network request on the current page.
-    public nonisolated(nonsending) func emitNetworkRequest(
+    public func emitNetworkRequest(
         _ request: NetworkRequest
     ) async throws {
-        guard !isClosed else {
-            throw RuntimeError.closed
-        }
+        try beginInputOperation()
+        defer { endInputOperation() }
         try await driver.emitNetworkRequest(request)
     }
 
     /// Emits only `Network.requestWillBeSent` for a staged request lifecycle.
-    public nonisolated(nonsending) func emitNetworkRequestWillBeSent(
+    public func emitNetworkRequestWillBeSent(
         _ request: NetworkRequest
     ) async throws {
-        guard !isClosed else {
-            throw RuntimeError.closed
-        }
+        try beginInputOperation()
+        defer { endInputOperation() }
         try await driver.emitNetworkRequestWillBeSent(request)
     }
 
     /// Emits only `Network.responseReceived` for a staged request lifecycle.
-    public nonisolated(nonsending) func emitNetworkResponseReceived(
+    public func emitNetworkResponseReceived(
         _ request: NetworkRequest
     ) async throws {
-        guard !isClosed else {
-            throw RuntimeError.closed
-        }
+        try beginInputOperation()
+        defer { endInputOperation() }
         try await driver.emitNetworkResponseReceived(request)
     }
 
     /// Emits only `Network.loadingFinished` for a staged request lifecycle.
-    public nonisolated(nonsending) func emitNetworkLoadingFinished(
+    public func emitNetworkLoadingFinished(
         _ request: NetworkRequest
     ) async throws {
-        guard !isClosed else {
-            throw RuntimeError.closed
-        }
+        try beginInputOperation()
+        defer { endInputOperation() }
         try await driver.emitNetworkLoadingFinished(request)
     }
 
     /// Emits one `DOM.attributeModified` event on the current page target.
-    public nonisolated(nonsending) func emitDOMAttributeModified(
+    public func emitDOMAttributeModified(
         nodeID: String,
         name: String,
         value: String
     ) async throws {
-        guard !isClosed else {
-            throw RuntimeError.closed
-        }
+        try beginInputOperation()
+        defer { endInputOperation() }
         try await driver.emitDOMAttributeModified(
             nodeID: nodeID,
             name: name,
@@ -342,13 +385,12 @@ public final class WebInspectorDataKitTestRuntime {
     }
 
     /// Emits one `DOM.setChildNodes` event on the current page target.
-    public nonisolated(nonsending) func emitDOMSetChildNodes(
+    public func emitDOMSetChildNodes(
         parentID: String,
         children: [Node]
     ) async throws {
-        guard !isClosed else {
-            throw RuntimeError.closed
-        }
+        try beginInputOperation()
+        defer { endInputOperation() }
         try await driver.emitDOMSetChildNodes(
             parentID: parentID,
             children: children
@@ -356,13 +398,12 @@ public final class WebInspectorDataKitTestRuntime {
     }
 
     /// Emits one `DOM.childNodeCountUpdated` event on the current page target.
-    public nonisolated(nonsending) func emitDOMChildNodeCountUpdated(
+    public func emitDOMChildNodeCountUpdated(
         nodeID: String,
         count: Int
     ) async throws {
-        guard !isClosed else {
-            throw RuntimeError.closed
-        }
+        try beginInputOperation()
+        defer { endInputOperation() }
         try await driver.emitDOMChildNodeCountUpdated(
             nodeID: nodeID,
             count: count
@@ -370,14 +411,13 @@ public final class WebInspectorDataKitTestRuntime {
     }
 
     /// Emits one `DOM.childNodeInserted` event on the current page target.
-    public nonisolated(nonsending) func emitDOMChildNodeInserted(
+    public func emitDOMChildNodeInserted(
         parentID: String,
         previousNodeID: String? = nil,
         node: Node
     ) async throws {
-        guard !isClosed else {
-            throw RuntimeError.closed
-        }
+        try beginInputOperation()
+        defer { endInputOperation() }
         try await driver.emitDOMChildNodeInserted(
             parentID: parentID,
             previousNodeID: previousNodeID,
@@ -386,169 +426,196 @@ public final class WebInspectorDataKitTestRuntime {
     }
 
     /// Emits one `DOM.childNodeRemoved` event on the current page target.
-    public nonisolated(nonsending) func emitDOMChildNodeRemoved(
+    public func emitDOMChildNodeRemoved(
         parentID: String,
         nodeID: String
     ) async throws {
-        guard !isClosed else {
-            throw RuntimeError.closed
-        }
+        try beginInputOperation()
+        defer { endInputOperation() }
         try await driver.emitDOMChildNodeRemoved(
             parentID: parentID,
             nodeID: nodeID
         )
     }
 
-    /// Commits a provisional page target and waits for the replacement model.
+    /// Commits a provisional page target and waits for previously-ready feature
+    /// owners to reach terminal states in the replacement generation.
+    ///
+    /// The returned boundary does not wait for consumer ModelContext or FRC
+    /// application. Observe the consumer-owned FRC update when that completion
+    /// matters to the test.
+    @discardableResult
     public func replacePage(
         with document: Document,
-        networkReplay: [NetworkRequest] = [],
-        isolation: isolated (any Actor) = #isolation
-    ) async throws {
-        guard !isClosed else {
-            throw RuntimeError.closed
-        }
+        networkReplay: [NetworkRequest] = []
+    ) async throws -> BoundarySnapshot {
+        try beginInputOperation()
+        defer { endInputOperation() }
         precondition(
             Set(networkReplay.map(\.id)).count == networkReplay.count,
             "A DataKit test scenario cannot replay duplicate Network request identifiers."
         )
-        let synchronizationCheckpoint = try await container
-            .synchronizationCheckpoint()
-        let observations = try await makeReplacementObservations(
-            document: document,
-            networkReplay: networkReplay,
-            isolation: isolation
-        )
-        let replacement = await driver.prepareReplacement(
+        let baseline = try await makeBoundarySnapshot(after: nil)
+        try await driver.replacePage(
             document: document,
             networkReplay: networkReplay
         )
-
-        do {
-            try await proxyRuntime.peer.createTarget(.init(
-                id: replacement.newTargetID,
-                type: "page",
-                frameID: document.frameID,
-                isProvisional: true
-            ))
-            try await proxyRuntime.peer.commitProvisionalTarget(
-                from: replacement.oldTargetID,
-                to: replacement.newTargetID
-            )
-        } catch {
-            await driver.rollbackReplacement(replacement)
-            await Self.close(observations, isolation: isolation)
-            throw error
-        }
-
-        do {
-            _ = try await container.waitForSynchronization(
-                after: synchronizationCheckpoint
-            )
-            for observation in observations {
-                observation.validate(isolation: isolation)
-            }
-        } catch {
-            await Self.close(observations, isolation: isolation)
-            throw error
-        }
-        await Self.close(observations, isolation: isolation)
+        return try await makeBoundarySnapshot(after: baseline)
     }
 
-    /// Closes the model, connection, and command consumer in ownership order.
-    public nonisolated(nonsending) func close() async {
-        guard !isClosed else {
+    /// Closes the container, connection, and command consumer in ownership order.
+    /// Concurrent or repeated calls join the same teardown.
+    public func close() async {
+        let task: Task<Void, Never>
+        switch lifecycleState {
+        case .running:
+            lifecycleState = .closing
+            task = Task { [container, proxyRuntime, driverTask] in
+                await container.close()
+                await proxyRuntime.close()
+                driverTask.cancel()
+                await driverTask.value
+            }
+            closeTask = task
+        case .closing:
+            guard let closeTask else {
+                preconditionFailure("A closing DataKit test runtime must own its close task.")
+            }
+            task = closeTask
+        case .closed:
             return
         }
-        isClosed = true
-        await container.close()
-        await proxyRuntime.close()
-        driverTask.cancel()
-        await driverTask.value
+
+        await task.value
+        lifecycleState = .closed
+        closeTask = nil
     }
 
     private init(
         container: WebInspectorModelContainer,
-        model: WebInspectorModelContext,
         proxyRuntime: WebInspectorProxyTestRuntime,
         driver: ScenarioDriver,
         driverTask: Task<Void, Never>
     ) {
         self.container = container
-        self.model = model
         self.proxyRuntime = proxyRuntime
         self.driver = driver
         self.driverTask = driverTask
-        isClosed = false
+        lifecycleState = .running
+        closeTask = nil
+        isInputOperationActive = false
     }
 
-    private func makeReplacementObservations(
-        document: Document,
-        networkReplay: [NetworkRequest],
-        isolation: isolated (any Actor)
-    ) async throws -> [ReplacementObservation] {
-        let domains = container.configuration.domains
-        var observations: [ReplacementObservation] = []
-        do {
-            if domains.contains(.dom) {
-                let results = try await WebInspectorFetchedResultsController<
-                    WebInspectorDataKit.DOMNode,
-                    Never
-                >(modelContext: model, isolation: isolation)
-                observations.append(.dom(
-                    results,
-                    baselineRevision: results.revision,
-                    oldIDs: Set(results.snapshot.itemIDs),
-                    expectedCount: document.modelNodeCount
-                ))
-            }
-            if domains.contains(.network) {
-                let results = try await WebInspectorFetchedResultsController<
-                    WebInspectorDataKit.NetworkRequest,
-                    Never
-                >(modelContext: model, isolation: isolation)
-                observations.append(.network(
-                    results,
-                    baselineRevision: results.revision,
-                    oldIDs: Set(results.snapshot.itemIDs),
-                    expectedCount: networkReplay.count
-                ))
-            }
-            return observations
-        } catch {
-            await Self.close(observations, isolation: isolation)
-            throw error
+    private func requireRunning() throws {
+        guard lifecycleState == .running else {
+            throw RuntimeError.closed
         }
     }
 
-    private static func close(
-        _ observations: [ReplacementObservation],
-        isolation: isolated (any Actor)
-    ) async {
-        for observation in observations {
-            await observation.close(isolation: isolation)
+    private func beginInputOperation() throws {
+        try requireRunning()
+        guard !isInputOperationActive else {
+            throw RuntimeError.inputOperationInProgress
         }
+        isInputOperationActive = true
     }
 
-    private static func validateReplacement<
-        Model: WebInspectorPersistentModel
-    >(
-        _ results: WebInspectorFetchedResultsController<Model, Never>,
-        baselineRevision: UInt64,
-        oldIDs: Set<Model.ID>,
-        expectedCount: Int
-    ) {
-        let ids = results.snapshot.itemIDs
-        precondition(
-            results.revision >= baselineRevision
-                && ids.count == expectedCount
-                && Set(ids).isDisjoint(with: oldIDs),
-            "A synchronized DataKit test replacement published unexpected model membership."
+    private func endInputOperation() {
+        isInputOperationActive = false
+    }
+
+    private func makeBoundarySnapshot(
+        after baseline: BoundarySnapshot?
+    ) async throws -> BoundarySnapshot {
+        let baselineStates = Dictionary(
+            uniqueKeysWithValues: baseline?.features.map {
+                ($0.featureID, $0.state)
+            } ?? []
+        )
+        let featureIDs = container.configuration.enabledFeatures.sorted {
+            $0.name < $1.name
+        }
+        let container = container
+        let features = try await withThrowingTaskGroup(
+            of: FeatureBoundary.self,
+            returning: [FeatureBoundary].self
+        ) { group in
+            for featureID in featureIDs {
+                let requiredGeneration = Self.requiredGeneration(
+                    after: baselineStates[featureID]
+                )
+                group.addTask {
+                    try await Self.waitForTerminalFeatureState(
+                        featureID,
+                        in: container,
+                        after: requiredGeneration
+                    )
+                }
+            }
+
+            var boundaries: [FeatureBoundary] = []
+            for try await boundary in group {
+                boundaries.append(boundary)
+            }
+            return boundaries.sorted { $0.featureID.name < $1.featureID.name }
+        }
+        return BoundarySnapshot(
+            counters: await driver.counterSnapshot(),
+            features: features
         )
     }
 
-    deinit {
+    private nonisolated static func requiredGeneration(
+        after state: WebInspectorFeatureState?
+    ) -> WebInspectorPageGeneration? {
+        switch state {
+        case let .ready(generation, _):
+            generation
+        case .disabled, .synchronizing, .recovering, .unavailable, nil:
+            nil
+        }
+    }
+
+    private nonisolated static func waitForTerminalFeatureState(
+        _ featureID: WebInspectorFeatureID,
+        in container: WebInspectorModelContainer,
+        after requiredGeneration: WebInspectorPageGeneration?
+    ) async throws -> FeatureBoundary {
+        var updates = container.featureStateUpdates(for: featureID)
+            .makeAsyncIterator()
+        while let state = await updates.next() {
+            try Task.checkCancellation()
+            switch container.state {
+            case let .failed(_, failure):
+                throw RuntimeError.connectionFailed(failure)
+            case .closing, .closed:
+                throw RuntimeError.closed
+            case .detached, .attaching, .attached, .detaching:
+                break
+            }
+
+            switch state {
+            case let .ready(generation, _),
+                let .unavailable(generation, _):
+                guard requiredGeneration.map({ generation > $0 }) ?? true else {
+                    continue
+                }
+                return FeatureBoundary(featureID: featureID, state: state)
+            case .disabled, .synchronizing, .recovering:
+                continue
+            }
+        }
+
+        try Task.checkCancellation()
+        if case let .failed(_, failure) = container.state {
+            throw RuntimeError.connectionFailed(failure)
+        }
+        throw RuntimeError.closed
+    }
+
+    isolated deinit {
         driverTask.cancel()
+        closeTask?.cancel()
     }
 }
 
@@ -567,6 +634,9 @@ private actor ScenarioDriver {
     private var responseBodies: [String: Network.Body]
     private var attachFailure: WebInspectorDataKitTestRuntime.AttachFailure?
     private var replacementOrdinal: UInt64
+    private var acceptedRawInputCount: UInt64
+    private var completedCommandCount: UInt64
+    private var pageReplacementCount: UInt64
 
     init(
         peer: WebInspectorTestPeer,
@@ -585,6 +655,9 @@ private actor ScenarioDriver {
         )
         self.attachFailure = attachFailure
         replacementOrdinal = 0
+        acceptedRawInputCount = 0
+        completedCommandCount = 0
+        pageReplacementCount = 0
     }
 
     nonisolated static func makeConsumerTask(
@@ -608,6 +681,16 @@ private actor ScenarioDriver {
                 }
             }
         }
+    }
+
+    func counterSnapshot()
+        -> WebInspectorDataKitTestRuntime.CounterSnapshot
+    {
+        WebInspectorDataKitTestRuntime.CounterSnapshot(
+            acceptedRawInputCount: acceptedRawInputCount,
+            completedCommandCount: completedCommandCount,
+            pageReplacementCount: pageReplacementCount
+        )
     }
 
     func emitNetworkRequest(
@@ -666,14 +749,16 @@ private actor ScenarioDriver {
         try await peer.emitTargetEvent(
             targetID: currentTargetID,
             method: "DOM.attributeModified",
-            parameters: try WebInspectorTestJSONObject(encoding:
-                DOMAttributeModifiedParameters(
-                    nodeId: nodeID,
-                    name: name,
-                    value: value
-                )
+            parameters: try WebInspectorTestJSONObject(
+                encoding:
+                    DOMAttributeModifiedParameters(
+                        nodeId: nodeID,
+                        name: name,
+                        value: value
+                    )
             )
         )
+        recordAcceptedRawInput()
     }
 
     func emitDOMSetChildNodes(
@@ -683,13 +768,15 @@ private actor ScenarioDriver {
         try await peer.emitTargetEvent(
             targetID: currentTargetID,
             method: "DOM.setChildNodes",
-            parameters: try WebInspectorTestJSONObject(encoding:
-                DOMSetChildNodesParameters(
-                    parentId: parentID,
-                    nodes: children.map { DOMNodeWire(node: $0, depth: 0) }
-                )
+            parameters: try WebInspectorTestJSONObject(
+                encoding:
+                    DOMSetChildNodesParameters(
+                        parentId: parentID,
+                        nodes: children.map { DOMNodeWire(node: $0, depth: 0) }
+                    )
             )
         )
+        recordAcceptedRawInput()
     }
 
     func emitDOMChildNodeCountUpdated(
@@ -699,13 +786,15 @@ private actor ScenarioDriver {
         try await peer.emitTargetEvent(
             targetID: currentTargetID,
             method: "DOM.childNodeCountUpdated",
-            parameters: try WebInspectorTestJSONObject(encoding:
-                DOMChildNodeCountUpdatedParameters(
-                    nodeId: nodeID,
-                    childNodeCount: count
-                )
+            parameters: try WebInspectorTestJSONObject(
+                encoding:
+                    DOMChildNodeCountUpdatedParameters(
+                        nodeId: nodeID,
+                        childNodeCount: count
+                    )
             )
         )
+        recordAcceptedRawInput()
     }
 
     func emitDOMChildNodeInserted(
@@ -716,14 +805,16 @@ private actor ScenarioDriver {
         try await peer.emitTargetEvent(
             targetID: currentTargetID,
             method: "DOM.childNodeInserted",
-            parameters: try WebInspectorTestJSONObject(encoding:
-                DOMChildNodeInsertedParameters(
-                    parentNodeId: parentID,
-                    previousNodeId: previousNodeID ?? "0",
-                    node: DOMNodeWire(node: node, depth: 0)
-                )
+            parameters: try WebInspectorTestJSONObject(
+                encoding:
+                    DOMChildNodeInsertedParameters(
+                        parentNodeId: parentID,
+                        previousNodeId: previousNodeID ?? "0",
+                        node: DOMNodeWire(node: node, depth: 0)
+                    )
             )
         )
+        recordAcceptedRawInput()
     }
 
     func emitDOMChildNodeRemoved(
@@ -733,21 +824,54 @@ private actor ScenarioDriver {
         try await peer.emitTargetEvent(
             targetID: currentTargetID,
             method: "DOM.childNodeRemoved",
-            parameters: try WebInspectorTestJSONObject(encoding:
-                DOMChildNodeRemovedParameters(
-                    parentNodeId: parentID,
-                    nodeId: nodeID
-                )
+            parameters: try WebInspectorTestJSONObject(
+                encoding:
+                    DOMChildNodeRemovedParameters(
+                        parentNodeId: parentID,
+                        nodeId: nodeID
+                    )
             )
         )
+        recordAcceptedRawInput()
     }
 
-    func prepareReplacement(
+    func replacePage(
+        document: WebInspectorDataKitTestRuntime.Document,
+        networkReplay: [WebInspectorDataKitTestRuntime.NetworkRequest]
+    ) async throws {
+        let replacement = prepareReplacement(
+            document: document,
+            networkReplay: networkReplay
+        )
+        do {
+            try await peer.createTarget(
+                .init(
+                    id: replacement.newTargetID,
+                    type: "page",
+                    frameID: document.frameID,
+                    isProvisional: true
+                ))
+            recordAcceptedRawInput()
+            try await peer.commitProvisionalTarget(
+                from: replacement.oldTargetID,
+                to: replacement.newTargetID
+            )
+            recordAcceptedRawInput()
+            Self.increment(
+                &pageReplacementCount,
+                named: "page replacement"
+            )
+        } catch {
+            rollbackReplacement(replacement)
+            throw error
+        }
+    }
+
+    private func prepareReplacement(
         document: WebInspectorDataKitTestRuntime.Document,
         networkReplay: [WebInspectorDataKitTestRuntime.NetworkRequest]
     ) -> Replacement {
-        replacementOrdinal &+= 1
-        precondition(replacementOrdinal != 0, "DataKit test target ordinal exhausted.")
+        Self.increment(&replacementOrdinal, named: "target ordinal")
         let replacement = Replacement(
             oldTargetID: currentTargetID,
             newTargetID: "page-replacement-\(replacementOrdinal)",
@@ -765,7 +889,7 @@ private actor ScenarioDriver {
         return replacement
     }
 
-    func rollbackReplacement(_ replacement: Replacement) {
+    private func rollbackReplacement(_ replacement: Replacement) {
         guard currentTargetID == replacement.newTargetID else {
             return
         }
@@ -780,6 +904,11 @@ private actor ScenarioDriver {
     }
 
     private func respond(to command: WebInspectorTestPeer.Command) async throws {
+        try await performResponse(to: command)
+        Self.increment(&completedCommandCount, named: "completed command")
+    }
+
+    private func performResponse(to command: WebInspectorTestPeer.Command) async throws {
         if let failure = matchingAttachFailure(for: command.method) {
             attachFailure = nil
             try await peer.fail(command, message: failure.message)
@@ -788,10 +917,10 @@ private actor ScenarioDriver {
 
         switch command.method {
         case "Page.enable", "CSS.enable", "Console.enable", "Runtime.enable",
-             "Page.disable", "CSS.disable", "Console.disable", "Runtime.disable", "Network.disable",
-             "Inspector.enable", "Inspector.initialized", "Inspector.disable",
-             "DOM.setInspectModeEnabled", "DOM.hideHighlight",
-             "Runtime.releaseObjectGroup":
+            "Page.disable", "CSS.disable", "Console.disable", "Runtime.disable", "Network.disable",
+            "Inspector.enable", "Inspector.initialized", "Inspector.disable",
+            "DOM.setInspectModeEnabled", "DOM.hideHighlight",
+            "Runtime.releaseObjectGroup":
             try await peer.reply(to: command)
         case "Network.enable":
             guard case let .target(targetID) = command.destination else {
@@ -809,8 +938,17 @@ private actor ScenarioDriver {
         case "DOM.getDocument":
             try await peer.reply(
                 to: command,
-                with: try WebInspectorTestJSONObject(encoding:
-                    DOMDocumentResult(root: DOMNodeWire(document: document))
+                with: try WebInspectorTestJSONObject(
+                    encoding:
+                        DOMDocumentResult(root: DOMNodeWire(document: document))
+                )
+            )
+        case "Page.getResourceTree":
+            try await peer.reply(
+                to: command,
+                with: try WebInspectorTestJSONObject(
+                    encoding:
+                        PageResourceTreeResult(document: document)
                 )
             )
         case "Network.getResponseBody":
@@ -824,8 +962,9 @@ private actor ScenarioDriver {
             }
             try await peer.reply(
                 to: command,
-                with: try WebInspectorTestJSONObject(encoding:
-                    ResponseBodyResult(body: body.data, base64Encoded: body.base64Encoded)
+                with: try WebInspectorTestJSONObject(
+                    encoding:
+                        ResponseBodyResult(body: body.data, base64Encoded: body.base64Encoded)
                 )
             )
         default:
@@ -875,26 +1014,28 @@ private actor ScenarioDriver {
         try await peer.emitTargetEvent(
             targetID: targetID,
             method: "Network.requestWillBeSent",
-            parameters: try WebInspectorTestJSONObject(encoding:
-                RequestWillBeSentParameters(
-                    requestId: request.id,
-                    frameId: frameID,
-                    loaderId: "\(frameID)-loader",
-                    request: .init(
-                        url: request.url,
-                        method: request.method,
-                        headers: request.requestHeaders,
-                        postData: request.postData
-                    ),
-                    initiator: .init(
-                        type: "other",
-                        nodeId: request.initiatorNodeID
-                    ),
-                    timestamp: 1,
-                    type: request.resourceType.rawValue
-                )
+            parameters: try WebInspectorTestJSONObject(
+                encoding:
+                    RequestWillBeSentParameters(
+                        requestId: request.id,
+                        frameId: frameID,
+                        loaderId: "\(frameID)-loader",
+                        request: .init(
+                            url: request.url,
+                            method: request.method,
+                            headers: request.requestHeaders,
+                            postData: request.postData
+                        ),
+                        initiator: .init(
+                            type: "other",
+                            nodeId: request.initiatorNodeID
+                        ),
+                        timestamp: 1,
+                        type: request.resourceType.rawValue
+                    )
             )
         )
+        recordAcceptedRawInput()
     }
 
     private func emitNetworkResponseReceived(
@@ -904,22 +1045,24 @@ private actor ScenarioDriver {
         try await peer.emitTargetEvent(
             targetID: targetID,
             method: "Network.responseReceived",
-            parameters: try WebInspectorTestJSONObject(encoding:
-                ResponseReceivedParameters(
-                    requestId: request.id,
-                    response: .init(
-                        url: request.url,
-                        status: request.status,
-                        statusText: request.statusText,
-                        mimeType: request.mimeType,
-                        headers: request.responseHeaders,
-                        requestHeaders: request.responseRequestHeaders
-                    ),
-                    timestamp: 2,
-                    type: request.resourceType.rawValue
-                )
+            parameters: try WebInspectorTestJSONObject(
+                encoding:
+                    ResponseReceivedParameters(
+                        requestId: request.id,
+                        response: .init(
+                            url: request.url,
+                            status: request.status,
+                            statusText: request.statusText,
+                            mimeType: request.mimeType,
+                            headers: request.responseHeaders,
+                            requestHeaders: request.responseRequestHeaders
+                        ),
+                        timestamp: 2,
+                        type: request.resourceType.rawValue
+                    )
             )
         )
+        recordAcceptedRawInput()
     }
 
     private func emitNetworkLoadingFinished(
@@ -929,18 +1072,33 @@ private actor ScenarioDriver {
         try await peer.emitTargetEvent(
             targetID: targetID,
             method: "Network.loadingFinished",
-            parameters: try WebInspectorTestJSONObject(encoding:
-                LoadingFinishedParameters(
-                    requestId: request.id,
-                    timestamp: 3,
-                    metrics: request.encodedDataLength.map {
-                        LoadingFinishedParameters.Metrics(
-                            responseBodyBytesReceived: $0
-                        )
-                    }
-                )
+            parameters: try WebInspectorTestJSONObject(
+                encoding:
+                    LoadingFinishedParameters(
+                        requestId: request.id,
+                        timestamp: 3,
+                        metrics: request.encodedDataLength.map {
+                            LoadingFinishedParameters.Metrics(
+                                responseBodyBytesReceived: $0
+                            )
+                        }
+                    )
             )
         )
+        recordAcceptedRawInput()
+    }
+
+    private func recordAcceptedRawInput() {
+        Self.increment(&acceptedRawInputCount, named: "accepted raw input")
+    }
+
+    private static func increment(
+        _ value: inout UInt64,
+        named counterName: StaticString
+    ) {
+        let (next, overflow) = value.addingReportingOverflow(1)
+        precondition(!overflow, "DataKit test \(counterName) counter exhausted.")
+        value = next
     }
 
     private func terminateAfterUnexpectedFailure(_ error: any Error) async {
@@ -952,6 +1110,44 @@ private actor ScenarioDriver {
 
 private struct DOMDocumentResult: Encodable {
     let root: DOMNodeWire
+}
+
+private struct PageResourceTreeResult: Encodable {
+    struct FrameTree: Encodable {
+        struct Frame: Encodable {
+            let id: String
+            let loaderId: String
+            let name: String
+            let url: String
+            let securityOrigin: String?
+            let mimeType: String
+        }
+
+        struct Resource: Encodable {
+            let url: String
+            let type: String
+            let mimeType: String
+        }
+
+        let frame: Frame
+        let resources: [Resource]
+    }
+
+    let frameTree: FrameTree
+
+    init(document: WebInspectorDataKitTestRuntime.Document) {
+        frameTree = FrameTree(
+            frame: .init(
+                id: document.frameID,
+                loaderId: "\(document.frameID)-loader",
+                name: "",
+                url: document.url ?? "",
+                securityOrigin: nil,
+                mimeType: "text/html"
+            ),
+            resources: []
+        )
+    }
 }
 
 private struct DOMAttributeModifiedParameters: Encodable {
@@ -1004,7 +1200,8 @@ private struct DOMNodeWire: Encodable {
         attributes = []
         let protocolChildren = document.children.filter { !$0.isASCIIWhitespaceText }
         childNodeCount = protocolChildren.count
-        children = protocolChildren.isEmpty
+        children =
+            protocolChildren.isEmpty
             ? nil
             : protocolChildren.map { DOMNodeWire(node: $0, depth: .max) }
     }
@@ -1021,7 +1218,8 @@ private struct DOMNodeWire: Encodable {
         let protocolChildren = node.children.filter { !$0.isASCIIWhitespaceText }
         childNodeCount = node.isContainer ? protocolChildren.count : nil
         if depth > 0 {
-            children = protocolChildren.isEmpty
+            children =
+                protocolChildren.isEmpty
                 ? nil
                 : protocolChildren.map { DOMNodeWire(node: $0, depth: depth - 1) }
         } else if node.children.count == 1, node.children[0].nodeType == 3 {
@@ -1107,20 +1305,4 @@ private struct ResponseBodyParameters: Decodable {
 private struct ResponseBodyResult: Encodable {
     let body: String
     let base64Encoded: Bool
-}
-
-private extension WebInspectorDataKitTestRuntime.Document {
-    var modelNodeCount: Int {
-        1 + children.reduce(into: 0) { count, node in
-            count += node.modelNodeCount
-        }
-    }
-}
-
-private extension WebInspectorDataKitTestRuntime.Node {
-    var modelNodeCount: Int {
-        1 + children.reduce(into: 0) { count, node in
-            count += node.modelNodeCount
-        }
-    }
 }
