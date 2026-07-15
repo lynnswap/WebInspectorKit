@@ -167,9 +167,11 @@ final class CanonicalNetworkPanelFixture {
     }
 
     func request(url: String) -> NetworkRequest? {
-        requests.fetchedObjects?.first {
-            $0.url == url
-        }
+        requests.fetchedObjects?.lazy
+            .filter { $0.url == url }
+            .max {
+                $0.id.canonicalStorage.ordinal < $1.id.canonicalStorage.ordinal
+            }
     }
 
     func close() async {
