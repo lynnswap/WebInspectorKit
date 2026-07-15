@@ -8159,6 +8159,7 @@ func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws
     let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
     try await waitUntil { results.items.first?.state == .finished }
     let request = try #require(results.items.first)
+    #expect(request.lifecycleRevision == 0)
 
     await runtime.backend.emit(
         .requestWillBeSent(
@@ -8182,6 +8183,7 @@ func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws
     #expect(request.sourceMapURL == nil)
     #expect(request.metrics == nil)
     #expect(request.initiator?.nodeID == DOM.Node.ID("42"))
+    #expect(request.lifecycleRevision == 1)
 }
 
 @MainActor

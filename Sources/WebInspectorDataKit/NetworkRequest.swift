@@ -772,6 +772,9 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     /// Immutable frame-visit membership for the current request chain.
     package private(set) var navigationVisit: NetworkNavigationVisit?
 
+    /// Increments when WebKit reuses the protocol request ID for a new lifecycle.
+    package private(set) var lifecycleRevision: UInt64
+
     /// The current request lifecycle state.
     public private(set) var state: State
 
@@ -867,6 +870,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         method = request.method
         self.initiator = initiator
         self.navigationVisit = navigationVisit
+        lifecycleRevision = 0
         self.resourceType = resourceType
         state = .pending
         status = nil
@@ -990,6 +994,8 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         resourceType: Network.ResourceType?,
         timestamp: Double
     ) {
+        precondition(lifecycleRevision < UInt64.max, "Network request lifecycle revision overflowed.")
+        lifecycleRevision += 1
         currentRequest = request
         url = request.url
         method = request.method
