@@ -830,6 +830,43 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func scrollingUsesViewportSurfacesWithoutRebuildingAllDecorations() async throws {
+        let session = makeDOMTreeFixture(root: selectionRevealRaceDocument())
+        let view = await makeTreeView(fixture: session)
+        view.frame = CGRect(x: 0, y: 0, width: 360, height: 96)
+        view.layoutIfNeeded()
+        let didRenderRows = await waitForRenderedDocumentTreeUpdate(
+            in: view,
+            fixture: session,
+            update: {
+                session.applySetChildNodes(
+                    parent: nodeID(3),
+                    children: selectionRevealRaceBodyChildren(prefixCount: 80),
+                    eventSequence: 10
+                )
+            },
+            until: {
+                view.rowSnapshotsForTesting.count > 80
+            }
+        )
+        #expect(didRenderRows)
+        view.setContentOffset(.zero, animated: false)
+        view.layoutSubviews()
+        let maximumOffset = view.contentSize.height - view.bounds.height
+        #expect(maximumOffset > view.rowHeightForTesting)
+        view.resetPerformanceCountersForTesting()
+
+        view.setContentOffset(
+            CGPoint(x: 0, y: min(maximumOffset, view.rowHeightForTesting * 20)),
+            animated: false
+        )
+        view.layoutSubviews()
+
+        #expect(view.fragmentSubviewCountForTesting > 0)
+        #expect(view.updateContentDecorationsCallCountForTesting == 0)
+    }
+
+    @Test
     func hiddenVisibleMutationDefersRenderingUntilRenderingResumes() async throws {
         let session = makeDOMTreeFixture()
         let view = await makeTreeView(fixture: session)

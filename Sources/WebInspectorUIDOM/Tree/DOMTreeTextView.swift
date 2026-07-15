@@ -1814,7 +1814,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         if !textContainer.size.wiIsNearlyEqual(to: containerSize) {
             textContainer.size = containerSize
         }
-        updateContentDecorations()
     }
 
     private func resetTextFragmentViews() {
@@ -2096,6 +2095,9 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func updateContentDecorations() {
+#if DEBUG
+        performanceCounters.updateContentDecorationsCallCount += 1
+#endif
         hoverRowRects = hoverContentRowRects()
         selectedRowRects = selectedContentRowRects()
         multiSelectedRowRects = multiSelectionContentRowRects()
@@ -2712,6 +2714,10 @@ extension DOMTreeTextView {
 
     var textSegmentRectsCallCountForTesting: Int {
         performanceCounters.textSegmentRectsCallCount
+    }
+
+    var updateContentDecorationsCallCountForTesting: Int {
+        performanceCounters.updateContentDecorationsCallCount
     }
 
     var cachedMarkupKeysForTesting: Set<DOMTreeTextView.MarkupCacheKey> {
