@@ -453,10 +453,10 @@ func descendantActivationDoesNotBlockCurrentPageCommand() async throws {
         buffering: .bounded(4)
     )
 
-    try await runtime.peer.createTarget(.init(id: "frame-one", type: "frame"))
+    try await runtime.peer.createTarget(.init(id: "frame-42-7", type: "frame"))
     let pendingActivation = try await runtime.peer.commands.next()
     #expect(pendingActivation.method == "Console.enable")
-    #expect(pendingActivation.destination == .target("frame-one"))
+    #expect(pendingActivation.destination == .target("frame-42-7"))
 
     let documentTask = Task { try await scope.command(DOMWireCoding.getDocument()) }
     let documentCommand = try await nextCommand(
@@ -480,7 +480,7 @@ func descendantActivationDoesNotBlockCurrentPageCommand() async throws {
 func disappearingInitialDescendantDoesNotFailScopeRegistration() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     defer { Task { await runtime.close() } }
-    try await runtime.peer.createTarget(.init(id: "frame-one", type: "frame"))
+    try await runtime.peer.createTarget(.init(id: "frame-42-7", type: "frame"))
 
     let scopeTask = Task {
         try await runtime.page.orderedScope(
@@ -494,9 +494,9 @@ func disappearingInitialDescendantDoesNotFailScopeRegistration() async throws {
     }
     let pendingActivation = try await runtime.peer.commands.next()
     #expect(pendingActivation.method == "Console.enable")
-    #expect(pendingActivation.destination == .target("frame-one"))
+    #expect(pendingActivation.destination == .target("frame-42-7"))
 
-    try await runtime.peer.destroyTarget(id: "frame-one")
+    try await runtime.peer.destroyTarget(id: "frame-42-7")
     let scope = try await scopeTask.value
 
     let documentTask = Task { try await scope.command(DOMWireCoding.getDocument()) }
