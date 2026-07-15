@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import socket
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,6 +27,30 @@ HLS_PLAYLIST: Final = b"""#EXTM3U
 /media/fixture.ts
 #EXT-X-ENDLIST
 """
+SINGLE_BYTE_RANGE: Final = re.compile(r"bytes=(\d*)-(\d*)\Z")
+
+
+def _parse_single_byte_range(value: str, length: int) -> tuple[int, int] | None:
+    match = SINGLE_BYTE_RANGE.fullmatch(value)
+    if match is None:
+        return None
+
+    first, last = match.groups()
+    if first:
+        start = int(first)
+        if start >= length:
+            return None
+        end = min(int(last), length - 1) if last else length - 1
+        if end < start:
+            return None
+        return start, end
+
+    if not last:
+        return None
+    suffix_length = int(last)
+    if suffix_length == 0:
+        return None
+    return max(length - suffix_length, 0), length - 1
 
 
 def _cards(count: int = CARD_COUNT) -> str:
@@ -371,7 +396,7 @@ class InspectorFixtureHandler(BaseHTTPRequestHandler):
         elif path == "/media/fixture.m3u8":
             self._send(HTTPStatus.OK, "application/vnd.apple.mpegurl", HLS_PLAYLIST)
         elif path == "/media/fixture.ts":
-            self._send(HTTPStatus.OK, "video/mp2t", MEDIA_SEGMENT)
+            self._send_media_segment()
         elif path == "/api/data":
             self._send(HTTPStatus.OK, "application/json", JSON_DATA)
         elif path == "/api/detail":
@@ -440,12 +465,48 @@ class InspectorFixtureHandler(BaseHTTPRequestHandler):
             return None
         return self.rfile.read(length)
 
-    def _send(self, status: HTTPStatus, content_type: str, body: bytes) -> None:
+    def _send_media_segment(self) -> None:
+        range_value = self.headers.get("Range")
+        headers = {"Accept-Ranges": "bytes"}
+        if range_value is None:
+            self._send(HTTPStatus.OK, "video/mp2t", MEDIA_SEGMENT, headers=headers)
+            return
+
+        selected_range = _parse_single_byte_range(range_value, len(MEDIA_SEGMENT))
+        if selected_range is None:
+            headers["Content-Range"] = f"bytes */{len(MEDIA_SEGMENT)}"
+            self._send(
+                HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE,
+                "video/mp2t",
+                b"",
+                headers=headers,
+            )
+            return
+
+        start, end = selected_range
+        headers["Content-Range"] = f"bytes {start}-{end}/{len(MEDIA_SEGMENT)}"
+        self._send(
+            HTTPStatus.PARTIAL_CONTENT,
+            "video/mp2t",
+            MEDIA_SEGMENT[start : end + 1],
+            headers=headers,
+        )
+
+    def _send(
+        self,
+        status: HTTPStatus,
+        content_type: str,
+        body: bytes,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Inspector-Fixture", "self-authored")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 

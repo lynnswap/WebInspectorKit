@@ -522,10 +522,8 @@ package final class NetworkDetailViewController: UIViewController {
             unbindResponseBodyFetchObservation()
             return
         }
-        guard NetworkDisplay.MediaPreviewSupport.remoteHLSURL(
-            mimeType: metadata?.mimeType,
-            url: metadata?.url
-        ) == nil else {
+        if let metadata,
+           case .preferredRemotePlayback = metadata.sourcePolicy {
             unbindResponseBodyFetchObservation()
             return
         }
@@ -579,12 +577,30 @@ package final class NetworkDetailViewController: UIViewController {
         case .request:
             return NetworkMediaPreviewMetadata(
                 mimeType: mimeType(from: nil, headers: request.requestHeaders),
-                url: request.url
+                url: request.url,
+                sourcePolicy: .body
             )
         case .response:
+            let mimeType = mimeType(from: request.mimeType, headers: request.responseHeaders)
+            let url = request.responseURL ?? request.url
+            let remotePlaybackURL = preferredRemotePlaybackURL(
+                for: request,
+                mimeType: mimeType,
+                url: url
+            )
+            let previewKind = NetworkDisplay.MediaPreviewSupport.previewKind(
+                mimeType: mimeType,
+                url: url
+            )
             return NetworkMediaPreviewMetadata(
-                mimeType: mimeType(from: request.mimeType, headers: request.responseHeaders),
-                url: request.responseURL ?? request.url
+                mimeType: mimeType,
+                url: url,
+                sourcePolicy: remotePlaybackURL.map(
+                    NetworkMediaPreviewSourcePolicy.preferredRemotePlayback
+                ) ?? (previewKind == .hlsPlaylist ? .syntax : .body),
+                remotePlaybackHTTPUserAgent: remotePlaybackURL.flatMap { _ in
+                    headerValue(named: "user-agent", in: request.requestHeaders)
+                }
             )
         }
     }
@@ -607,6 +623,89 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func headerValue(named name: String, in headers: [String: String]) -> String? {
         headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
+    }
+
+    private func preferredRemotePlaybackURL(
+        for request: NetworkRequest,
+        mimeType: String?,
+        url: String
+    ) -> URL? {
+        let previewKind = NetworkDisplay.MediaPreviewSupport.previewKind(
+            mimeType: mimeType,
+            url: url
+        )
+        guard canReplayRequestAsRemoteMedia(request) else {
+            return nil
+        }
+        if previewKind == .hlsPlaylist {
+            return NetworkDisplay.MediaPreviewSupport.remoteHLSURL(
+                mimeType: mimeType,
+                url: url
+            )
+        }
+        guard previewKind == .movie,
+              request.status == 206 || hasSatisfiableContentRange(request.responseHeaders),
+              let remoteURL = URL(string: url),
+              let scheme = remoteURL.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              remoteURL.host?.isEmpty == false else {
+            return nil
+        }
+        return remoteURL
+    }
+
+    private func canReplayRequestAsRemoteMedia(_ request: NetworkRequest) -> Bool {
+        guard request.method.caseInsensitiveCompare("GET") == .orderedSame,
+              request.requestBody == nil else {
+            return false
+        }
+        // AVURLAsset can reproduce User-Agent through public API. AVPlayer owns
+        // its Range requests; every other captured header may change semantics.
+        return request.requestHeaders.allSatisfy { name, _ in
+            switch name.lowercased() {
+            case "range", "user-agent":
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    private func hasSatisfiableContentRange(_ headers: [String: String]) -> Bool {
+        guard let value = headerValue(named: "content-range", in: headers) else {
+            return false
+        }
+        let components = value.split(whereSeparator: { $0.isWhitespace })
+        guard components.count == 2,
+              components[0].caseInsensitiveCompare("bytes") == .orderedSame else {
+            return false
+        }
+        let rangeAndLength = components[1].split(
+            separator: "/",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )
+        guard rangeAndLength.count == 2 else {
+            return false
+        }
+        let bounds = rangeAndLength[0].split(
+            separator: "-",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )
+        guard bounds.count == 2,
+              let first = Int(bounds[0]),
+              let last = Int(bounds[1]),
+              first <= last else {
+            return false
+        }
+        if rangeAndLength[1] == "*" {
+            return true
+        }
+        guard let completeLength = Int(rangeAndLength[1]) else {
+            return false
+        }
+        return last < completeLength
     }
 
 }

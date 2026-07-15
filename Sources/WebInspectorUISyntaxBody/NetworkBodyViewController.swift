@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import AVFoundation
 import AVKit
 import WebInspectorDataKit
 import WebInspectorProxyKit
@@ -15,7 +16,7 @@ extension NetworkBodyViewController {
 
 @MainActor
 package final class NetworkBodyViewController: UIViewController, NetworkBodyPreviewControlling {
-    package typealias MoviePreviewPlayerFactory = @MainActor (URL) -> AVPlayer
+    package typealias MoviePreviewPlayerFactory = @MainActor () -> AVPlayer
 
     private let syntaxModel = SyntaxEditorModel(
         text: "",
@@ -70,7 +71,9 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
     private var surface = NetworkBodySurface.none
     private var isRenderingActive = false
     private var mediaPlayerViewController: AVPlayerViewController?
-    private var mediaPlayerURL: URL?
+    private var mediaPlayerSurfaceBodyID: ObjectIdentifier?
+    private var mediaPlayerStatusView: UIContentUnavailableView?
+    private var mediaPlayerPreview: NetworkMoviePreview?
     private var moviePreviewPlayerFactory: MoviePreviewPlayerFactory
     private var textPreviewCoordinator = NetworkTextPreviewCoordinator()
     private var mediaPreviewCoordinator = NetworkMediaPreviewCoordinator()
@@ -87,8 +90,8 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
 
     package init(
         scrollEdgeSink: (any NetworkBodyScrollEdgeSink)? = nil,
-        moviePreviewPlayerFactory: @escaping MoviePreviewPlayerFactory = { url in
-            AVPlayer(url: url)
+        moviePreviewPlayerFactory: @escaping MoviePreviewPlayerFactory = {
+            AVPlayer()
         }
     ) {
         self.scrollEdgeSink = scrollEdgeSink
@@ -300,6 +303,29 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
             return
         }
 
+        if case .loaded = body.phase,
+           surface.metadata?.sourcePolicy == .syntax,
+           let rawBody = body.full {
+            textPreviewCoordinator.cancel()
+            hideMediaPreview()
+            let syntaxBody: String?
+            if body.isBase64Encoded {
+                syntaxBody = Data(base64Encoded: rawBody).flatMap {
+                    String(data: $0, encoding: .utf8)
+                }
+            } else {
+                syntaxBody = rawBody
+            }
+            applyBodyDisplay(
+                text: syntaxBody ?? String(
+                    localized: "network.body.unavailable",
+                    bundle: WebInspectorUILocalization.bundle
+                ),
+                syntaxKind: body.sourceSyntaxKind
+            )
+            return
+        }
+
         if renderMediaPreviewIfPossible(for: body) {
             textPreviewCoordinator.cancel()
             return
@@ -389,11 +415,17 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
             return false
         case .active:
             return true
-        case .remoteMovie(let url):
-            showMoviePreview(url)
+        case .remoteMovie(let preview):
+            showMoviePreview(preview)
             return true
-        case .cachedMovie(let fileURL):
-            showMoviePreview(fileURL)
+        case .cachedMovie(let preview):
+            showMoviePreview(preview)
+            return true
+        case .loadingMovie(let bodyID):
+            showMoviePreviewLoadingState(bodyID: bodyID)
+            return true
+        case .unavailableMovie(let bodyID):
+            showMoviePreviewUnavailableState(bodyID: bodyID)
             return true
         case .startedLoading:
             showMediaPreviewLoadingState()
@@ -414,8 +446,8 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
             renderCurrentSurface()
         case .showImage(let image):
             showImagePreview(image)
-        case .showMovie(let fileURL):
-            showMoviePreview(fileURL)
+        case .showMovie(let preview):
+            showMoviePreview(preview)
         }
     }
 
@@ -429,6 +461,26 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         syntaxView.isHidden = false
         scrollEdgeSink?.contentScrollView = syntaxView
         previewRenderState.showLoading()
+    }
+
+    private func showMoviePreviewLoadingState(bodyID: ObjectIdentifier) {
+        installMoviePreviewSurfaceIfNeeded(bodyID: bodyID)
+        clearMoviePreviewSourceIfNeeded(bodyID: bodyID)
+        showMoviePreviewStatus(UIContentUnavailableConfiguration.loading())
+        previewRenderState.showMovieLoading(bodyID: bodyID)
+    }
+
+    private func showMoviePreviewUnavailableState(bodyID: ObjectIdentifier) {
+        installMoviePreviewSurfaceIfNeeded(bodyID: bodyID)
+        clearMoviePreviewSourceIfNeeded(bodyID: bodyID)
+        var configuration = UIContentUnavailableConfiguration.empty()
+        configuration.image = UIImage(systemName: "exclamationmark.triangle")
+        configuration.text = String(
+            localized: "network.body.unavailable",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        showMoviePreviewStatus(configuration)
+        previewRenderState.showMovieUnavailable(bodyID: bodyID)
     }
 
     private func showSyntaxPreview() {
@@ -458,34 +510,98 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         previewRenderState.showImage(size: image.size)
     }
 
-    private func showMoviePreview(_ url: URL) {
+    private func showMoviePreview(_ preview: NetworkMoviePreview) {
+        installMoviePreviewSurfaceIfNeeded(bodyID: preview.bodyID)
+        if mediaPlayerPreview == preview,
+           mediaPlayerViewController?.player?.currentItem != nil {
+            return
+        }
+        guard let player = mediaPlayerViewController?.player else {
+            preconditionFailure("An installed movie preview surface must own its player.")
+        }
+        let asset = AVURLAsset(
+            url: preview.url,
+            options: preview.httpUserAgent.map { userAgent in
+                [AVURLAssetHTTPUserAgentKey: userAgent]
+            }
+        )
+        let item = AVPlayerItem(asset: asset)
+        mediaPlayerPreview = preview
+        player.replaceCurrentItem(with: item)
+        hideMoviePreviewStatus()
+        previewRenderState.showMovie(preview.url)
+    }
+
+    private func installMoviePreviewSurfaceIfNeeded(bodyID: ObjectIdentifier) {
+        if mediaPlayerSurfaceBodyID == bodyID,
+           mediaPlayerViewController != nil {
+            return
+        }
+
+        removeMediaPlayerViewController()
         hideImagePreview()
         removeSyntaxPreview()
         scrollEdgeSink?.contentScrollView = nil
 
-        let playerViewController: AVPlayerViewController
-        if let current = mediaPlayerViewController {
-            playerViewController = current
-        } else {
-            playerViewController = AVPlayerViewController()
-            playerViewController.view.translatesAutoresizingMaskIntoConstraints = false
-            addChild(playerViewController)
-            view.addSubview(playerViewController.view)
-            NSLayoutConstraint.activate([
-                playerViewController.view.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-                playerViewController.view.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
-                playerViewController.view.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
-                playerViewController.view.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
-            ])
-            playerViewController.didMove(toParent: self)
-            mediaPlayerViewController = playerViewController
-        }
-        if mediaPlayerURL == url {
+        let playerViewController = AVPlayerViewController()
+        playerViewController.player = moviePreviewPlayerFactory()
+        playerViewController.view.translatesAutoresizingMaskIntoConstraints = false
+        addChild(playerViewController)
+        view.addSubview(playerViewController.view)
+        NSLayoutConstraint.activate([
+            playerViewController.view.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            playerViewController.view.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            playerViewController.view.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            playerViewController.view.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
+        ])
+        playerViewController.didMove(toParent: self)
+        mediaPlayerSurfaceBodyID = bodyID
+        mediaPlayerViewController = playerViewController
+    }
+
+    private func clearMoviePreviewSourceIfNeeded(bodyID: ObjectIdentifier) {
+        guard mediaPlayerSurfaceBodyID == bodyID,
+              let player = mediaPlayerViewController?.player,
+              mediaPlayerPreview != nil || player.currentItem != nil else {
             return
         }
-        playerViewController.player = moviePreviewPlayerFactory(url)
-        mediaPlayerURL = url
-        previewRenderState.showMovie(url)
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        mediaPlayerPreview = nil
+    }
+
+    private func showMoviePreviewStatus(_ configuration: UIContentUnavailableConfiguration) {
+        guard let playerViewController = mediaPlayerViewController else {
+            preconditionFailure("A movie preview status requires an installed player surface.")
+        }
+        let statusView: UIContentUnavailableView
+        if let mediaPlayerStatusView {
+            statusView = mediaPlayerStatusView
+            statusView.configuration = configuration
+        } else {
+            statusView = UIContentUnavailableView(configuration: configuration)
+            statusView.translatesAutoresizingMaskIntoConstraints = false
+            statusView.backgroundColor = .clear
+            statusView.isOpaque = false
+            statusView.isUserInteractionEnabled = false
+            guard let playerView = playerViewController.view else {
+                preconditionFailure("An installed movie preview surface must own its view.")
+            }
+            playerView.addSubview(statusView)
+            NSLayoutConstraint.activate([
+                statusView.topAnchor.constraint(equalTo: playerView.topAnchor),
+                statusView.leadingAnchor.constraint(equalTo: playerView.leadingAnchor),
+                statusView.trailingAnchor.constraint(equalTo: playerView.trailingAnchor),
+                statusView.bottomAnchor.constraint(equalTo: playerView.bottomAnchor),
+            ])
+            mediaPlayerStatusView = statusView
+        }
+        statusView.isHidden = false
+        statusView.superview?.bringSubviewToFront(statusView)
+    }
+
+    private func hideMoviePreviewStatus() {
+        mediaPlayerStatusView?.isHidden = true
     }
 
     private func hideMediaPreview() {
@@ -613,11 +729,15 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
     }
 
     private func removeMediaPlayerViewController() {
-        mediaPlayerURL = nil
+        mediaPlayerPreview = nil
+        mediaPlayerSurfaceBodyID = nil
+        mediaPlayerStatusView?.removeFromSuperview()
+        mediaPlayerStatusView = nil
         guard let mediaPlayerViewController else {
             return
         }
         pauseMediaPreviewPlayback()
+        mediaPlayerViewController.player?.replaceCurrentItem(with: nil)
         mediaPlayerViewController.willMove(toParent: nil)
         mediaPlayerViewController.view.removeFromSuperview()
         mediaPlayerViewController.removeFromParent()
@@ -662,6 +782,14 @@ private final class NetworkBodyPreviewRenderState {
 
     func showLoading() {
         updateSurface(.loading, imageLayout: nil)
+    }
+
+    func showMovieLoading(bodyID: ObjectIdentifier) {
+        updateSurface(.movieLoading(bodyID: bodyID), imageLayout: nil)
+    }
+
+    func showMovieUnavailable(bodyID: ObjectIdentifier) {
+        updateSurface(.movieUnavailable(bodyID: bodyID), imageLayout: nil)
     }
 
     func showImage(size: CGSize) {
@@ -712,6 +840,8 @@ private enum NetworkBodyPreviewSurface: Equatable {
     case syntax
     case loading
     case image(size: CGSize)
+    case movieLoading(bodyID: ObjectIdentifier)
+    case movieUnavailable(bodyID: ObjectIdentifier)
     case movie(URL)
 }
 
@@ -751,6 +881,11 @@ struct NetworkBodyImagePreviewRenderSnapshot: Equatable {
     var visibleBoundsSize: CGSize
     var minimumZoomScale: CGFloat
     var zoomScale: CGFloat
+}
+
+enum NetworkMoviePreviewStatusForTesting: Equatable {
+    case loading
+    case unavailable
 }
 
 extension NetworkBodyViewController {
@@ -794,7 +929,38 @@ extension NetworkBodyViewController {
         guard mediaPlayerViewController != nil else {
             return nil
         }
-        return mediaPlayerURL
+        return mediaPlayerPreview?.url
+    }
+
+    var mediaPlayerViewControllerIdentityForTesting: ObjectIdentifier? {
+        loadViewIfNeeded()
+        return mediaPlayerViewController.map(ObjectIdentifier.init)
+    }
+
+    var isMoviePreviewStatusVisibleForTesting: Bool {
+        loadViewIfNeeded()
+        return mediaPlayerStatusView?.isHidden == false
+    }
+
+    var moviePreviewStatusForTesting: NetworkMoviePreviewStatusForTesting? {
+        loadViewIfNeeded()
+        switch previewRenderState.surface {
+        case .movieLoading:
+            return .loading
+        case .movieUnavailable:
+            return .unavailable
+        default:
+            return nil
+        }
+    }
+
+    var isMoviePreviewStatusHostedInPlayerForTesting: Bool {
+        loadViewIfNeeded()
+        guard let mediaPlayerStatusView,
+              let playerView = mediaPlayerViewController?.view else {
+            return false
+        }
+        return mediaPlayerStatusView.isDescendant(of: playerView)
     }
 
     var mediaPlayerIdentityForTesting: ObjectIdentifier? {
@@ -803,6 +969,11 @@ extension NetworkBodyViewController {
             return nil
         }
         return ObjectIdentifier(player)
+    }
+
+    var mediaPlayerItemForTesting: AVPlayerItem? {
+        loadViewIfNeeded()
+        return mediaPlayerViewController?.player?.currentItem
     }
 
     func setMoviePreviewPlayerFactoryForTesting(

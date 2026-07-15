@@ -44,7 +44,7 @@ launcher defaults.
 | `target=_blank` routing | Tap **Open page B in target blank** and confirm Monocly loads page B in the current browser view. |
 | POST request and response bodies | Tap **Send local JSON POST**, select `/api/echo` in Network, and inspect both **Request** and **Response** preview roles. |
 | Network list and previews | Page A issues JSON, redirect, SVG image, and intentionally disconnected requests. Inspect headers, JSON body, image preview, redirect chain, and failure state. |
-| Movie/HLS preview | Tap **Load local HLS movie**, select `/media/fixture.m3u8` in Network, and confirm the finite local movie renders in Preview. |
+| Movie/HLS preview | Tap **Load local HLS movie**, select `/media/fixture.m3u8` in Network, and confirm the finite local movie renders in Preview. Select its `/media/fixture.ts` request and confirm the 206 response has `Content-Range` / `Accept-Ranges` headers and plays from the original URL without fetching a response body into WebInspectorKit. |
 | Navigation generations | Navigate A → B, then use **History back** or Monocly back. DOM changes while Network history remains available. |
 | Idle behavior | After the one-shot requests settle, do nothing and sample the main thread. The fixture has no interval, animation loop, or periodic mutation. |
 
@@ -60,6 +60,7 @@ python3 Tools/InspectorFixture/test_server.py
 
 The test boots the server on an ephemeral port and verifies the route shapes,
 stress markers, dialog and navigation targets, used/unused CSS variables,
-distinct POST request/response bodies, finite local HLS media, local-only
+distinct POST request/response bodies, finite local HLS media with byte-range
+responses, local-only
 assets, redirect, JSON/image responses, and the connection-level failed
 request.
