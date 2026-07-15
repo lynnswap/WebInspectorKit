@@ -64,6 +64,20 @@ public final class WebInspectorContext {
 
     private typealias LoadedDOMDocument = (node: DOM.Node, generation: Int)
 
+    private struct ElementPickerOperation {
+        enum Intent: Equatable {
+            case commandReply
+            case inspectEvent
+            case invalidated
+        }
+
+        let id: UInt64
+        let pageGeneration: Int
+        let documentGeneration: Int
+        let requestedEnabled: Bool
+        var intent: Intent
+    }
+
 #if DEBUG
     private struct EventPumpAppliedWaiterForTesting {
         var minimumSequence: UInt64
@@ -135,6 +149,8 @@ public final class WebInspectorContext {
     private var documentReloadTask: Task<Void, Never>?
     private var inspectResolutionTask: Task<Void, Never>?
     private var inspectedNodeHighlightTask: Task<Void, Never>?
+    private var elementPickerOperation: ElementPickerOperation?
+    private var nextElementPickerOperationID: UInt64
     private var frameDocumentLoadTasks: [WebInspectorTarget.ID: Task<Void, Never>]
     private var styleRefreshTask: Task<Void, Never>?
     private var styleRefreshGeneration: Int
@@ -204,6 +220,8 @@ public final class WebInspectorContext {
         documentReloadTask = nil
         inspectResolutionTask = nil
         inspectedNodeHighlightTask = nil
+        elementPickerOperation = nil
+        nextElementPickerOperationID = 0
         frameDocumentLoadTasks = [:]
         styleRefreshTask = nil
         styleRefreshGeneration = 0
@@ -291,6 +309,8 @@ public final class WebInspectorContext {
         previousStartupTask?.cancel()
         currentPageRetargetTask?.cancel()
         currentPageRetargetTask = nil
+        invalidateElementPickerOperation()
+        isElementPickerEnabled = false
         state = .attaching
         notifyStatusChanged()
         teardownError = nil
@@ -662,23 +682,157 @@ public final class WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) async throws {
         requireOwner(isolation)
+        try Task.checkCancellation()
+        guard elementPickerOperation == nil else {
+            throw WebInspectorProxyError.commandFailed(
+                domain: "DOM",
+                method: "setInspectModeEnabled",
+                message: "An element picker transition is already in progress."
+            )
+        }
+        guard isEnabled != isElementPickerEnabled else {
+            return
+        }
         let page = try currentPageOrThrow()
+        precondition(
+            nextElementPickerOperationID < UInt64.max,
+            "WebInspectorContext exhausted element picker operation identifiers."
+        )
+        nextElementPickerOperationID += 1
+        let operationID = nextElementPickerOperationID
+        elementPickerOperation = ElementPickerOperation(
+            id: operationID,
+            pageGeneration: currentPageGeneration,
+            documentGeneration: domDocumentGeneration,
+            requestedEnabled: isEnabled,
+            intent: .commandReply
+        )
         WebInspectorDataKitLog.debug(
             "DOM picker setInspectMode start enabled=\(isEnabled) target=\(page.id.rawValue)"
         )
-        do {
+        // Do not inherit caller cancellation here. Once WebKit accepts the
+        // command, its reply is required to decide whether cancellation must
+        // send one compensating disable.
+        let commandResult = await Task {
             try await page.dom.setInspectMode(enabled: isEnabled)
-        } catch {
+        }.result
+        let wasCancelled = Task.isCancelled
+
+        guard let operation = elementPickerOperation,
+              operation.id == operationID else {
+            throw staleElementPickerOperationError()
+        }
+        defer {
+            if elementPickerOperation?.id == operationID {
+                elementPickerOperation = nil
+            }
+        }
+        if case .inspectEvent = operation.intent {
+            if wasCancelled {
+                throw CancellationError()
+            }
+            return
+        }
+
+        let operationIsCurrent = operation.pageGeneration == currentPageGeneration
+            && operation.documentGeneration == domDocumentGeneration
+            && operation.intent != .invalidated
+
+        switch commandResult {
+        case let .failure(error):
             WebInspectorDataKitLog.debug(
                 "DOM picker setInspectMode failed enabled=\(isEnabled) target=\(page.id.rawValue): \(String(describing: error))"
             )
+            guard operationIsCurrent else {
+                throw staleElementPickerOperationError()
+            }
+            if wasCancelled {
+                throw CancellationError()
+            }
             throw error
+        case .success:
+            break
         }
+
+        guard operationIsCurrent else {
+            if isEnabled {
+                try await disableElementPickerAfterSuccessfulEnable(
+                    on: page,
+                    operationID: operationID,
+                    isolation: isolation
+                )
+            }
+            throw staleElementPickerOperationError()
+        }
+
+        if isEnabled && wasCancelled {
+            try await disableElementPickerAfterSuccessfulEnable(
+                on: page,
+                operationID: operationID,
+                isolation: isolation
+            )
+            throw CancellationError()
+        }
+
         isElementPickerEnabled = isEnabled
         notifyStatusChanged()
         WebInspectorDataKitLog.debug(
             "DOM picker setInspectMode finished enabled=\(isEnabled) target=\(page.id.rawValue)"
         )
+        if wasCancelled {
+            throw CancellationError()
+        }
+    }
+
+    private func staleElementPickerOperationError() -> WebInspectorProxyError {
+        .disconnected("DOM element picker operation no longer belongs to the current document.")
+    }
+
+    private func disableElementPickerAfterSuccessfulEnable(
+        on page: WebInspectorTarget,
+        operationID: UInt64,
+        isolation: isolated (any Actor)
+    ) async throws {
+        requireOwner(isolation)
+        // The caller is already cancelled on this path, but physical cleanup
+        // still owns its command through the backend reply.
+        let rollbackResult = await Task {
+            try await page.dom.setInspectMode(enabled: false)
+        }.result
+        if case let .failure(error) = rollbackResult {
+            if elementPickerOperation?.id == operationID,
+               elementPickerOperation?.intent == .inspectEvent {
+                return
+            }
+            if let operation = elementPickerOperation,
+               operation.id == operationID,
+               operation.pageGeneration == currentPageGeneration,
+               operation.documentGeneration == domDocumentGeneration,
+               operation.intent == .commandReply {
+                switch state {
+                case .attaching, .attached:
+                    if currentPage != nil {
+                        isElementPickerEnabled = true
+                        notifyStatusChanged()
+                    }
+                case .detached, .failed:
+                    break
+                }
+            }
+            WebInspectorDataKitLog.debug(
+                "DOM picker rollback failed target=\(page.id.rawValue): \(String(describing: error))"
+            )
+            throw error
+        }
+    }
+
+    private func invalidateElementPickerOperation() {
+        guard var operation = elementPickerOperation,
+              operation.intent == .commandReply else {
+            return
+        }
+        operation.intent = .invalidated
+        elementPickerOperation = operation
     }
 
     /// Reloads the inspected page.
@@ -2213,6 +2367,9 @@ extension WebInspectorContext {
         }
         styleToggleTasks = [:]
         cancelConsoleObjectGroupReleaseTasks()
+        invalidateElementPickerOperation()
+        isElementPickerEnabled = false
+        notifyStatusChanged()
         let generation = advanceCurrentPageGeneration(isolation: isolation)
         advanceDOMDocumentGeneration(isolation: isolation)
 
@@ -2335,6 +2492,14 @@ extension WebInspectorContext {
             markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
             notifyDOMTreeNodeChanged(node, isolation: isolation)
         case let .inspect(id):
+            if elementPickerOperation?.intent == .invalidated {
+                skipEvent("DOM.inspect ignored for invalidated element picker operation")
+                return
+            }
+            if elementPickerOperation?.requestedEnabled == true,
+               elementPickerOperation?.intent == .commandReply {
+                elementPickerOperation?.intent = .inspectEvent
+            }
             isElementPickerEnabled = false
             notifyStatusChanged()
             let inspectedNodeID = DOMNode.ID(id)
@@ -2435,6 +2600,7 @@ extension WebInspectorContext {
     }
 
     private func resetDOM(isolation: isolated (any Actor)) {
+        invalidateElementPickerOperation()
         inspectResolutionTask?.cancel()
         inspectResolutionTask = nil
         styleRefreshTask?.cancel()
