@@ -62,6 +62,11 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         case unavailable(WebInspectorFeatureError)
     }
 
+    private struct LoadedStyleResource {
+        var record: WebInspectorCSSStylesRecord
+        var loadToken: UUID?
+    }
+
     private let registry: WebInspectorFeatureRegistry
     private let pickerPublisher: _WebInspectorStatePublisher<WebInspectorElementPickerState>
     private var connection: WebInspectorFeatureConnection?
@@ -70,7 +75,11 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     private var reducer: WebInspectorCanonicalDOMReducer?
     private var cssReducer: WebInspectorCanonicalCSSReducer?
     private var currentBindingScope: WebInspectorCanonicalDOMEventScope?
-    private var loadedStyles: [CSSStyles.ID: WebInspectorCSSStylesRecord] = [:]
+    private var loadedStyles: [CSSStyles.ID: LoadedStyleResource] = [:]
+    private var isStyleCommitActive = false
+    private var isStyleCommitClosed = false
+    private var styleCommitWaiters: [CheckedContinuation<Void, any Error>] = []
+    private var styleCommitCloseWaiters: [CheckedContinuation<Void, Never>] = []
     private var state: WebInspectorFeatureState = .disabled
     private var recoveryBudget = WebInspectorFeatureRecoveryBudget()
     private var closeRequested = false
@@ -95,6 +104,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         self.connection = connection
         self.store = store
         closeRequested = false
+        reopenStyleCommitGate()
         explicitRetryRequested = false
         recoveryBudget = WebInspectorFeatureRecoveryBudget()
         // Do not replace the reducers here: after detach they still describe
@@ -193,6 +203,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     package func close() async {
         guard !closeRequested else { return }
         closeRequested = true
+        await closeStyleCommitGate()
         explicitRetryRequested = true
         retryWaiter?.resume()
         retryWaiter = nil
@@ -357,7 +368,13 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
             computedProperties: [],
             cascadeRevision: cssReducer?.cascadeRevision(in: id.canonicalStorage.documentScope) ?? 0
         )
-        try await commitStyles(stylesID, record: loading, rank: canonical.insertionOrdinal)
+        let loadToken = UUID()
+        try await beginStyleLoad(
+            stylesID,
+            record: loading,
+            rank: canonical.insertionOrdinal,
+            token: loadToken
+        )
         do {
             async let matched = connection.page.css.matchedStyles(for: rawID)
             async let inline = connection.page.css.inlineStyles(for: rawID)
@@ -372,7 +389,12 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                 computedProperties: try await computed.map(CSSComputedProperty.init),
                 cascadeRevision: cssReducer?.cascadeRevision(in: id.canonicalStorage.documentScope) ?? 0
             )
-            try await commitStyles(stylesID, record: record, rank: canonical.insertionOrdinal)
+            _ = try await finishStyleLoad(
+                stylesID,
+                record: record,
+                rank: canonical.insertionOrdinal,
+                token: loadToken
+            )
             return stylesID
         } catch {
             let failure = WebInspectorFeatureError.command(
@@ -385,7 +407,12 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                 computedProperties: [],
                 cascadeRevision: loading.cascadeRevision
             )
-            try? await commitStyles(stylesID, record: failed, rank: canonical.insertionOrdinal)
+            _ = try? await finishStyleLoad(
+                stylesID,
+                record: failed,
+                rank: canonical.insertionOrdinal,
+                token: loadToken
+            )
             throw webInspectorCommandError(error, featureID: .dom, phase: "CSS.loadStyles")
         }
     }
@@ -520,67 +547,71 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
             )
         }
         let route = try featureScope(from: reply)
-        let oldIDs: [DOMNode.ID]
-        if var reducer {
-            oldIDs = reducer.snapshot().records.map { DOMNode.ID(canonical: $0.id) }
-        } else {
-            oldIDs = []
-        }
-        let oldStyleIDs = Array(loadedStyles.keys)
         let baseReducer = WebInspectorCanonicalDOMReducer(
             storeID: connection.storeID,
             attachmentGeneration: connection.attachmentGeneration
         )
         let root = reply.value
         let boundary = reply.boundary.watermark.rawValue
-        let result = try await store.commit(
-            updating: webInspectorDOMBindingTimelineKey,
-            initialValue: WebInspectorDOMBindingTimeline()
-        ) { timeline, _ in
-            let binding = try timeline.issue(after: boundary, route: route)
-            var staged = baseReducer
-            var canonical = try staged.bootstrap(scope: binding, root: root)
-            staged.reconcilePrimaryTree(
-                rootID: WebInspectorDOMNodeIdentityStorage(
-                    documentScope: WebInspectorDOMDocumentScopeStorage(
-                        storeID: connection.storeID,
-                        attachmentGeneration: connection.attachmentGeneration,
-                        eventScope: binding
+        let ready = try await withExclusiveStyleCommit {
+            let oldIDs: [DOMNode.ID]
+            if var reducer {
+                oldIDs = reducer.snapshot().records.map {
+                    DOMNode.ID(canonical: $0.id)
+                }
+            } else {
+                oldIDs = []
+            }
+            let oldStyleIDs = Array(loadedStyles.keys)
+            let result = try await store.commit(
+                updating: webInspectorDOMBindingTimelineKey,
+                initialValue: WebInspectorDOMBindingTimeline()
+            ) { timeline, _ in
+                let binding = try timeline.issue(after: boundary, route: route)
+                var staged = baseReducer
+                var canonical = try staged.bootstrap(scope: binding, root: root)
+                staged.reconcilePrimaryTree(
+                    rootID: WebInspectorDOMNodeIdentityStorage(
+                        documentScope: WebInspectorDOMDocumentScopeStorage(
+                            storeID: connection.storeID,
+                            attachmentGeneration: connection.attachmentGeneration,
+                            eventScope: binding
+                        ),
+                        rawNodeID: root.id
                     ),
-                    rawNodeID: root.id
-                ),
-                transaction: &canonical
+                    transaction: &canonical
+                )
+                var transaction = WebInspectorModelTransaction()
+                transaction.append(contentsOf: oldIDs.map {
+                    webInspectorDOMNodeSchema.delete(id: $0)
+                })
+                transaction.append(contentsOf: oldStyleIDs.map {
+                    webInspectorCSSStylesSchema.delete(id: $0)
+                })
+                transaction.append(
+                    contentsOf: webInspectorDOMSnapshotMutations(staged.snapshot())
+                )
+                transaction.setFeatureState(
+                    .ready(
+                        generation: route.generation,
+                        revision: WebInspectorStoreRevision(rawValue: 0)
+                    ),
+                    for: .dom
+                )
+                return (transaction, (staged, binding))
+            }
+            reducer = result.output.0
+            currentBindingScope = result.output.1
+            cssReducer = WebInspectorCanonicalCSSReducer(
+                storeID: connection.storeID,
+                attachmentGeneration: connection.attachmentGeneration
             )
-            var transaction = WebInspectorModelTransaction()
-            transaction.append(contentsOf: oldIDs.map {
-                webInspectorDOMNodeSchema.delete(id: $0)
-            })
-            transaction.append(contentsOf: oldStyleIDs.map {
-                webInspectorCSSStylesSchema.delete(id: $0)
-            })
-            transaction.append(
-                contentsOf: webInspectorDOMSnapshotMutations(staged.snapshot())
+            loadedStyles.removeAll(keepingCapacity: true)
+            return WebInspectorFeatureState.ready(
+                generation: route.generation,
+                revision: result.revision
             )
-            transaction.setFeatureState(
-                .ready(
-                    generation: route.generation,
-                    revision: WebInspectorStoreRevision(rawValue: 0)
-                ),
-                for: .dom
-            )
-            return (transaction, (staged, binding))
         }
-        reducer = result.output.0
-        currentBindingScope = result.output.1
-        cssReducer = WebInspectorCanonicalCSSReducer(
-            storeID: connection.storeID,
-            attachmentGeneration: connection.attachmentGeneration
-        )
-        loadedStyles.removeAll(keepingCapacity: true)
-        let ready = WebInspectorFeatureState.ready(
-            generation: route.generation,
-            revision: result.revision
-        )
         transition(to: ready)
 
         for try await event in scope.events {
@@ -664,11 +695,28 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                 transaction: &canonical
             )
             guard !canonical.isEmpty else { return }
-            var transaction = WebInspectorModelTransaction()
-            transaction.append(contentsOf: webInspectorDOMMutations(canonical, staged: staged))
-            let revision = try await store.commit(transaction)
-            reducer = staged
-            refreshReadyRevision(revision)
+            let domMutations = webInspectorDOMMutations(
+                canonical,
+                staged: staged
+            )
+            try await withExclusiveStyleCommit {
+                let styleMutations = invalidateLoadedStyles(
+                    canonical.resourceInvalidations,
+                    deleting: canonical.deletedRecordIDs,
+                    domReducer: staged,
+                    cssReducer: cssReducer
+                )
+                guard !domMutations.isEmpty || !styleMutations.isEmpty else {
+                    reducer = staged
+                    return
+                }
+                var transaction = WebInspectorModelTransaction()
+                transaction.append(contentsOf: domMutations)
+                transaction.append(contentsOf: styleMutations)
+                let revision = try await store.commit(transaction)
+                reducer = staged
+                refreshReadyRevision(revision)
+            }
         } catch let error as WebInspectorCanonicalDOMError {
             throw WebInspectorDOMRecoveryRequest(
                 reason: .snapshotConflict(
@@ -693,26 +741,24 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         do {
             let canonical = try staged.apply(scope: binding, event: event)
             cssReducer = staged
-            guard !canonical.isEmpty, !loadedStyles.isEmpty, let store else { return }
-            var transaction = WebInspectorModelTransaction()
-            for (id, current) in loadedStyles {
-                let record = WebInspectorCSSStylesRecord(
-                    nodeID: current.nodeID,
-                    phase: .needsRefresh,
-                    sections: current.sections,
-                    computedProperties: current.computedProperties,
-                    cascadeRevision: staged.cascadeRevision(
-                        in: current.nodeID.canonicalStorage.documentScope
-                    )
-                )
-                loadedStyles[id] = record
-                let rank = reducer?.record(for: current.nodeID.canonicalStorage)?.insertionOrdinal ?? 0
-                transaction.append(
-                    webInspectorCSSStylesMutation(id: id, record: record, canonicalRank: rank)
-                )
+            guard !canonical.isEmpty,
+                  let domReducer = reducer,
+                  let store else {
+                return
             }
-            let revision = try await store.commit(transaction)
-            refreshReadyRevision(revision)
+            try await withExclusiveStyleCommit {
+                let styleMutations = invalidateLoadedStyles(
+                    canonical.resourceInvalidations,
+                    deleting: [],
+                    domReducer: domReducer,
+                    cssReducer: staged
+                )
+                guard !styleMutations.isEmpty else { return }
+                var transaction = WebInspectorModelTransaction()
+                transaction.append(contentsOf: styleMutations)
+                let revision = try await store.commit(transaction)
+                refreshReadyRevision(revision)
+            }
         } catch let error as WebInspectorCanonicalCSSError {
             throw WebInspectorDOMRecoveryRequest(
                 reason: .snapshotConflict(
@@ -735,31 +781,55 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
             rootID: stagedDOM.primaryDocumentRootID,
             transaction: &dom
         )
-        _ = stagedCSS.frameWasDetached(frameID)
-        guard !dom.isEmpty else { return }
-        var transaction = WebInspectorModelTransaction()
-        transaction.append(contentsOf: webInspectorDOMMutations(dom, staged: stagedDOM))
-        let revision = try await store.commit(transaction)
-        reducer = stagedDOM
-        cssReducer = stagedCSS
-        refreshReadyRevision(revision)
+        let css = stagedCSS.frameWasDetached(frameID)
+        let domMutations = webInspectorDOMMutations(
+            dom,
+            staged: stagedDOM
+        )
+        try await withExclusiveStyleCommit {
+            let styleMutations = invalidateLoadedStyles(
+                dom.resourceInvalidations.union(css.resourceInvalidations),
+                deleting: dom.deletedRecordIDs,
+                domReducer: stagedDOM,
+                cssReducer: stagedCSS
+            )
+            guard !domMutations.isEmpty || !styleMutations.isEmpty else {
+                reducer = stagedDOM
+                cssReducer = stagedCSS
+                return
+            }
+            var transaction = WebInspectorModelTransaction()
+            transaction.append(contentsOf: domMutations)
+            transaction.append(contentsOf: styleMutations)
+            let revision = try await store.commit(transaction)
+            reducer = stagedDOM
+            cssReducer = stagedCSS
+            refreshReadyRevision(revision)
+        }
     }
 
     private func resetPublishedDocument() async throws {
         guard var reducer, let store else { return }
-        let canonical = reducer.reset()
-        var transaction = WebInspectorModelTransaction()
-        transaction.append(contentsOf: canonical.deletedRecordIDs.map {
-            webInspectorDOMNodeSchema.delete(id: DOMNode.ID(canonical: $0))
-        })
-        transaction.append(contentsOf: loadedStyles.keys.map(webInspectorCSSStylesSchema.delete))
         let generation = await currentGeneration()
-        transaction.setFeatureState(.synchronizing(generation: generation), for: .dom)
-        _ = try await store.commit(transaction)
-        self.reducer = reducer
-        loadedStyles.removeAll(keepingCapacity: true)
-        currentBindingScope = nil
-        transition(to: .synchronizing(generation: generation))
+        try await withExclusiveStyleCommit {
+            let canonical = reducer.reset()
+            var transaction = WebInspectorModelTransaction()
+            transaction.append(contentsOf: canonical.deletedRecordIDs.map {
+                webInspectorDOMNodeSchema.delete(id: DOMNode.ID(canonical: $0))
+            })
+            transaction.append(
+                contentsOf: loadedStyles.keys.map(webInspectorCSSStylesSchema.delete)
+            )
+            transaction.setFeatureState(
+                .synchronizing(generation: generation),
+                for: .dom
+            )
+            _ = try await store.commit(transaction)
+            self.reducer = reducer
+            loadedStyles.removeAll(keepingCapacity: true)
+            currentBindingScope = nil
+            transition(to: .synchronizing(generation: generation))
+        }
         await retirePicker(
             with: WebInspectorElementPickerError.targetChanged,
             disableBackend: false
@@ -767,6 +837,94 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     }
 
     // MARK: Helpers
+
+    private func withExclusiveStyleCommit<Result: Sendable>(
+        afterWaiterRegistration: (@Sendable () -> Void)? = nil,
+        _ operation: () async throws -> Result
+    ) async throws -> Result {
+        try await acquireStyleCommit(
+            afterWaiterRegistration: afterWaiterRegistration
+        )
+        defer { releaseStyleCommit() }
+        try Task.checkCancellation()
+        return try await operation()
+    }
+
+    private func acquireStyleCommit(
+        afterWaiterRegistration: (@Sendable () -> Void)?
+    ) async throws {
+        guard !isStyleCommitClosed else { throw CancellationError() }
+        guard isStyleCommitActive else {
+            isStyleCommitActive = true
+            return
+        }
+        try await withCheckedThrowingContinuation { continuation in
+            styleCommitWaiters.append(continuation)
+            afterWaiterRegistration?()
+        }
+    }
+
+    private func releaseStyleCommit() {
+        if isStyleCommitClosed {
+            isStyleCommitActive = false
+            let closeWaiters = styleCommitCloseWaiters
+            styleCommitCloseWaiters.removeAll(keepingCapacity: false)
+            for waiter in closeWaiters { waiter.resume() }
+            return
+        }
+        guard !styleCommitWaiters.isEmpty else {
+            isStyleCommitActive = false
+            return
+        }
+        styleCommitWaiters.removeFirst().resume()
+    }
+
+    private func closeStyleCommitGate() async {
+        isStyleCommitClosed = true
+        let waiters = styleCommitWaiters
+        styleCommitWaiters.removeAll(keepingCapacity: false)
+        for waiter in waiters { waiter.resume(throwing: CancellationError()) }
+        guard isStyleCommitActive else { return }
+        await withCheckedContinuation { continuation in
+            styleCommitCloseWaiters.append(continuation)
+        }
+    }
+
+    private func reopenStyleCommitGate() {
+        precondition(
+            !isStyleCommitActive
+                && styleCommitWaiters.isEmpty
+                && styleCommitCloseWaiters.isEmpty,
+            "The style commit gate can reopen only after close is quiescent."
+        )
+        isStyleCommitClosed = false
+    }
+
+    package func withExclusiveStyleCommitForTesting(
+        afterWaiterRegistration: (@Sendable () -> Void)? = nil,
+        _ operation: @escaping @Sendable () async throws -> Void
+    ) async throws {
+        try await withExclusiveStyleCommit(
+            afterWaiterRegistration: afterWaiterRegistration,
+            operation
+        )
+    }
+
+    package func closeStyleCommitGateForTesting() async {
+        await closeStyleCommitGate()
+    }
+
+    package var styleCommitGateStateForTesting: (
+        active: Bool,
+        waiterCount: Int,
+        closeWaiterCount: Int
+    ) {
+        (
+            isStyleCommitActive,
+            styleCommitWaiters.count,
+            styleCommitCloseWaiters.count
+        )
+    }
 
     private struct CSSPropertyLocation {
         let style: CSS.Style
@@ -776,7 +934,8 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     private func propertyLocation(
         for id: CSSStyleProperty.ID
     ) -> CSSPropertyLocation? {
-        for record in loadedStyles.values {
+        for resource in loadedStyles.values {
+            let record = resource.record
             for section in record.sections {
                 if let index = section.proxyStyle.properties.firstIndex(
                     where: { $0.id.rawValue == id.rawValue }
@@ -791,19 +950,163 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         return nil
     }
 
-    private func commitStyles(
+    private func invalidateLoadedStyles(
+        _ invalidations: Set<WebInspectorCanonicalResourceInvalidation>,
+        deleting deletedNodeIDs: Set<WebInspectorDOMNodeIdentityStorage>,
+        domReducer: WebInspectorCanonicalDOMReducer,
+        cssReducer: WebInspectorCanonicalCSSReducer?
+    ) -> [WebInspectorModelMutation<CSSStyles>] {
+        guard !invalidations.isEmpty || !deletedNodeIDs.isEmpty else {
+            return []
+        }
+        var mutations: [WebInspectorModelMutation<CSSStyles>] = []
+        for (id, resource) in loadedStyles {
+            let current = resource.record
+            if deletedNodeIDs.contains(current.nodeID.canonicalStorage) {
+                loadedStyles[id] = nil
+                mutations.append(webInspectorCSSStylesSchema.delete(id: id))
+                continue
+            }
+            guard current.phase != .needsRefresh,
+                  let canonical = domReducer.record(
+                      for: current.nodeID.canonicalStorage
+                  ),
+                  invalidations.contains(where: {
+                      invalidatesStyleResource(
+                          current.nodeID.canonicalStorage,
+                          invalidation: $0,
+                          domReducer: domReducer
+                      )
+                  }) else {
+                continue
+            }
+            let record = WebInspectorCSSStylesRecord(
+                nodeID: current.nodeID,
+                phase: .needsRefresh,
+                sections: current.sections,
+                computedProperties: current.computedProperties,
+                cascadeRevision: cssReducer?.cascadeRevision(
+                    in: current.nodeID.canonicalStorage.documentScope
+                ) ?? current.cascadeRevision
+            )
+            loadedStyles[id] = LoadedStyleResource(
+                record: record,
+                loadToken: nil
+            )
+            mutations.append(
+                webInspectorCSSStylesMutation(
+                    id: id,
+                    record: record,
+                    canonicalRank: canonical.insertionOrdinal
+                )
+            )
+        }
+        return mutations
+    }
+
+    private func invalidatesStyleResource(
+        _ nodeID: WebInspectorDOMNodeIdentityStorage,
+        invalidation: WebInspectorCanonicalResourceInvalidation,
+        domReducer: WebInspectorCanonicalDOMReducer
+    ) -> Bool {
+        switch invalidation {
+        case let .target(scope):
+            nodeID.documentScope == scope
+        case let .subtree(rootID):
+            domReducer.contains(nodeID, inSubtreeOf: rootID)
+        case let .nodes(nodeIDs):
+            nodeIDs.contains(nodeID)
+        }
+    }
+
+    private func beginStyleLoad(
+        _ id: CSSStyles.ID,
+        record: WebInspectorCSSStylesRecord,
+        rank: UInt64,
+        token: UUID
+    ) async throws {
+        try await withExclusiveStyleCommit {
+            guard loadedStyles[id]?.loadToken == nil else {
+                throw WebInspectorCommandError.rejected(
+                    WebInspectorFailureDescription(
+                        code: "css.load.in-progress",
+                        phase: "CSS.loadStyles",
+                        message: "A style load is already active for this node."
+                    )
+                )
+            }
+            let previous = loadedStyles[id]
+            loadedStyles[id] = LoadedStyleResource(
+                record: record,
+                loadToken: token
+            )
+            do {
+                let revision = try await commitStyleRecord(
+                    id,
+                    record: record,
+                    rank: rank
+                )
+                refreshReadyRevision(revision)
+            } catch {
+                if loadedStyles[id]?.loadToken == token {
+                    loadedStyles[id] = previous
+                }
+                throw error
+            }
+        }
+    }
+
+    private func finishStyleLoad(
+        _ id: CSSStyles.ID,
+        record: WebInspectorCSSStylesRecord,
+        rank: UInt64,
+        token: UUID
+    ) async throws -> Bool {
+        try await withExclusiveStyleCommit {
+            guard let current = loadedStyles[id],
+                  current.loadToken == token,
+                  current.record.phase == .loading else {
+                return false
+            }
+            loadedStyles[id] = LoadedStyleResource(
+                record: record,
+                loadToken: token
+            )
+            do {
+                let revision = try await commitStyleRecord(
+                    id,
+                    record: record,
+                    rank: rank
+                )
+                refreshReadyRevision(revision)
+                guard loadedStyles[id]?.loadToken == token else {
+                    return false
+                }
+                loadedStyles[id] = LoadedStyleResource(
+                    record: record,
+                    loadToken: nil
+                )
+                return true
+            } catch {
+                if loadedStyles[id]?.loadToken == token {
+                    loadedStyles[id] = current
+                }
+                throw error
+            }
+        }
+    }
+
+    private func commitStyleRecord(
         _ id: CSSStyles.ID,
         record: WebInspectorCSSStylesRecord,
         rank: UInt64
-    ) async throws {
+    ) async throws -> WebInspectorStoreRevision {
         guard let store else { throw WebInspectorCommandError.containerClosed }
         var transaction = WebInspectorModelTransaction()
         transaction.append(
             webInspectorCSSStylesMutation(id: id, record: record, canonicalRank: rank)
         )
-        let revision = try await store.commit(transaction)
-        loadedStyles[id] = record
-        refreshReadyRevision(revision)
+        return try await store.commit(transaction)
     }
 
     private func validatedRawNodeID(_ id: DOMNode.ID) throws -> DOM.Node.ID {

@@ -317,6 +317,10 @@ package final class DOMElementViewController: UICollectionViewController {
                 return
             }
             styleHydrationTask = nil
+            hydrateStylesIfNeeded(
+                for: nodeID,
+                retryFailure: false
+            )
         }
     }
 
