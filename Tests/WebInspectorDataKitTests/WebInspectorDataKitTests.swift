@@ -6942,6 +6942,76 @@ func childFrameNavigationPreservesUnrelatedStyleSheetMutation() async throws {
 
 @MainActor
 @Test
+func removedAndReusedStyleSheetIDRejectsPriorMutationReply() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (pageTarget, context) = try await startContext(runtime: runtime)
+    let frameTargetID = WebInspectorTarget.ID("reused-css-frame")
+    let frameID = FrameID("reused-css-frame-id")
+    let styleSheetID = CSS.StyleSheet.ID(
+        "reused-sheet",
+        scopedToTargetRawValue: frameTargetID.rawValue
+    )
+
+    let firstHeaderBaseline = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(
+        .styleSheetAdded(CSS.StyleSheetHeader(
+            styleSheetID: styleSheetID,
+            frameID: frameID,
+            origin: CSS.Origin(rawValue: "author")
+        )),
+        target: pageTarget
+    )
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: firstHeaderBaseline))
+
+    let priorMutationGate = WebInspectorTestGate()
+    await runtime.backend.hold(domain: "CSS", method: "setStyleSheetText", gate: priorMutationGate)
+    await runtime.backend.enqueue((), for: "CSS", method: "setStyleSheetText")
+    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
+    let priorMutationTask = Task { @MainActor in
+        try await context.css.setStyleSheetText("body { color: red; }", for: styleSheetID)
+    }
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "CSS",
+        method: "setStyleSheetText",
+        count: 1
+    )
+
+    let removalBaseline = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(.styleSheetRemoved(styleSheetID), target: pageTarget)
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: removalBaseline))
+
+    let reusedHeaderBaseline = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(
+        .styleSheetAdded(CSS.StyleSheetHeader(
+            styleSheetID: styleSheetID,
+            frameID: frameID,
+            origin: CSS.Origin(rawValue: "author")
+        )),
+        target: pageTarget
+    )
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: reusedHeaderBaseline))
+    await priorMutationGate.open()
+
+    await #expect(throws: WebInspectorProxyError.disconnected("CSS mutation no longer belongs to the current document.")) {
+        try await priorMutationTask.value
+    }
+    var commands = await runtime.backend.recordedCommands()
+    #expect(commands.contains(RecordedCommand(domain: "DOM", method: "markUndoableState")) == false)
+
+    await runtime.backend.enqueue((), for: "CSS", method: "setStyleSheetText")
+    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
+    try await context.css.setStyleSheetText("body { color: blue; }", for: styleSheetID)
+
+    commands = await runtime.backend.recordedCommands()
+    let undoCommands = commands.filter {
+        $0.domain == "DOM" && $0.method == "markUndoableState"
+    }
+    #expect(undoCommands.count == 1)
+    #expect(undoCommands.first?.targetID == frameTargetID)
+}
+
+@MainActor
+@Test
 func removingLoadedChildPurgesDescendantsFromIdentityMap() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
