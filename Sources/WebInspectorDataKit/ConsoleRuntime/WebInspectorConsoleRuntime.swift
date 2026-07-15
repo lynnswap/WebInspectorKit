@@ -296,7 +296,7 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
 
     package func closeObjectScope(_ id: UUID) async {
         guard let scope = objectScopes.removeValue(forKey: id), let connection else { return }
-        try? await connection.page.runtime.releaseObjectGroup(scope.group)
+        await releaseRemoteObjects(in: scope, using: connection)
     }
 
     private func runOrderedScope() async throws {
@@ -552,9 +552,24 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
             objectScopes.removeAll(keepingCapacity: true)
             return
         }
-        let groups = objectScopes.values.map(\.group)
+        let scopes = objectScopes.values
         objectScopes.removeAll(keepingCapacity: true)
-        for group in groups { try? await connection.page.runtime.releaseObjectGroup(group) }
+        for scope in scopes {
+            await releaseRemoteObjects(in: scope, using: connection)
+        }
+    }
+
+    private func releaseRemoteObjects(
+        in scope: ObjectScopeState,
+        using connection: WebInspectorFeatureConnection
+    ) async {
+        let objectIDs = Set(scope.handles.values.map(\.rawID))
+        for objectID in objectIDs {
+            // Do not replace this with releaseObjectGroup: WebKit object
+            // groups are target-local, while that command has no target ID.
+            // RemoteObject.ID retains the owning target for correct routing.
+            try? await connection.page.runtime.releaseObject(objectID)
+        }
     }
 
     private func featureScope<Value: Sendable>(
