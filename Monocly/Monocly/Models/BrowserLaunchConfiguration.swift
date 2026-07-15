@@ -48,6 +48,10 @@ struct BrowserLaunchConfiguration {
     private static func resolveSessionPersistenceMode(
         from environment: [String: String]
     ) -> BrowserSession.PersistenceMode {
+        if environment["WEBSPECTOR_EPHEMERAL_SESSION"] == "1" {
+            return .ephemeral
+        }
+
         if environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1" {
             return .ephemeral
         }
