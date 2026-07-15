@@ -3,7 +3,8 @@ import WebInspectorUIBase
 import WebInspectorDataKit
 import UIKit
 
-final class DOMTreeTextDocument: NSObject, NSTextContentStorageDelegate {
+@MainActor
+final class DOMTreeTextDocument: NSObject, @MainActor NSTextContentStorageDelegate {
     static let rowIdentityAttribute = NSAttributedString.Key("WebInspectorKit.DOMTree.rowIdentity")
 
     let textContentStorage: NSTextContentStorage
@@ -11,7 +12,6 @@ final class DOMTreeTextDocument: NSObject, NSTextContentStorageDelegate {
     let textContainer: NSTextContainer
 
     private(set) var rowIndex = DOMTreeRowIndex()
-    private var rowIdentityByParagraphLocation: [Int: DOMTreeRowIdentity] = [:]
 
     override init() {
         textContentStorage = NSTextContentStorage()
@@ -45,10 +45,9 @@ final class DOMTreeTextDocument: NSObject, NSTextContentStorageDelegate {
 
     func replaceDocument(
         with attributedString: NSAttributedString,
-        rows: [DOMTreeRowRenderPlan]
+        rowIndex: DOMTreeRowIndex
     ) {
-        rowIndex = DOMTreeRowIndex(rows: rows)
-        rebuildParagraphLocationIndex(rows: rows)
+        self.rowIndex = rowIndex
         textContentStorage.performEditingTransaction {
             backingTextStorage.setAttributedString(attributedString)
         }
@@ -57,10 +56,9 @@ final class DOMTreeTextDocument: NSObject, NSTextContentStorageDelegate {
     func replaceCharacters(
         in range: NSRange,
         with attributedString: NSAttributedString,
-        rows: [DOMTreeRowRenderPlan]
+        rowIndex: DOMTreeRowIndex
     ) {
-        rowIndex = DOMTreeRowIndex(rows: rows)
-        rebuildParagraphLocationIndex(rows: rows)
+        self.rowIndex = rowIndex
         textContentStorage.performEditingTransaction {
             backingTextStorage.replaceCharacters(in: range, with: attributedString)
         }
@@ -115,7 +113,7 @@ final class DOMTreeTextDocument: NSObject, NSTextContentStorageDelegate {
             Self.rowIdentityAttribute,
             at: range.location,
             effectiveRange: nil
-        ) as? DOMTreeRowIdentity ?? rowIdentityByParagraphLocation[range.location]
+        ) as? DOMTreeRowIdentity ?? rowIndex.identity(atParagraphLocation: range.location)
         guard let identity else {
             return nil
         }
@@ -142,15 +140,6 @@ final class DOMTreeTextDocument: NSObject, NSTextContentStorageDelegate {
             return false
         }
         return unsafe backingTextStorage.attribute(.attachment, at: location, effectiveRange: nil) is NSTextAttachment
-    }
-
-    private func rebuildParagraphLocationIndex(rows: [DOMTreeRowRenderPlan]) {
-        var nextIndex: [Int: DOMTreeRowIdentity] = [:]
-        nextIndex.reserveCapacity(rows.count)
-        for row in rows {
-            nextIndex[row.documentRange.location] = row.identity
-        }
-        rowIdentityByParagraphLocation = nextIndex
     }
 
 #if DEBUG
@@ -213,6 +202,7 @@ struct DOMTreeRowRenderPlan: Equatable, Sendable {
         identity == other.identity
             && depth == other.depth
             && text == other.text
+            && markupRange == other.markupRange
             && tokens == other.tokens
             && displayColumnCount == other.displayColumnCount
             && hasDisclosure == other.hasDisclosure
@@ -221,23 +211,40 @@ struct DOMTreeRowRenderPlan: Equatable, Sendable {
     }
 }
 
-struct DOMTreeRowIndex {
+struct DOMTreeRowIndex: Sendable {
+    private struct Storage: Sendable {
+        let visibleNodeIDs: Set<DOMNode.ID>
+        let rowIndexByIdentity: [DOMTreeRowIdentity: Int]
+        let firstRowIndexByNodeID: [DOMNode.ID: Int]
+        let rowIdentityByParagraphLocation: [Int: DOMTreeRowIdentity]
+    }
+
     private(set) var rows: [DOMTreeRowRenderPlan]
     private(set) var visibleNodeIDs: Set<DOMNode.ID>
     private var rowIndexByIdentity: [DOMTreeRowIdentity: Int]
     private var firstRowIndexByNodeID: [DOMNode.ID: Int]
+    private var rowIdentityByParagraphLocation: [Int: DOMTreeRowIdentity]
 
     init(rows: [DOMTreeRowRenderPlan] = []) {
         self.rows = rows
-        visibleNodeIDs = []
-        rowIndexByIdentity = [:]
-        firstRowIndexByNodeID = [:]
-        rebuildIndex()
+        let storage = Self.makeStorage(rows: rows) { _ in }
+        visibleNodeIDs = storage.visibleNodeIDs
+        rowIndexByIdentity = storage.rowIndexByIdentity
+        firstRowIndexByNodeID = storage.firstRowIndexByNodeID
+        rowIdentityByParagraphLocation = storage.rowIdentityByParagraphLocation
     }
 
-    mutating func replaceRows(_ rows: [DOMTreeRowRenderPlan]) {
+    init(cancellableRows rows: [DOMTreeRowRenderPlan]) throws {
         self.rows = rows
-        rebuildIndex()
+        let storage = try Self.makeStorage(rows: rows) { index in
+            if index.isMultiple(of: 256) {
+                try Task.checkCancellation()
+            }
+        }
+        visibleNodeIDs = storage.visibleNodeIDs
+        rowIndexByIdentity = storage.rowIndexByIdentity
+        firstRowIndexByNodeID = storage.firstRowIndexByNodeID
+        rowIdentityByParagraphLocation = storage.rowIdentityByParagraphLocation
     }
 
     func contains(nodeID: DOMNode.ID) -> Bool {
@@ -262,6 +269,10 @@ struct DOMTreeRowIndex {
 
     func rowIndex(for nodeID: DOMNode.ID) -> Int? {
         firstRowIndexByNodeID[nodeID]
+    }
+
+    func identity(atParagraphLocation location: Int) -> DOMTreeRowIdentity? {
+        rowIdentityByParagraphLocation[location]
     }
 
     func rowsInDisplayOrder(for nodeIDs: Set<DOMNode.ID>) -> [DOMTreeRowRenderPlan] {
@@ -293,23 +304,33 @@ struct DOMTreeRowIndex {
     }
 #endif
 
-    private mutating func rebuildIndex() {
+    private static func makeStorage(
+        rows: [DOMTreeRowRenderPlan],
+        checkCancellation: (Int) throws -> Void
+    ) rethrows -> Storage {
         var nextRowIndexByIdentity: [DOMTreeRowIdentity: Int] = [:]
         nextRowIndexByIdentity.reserveCapacity(rows.count)
         var nextFirstRowIndexByNodeID: [DOMNode.ID: Int] = [:]
         nextFirstRowIndexByNodeID.reserveCapacity(rows.count)
+        var nextRowIdentityByParagraphLocation: [Int: DOMTreeRowIdentity] = [:]
+        nextRowIdentityByParagraphLocation.reserveCapacity(rows.count)
         var nextVisibleNodeIDs = Set<DOMNode.ID>()
         nextVisibleNodeIDs.reserveCapacity(rows.count)
-        for row in rows {
-            nextRowIndexByIdentity[row.identity] = row.rowIndex
+        for (index, row) in rows.enumerated() {
+            try checkCancellation(index)
+            nextRowIndexByIdentity[row.identity] = index
+            nextRowIdentityByParagraphLocation[row.documentRange.location] = row.identity
             if !row.isClosingTag, nextFirstRowIndexByNodeID[row.nodeID] == nil {
-                nextFirstRowIndexByNodeID[row.nodeID] = row.rowIndex
+                nextFirstRowIndexByNodeID[row.nodeID] = index
             }
             nextVisibleNodeIDs.insert(row.nodeID)
         }
-        rowIndexByIdentity = nextRowIndexByIdentity
-        firstRowIndexByNodeID = nextFirstRowIndexByNodeID
-        visibleNodeIDs = nextVisibleNodeIDs
+        return Storage(
+            visibleNodeIDs: nextVisibleNodeIDs,
+            rowIndexByIdentity: nextRowIndexByIdentity,
+            firstRowIndexByNodeID: nextFirstRowIndexByNodeID,
+            rowIdentityByParagraphLocation: nextRowIdentityByParagraphLocation
+        )
     }
 }
 #endif

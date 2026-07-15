@@ -6,19 +6,41 @@ import WebInspectorUIBase
 extension DOMTreeTextView {
     @MainActor
     final class RowRenderBuildCoordinator {
-        typealias IsCurrentBuild = @MainActor (
-            DOMTreeTextView.RowRenderBuildRequest,
-            DOMTreeTextView.RowRenderBuildResult
+        struct SemanticUpdate: Equatable {
+            fileprivate let token: UInt64
+            fileprivate let sourceRevision: UInt64
+            fileprivate let cancelledBuild: Bool
+        }
+
+        struct PendingInvalidation {
+            let invalidation: DOMTreeRenderInvalidation
+            let isInitial: Bool
+            let requiresRoute: Bool
+        }
+
+        struct SemanticUpdateAcceptance {
+            let isInitial: Bool
+            let requiresRoute: Bool
+        }
+
+        typealias CanCommitBuild = @MainActor (
+            DOMTreeTextView.RowRenderBuildRequest
         ) -> Bool
-        typealias ShouldApplyBuild = @MainActor (DOMTreeTextView.RowRenderBuildResult) -> Bool
         typealias ApplyBuild = @MainActor (DOMTreeTextView.RowRenderBuildResult) -> Void
         typealias FinishBuild = @MainActor () -> Void
 
         private let projector: DOMTreeRenderProjector
-        private let expansionState: DOMTreeTextView.ExpansionState
+        private let expansionState = DOMTreeTextView.ExpansionState()
         private var task: Task<Void, Never>?
         private var currentRequest: DOMTreeTextView.RowRenderBuildRequest?
-        private var generation: UInt64 = 0
+        private var nextRequestToken: UInt64 = 0
+        private var nextSemanticUpdateToken: UInt64 = 0
+        private var pendingSemanticUpdate: SemanticUpdate?
+        private(set) var currentMetadata: DOMTreeRenderMetadata = .empty
+        private var lastRoutedSourceRevision: UInt64?
+        private var pendingInvalidation: DOMTreeRenderInvalidation?
+        private var pendingInvalidationIsInitial = false
+        private var pendingInvalidationRequiresRoute = false
 #if DEBUG
         private struct BuildCompletionWaiter {
             let continuation: CheckedContinuation<Bool, Never>
@@ -28,32 +50,160 @@ extension DOMTreeTextView {
         private var shouldSuspendNextBuildForTesting = false
         private var suspendedBuildContinuationForTesting: CheckedContinuation<Void, Never>?
         private var buildSuspensionWaitersForTesting: [CheckedContinuation<Void, Never>] = []
+        private var shouldSuspendNextCompletedBuildForTesting = false
+        private var suspendedCompletedBuildContinuationForTesting: CheckedContinuation<Void, Never>?
+        private var completedBuildSuspensionWaitersForTesting: [CheckedContinuation<Void, Never>] = []
         private var nextBuildCompletionWaiterID: UInt64 = 0
         private var buildCompletionWaiters: [UInt64: BuildCompletionWaiter] = [:]
-        private var cachedMarkupKeysForTestingStorage: Set<DOMTreeTextView.MarkupCacheKey> = []
+        private(set) var semanticInputCancellationCountForTesting = 0
+        private(set) var lastCommittedRequestIdentityForTesting:
+            DOMTreeTextView.RowRenderRequestIdentity?
 #endif
 
-        init(
-            projector: DOMTreeRenderProjector,
-            expansionState: DOMTreeTextView.ExpansionState
-        ) {
+        init(projector: DOMTreeRenderProjector) {
             self.projector = projector
-            self.expansionState = expansionState
         }
 
         var hasCurrentBuild: Bool {
             task != nil
         }
 
-        func cancel() {
-            generation &+= 1
-            task?.cancel()
-            task = nil
-            currentRequest = nil
+        var expansionSnapshot: DOMTreeTextView.ExpansionState.Snapshot {
+            expansionState.snapshot
+        }
+
+        var pendingInvalidationRevision: UInt64? {
+            pendingInvalidation?.revision
+        }
+
+        func isNodeOpen(_ nodeID: DOMNode.ID) -> Bool? {
+            expansionState.isOpen(nodeID)
+        }
+
+        @discardableResult
+        func setIsNodeOpen(_ isOpen: Bool, for nodeID: DOMNode.ID) -> Bool {
+            guard expansionState.setIsOpen(isOpen, for: nodeID) else {
+                return false
+            }
+            supersedeCurrentBuild()
+            return true
+        }
+
+        @discardableResult
+        func removeAllExpansion() -> Bool {
+            guard expansionState.removeAll() else {
+                return false
+            }
+            supersedeCurrentBuild()
+            return true
+        }
+
+        func beginSemanticUpdate(sourceRevision: UInt64) -> SemanticUpdate {
+            precondition(
+                pendingSemanticUpdate == nil,
+                "DOM render coordinator accepts one ordered semantic update at a time."
+            )
+            nextSemanticUpdateToken &+= 1
+            let cancelledBuild = supersedeCurrentBuild()
 #if DEBUG
-            resumeSuspendedBuildForTesting()
-            resolveBuildCompletionWaiters(result: true)
+            if cancelledBuild {
+                semanticInputCancellationCountForTesting += 1
+            }
 #endif
+            let update = SemanticUpdate(
+                token: nextSemanticUpdateToken,
+                sourceRevision: sourceRevision,
+                cancelledBuild: cancelledBuild
+            )
+            pendingSemanticUpdate = update
+            return update
+        }
+
+        func acceptSemanticUpdate(
+            _ update: SemanticUpdate,
+            metadata: DOMTreeRenderMetadata
+        ) -> SemanticUpdateAcceptance {
+            precondition(
+                pendingSemanticUpdate == update,
+                "DOM render semantic updates must complete in accepted source order."
+            )
+            precondition(
+                metadata.revision == update.sourceRevision,
+                "DOM render projection returned a different source revision."
+            )
+            pendingSemanticUpdate = nil
+            currentMetadata = metadata
+            return SemanticUpdateAcceptance(
+                isInitial: lastRoutedSourceRevision == nil,
+                requiresRoute: update.cancelledBuild
+            )
+        }
+
+        @discardableResult
+        func rejectSemanticUpdate(_ update: SemanticUpdate) -> Bool {
+            precondition(
+                pendingSemanticUpdate == update,
+                "DOM render semantic updates must fail in accepted source order."
+            )
+            pendingSemanticUpdate = nil
+            guard update.cancelledBuild else {
+                return false
+            }
+            enqueueCurrentInvalidation(forceRoute: true)
+            return true
+        }
+
+        @discardableResult
+        func enqueueInvalidation(
+            _ invalidation: DOMTreeRenderInvalidation,
+            isInitial: Bool,
+            requiresRoute: Bool
+        ) -> UInt64 {
+            pendingInvalidation = pendingInvalidation?.merging(with: invalidation) ?? invalidation
+            pendingInvalidationIsInitial = pendingInvalidationIsInitial || isInitial
+            pendingInvalidationRequiresRoute = self.pendingInvalidationRequiresRoute
+                || requiresRoute
+                || currentBuildMayRender(invalidation)
+            return pendingInvalidation?.revision ?? invalidation.revision
+        }
+
+        func takePendingInvalidation() -> PendingInvalidation? {
+            guard let pendingInvalidation else {
+                return nil
+            }
+            let result = PendingInvalidation(
+                invalidation: pendingInvalidation,
+                isInitial: pendingInvalidationIsInitial,
+                requiresRoute: pendingInvalidationRequiresRoute
+            )
+            self.pendingInvalidation = nil
+            pendingInvalidationIsInitial = false
+            pendingInvalidationRequiresRoute = false
+            lastRoutedSourceRevision = result.invalidation.revision
+            return result
+        }
+
+        @discardableResult
+        func enqueueCurrentInvalidationIfNeeded() -> Bool {
+            guard lastRoutedSourceRevision != currentMetadata.revision else {
+                return false
+            }
+            enqueueCurrentInvalidation(forceRoute: true)
+            return true
+        }
+
+        @discardableResult
+        func suspendRendering() -> Bool {
+            guard supersedeCurrentBuild() else {
+                return false
+            }
+            enqueueCurrentInvalidation(forceRoute: true)
+            return true
+        }
+
+        func cancel() {
+            pendingSemanticUpdate = nil
+            supersedeCurrentBuild()
         }
 
 #if DEBUG
@@ -75,6 +225,11 @@ extension DOMTreeTextView {
                 )
             }
         }
+
+        var currentRequestIdentityForTesting:
+            DOMTreeTextView.RowRenderRequestIdentity? {
+            currentRequest?.identity
+        }
 #endif
 
         func currentBuildMayRender(_ invalidation: DOMTreeRenderInvalidation) -> Bool {
@@ -83,39 +238,40 @@ extension DOMTreeTextView {
 
         func startBuild(
             baseDocumentRevision: UInt64,
-            rootNodeID: DOMNode.ID?,
             visibleNodeIDs: Set<DOMNode.ID>,
-            previousRowCapacity: Int,
-            previousTextCapacity: Int,
+            previousRows: [DOMTreeRowRenderPlan],
+            previousTextUTF16Length: Int,
             resetMarkupCache: Bool,
-            isCurrentBuild: @escaping IsCurrentBuild,
-            shouldApply: ShouldApplyBuild? = nil,
+            canCommit: @escaping CanCommitBuild,
             apply: @escaping ApplyBuild,
+            didQueueInvalidation: FinishBuild? = nil,
             didFinish: FinishBuild? = nil
         ) {
+            supersedeCurrentBuild()
+            nextRequestToken &+= 1
+            let expansionSnapshot = expansionState.snapshot
             let request = DOMTreeTextView.RowRenderBuildRequest(
-                rootNodeID: rootNodeID,
+                identity: DOMTreeTextView.RowRenderRequestIdentity(
+                    token: nextRequestToken,
+                    documentRootNodeID: currentMetadata.rootNodeID,
+                    sourceRevision: currentMetadata.revision,
+                    expansionRevision: expansionSnapshot.revision
+                ),
                 visibleNodeIDs: visibleNodeIDs,
-                expansionState: expansionState.snapshot,
+                expansionState: expansionSnapshot.states,
                 baseDocumentRevision: baseDocumentRevision,
-                previousRowCapacity: previousRowCapacity,
-                previousTextCapacity: previousTextCapacity,
+                previousRows: previousRows,
+                previousTextUTF16Length: previousTextUTF16Length,
                 resetMarkupCache: resetMarkupCache
             )
-            generation &+= 1
-            let buildGeneration = generation
-            task?.cancel()
             currentRequest = request
-#if DEBUG
-            resumeSuspendedBuildForTesting()
-#endif
             task = Task { @MainActor [weak self, projector] in
                 guard let self else {
                     return
                 }
                 var shouldNotifyFinish = false
                 defer {
-                    if generation == buildGeneration {
+                    if currentRequest?.identity.token == request.identity.token {
                         task = nil
                         currentRequest = nil
 #if DEBUG
@@ -144,17 +300,25 @@ extension DOMTreeTextView {
                     shouldNotifyFinish = true
                     return
                 }
+#if DEBUG
+                await suspendCompletedBuildIfNeededForTesting()
+#endif
                 guard !Task.isCancelled,
-                      generation == buildGeneration,
-                      isCurrentBuild(request, buildResult) else {
+                      currentRequest?.identity == request.identity,
+                      request.identity.documentRootNodeID == currentMetadata.rootNodeID,
+                      request.identity.sourceRevision == currentMetadata.revision,
+                      request.identity.expansionRevision == expansionState.snapshot.revision,
+                      request.identity.documentRootNodeID == buildResult.rootNodeID,
+                      request.identity.sourceRevision == buildResult.treeRevision else {
                     return
                 }
-                guard shouldApply?(buildResult) ?? true else {
-                    shouldNotifyFinish = true
+                guard canCommit(request) else {
+                    enqueueCurrentInvalidation(forceRoute: true)
+                    didQueueInvalidation?()
                     return
                 }
 #if DEBUG
-                cachedMarkupKeysForTestingStorage = buildResult.cachedMarkupKeysForTesting
+                lastCommittedRequestIdentityForTesting = request.identity
 #endif
                 apply(buildResult)
                 shouldNotifyFinish = true
@@ -175,8 +339,17 @@ extension DOMTreeTextView {
             }
         }
 
-        func cachedMarkupKeysForTesting() -> Set<DOMTreeTextView.MarkupCacheKey> {
-            cachedMarkupKeysForTestingStorage
+        func suspendNextCompletedBuildForTesting() {
+            shouldSuspendNextCompletedBuildForTesting = true
+        }
+
+        func waitForCompletedBuildSuspensionForTesting() async {
+            if suspendedCompletedBuildContinuationForTesting != nil {
+                return
+            }
+            await withCheckedContinuation { continuation in
+                completedBuildSuspensionWaitersForTesting.append(continuation)
+            }
         }
 
         private func resolveBuildCompletionWaiters(result: Bool) {
@@ -202,6 +375,14 @@ extension DOMTreeTextView {
             continuation.resume()
         }
 
+        func resumeSuspendedCompletedBuildForTesting() {
+            guard let continuation = suspendedCompletedBuildContinuationForTesting else {
+                return
+            }
+            suspendedCompletedBuildContinuationForTesting = nil
+            continuation.resume()
+        }
+
         private func suspendBuildIfNeededForTesting() async {
             guard shouldSuspendNextBuildForTesting else {
                 return
@@ -216,7 +397,45 @@ extension DOMTreeTextView {
                 }
             }
         }
+
+        private func suspendCompletedBuildIfNeededForTesting() async {
+            guard shouldSuspendNextCompletedBuildForTesting else {
+                return
+            }
+            shouldSuspendNextCompletedBuildForTesting = false
+            await withCheckedContinuation { continuation in
+                suspendedCompletedBuildContinuationForTesting = continuation
+                let waiters = completedBuildSuspensionWaitersForTesting
+                completedBuildSuspensionWaitersForTesting.removeAll(keepingCapacity: true)
+                for waiter in waiters {
+                    waiter.resume()
+                }
+            }
+        }
 #endif
+
+        @discardableResult
+        private func supersedeCurrentBuild() -> Bool {
+            nextRequestToken &+= 1
+            let hadCurrentBuild = task != nil
+            task?.cancel()
+            task = nil
+            currentRequest = nil
+#if DEBUG
+            resumeSuspendedBuildForTesting()
+            resumeSuspendedCompletedBuildForTesting()
+            resolveBuildCompletionWaiters(result: true)
+#endif
+            return hadCurrentBuild
+        }
+
+        private func enqueueCurrentInvalidation(forceRoute: Bool) {
+            enqueueInvalidation(
+                .initial(metadata: currentMetadata),
+                isInitial: false,
+                requiresRoute: forceRoute
+            )
+        }
     }
 }
 
@@ -267,13 +486,20 @@ extension DOMTreeTextView {
         let isClosingTag: Bool
     }
 
+    struct RowRenderRequestIdentity: Equatable, Sendable {
+        let token: UInt64
+        let documentRootNodeID: DOMNode.ID?
+        let sourceRevision: UInt64
+        let expansionRevision: UInt64
+    }
+
     struct RowRenderBuildRequest: Sendable {
-        let rootNodeID: DOMNode.ID?
+        let identity: DOMTreeTextView.RowRenderRequestIdentity
         let visibleNodeIDs: Set<DOMNode.ID>
         let expansionState: [DOMNode.ID: Bool]
         let baseDocumentRevision: UInt64
-        let previousRowCapacity: Int
-        let previousTextCapacity: Int
+        let previousRows: [DOMTreeRowRenderPlan]
+        let previousTextUTF16Length: Int
         let resetMarkupCache: Bool
 
         func isNodeOpen(nodeID: DOMNode.ID, displayName: String) -> Bool {
@@ -297,7 +523,7 @@ extension DOMTreeTextView {
                 }
                 return !invalidation.affectedNodeIDs.isDisjoint(with: visibleNodeIDs)
             case .structure:
-                if let rootNodeID,
+                if let rootNodeID = identity.documentRootNodeID,
                    invalidation.affectedNodeIDs.contains(rootNodeID)
                     || invalidation.parentNodeIDs.contains(rootNodeID) {
                     return true
@@ -308,35 +534,117 @@ extension DOMTreeTextView {
         }
     }
 
+    enum RowRenderDifference: Equatable, Sendable {
+        case noChange
+        case replaceDocument(resetTextFragments: Bool)
+        case replaceCharacters(RowRenderTextEdit)
+    }
+
+    struct RowRenderTextEdit: Equatable, Sendable {
+        let previousRange: NSRange
+        let nextRowsRange: Range<Int>
+    }
+
     struct RowRenderBuildResult: Sendable {
         let treeRevision: UInt64
         let rootNodeID: DOMNode.ID?
-        let rows: [DOMTreeRowRenderPlan]
-        let text: String
+        let rowIndex: DOMTreeRowIndex
         let maxLineDisplayColumnCount: Int
-        let renderedNodeIDs: Set<DOMNode.ID>
-#if DEBUG
-        let collectedNodeIDsForTesting: [DOMNode.ID]
-        let cachedMarkupKeysForTesting: Set<DOMTreeTextView.MarkupCacheKey>
-#endif
+        let difference: DOMTreeTextView.RowRenderDifference
 
-        var observedContent: DOMTreeTextView.ObservedContent {
-            DOMTreeTextView.ObservedContent((
-                rows: rows,
-                text: text,
-                maxLineDisplayColumnCount: maxLineDisplayColumnCount
-            ))
+        var rows: [DOMTreeRowRenderPlan] {
+            rowIndex.rows
         }
     }
 
     struct RowRenderWorkerOutput {
-        let rows: [DOMTreeRowRenderPlan]
-        let text: String
+        let rowIndex: DOMTreeRowIndex
         let maxLineDisplayColumnCount: Int
-        let renderedNodeIDs: Set<DOMNode.ID>
-#if DEBUG
-        let collectedNodeIDsForTesting: [DOMNode.ID]
-#endif
+        let difference: DOMTreeTextView.RowRenderDifference
+    }
+
+    struct RowRenderDifferenceBuilder {
+        let previousRows: [DOMTreeRowRenderPlan]
+        let previousTextUTF16Length: Int
+        let nextRows: [DOMTreeRowRenderPlan]
+        let resetMarkupCache: Bool
+
+        func build() throws -> DOMTreeTextView.RowRenderDifference {
+            try Task.checkCancellation()
+            if resetMarkupCache {
+                return .replaceDocument(resetTextFragments: true)
+            }
+            if previousRows.isEmpty || nextRows.isEmpty {
+                return previousRows.isEmpty && nextRows.isEmpty
+                    ? .noChange
+                    : .replaceDocument(resetTextFragments: false)
+            }
+
+            var prefix = 0
+            while prefix < previousRows.count,
+                  prefix < nextRows.count,
+                  previousRows[prefix].hasSameRenderedContent(as: nextRows[prefix]) {
+                if prefix.isMultiple(of: 256) {
+                    try Task.checkCancellation()
+                }
+                prefix += 1
+            }
+
+            guard prefix != previousRows.count || prefix != nextRows.count else {
+                return .noChange
+            }
+
+            var previousSuffix = previousRows.count
+            var nextSuffix = nextRows.count
+            var comparedSuffixCount = 0
+            while previousSuffix > prefix,
+                  nextSuffix > prefix,
+                  previousRows[previousSuffix - 1].hasSameRenderedContent(
+                    as: nextRows[nextSuffix - 1]
+                  ) {
+                if comparedSuffixCount.isMultiple(of: 256) {
+                    try Task.checkCancellation()
+                }
+                previousSuffix -= 1
+                nextSuffix -= 1
+                comparedSuffixCount += 1
+            }
+
+            return .replaceCharacters(
+                DOMTreeTextView.RowRenderTextEdit(
+                    previousRange: textEditRange(
+                        previousStart: prefix,
+                        previousEnd: previousSuffix
+                    ),
+                    nextRowsRange: prefix..<nextSuffix
+                )
+            )
+        }
+
+        private func textEditRange(
+            previousStart: Int,
+            previousEnd: Int
+        ) -> NSRange {
+            let location: Int
+            let length: Int
+            if previousStart == 0 {
+                location = 0
+                if previousEnd == previousRows.count {
+                    length = previousTextUTF16Length
+                } else {
+                    length = previousRows[previousEnd].documentRange.location
+                }
+            } else {
+                let precedingRow = previousRows[previousStart - 1]
+                location = NSMaxRange(precedingRow.documentRange)
+                if previousEnd == previousRows.count {
+                    length = previousTextUTF16Length - location
+                } else {
+                    length = previousRows[previousEnd].documentRange.location - location
+                }
+            }
+            return NSRange(location: location, length: length)
+        }
     }
 }
 
@@ -368,33 +676,19 @@ extension DOMTreeRenderProjector {
         }
         markupCache = worker.takeMarkupCache()
         let staleCacheKeys = markupCache.keys.filter {
-            !output.renderedNodeIDs.contains($0.nodeID)
+            !output.rowIndex.visibleNodeIDs.contains($0.nodeID)
         }
         for key in staleCacheKeys {
             markupCache.removeValue(forKey: key)
         }
 
-#if DEBUG
         return DOMTreeTextView.RowRenderBuildResult(
             treeRevision: revision,
             rootNodeID: rootNodeID,
-            rows: output.rows,
-            text: output.text,
+            rowIndex: output.rowIndex,
             maxLineDisplayColumnCount: output.maxLineDisplayColumnCount,
-            renderedNodeIDs: output.renderedNodeIDs,
-            collectedNodeIDsForTesting: output.collectedNodeIDsForTesting,
-            cachedMarkupKeysForTesting: Set(markupCache.keys)
+            difference: output.difference
         )
-#else
-        return DOMTreeTextView.RowRenderBuildResult(
-            treeRevision: revision,
-            rootNodeID: rootNodeID,
-            rows: output.rows,
-            text: output.text,
-            maxLineDisplayColumnCount: output.maxLineDisplayColumnCount,
-            renderedNodeIDs: output.renderedNodeIDs
-        )
-#endif
     }
 }
 
@@ -430,52 +724,41 @@ extension DOMTreeTextView {
         mutating func build() throws -> DOMTreeTextView.RowRenderWorkerOutput {
             try Task.checkCancellation()
             var nextRows: [DOMTreeRowRenderPlan] = []
-            nextRows.reserveCapacity(request.previousRowCapacity)
-            var nextText = ""
-            nextText.reserveCapacity(request.previousTextCapacity)
+            nextRows.reserveCapacity(request.previousRows.count)
             var utf16Location = 0
             var maxLineDisplayColumnCount = 0
             var visitedNodeIDs = Set<DOMNode.ID>()
-            var renderedNodeIDs: [DOMNode.ID] = []
 
             for nodeID in displayRootIDs() {
                 try append(
                     nodeID,
                     depth: 0,
                     visitedNodeIDs: &visitedNodeIDs,
-                    renderedNodeIDs: &renderedNodeIDs,
                     rows: &nextRows,
-                    text: &nextText,
                     utf16Location: &utf16Location,
                     maxLineDisplayColumnCount: &maxLineDisplayColumnCount
                 )
             }
 
-#if DEBUG
+            let difference = try DOMTreeTextView.RowRenderDifferenceBuilder(
+                previousRows: request.previousRows,
+                previousTextUTF16Length: request.previousTextUTF16Length,
+                nextRows: nextRows,
+                resetMarkupCache: request.resetMarkupCache
+            ).build()
+            let rowIndex = try DOMTreeRowIndex(cancellableRows: nextRows)
             return DOMTreeTextView.RowRenderWorkerOutput(
-                rows: nextRows,
-                text: nextText,
+                rowIndex: rowIndex,
                 maxLineDisplayColumnCount: maxLineDisplayColumnCount,
-                renderedNodeIDs: Set(renderedNodeIDs),
-                collectedNodeIDsForTesting: renderedNodeIDs
+                difference: difference
             )
-#else
-            return DOMTreeTextView.RowRenderWorkerOutput(
-                rows: nextRows,
-                text: nextText,
-                maxLineDisplayColumnCount: maxLineDisplayColumnCount,
-                renderedNodeIDs: Set(renderedNodeIDs)
-            )
-#endif
         }
 
         private mutating func append(
             _ nodeID: DOMNode.ID,
             depth: Int,
             visitedNodeIDs: inout Set<DOMNode.ID>,
-            renderedNodeIDs: inout [DOMNode.ID],
             rows: inout [DOMTreeRowRenderPlan],
-            text: inout String,
             utf16Location: inout Int,
             maxLineDisplayColumnCount: inout Int
         ) throws {
@@ -503,11 +786,9 @@ extension DOMTreeTextView {
                     isClosingTag: false
                 ),
                 rows: &rows,
-                text: &text,
                 utf16Location: &utf16Location,
                 maxLineDisplayColumnCount: &maxLineDisplayColumnCount
             )
-            renderedNodeIDs.append(nodeID)
 
             guard hasDisclosure, isOpen else {
                 return
@@ -517,9 +798,7 @@ extension DOMTreeTextView {
                     childID,
                     depth: depth + 1,
                     visitedNodeIDs: &visitedNodeIDs,
-                    renderedNodeIDs: &renderedNodeIDs,
                     rows: &rows,
-                    text: &text,
                     utf16Location: &utf16Location,
                     maxLineDisplayColumnCount: &maxLineDisplayColumnCount
                 )
@@ -536,7 +815,6 @@ extension DOMTreeTextView {
                     isClosingTag: true
                 ),
                 rows: &rows,
-                text: &text,
                 utf16Location: &utf16Location,
                 maxLineDisplayColumnCount: &maxLineDisplayColumnCount
             )
@@ -545,7 +823,6 @@ extension DOMTreeTextView {
         private mutating func appendLine(
             _ rowInput: DOMTreeTextView.RowRenderInput,
             rows: inout [DOMTreeRowRenderPlan],
-            text: inout String,
             utf16Location: inout Int,
             maxLineDisplayColumnCount: inout Int
         ) throws {
@@ -561,10 +838,6 @@ extension DOMTreeTextView {
                 row.displayColumnCount
             )
             rows.append(row)
-            if rowIndex > 0 {
-                text.append("\n")
-            }
-            text.append(row.text)
             utf16Location += row.documentRange.length + 1
         }
 

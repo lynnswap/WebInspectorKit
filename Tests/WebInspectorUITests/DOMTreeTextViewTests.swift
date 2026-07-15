@@ -139,7 +139,10 @@ struct DOMTreeTextViewTests {
     func textDocumentVendsRowParagraphsWithStableIdentity() throws {
         let document = DOMTreeTextDocument()
         let rows = makeRowDocumentRows(["alpha", "beta"])
-        document.replaceDocument(with: attributedRowDocument(rows: rows), rows: rows)
+        document.replaceDocument(
+            with: attributedRowDocument(rows: rows),
+            rowIndex: DOMTreeRowIndex(rows: rows)
+        )
 
         let firstParagraph = try #require(document.textContentStorage(
             document.textContentStorage,
@@ -160,14 +163,14 @@ struct DOMTreeTextViewTests {
         let initialRows = makeRowDocumentRows(["first", "middle", "third"])
         document.replaceDocument(
             with: attributedRowDocument(rows: initialRows),
-            rows: initialRows
+            rowIndex: DOMTreeRowIndex(rows: initialRows)
         )
         let nextRows = makeRowDocumentRows(["first", "second", "third"])
 
         document.replaceCharacters(
             in: initialRows[1].documentRange,
             with: attributedRowDocument(rows: [nextRows[1]]),
-            rows: nextRows
+            rowIndex: DOMTreeRowIndex(rows: nextRows)
         )
 
         #expect(document.string == "first\nsecond\nthird")
@@ -235,7 +238,7 @@ struct DOMTreeTextViewTests {
         let rows = makeRowDocumentRows(["alpha", "beta"])
         document.replaceDocument(
             with: attributedRowDocument(rows: rows),
-            rows: rows
+            rowIndex: DOMTreeRowIndex(rows: rows)
         )
         document.textContainer.size = CGSize(width: 1_000, height: 1_000)
 
@@ -256,6 +259,159 @@ struct DOMTreeTextViewTests {
         let firstFragment = try #require(fragments.first)
         #expect(document.rowIdentity(for: firstFragment) == rows[0].identity)
         #expect(document.row(for: firstFragment) == rows[0])
+    }
+
+    @Test
+    func rowRenderDifferenceRecognizesEquivalentRows() throws {
+        let previousRows = makeRowDocumentRows(
+            ["alpha", "beta"],
+            nodeIDs: [1, 2]
+        )
+        let nextRows = makeRowDocumentRows(
+            ["alpha", "beta"],
+            nodeIDs: [1, 2]
+        )
+
+        let difference = try rowRenderDifference(
+            previousRows: previousRows,
+            nextRows: nextRows
+        )
+
+        #expect(difference == .noChange)
+    }
+
+    @Test
+    func rowRenderDifferenceReplacesChangedMiddleRow() throws {
+        let previousRows = makeRowDocumentRows(
+            ["a", "b", "c"],
+            nodeIDs: [1, 2, 3]
+        )
+        let nextRows = makeRowDocumentRows(
+            ["a", "x", "c"],
+            nodeIDs: [1, 2, 3]
+        )
+
+        let difference = try rowRenderDifference(
+            previousRows: previousRows,
+            nextRows: nextRows
+        )
+
+        #expect(difference == .replaceCharacters(.init(
+            previousRange: NSRange(location: 1, length: 3),
+            nextRowsRange: 1..<2
+        )))
+    }
+
+    @Test
+    func rowRenderDifferenceInsertsMiddleRow() throws {
+        let previousRows = makeRowDocumentRows(
+            ["a", "c"],
+            nodeIDs: [1, 3]
+        )
+        let nextRows = makeRowDocumentRows(
+            ["a", "b", "c"],
+            nodeIDs: [1, 2, 3]
+        )
+
+        let difference = try rowRenderDifference(
+            previousRows: previousRows,
+            nextRows: nextRows
+        )
+
+        #expect(difference == .replaceCharacters(.init(
+            previousRange: NSRange(location: 1, length: 1),
+            nextRowsRange: 1..<2
+        )))
+    }
+
+    @Test
+    func rowRenderDifferenceDeletesMiddleRow() throws {
+        let previousRows = makeRowDocumentRows(
+            ["a", "b", "c"],
+            nodeIDs: [1, 2, 3]
+        )
+        let nextRows = makeRowDocumentRows(
+            ["a", "c"],
+            nodeIDs: [1, 3]
+        )
+
+        let difference = try rowRenderDifference(
+            previousRows: previousRows,
+            nextRows: nextRows
+        )
+
+        #expect(difference == .replaceCharacters(.init(
+            previousRange: NSRange(location: 1, length: 3),
+            nextRowsRange: 1..<1
+        )))
+    }
+
+    @Test
+    func rowRenderDifferenceHandlesEmptyTransitions() throws {
+        let row = makeRowDocumentRows(["a"], nodeIDs: [1])
+
+        let bothEmpty = try rowRenderDifference(
+            previousRows: [],
+            nextRows: []
+        )
+        let insertion = try rowRenderDifference(
+            previousRows: [],
+            nextRows: row
+        )
+        let deletion = try rowRenderDifference(
+            previousRows: row,
+            nextRows: []
+        )
+
+        #expect(bothEmpty == .noChange)
+        #expect(insertion == .replaceDocument(resetTextFragments: false))
+        #expect(deletion == .replaceDocument(resetTextFragments: false))
+    }
+
+    @Test
+    func rowRenderDifferenceUsesExactUTF16Boundaries() throws {
+        let previousRows = makeRowDocumentRows(
+            ["😀", "tail"],
+            nodeIDs: [1, 2]
+        )
+        let nextRows = makeRowDocumentRows(
+            ["🙂", "tail"],
+            nodeIDs: [1, 2]
+        )
+
+        let difference = try rowRenderDifference(
+            previousRows: previousRows,
+            nextRows: nextRows
+        )
+
+        #expect(difference == .replaceCharacters(.init(
+            previousRange: NSRange(location: 0, length: 3),
+            nextRowsRange: 0..<1
+        )))
+    }
+
+    @Test
+    func rowRenderEquivalenceIncludesMarkupRange() throws {
+        let previousRows = makeRowDocumentRows(
+            [" <a>"],
+            nodeIDs: [1],
+            markupRanges: [NSRange(location: 1, length: 3)]
+        )
+        let nextRows = makeRowDocumentRows(
+            [" <a>"],
+            nodeIDs: [1],
+            markupRanges: [NSRange(location: 0, length: 4)]
+        )
+
+        let difference = try rowRenderDifference(
+            previousRows: previousRows,
+            nextRows: nextRows
+        )
+
+        #expect(difference == .replaceCharacters(.init(
+            previousRange: NSRange(location: 0, length: 4),
+            nextRowsRange: 0..<1
+        )))
     }
 
     @Test
@@ -303,6 +459,24 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func unchangedProjectionAcknowledgesWithoutMutatingTextStorage()
+        async throws
+    {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
+        let baselineDocumentRevision = view.rowDocumentRevisionForTesting
+        view.resetPerformanceCountersForTesting()
+
+        view.rebuildRowsWithoutFragmentResetForTesting()
+        #expect(await view.waitForRowDocumentForTesting())
+
+        #expect(view.rowDocumentRevisionForTesting == baselineDocumentRevision)
+        #expect(view.replaceRowDocumentCallCountForTesting == 0)
+        #expect(view.incrementalRowDocumentEditCallCountForTesting == 0)
+        await fixture.close(view: view)
+    }
+
+    @Test
     func hiddenCanonicalDeltaRendersOnlyAfterRenderingResumes() async throws {
         let fixture = try await DOMTreeRuntimeFixture.start()
         let view = await fixture.makeView()
@@ -329,6 +503,33 @@ struct DOMTreeTextViewTests {
                 "data-hidden-update=\"ready\""
             )
         )
+        await fixture.close(view: view)
+    }
+
+    @Test
+    func hiddenSelectOnlyDoesNotExpandOrReloadRows() async throws {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
+        view.setRenderingActive(false)
+        view.resetPerformanceCountersForTesting()
+        let nestedChildID = try fixture.nodeID("span")
+
+        fixture.model.selectNode(nestedChildID, reveal: .selectOnly)
+        #expect(await waitForObservedCondition(
+            deliveries: {
+                [view.selectionObservationDeliveryForTesting].compactMap { $0 }
+            },
+            sample: {
+                fixture.model.selectedNodeID == nestedChildID
+            }
+        ))
+
+        view.setRenderingActive(true)
+        #expect(await view.waitForRowDocumentForTesting())
+
+        #expect(view.documentTextForTesting.contains("<article>…</article>"))
+        #expect(!view.documentTextForTesting.contains("nested-child"))
+        #expect(view.buildRowRenderPlanCallCountForTesting == 0)
         await fixture.close(view: view)
     }
 
@@ -536,7 +737,7 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
-    func localMarkupLookupAndCacheDistinguishOpeningAndClosingRows()
+    func localMarkupLookupDistinguishesOpeningAndClosingRows()
         async throws
     {
         let fixture = try await DOMTreeRuntimeFixture.start()
@@ -549,15 +750,6 @@ struct DOMTreeTextViewTests {
             view.localMarkupTextByNodeIDForTesting([articleID])[articleID]
                 == "      <article>"
         )
-        #expect(view.cachedMarkupKeysForTesting.contains(.init(
-            nodeID: articleID,
-            isClosingTag: false
-        )))
-        #expect(view.cachedMarkupKeysForTesting.contains(.init(
-            nodeID: articleID,
-            isClosingTag: true
-        )))
-
         view.removeRowIndexForTesting(containing: "<article>")
         #expect(view.localMarkupTextByNodeIDForTesting([articleID]).isEmpty)
         await fixture.close(view: view)
@@ -638,6 +830,147 @@ struct DOMTreeTextViewTests {
                 "<span id=\"nested-child\" data-state=\"ready\"></span>"
             )
         )
+        await fixture.close(view: view)
+    }
+
+    @Test
+    func semanticInputCancelsRowsBeforeProjectionCompletesWithoutLosingUpdate()
+        async throws
+    {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
+        let baselineCancellationCount =
+            view.semanticInputCancellationCountForTesting
+        view.suspendNextRowRenderBuildForTesting()
+        view.rebuildRowsWithoutFragmentResetForTesting()
+        await view.waitForRowRenderBuildSuspensionForTesting()
+        await view.suspendNextSemanticProjectionForTesting()
+
+        let revision = try await fixture.modifyAttribute(
+            nodeID: "visible-div",
+            name: "data-cancelled-build",
+            value: "latest"
+        )
+        await view.waitForSemanticProjectionSuspensionForTesting()
+
+        #expect(
+            view.semanticInputCancellationCountForTesting
+                == baselineCancellationCount + 1
+        )
+        #expect(view.currentRowRenderRequestIdentityForTesting == nil)
+        #expect(
+            !view.documentTextForTesting.contains(
+                "data-cancelled-build=\"latest\""
+            )
+        )
+
+        await view.resumeSemanticProjectionForTesting()
+        #expect(
+            await view.waitForRowDocumentAppliedTreeRevisionForTesting(revision)
+        )
+        #expect(
+            view.documentTextForTesting.contains(
+                "data-cancelled-build=\"latest\""
+            )
+        )
+        await fixture.close(view: view)
+    }
+
+    @Test
+    func supersededRequestTokenCannotCommitCompletedRows() async throws {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
+        let baselineDocumentRevision = view.rowDocumentRevisionForTesting
+        view.suspendNextCompletedRowRenderBuildForTesting()
+        view.setRowExpansionForTesting(containing: "<article", isOpen: true)
+        await view.waitForCompletedRowRenderBuildSuspensionForTesting()
+        let staleIdentity = try #require(
+            view.currentRowRenderRequestIdentityForTesting
+        )
+
+        view.setRowExpansionForTesting(containing: "<article", isOpen: false)
+        #expect(await view.waitForRowDocumentForTesting())
+        let committedIdentity = try #require(
+            view.lastCommittedRowRenderRequestIdentityForTesting
+        )
+
+        #expect(committedIdentity.token > staleIdentity.token)
+        #expect(
+            committedIdentity.expansionRevision
+                > staleIdentity.expansionRevision
+        )
+        #expect(view.rowDocumentRevisionForTesting == baselineDocumentRevision)
+        #expect(view.documentTextForTesting.contains("<article>…</article>"))
+        #expect(!view.documentTextForTesting.contains("nested-child"))
+        await fixture.close(view: view)
+    }
+
+    @Test
+    func expansionABARejectsRowsFromTheEarlierEquivalentState() async throws {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
+        let baselineDocumentRevision = view.rowDocumentRevisionForTesting
+        view.suspendNextCompletedRowRenderBuildForTesting()
+        view.setRowExpansionForTesting(containing: "<article", isOpen: true)
+        await view.waitForCompletedRowRenderBuildSuspensionForTesting()
+        let staleIdentity = try #require(
+            view.currentRowRenderRequestIdentityForTesting
+        )
+
+        view.setRowExpansionForTesting(containing: "<article", isOpen: false)
+        view.setRowExpansionForTesting(containing: "<article", isOpen: true)
+        #expect(await view.waitForRowDocumentForTesting())
+        let committedIdentity = try #require(
+            view.lastCommittedRowRenderRequestIdentityForTesting
+        )
+
+        #expect(committedIdentity.token > staleIdentity.token)
+        #expect(
+            committedIdentity.expansionRevision
+                == staleIdentity.expansionRevision + 2
+        )
+        #expect(
+            view.rowDocumentRevisionForTesting
+                == baselineDocumentRevision + 1
+        )
+        #expect(view.documentTextForTesting.contains("nested-child"))
+        await fixture.close(view: view)
+    }
+
+    @Test
+    func navigationRejectsCompletedRowsFromThePreviousDocumentGeneration()
+        async throws
+    {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
+        let baselineDocumentRevision = view.rowDocumentRevisionForTesting
+        view.suspendNextCompletedRowRenderBuildForTesting()
+        view.setRowExpansionForTesting(containing: "<article", isOpen: true)
+        await view.waitForCompletedRowRenderBuildSuspensionForTesting()
+        let staleIdentity = try #require(
+            view.currentRowRenderRequestIdentityForTesting
+        )
+
+        let revision = try await fixture.replacePage(
+            with: DOMTreeRuntimeFixture.document()
+        )
+        #expect(await view.waitForObservedTreeRevisionForTesting(revision))
+        #expect(await view.waitForRowDocumentForTesting())
+        let committedIdentity = try #require(
+            view.lastCommittedRowRenderRequestIdentityForTesting
+        )
+
+        #expect(committedIdentity.token > staleIdentity.token)
+        #expect(
+            committedIdentity.documentRootNodeID
+                != staleIdentity.documentRootNodeID
+        )
+        #expect(
+            view.rowDocumentRevisionForTesting
+                == baselineDocumentRevision + 1
+        )
+        #expect(view.documentTextForTesting.contains("<article>…</article>"))
+        #expect(!view.documentTextForTesting.contains("nested-child"))
         await fixture.close(view: view)
     }
 
@@ -1168,7 +1501,14 @@ private func testDOMNodeID(_ value: Int) -> DOMNode.ID {
     )
 }
 
-private func makeRowDocumentRows(_ texts: [String]) -> [DOMTreeRowRenderPlan] {
+private func makeRowDocumentRows(
+    _ texts: [String],
+    nodeIDs: [Int]? = nil,
+    markupRanges: [NSRange]? = nil
+) -> [DOMTreeRowRenderPlan] {
+    let nodeIDs = nodeIDs ?? texts.indices.map { $0 + 1 }
+    precondition(nodeIDs.count == texts.count)
+    precondition(markupRanges == nil || markupRanges?.count == texts.count)
     var utf16Location = 0
     return texts.enumerated().map { index, text in
         let utf16Length = (text as NSString).length
@@ -1177,7 +1517,7 @@ private func makeRowDocumentRows(_ texts: [String]) -> [DOMTreeRowRenderPlan] {
         }
         return DOMTreeRowRenderPlan(
             identity: DOMTreeRowIdentity(
-                nodeID: testDOMNodeID(index + 1),
+                nodeID: testDOMNodeID(nodeIDs[index]),
                 kind: .opening
             ),
             depth: 0,
@@ -1187,7 +1527,8 @@ private func makeRowDocumentRows(_ texts: [String]) -> [DOMTreeRowRenderPlan] {
                 location: utf16Location,
                 length: utf16Length
             ),
-            markupRange: NSRange(location: 0, length: utf16Length),
+            markupRange: markupRanges?[index]
+                ?? NSRange(location: 0, length: utf16Length),
             tokens: [],
             displayColumnCount: utf16Length,
             hasDisclosure: false,
@@ -1195,6 +1536,20 @@ private func makeRowDocumentRows(_ texts: [String]) -> [DOMTreeRowRenderPlan] {
             hasUnloadedRegularChildren: false
         )
     }
+}
+
+private func rowRenderDifference(
+    previousRows: [DOMTreeRowRenderPlan],
+    nextRows: [DOMTreeRowRenderPlan]
+) throws -> DOMTreeTextView.RowRenderDifference {
+    try DOMTreeTextView.RowRenderDifferenceBuilder(
+        previousRows: previousRows,
+        previousTextUTF16Length: previousRows.last.map {
+            NSMaxRange($0.documentRange)
+        } ?? 0,
+        nextRows: nextRows,
+        resetMarkupCache: false
+    ).build()
 }
 
 private func attributedRowDocument(

@@ -15,63 +15,40 @@ extension DOMTreeTextView {
     @MainActor
     @Observable
     final class ExpansionState {
-        private var states: [DOMNode.ID: Bool] = [:]
+        struct Snapshot: Equatable, Sendable {
+            let revision: UInt64
+            let states: [DOMNode.ID: Bool]
+        }
 
-        var snapshot: [DOMNode.ID: Bool] {
-            states
+        private var states: [DOMNode.ID: Bool] = [:]
+        private var revision: UInt64 = 0
+
+        var snapshot: Snapshot {
+            Snapshot(revision: revision, states: states)
         }
 
         func isOpen(_ nodeID: DOMNode.ID) -> Bool? {
             states[nodeID]
         }
 
-        func setIsOpen(_ isOpen: Bool, for nodeID: DOMNode.ID) {
+        @discardableResult
+        func setIsOpen(_ isOpen: Bool, for nodeID: DOMNode.ID) -> Bool {
+            guard states[nodeID] != isOpen else {
+                return false
+            }
             states[nodeID] = isOpen
+            revision &+= 1
+            return true
         }
 
-        func removeAll() {
+        @discardableResult
+        func removeAll() -> Bool {
             guard !states.isEmpty else {
-                return
+                return false
             }
             states.removeAll(keepingCapacity: true)
-        }
-    }
-}
-
-extension DOMTreeTextView {
-    struct ObservedLine: Equatable, Sendable {
-        var nodeID: DOMNode.ID
-        var depth: Int
-        var text: String
-        var tokens: [DOMTreeTextView.Token]
-        var displayColumnCount: Int
-        var hasDisclosure: Bool
-        var isOpen: Bool
-        var isClosingTag: Bool
-
-        init(_ row: DOMTreeRowRenderPlan) {
-            nodeID = row.nodeID
-            depth = row.depth
-            text = row.text
-            tokens = row.tokens
-            displayColumnCount = row.displayColumnCount
-            hasDisclosure = row.hasDisclosure
-            isOpen = row.isOpen
-            isClosingTag = row.isClosingTag
-        }
-    }
-}
-
-extension DOMTreeTextView {
-    struct ObservedContent: Equatable, Sendable {
-        var lines: [DOMTreeTextView.ObservedLine]
-        var text: String
-        var maxLineDisplayColumnCount: Int
-
-        init(_ buildResult: (rows: [DOMTreeRowRenderPlan], text: String, maxLineDisplayColumnCount: Int)) {
-            lines = buildResult.rows.map(DOMTreeTextView.ObservedLine.init)
-            text = buildResult.text
-            maxLineDisplayColumnCount = buildResult.maxLineDisplayColumnCount
+            revision &+= 1
+            return true
         }
     }
 }
@@ -285,15 +262,6 @@ extension DOMTreeTextView {
     struct Token: Equatable, Sendable {
         let kind: DOMTreeTextView.Token.Kind
         let range: NSRange
-    }
-}
-
-extension DOMTreeTextView {
-    struct RowDiff: Sendable {
-        let previousStart: Int
-        let previousEnd: Int
-        let nextStart: Int
-        let nextEnd: Int
     }
 }
 

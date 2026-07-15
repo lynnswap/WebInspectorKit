@@ -39,7 +39,9 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private let context: WebInspectorModelContext
     private let panelModel: DOMPanelModel
     private let treeRenderProjector: DOMTreeRenderProjector
-    private var currentTreeMetadata: DOMTreeRenderMetadata = .empty
+    private var currentTreeMetadata: DOMTreeRenderMetadata {
+        rowRenderBuildCoordinator.currentMetadata
+    }
     private var selectionRevision: UInt64
     private var selectionRevealPolicy: DOMRevealPolicy
     private let menuModel: DOMTreeMenuModel
@@ -68,7 +70,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private var rowIndex: DOMTreeRowIndex {
         textDocument.rowIndex
     }
-    private let expansionState: DOMTreeTextView.ExpansionState
     private let rowRenderBuildCoordinator: DOMTreeTextView.RowRenderBuildCoordinator
     private var hoveredNodeID: DOMNode.ID?
     private var pageHighlightTask: Task<Void, Never>?
@@ -83,12 +84,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private var measuredTextWidth: CGFloat = 0
     private var lastBoundsSize: CGSize = .zero
     private var lastRenderedDocumentRootID: DOMNode.ID?
-    private var lastRoutedTreeRevision: UInt64?
-    private var pendingDOMTreeRenderInvalidation: DOMTreeRenderInvalidation?
-    private var pendingDOMTreeRenderInvalidationIsInitial = false
-    private var pendingDOMTreeRenderInvalidationRequiresRoute = false
     private var domTreeRenderInvalidationTask: Task<Void, Never>?
-    private var lastObservedTreeContent: DOMTreeTextView.ObservedContent?
     private var rowDocumentRevision: UInt64 = 0
     private var lastRoutedSelectedNodeID: DOMNode.ID?
     private var isRenderingActive = false
@@ -214,11 +210,8 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         self.requestChildrenAction = requestChildrenAction
         self.highlightNodeAction = highlightNodeAction
         self.restoreHighlightAction = restoreHighlightAction
-        let expansionState = DOMTreeTextView.ExpansionState()
-        self.expansionState = expansionState
         self.rowRenderBuildCoordinator = DOMTreeTextView.RowRenderBuildCoordinator(
-            projector: treeRenderProjector,
-            expansionState: expansionState
+            projector: treeRenderProjector
         )
         self.menuModel = DOMTreeMenuModel(
             context: model.context,
@@ -573,11 +566,10 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         }
     }
 
-    private func mergePendingDOMTreeRenderInvalidation(_ invalidation: DOMTreeRenderInvalidation) {
-        pendingDOMTreeRenderInvalidation = pendingDOMTreeRenderInvalidation?.merging(with: invalidation) ?? invalidation
+    private func recordPendingDOMTreeRenderInvalidationForTesting() {
 #if DEBUG
-        if let pendingDOMTreeRenderInvalidation {
-            recordPendingDOMInvalidationRevisionForTesting(pendingDOMTreeRenderInvalidation.revision)
+        if let revision = rowRenderBuildCoordinator.pendingInvalidationRevision {
+            recordPendingDOMInvalidationRevisionForTesting(revision)
         }
 #endif
     }
@@ -592,12 +584,23 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         treeTransactionTask = Task { @MainActor [weak self, model, projector] in
             for await update in updates {
                 guard let self else { return }
+                let sourceRevision = switch update {
+                case let .initial(revision, _),
+                     let .reset(revision, _):
+                    revision.rawValue
+                case let .changes(_, toRevision, _, _):
+                    toRevision.rawValue
+                }
+                let semanticUpdate = rowRenderBuildCoordinator.beginSemanticUpdate(
+                    sourceRevision: sourceRevision
+                )
 
                 let projection: DOMTreeRenderProjection
                 switch update {
                 case let .initial(revision, _),
                      let .reset(revision, _):
                     guard let queryValues = model.nodes.fetchedQueryValues else {
+                        rejectSemanticUpdate(semanticUpdate)
                         continue
                     }
                     do {
@@ -610,6 +613,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                             "DOM render projection rejected replacement revision=\(revision.rawValue): "
                                 + String(describing: error)
                         )
+                        rejectSemanticUpdate(semanticUpdate)
                         continue
                     }
 
@@ -648,6 +652,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                         )
                     } catch {
                         guard let acceptedQueryValues = model.nodes.fetchedQueryValues else {
+                            rejectSemanticUpdate(semanticUpdate)
                             continue
                         }
                         WebInspectorUIDOMLog.error(
@@ -664,21 +669,38 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                                 "DOM render projection rejected authoritative replacement revision=\(toRevision.rawValue): "
                                     + String(describing: error)
                             )
+                            rejectSemanticUpdate(semanticUpdate)
                             continue
                         }
                     }
                 }
 
                 guard Task.isCancelled == false else { return }
-                currentTreeMetadata = projection.metadata
+                let acceptance = rowRenderBuildCoordinator.acceptSemanticUpdate(
+                    semanticUpdate,
+                    metadata: projection.metadata
+                )
 #if DEBUG
                 recordObservedTreeRevisionForTesting(projection.metadata.revision)
 #endif
                 scheduleDOMInvalidation(
                     projection.invalidation,
-                    isInitial: lastRoutedTreeRevision == nil
+                    isInitial: acceptance.isInitial,
+                    forceRoute: acceptance.requiresRoute
                 )
             }
+        }
+    }
+
+    private func rejectSemanticUpdate(
+        _ update: DOMTreeTextView.RowRenderBuildCoordinator.SemanticUpdate
+    ) {
+        guard rowRenderBuildCoordinator.rejectSemanticUpdate(update) else {
+            return
+        }
+        recordPendingDOMTreeRenderInvalidationForTesting()
+        if isRenderingActive {
+            schedulePendingDOMInvalidationFlush()
         }
     }
 
@@ -705,15 +727,11 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func suspendRenderingWork() {
-        let hadCurrentRowRenderBuild = rowRenderBuildCoordinator.hasCurrentBuild
         let needsHoveredPageHighlightRestore = hoveredNodeID != nil
         domTreeRenderInvalidationTask?.cancel()
         domTreeRenderInvalidationTask = nil
-        rowRenderBuildCoordinator.cancel()
-        if hadCurrentRowRenderBuild {
-            let invalidation = DOMTreeRenderInvalidation.initial(metadata: currentTreeMetadata)
-            mergePendingDOMTreeRenderInvalidation(invalidation)
-            pendingDOMTreeRenderInvalidationRequiresRoute = true
+        if rowRenderBuildCoordinator.suspendRendering() {
+            recordPendingDOMTreeRenderInvalidationForTesting()
         }
         if needsHoveredPageHighlightRestore {
             clearHoveredRowAndRestoreSelectionHighlight()
@@ -728,15 +746,11 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         guard isRenderingActive else {
             return
         }
-        let latestInvalidation = DOMTreeRenderInvalidation.initial(metadata: currentTreeMetadata)
-        let treeRevision = latestInvalidation.revision
-        let previousRoutedTreeRevision = lastRoutedTreeRevision
-        guard previousRoutedTreeRevision != treeRevision else {
+        guard rowRenderBuildCoordinator.enqueueCurrentInvalidationIfNeeded() else {
             return
         }
-
-        lastRoutedTreeRevision = treeRevision
-        scheduleDOMInvalidation(latestInvalidation, isInitial: previousRoutedTreeRevision == nil)
+        recordPendingDOMTreeRenderInvalidationForTesting()
+        schedulePendingDOMInvalidationFlush()
     }
 
     private func scheduleDOMInvalidation(
@@ -744,12 +758,13 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         isInitial: Bool,
         forceRoute: Bool = false
     ) {
-        mergePendingDOMTreeRenderInvalidation(invalidation)
-        pendingDOMTreeRenderInvalidationIsInitial = pendingDOMTreeRenderInvalidationIsInitial || isInitial
-        pendingDOMTreeRenderInvalidationRequiresRoute = pendingDOMTreeRenderInvalidationRequiresRoute
-            || forceRoute
-            || shouldRouteDOMInvalidation(invalidation, isInitial: isInitial)
-            || rowRenderBuildCoordinator.currentBuildMayRender(invalidation)
+        rowRenderBuildCoordinator.enqueueInvalidation(
+            invalidation,
+            isInitial: isInitial,
+            requiresRoute: forceRoute
+                || shouldRouteDOMInvalidation(invalidation, isInitial: isInitial)
+        )
+        recordPendingDOMTreeRenderInvalidationForTesting()
         guard isRenderingActive else {
             return
         }
@@ -777,19 +792,13 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         }
         domTreeRenderInvalidationTask?.cancel()
         domTreeRenderInvalidationTask = nil
-        let pendingInvalidation = pendingDOMTreeRenderInvalidation
-        let pendingIsInitial = pendingDOMTreeRenderInvalidationIsInitial
-        let pendingRequiresRoute = pendingDOMTreeRenderInvalidationRequiresRoute
-        pendingDOMTreeRenderInvalidation = nil
-        pendingDOMTreeRenderInvalidationIsInitial = false
-        pendingDOMTreeRenderInvalidationRequiresRoute = false
-        guard let pendingInvalidation else {
+        guard let pending = rowRenderBuildCoordinator.takePendingInvalidation() else {
             return
         }
         routeDOMInvalidation(
-            pendingInvalidation,
-            isInitial: pendingIsInitial,
-            forceRoute: pendingRequiresRoute
+            pending.invalidation,
+            isInitial: pending.isInitial,
+            forceRoute: pending.requiresRoute
         )
     }
 
@@ -799,9 +808,12 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         forceRoute: Bool = false
     ) {
         guard isRenderingActive else {
-            mergePendingDOMTreeRenderInvalidation(invalidation)
-            pendingDOMTreeRenderInvalidationIsInitial = pendingDOMTreeRenderInvalidationIsInitial || isInitial
-            pendingDOMTreeRenderInvalidationRequiresRoute = pendingDOMTreeRenderInvalidationRequiresRoute || forceRoute
+            rowRenderBuildCoordinator.enqueueInvalidation(
+                invalidation,
+                isInitial: isInitial,
+                requiresRoute: forceRoute
+            )
+            recordPendingDOMTreeRenderInvalidationForTesting()
             return
         }
         guard forceRoute || shouldRouteDOMInvalidation(invalidation, isInitial: isInitial) else {
@@ -816,18 +828,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         )
         prepareSelectionForRendering()
         startRowRenderBuild(
-            resetFragments: isInitial || invalidation.requiresFragmentReset || didResetLocalDocumentState,
-            previousRows: rows,
-            previousText: documentText,
-            shouldApply: { [weak self] result in
-                guard let self else {
-                    return false
-                }
-                let nextTreeContent = result.observedContent
-                let treeChanged = isInitial || self.lastObservedTreeContent != nextTreeContent
-                self.lastObservedTreeContent = nextTreeContent
-                return treeChanged
-            }
+            resetFragments: isInitial || invalidation.requiresFragmentReset || didResetLocalDocumentState
         )
     }
 
@@ -888,10 +889,11 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func handleSelectedNodeChange(selectionRevision: UInt64) {
-        let previousOpenState = expansionState.snapshot
+        let previousExpansionRevision = rowRenderBuildCoordinator.expansionSnapshot.revision
         prepareSelectionForRendering(clearsMultiSelectionForDocumentSelection: true)
         selectionReconciliationState.markReconciled(revision: selectionRevision)
-        if previousOpenState != expansionState.snapshot || selectedNodeNeedsRowReload() {
+        if previousExpansionRevision != rowRenderBuildCoordinator.expansionSnapshot.revision
+            || selectedNodeNeedsRowReload() {
             reloadTree(resetFragments: false)
             return
         }
@@ -914,9 +916,12 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         countsCall: Bool = true
     ) {
         guard isRenderingActive else {
-            let invalidation = DOMTreeRenderInvalidation.initial(metadata: currentTreeMetadata)
-            mergePendingDOMTreeRenderInvalidation(invalidation)
-            pendingDOMTreeRenderInvalidationRequiresRoute = true
+            rowRenderBuildCoordinator.enqueueInvalidation(
+                .initial(metadata: currentTreeMetadata),
+                isInitial: false,
+                requiresRoute: true
+            )
+            recordPendingDOMTreeRenderInvalidationForTesting()
             return
         }
 #if DEBUG
@@ -925,63 +930,33 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         }
 #endif
         let didResetLocalDocumentState = resetLocalDocumentStateIfNeeded()
-        let previousRows = rows
-        let previousText = documentText
         let shouldResetFragments = resetFragments || didResetLocalDocumentState
         prepareSelectionForRendering()
 #if DEBUG
         performanceCounters.buildRowRenderPlanCallCount += 1
 #endif
-        startRowRenderBuild(
-            resetFragments: shouldResetFragments,
-            previousRows: previousRows,
-            previousText: previousText
-        )
+        startRowRenderBuild(resetFragments: shouldResetFragments)
     }
 
     private func startRowRenderBuild(
-        resetFragments: Bool,
-        previousRows: [DOMTreeRowRenderPlan],
-        previousText: String,
-        shouldApply: (@MainActor (DOMTreeTextView.RowRenderBuildResult) -> Bool)? = nil
+        resetFragments: Bool
     ) {
         guard isRenderingActive else {
             return
         }
         rowRenderBuildCoordinator.startBuild(
             baseDocumentRevision: rowDocumentRevision,
-            rootNodeID: currentTreeMetadata.rootNodeID,
             visibleNodeIDs: rowIndex.visibleNodeIDs,
-            previousRowCapacity: rows.count,
-            previousTextCapacity: documentText.count,
+            previousRows: rows,
+            previousTextUTF16Length: textDocument.utf16Length,
             resetMarkupCache: resetFragments,
-            isCurrentBuild: { [weak self] request, result in
+            canCommit: { [weak self] request in
                 guard let self else {
                     return false
                 }
-                guard isRenderingActive else {
-                    return false
-                }
-                guard rowDocumentRevision == request.baseDocumentRevision else {
-                    scheduleDOMInvalidation(
-                        .initial(metadata: currentTreeMetadata),
-                        isInitial: false,
-                        forceRoute: true
-                    )
-                    return false
-                }
-                guard currentTreeMetadata.revision == result.treeRevision else {
-                    scheduleDOMInvalidation(
-                        .initial(metadata: currentTreeMetadata),
-                        isInitial: false,
-                        forceRoute: true
-                    )
-                    return false
-                }
-                _ = result
-                return expansionState.snapshot == request.expansionState
+                return isRenderingActive
+                    && rowDocumentRevision == request.baseDocumentRevision
             },
-            shouldApply: shouldApply,
             apply: { [weak self] buildResult in
                 guard let self else {
                     return
@@ -989,12 +964,14 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
                 guard isRenderingActive else {
                     return
                 }
-                applyRowRenderBuildResult(
-                    buildResult,
-                    resetFragments: resetFragments,
-                    previousRows: previousRows,
-                    previousText: previousText
-                )
+                applyRowRenderBuildResult(buildResult)
+            },
+            didQueueInvalidation: { [weak self] in
+                guard let self, isRenderingActive else {
+                    return
+                }
+                recordPendingDOMTreeRenderInvalidationForTesting()
+                schedulePendingDOMInvalidationFlush()
             },
             didFinish: { [weak self] in
                 self?.revealPendingSelectedNodeIfPossible()
@@ -1004,23 +981,25 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func applyRowRenderBuildResult(
-        _ buildResult: DOMTreeTextView.RowRenderBuildResult,
-        resetFragments: Bool,
-        previousRows: [DOMTreeRowRenderPlan],
-        previousText: String
+        _ buildResult: DOMTreeTextView.RowRenderBuildResult
     ) {
-        lastObservedTreeContent = buildResult.observedContent
-        let nextRows = buildResult.rows
-        let nextText = buildResult.text
-        if resetFragments {
-            resetTextFragmentViews()
-            replaceRowDocument(rows: nextRows)
-        } else {
+        switch buildResult.difference {
+        case .noChange:
+#if DEBUG
+            recordRowDocumentAppliedTreeRevisionForTesting(buildResult.treeRevision)
+#endif
+            return
+
+        case let .replaceDocument(resetTextFragments):
+            if resetTextFragments {
+                resetTextFragmentViews()
+            }
+            replaceRowDocument(rowIndex: buildResult.rowIndex)
+
+        case let .replaceCharacters(edit):
             updateRowDocumentIncrementally(
-                previousRows: previousRows,
-                previousText: previousText,
-                nextRows: nextRows,
-                nextText: nextText
+                rowIndex: buildResult.rowIndex,
+                edit: edit
             )
         }
         reconcileMultiSelectionAfterReload()
@@ -1052,7 +1031,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             return false
         }
 
-        expansionState.removeAll()
+        rowRenderBuildCoordinator.removeAllExpansion()
         hoveredNodeID = nil
         requestedChildNodeIDs.removeAll(keepingCapacity: true)
         hoverRowRects.removeAll(keepingCapacity: true)
@@ -1085,7 +1064,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             selectionRevealState.clearPendingSelection()
             return
         }
-        if selectionRevealPolicy != .none,
+        if selectionRevealPolicy == .selectAndScroll,
             !rowIndex.contains(nodeID: selectedNode.id)
         {
             openAncestors(of: selectedNode)
@@ -1112,7 +1091,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         while let currentAncestor = ancestor,
               visitedNodeIDs.insert(currentAncestor.id).inserted {
             if currentAncestor.kind != .document || currentAncestor.parent != nil {
-                expansionState.setIsOpen(true, for: currentAncestor.id)
+                rowRenderBuildCoordinator.setIsNodeOpen(true, for: currentAncestor.id)
             }
             ancestor = currentAncestor.parent
         }
@@ -1161,7 +1140,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func toggle(row: DOMTreeRowRenderPlan) {
-        expansionState.setIsOpen(!row.isOpen, for: row.nodeID)
+        rowRenderBuildCoordinator.setIsNodeOpen(!row.isOpen, for: row.nodeID)
         reloadTree(resetFragments: false)
     }
 
@@ -1602,129 +1581,49 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func reapplyTextAttributes() {
-        replaceRowDocument(rows: rows)
+        replaceRowDocument(rowIndex: rowIndex)
         setNeedsDisplayForVisibleTextFragments()
     }
 
-    private func replaceRowDocument(rows: [DOMTreeRowRenderPlan]) {
+    private func replaceRowDocument(rowIndex: DOMTreeRowIndex) {
 #if DEBUG
         performanceCounters.replaceRowDocumentCallCount += 1
 #endif
         textDocument.replaceDocument(
-            with: attributedDocumentText(for: rows),
-            rows: rows
+            with: attributedDocumentText(for: rowIndex.rows),
+            rowIndex: rowIndex
         )
         rowDocumentRevision &+= 1
         invalidateTextLayout()
     }
 
     private func updateRowDocumentIncrementally(
-        previousRows: [DOMTreeRowRenderPlan],
-        previousText: String,
-        nextRows: [DOMTreeRowRenderPlan],
-        nextText: String
+        rowIndex: DOMTreeRowIndex,
+        edit: DOMTreeTextView.RowRenderTextEdit
     ) {
-        guard !previousText.isEmpty, !nextText.isEmpty else {
-            replaceRowDocument(rows: nextRows)
-            return
-        }
-        guard let diff = rowDiff(previousRows: previousRows, nextRows: nextRows) else {
-            textDocument.replaceDocument(
-                with: attributedDocumentText(for: nextRows),
-                rows: nextRows
-            )
-            rowDocumentRevision &+= 1
-            return
-        }
-
-        let edit = textEdit(
-            previousRows: previousRows,
-            previousText: previousText,
-            nextRows: nextRows,
-            diff: diff
+        let replacement = attributedReplacementText(
+            rows: rowIndex.rows,
+            range: edit.nextRowsRange
         )
-        let replacement = attributedReplacementText(nextRows: nextRows, diff: diff)
-        textDocument.replaceCharacters(in: edit.range, with: replacement, rows: nextRows)
+        textDocument.replaceCharacters(
+            in: edit.previousRange,
+            with: replacement,
+            rowIndex: rowIndex
+        )
         rowDocumentRevision &+= 1
 #if DEBUG
         performanceCounters.incrementalRowDocumentEditCallCount += 1
 #endif
 
-        let editedLength = max(edit.range.length, replacement.length)
-        invalidateTextLayout(for: NSRange(location: edit.range.location, length: editedLength))
-        let changedRows = Array(nextRows[diff.nextStart..<diff.nextEnd])
-        if edit.range.length > 0 || replacement.length > 0 {
+        let editedLength = max(edit.previousRange.length, replacement.length)
+        invalidateTextLayout(for: NSRange(
+            location: edit.previousRange.location,
+            length: editedLength
+        ))
+        let changedRows = rowIndex.rows[edit.nextRowsRange]
+        if edit.previousRange.length > 0 || replacement.length > 0 {
             setNeedsDisplayForTextRanges(changedRows.map(\.documentRange))
         }
-    }
-
-    private func rowDiff(
-        previousRows: [DOMTreeRowRenderPlan],
-        nextRows: [DOMTreeRowRenderPlan]
-    ) -> DOMTreeTextView.RowDiff? {
-        var prefix = 0
-        while prefix < previousRows.count,
-              prefix < nextRows.count,
-              previousRows[prefix].hasSameRenderedContent(as: nextRows[prefix]) {
-            prefix += 1
-        }
-
-        var previousSuffix = previousRows.count
-        var nextSuffix = nextRows.count
-        while previousSuffix > prefix,
-              nextSuffix > prefix,
-              previousRows[previousSuffix - 1].hasSameRenderedContent(as: nextRows[nextSuffix - 1]) {
-            previousSuffix -= 1
-            nextSuffix -= 1
-        }
-
-        guard prefix != previousRows.count || prefix != nextRows.count else {
-            return nil
-        }
-        return DOMTreeTextView.RowDiff(
-            previousStart: prefix,
-            previousEnd: previousSuffix,
-            nextStart: prefix,
-            nextEnd: nextSuffix
-        )
-    }
-
-    private func textEdit(
-        previousRows: [DOMTreeRowRenderPlan],
-        previousText: String,
-        nextRows: [DOMTreeRowRenderPlan],
-        diff: DOMTreeTextView.RowDiff
-    ) -> (range: NSRange, replacement: String) {
-        let previousLength = (previousText as NSString).length
-        let location: Int
-        let length: Int
-        if diff.previousStart == 0 {
-            location = 0
-            if diff.previousEnd == previousRows.count {
-                length = previousLength
-            } else {
-                length = previousRows[diff.previousEnd].documentRange.location
-            }
-        } else {
-            let previousRow = previousRows[diff.previousStart - 1]
-            location = previousRow.documentRange.location + previousRow.documentRange.length
-            if diff.previousEnd == previousRows.count {
-                length = previousLength - location
-            } else {
-                length = previousRows[diff.previousEnd].documentRange.location - location
-            }
-        }
-
-        let replacementRows = nextRows[diff.nextStart..<diff.nextEnd].map(\.text).joined(separator: "\n")
-        let replacement: String
-        if diff.nextStart == 0 {
-            replacement = replacementRows + (diff.nextEnd < nextRows.count && !replacementRows.isEmpty ? "\n" : "")
-        } else if replacementRows.isEmpty {
-            replacement = diff.nextEnd < nextRows.count ? "\n" : ""
-        } else {
-            replacement = "\n" + replacementRows + (diff.nextEnd < nextRows.count ? "\n" : "")
-        }
-        return (NSRange(location: location, length: length), replacement)
     }
 
     private func attributedDocumentText(for rows: [DOMTreeRowRenderPlan]) -> NSAttributedString {
@@ -1742,12 +1641,12 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func attributedReplacementText(
-        nextRows: [DOMTreeRowRenderPlan],
-        diff: DOMTreeTextView.RowDiff
+        rows: [DOMTreeRowRenderPlan],
+        range: Range<Int>
     ) -> NSAttributedString {
-        let replacementRows = Array(nextRows[diff.nextStart..<diff.nextEnd])
+        let replacementRows = rows[range]
         let attributedText = NSMutableAttributedString()
-        if diff.nextStart > 0, !replacementRows.isEmpty {
+        if range.lowerBound > 0, !replacementRows.isEmpty {
             attributedText.append(NSAttributedString(string: "\n", attributes: baseTextAttributes()))
         }
         for (index, row) in replacementRows.enumerated() {
@@ -1756,9 +1655,11 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
             }
             attributedText.append(attributedRowText(for: row))
         }
-        if diff.nextEnd < nextRows.count, !replacementRows.isEmpty {
+        if range.upperBound < rows.count, !replacementRows.isEmpty {
             attributedText.append(NSAttributedString(string: "\n", attributes: baseTextAttributes()))
-        } else if replacementRows.isEmpty, diff.nextStart > 0, diff.nextEnd < nextRows.count {
+        } else if replacementRows.isEmpty,
+                  range.lowerBound > 0,
+                  range.upperBound < rows.count {
             attributedText.append(NSAttributedString(string: "\n", attributes: baseTextAttributes()))
         }
         return attributedText
@@ -1988,7 +1889,8 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     }
 
     private func selectedNodeNeedsRowReload() -> Bool {
-        guard let selectedNodeID = panelModel.selectedNodeID else {
+        guard selectionRevealPolicy == .selectAndScroll,
+              let selectedNodeID = panelModel.selectedNodeID else {
             return false
         }
         return !rowIndex.contains(nodeID: selectedNodeID)
@@ -2803,12 +2705,26 @@ extension DOMTreeTextView {
         performanceCounters.textSegmentRectsCallCount
     }
 
-    var cachedMarkupKeysForTesting: Set<DOMTreeTextView.MarkupCacheKey> {
-        rowRenderBuildCoordinator.cachedMarkupKeysForTesting()
-    }
-
     var rowDocumentAppliedTreeRevisionForTesting: UInt64 {
         rowDocumentAppliedTreeRevisionForTestingStorage
+    }
+
+    var rowDocumentRevisionForTesting: UInt64 {
+        rowDocumentRevision
+    }
+
+    var semanticInputCancellationCountForTesting: Int {
+        rowRenderBuildCoordinator.semanticInputCancellationCountForTesting
+    }
+
+    var currentRowRenderRequestIdentityForTesting:
+        DOMTreeTextView.RowRenderRequestIdentity? {
+        rowRenderBuildCoordinator.currentRequestIdentityForTesting
+    }
+
+    var lastCommittedRowRenderRequestIdentityForTesting:
+        DOMTreeTextView.RowRenderRequestIdentity? {
+        rowRenderBuildCoordinator.lastCommittedRequestIdentityForTesting
     }
 
     func waitForObservedTreeRevisionForTesting(
@@ -2841,7 +2757,7 @@ extension DOMTreeTextView {
         _ minimumRevision: UInt64,
         timeout: Duration = .seconds(1)
     ) async -> Bool {
-        if (pendingDOMTreeRenderInvalidation?.revision ?? 0) >= minimumRevision {
+        if (rowRenderBuildCoordinator.pendingInvalidationRevision ?? 0) >= minimumRevision {
             return true
         }
 
@@ -2857,7 +2773,7 @@ extension DOMTreeTextView {
                 continuation: continuation,
                 timeoutTask: timeoutTask
             )
-            if (pendingDOMTreeRenderInvalidation?.revision ?? 0) >= minimumRevision {
+            if (rowRenderBuildCoordinator.pendingInvalidationRevision ?? 0) >= minimumRevision {
                 resolvePendingDOMInvalidationWaiterForTesting(id: waiterID, result: true)
             }
         }
@@ -3074,6 +2990,10 @@ extension DOMTreeTextView {
         await waitForRowDocumentForTesting()
     }
 
+    func rebuildRowsWithoutFragmentResetForTesting() {
+        reloadTree(resetFragments: false)
+    }
+
     @discardableResult
     func waitForRowDocumentForTesting(timeout: Duration = .seconds(5)) async -> Bool {
         let start = ContinuousClock.now
@@ -3107,6 +3027,40 @@ extension DOMTreeTextView {
 
     func resumeRowRenderBuildForTesting() {
         rowRenderBuildCoordinator.resumeSuspendedBuildForTesting()
+    }
+
+    func suspendNextCompletedRowRenderBuildForTesting() {
+        rowRenderBuildCoordinator.suspendNextCompletedBuildForTesting()
+    }
+
+    func waitForCompletedRowRenderBuildSuspensionForTesting() async {
+        await rowRenderBuildCoordinator.waitForCompletedBuildSuspensionForTesting()
+    }
+
+    func resumeCompletedRowRenderBuildForTesting() {
+        rowRenderBuildCoordinator.resumeSuspendedCompletedBuildForTesting()
+    }
+
+    func setRowExpansionForTesting(containing text: String, isOpen: Bool) {
+        guard let row = rows.first(where: { $0.text.contains(text) }) else {
+            return
+        }
+        guard rowRenderBuildCoordinator.setIsNodeOpen(isOpen, for: row.nodeID) else {
+            return
+        }
+        reloadTree(resetFragments: false)
+    }
+
+    func suspendNextSemanticProjectionForTesting() async {
+        await treeRenderProjector.suspendNextSourceUpdateForTesting()
+    }
+
+    func waitForSemanticProjectionSuspensionForTesting() async {
+        await treeRenderProjector.waitForSourceUpdateSuspensionForTesting()
+    }
+
+    func resumeSemanticProjectionForTesting() async {
+        await treeRenderProjector.resumeSuspendedSourceUpdateForTesting()
     }
 
     func selectedRowRectsForTesting() -> [CGRect] {

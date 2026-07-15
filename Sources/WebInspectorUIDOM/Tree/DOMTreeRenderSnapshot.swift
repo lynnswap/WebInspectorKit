@@ -116,11 +116,19 @@ actor DOMTreeRenderProjector {
     var nodesByID: [DOMNode.ID: Node] = [:]
     var parentByNodeID: [DOMNode.ID: DOMNode.ID] = [:]
     var markupCache: [DOMTreeTextView.MarkupCacheKey: DOMTreeTextView.CachedMarkup] = [:]
+#if DEBUG
+    private var shouldSuspendNextSourceUpdateForTesting = false
+    private var suspendedSourceUpdateContinuationForTesting: CheckedContinuation<Void, Never>?
+    private var sourceUpdateSuspensionWaitersForTesting: [CheckedContinuation<Void, Never>] = []
+#endif
 
     func replace(
         revision: UInt64,
         queryValues: [DOMNode.QueryValue]
-    ) throws -> DOMTreeRenderProjection {
+    ) async throws -> DOMTreeRenderProjection {
+#if DEBUG
+        await suspendSourceUpdateIfNeededForTesting()
+#endif
         var nextNodesByID: [DOMNode.ID: Node] = [:]
         nextNodesByID.reserveCapacity(queryValues.count)
         var nextParentByNodeID: [DOMNode.ID: DOMNode.ID] = [:]
@@ -168,7 +176,10 @@ actor DOMTreeRenderProjector {
         toRevision: UInt64,
         deletedNodeIDs: Set<DOMNode.ID>,
         upsertedQueryValues: [DOMNode.QueryValue]
-    ) throws -> DOMTreeRenderProjection {
+    ) async throws -> DOMTreeRenderProjection {
+#if DEBUG
+        await suspendSourceUpdateIfNeededForTesting()
+#endif
         guard revision == fromRevision else {
             throw DOMTreeRenderProjectionError.revisionMismatch(
                 expected: revision,
@@ -274,6 +285,44 @@ actor DOMTreeRenderProjector {
             )
         )
     }
+
+#if DEBUG
+    func suspendNextSourceUpdateForTesting() {
+        shouldSuspendNextSourceUpdateForTesting = true
+    }
+
+    func waitForSourceUpdateSuspensionForTesting() async {
+        if suspendedSourceUpdateContinuationForTesting != nil {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            sourceUpdateSuspensionWaitersForTesting.append(continuation)
+        }
+    }
+
+    func resumeSuspendedSourceUpdateForTesting() {
+        guard let continuation = suspendedSourceUpdateContinuationForTesting else {
+            return
+        }
+        suspendedSourceUpdateContinuationForTesting = nil
+        continuation.resume()
+    }
+
+    private func suspendSourceUpdateIfNeededForTesting() async {
+        guard shouldSuspendNextSourceUpdateForTesting else {
+            return
+        }
+        shouldSuspendNextSourceUpdateForTesting = false
+        await withCheckedContinuation { continuation in
+            suspendedSourceUpdateContinuationForTesting = continuation
+            let waiters = sourceUpdateSuspensionWaitersForTesting
+            sourceUpdateSuspensionWaitersForTesting.removeAll(keepingCapacity: true)
+            for waiter in waiters {
+                waiter.resume()
+            }
+        }
+    }
+#endif
 
     private func validatedRootNodeID(
         nextNodeCount: Int,
