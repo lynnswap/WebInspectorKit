@@ -132,8 +132,14 @@ public final class WebInspectorViewController: UIViewController {
         case regular
     }
 
+    private enum SessionOwnership {
+        case owned
+        case borrowed
+    }
+
     /// The inspection session backing the view controller.
     public let session: WebInspectorSession
+    private let sessionOwnership: SessionOwnership
     private let interface: InterfaceModel
     private let presentationContentStore: PresentationContentStore
     private var drawsBackgroundStorage = true
@@ -165,12 +171,42 @@ public final class WebInspectorViewController: UIViewController {
         }
     }
 
-    /// Creates a view controller backed by an inspection session.
-    public init(
-        session: WebInspectorSession = .init(),
+    /// Creates a view controller that owns its inspection session.
+    ///
+    /// A terminal presentation dismissal closes the owned session after the
+    /// presentation resources have retired.
+    public convenience init(
         catalog: WebInspectorTabCatalog = .standard
     ) {
+        self.init(
+            session: WebInspectorSession(),
+            catalog: catalog,
+            sessionOwnership: .owned
+        )
+    }
+
+    /// Creates a view controller that borrows an app-owned inspection session.
+    ///
+    /// A terminal presentation dismissal retires only presentation resources.
+    /// The caller remains responsible for detaching or closing `session`.
+    public convenience init(
+        session: WebInspectorSession,
+        catalog: WebInspectorTabCatalog = .standard
+    ) {
+        self.init(
+            session: session,
+            catalog: catalog,
+            sessionOwnership: .borrowed
+        )
+    }
+
+    private init(
+        session: WebInspectorSession,
+        catalog: WebInspectorTabCatalog,
+        sessionOwnership: SessionOwnership
+    ) {
         self.session = session
+        self.sessionOwnership = sessionOwnership
         self.interface = InterfaceModel(catalog: catalog)
         self.presentationContentStore = PresentationContentStore(
             context: WebInspectorTab.Context(session: session)
@@ -285,10 +321,15 @@ public final class WebInspectorViewController: UIViewController {
     }
 
     private func finishRootPresentationLifecycle() {
+        let closesSession: Bool = switch sessionOwnership {
+        case .owned: true
+        case .borrowed: false
+        }
         presentationLifecycleCoordinator.finishIfNeeded { [
             session,
             presentationContentStore,
             presentationLifecycleCoordinator,
+            closesSession,
         ] generation in
             removeActiveHost()
             Task { @MainActor in
@@ -307,6 +348,9 @@ public final class WebInspectorViewController: UIViewController {
                 // Resource retirement may suspend long enough for this root to
                 // begin a new presentation. Never detach that newer lifetime.
                 guard presentationLifecycleCoordinator.isCurrentPresentation(generation) else {
+                    return
+                }
+                guard closesSession else {
                     return
                 }
                 await session.close()

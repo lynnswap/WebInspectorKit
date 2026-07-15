@@ -81,7 +81,6 @@ final class BrowserInspectorCoordinator {
 
         let anchor = resolvePresentationAnchor(from: presenter)
         let sheetController = WebInspectorViewController(session: inspectorSession)
-        sheetController.automaticallyDetachesOnDismiss = false
         if #available(iOS 26.0, *) {
             sheetController.drawsBackground = false
         }

@@ -958,9 +958,10 @@ struct BrowserSessionRestoreTests {
             ),
             sessionPersistence: .ephemeral
         )
+        let inspectorSession = WebInspectorSession()
         let pageViewController = BrowserPageViewController(
             browserWindow: store,
-            inspectorSession: WebInspectorSession(),
+            inspectorSession: inspectorSession,
             launchConfiguration: BrowserLaunchConfiguration(initialURL: initialURL),
             progressHideScheduler: ManualDelayScheduler()
         )
@@ -982,7 +983,7 @@ struct BrowserSessionRestoreTests {
 
         #expect(pageViewController.openInspectorAsSheetForTesting())
         let sheetController = try #require(pageViewController.presentedInspectorSheetForTesting)
-        #expect(sheetController.automaticallyDetachesOnDismiss == false)
+        #expect(sheetController.session === inspectorSession)
         #expect(await waitUntil {
             inspectorButtonItem.isEnabled == false
         })
