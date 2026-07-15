@@ -7,7 +7,7 @@ import WebInspectorDataKitTesting
 func readyDataKitScenarioIsUsableFromAConsumerPackage() async throws {
     let runtime = try await WebInspectorDataKitTestRuntime.start(
         scenario: .init(
-            configuration: .init(domains: [.dom, .network]),
+            configuration: .init(enabledFeatures: [.dom, .network]),
             document: .init(children: [
                 .element(id: "contract-button", name: "button")
             ]),
@@ -18,64 +18,58 @@ func readyDataKitScenarioIsUsableFromAConsumerPackage() async throws {
                     body: .init(data: "contract body")
                 )
             ]
-        ),
-        isolation: MainActor.shared
+        )
     )
+    let context = runtime.container.mainContext
 
-    let entries = try await WebInspectorFetchedResultsController<NetworkEntry, Never>(
-        modelContext: runtime.model
+    let entries = WebInspectorFetchedResultsController<NetworkEntry>(
+        modelContext: context
     )
-    let entryID = try #require(entries.snapshot.itemIDs.first)
-    let entry = try #require(runtime.model.model(for: entryID))
-    let request = try #require(runtime.model.model(for: entry.primaryRequestID))
+    try await entries.performFetch()
+    let entry = try #require(entries.fetchedObjects?.first)
+    let request = try #require(context.model(for: entry.primaryRequestID))
     #expect(request.url == "https://example.test/contract")
-    let body = try await runtime.model.responseBody(for: request)
-    #expect(body.text == "contract body")
-    try await runtime.model.clearNetworkRequests()
-    #expect(entries.snapshot.itemIDs.isEmpty)
 
-    let nodes = try await WebInspectorFetchedResultsController<DOMNode, Never>(
-        modelContext: runtime.model
+    let body = try await runtime.container.network.responseBody(for: request.id)
+    #expect(body.data == "contract body")
+    #expect(body.base64Encoded == false)
+
+    let nodes = WebInspectorFetchedResultsController<DOMNode>(
+        modelContext: context
     )
-    #expect(nodes.snapshot.itemIDs.contains { id in
-        runtime.model.model(for: id)?.localName == "button"
-    })
-
-    try await runtime.replacePage(with: .init())
-    #expect(nodes.snapshot.itemIDs.count == 1)
-    let documentID = try #require(nodes.snapshot.itemIDs.first)
-    #expect(runtime.model.model(for: documentID)?.nodeName == "#document")
+    try await nodes.performFetch()
+    #expect(nodes.fetchedObjects?.contains { $0.localName == "button" } == true)
 
     await nodes.close()
     await entries.close()
     await runtime.close()
     #expect(runtime.container.state == .closed)
-    #expect(runtime.model.state == .closed)
+    #expect(await runtime.lifecycleState == .closed)
 }
 
 @MainActor
 @Test
-func dataKitScenarioCanInjectAnAttachmentFailure() async {
-    do {
-        _ = try await WebInspectorDataKitTestRuntime.start(
-            scenario: .init(
-                configuration: .init(domains: [.network]),
-                attachFailure: .init(
-                    domain: .network,
-                    message: "contract attachment failure"
-                )
-            ),
-            isolation: MainActor.shared
+func dataKitScenarioPublishesFeatureLocalAttachmentFailure() async throws {
+    let runtime = try await WebInspectorDataKitTestRuntime.start(
+        scenario: .init(
+            configuration: .init(enabledFeatures: [.network]),
+            attachFailure: .init(
+                domain: .network,
+                message: "contract attachment failure"
+            )
         )
-        Issue.record("Expected the scenario attachment to fail.")
-    } catch let failure as WebInspectorModelContainer.Failure {
-        guard case let .bootstrap(domain, message) = failure else {
-            Issue.record("Expected a bootstrap failure, got \(failure).")
-            return
-        }
-        #expect(domain == .network)
-        #expect(message.contains("contract attachment failure"))
-    } catch {
-        Issue.record("Expected a DataKit model failure, got \(error).")
+    )
+    let boundary = try await runtime.boundarySnapshot()
+
+    guard
+        case let .unavailable(_, .bootstrap(failure)) =
+            boundary.featureState(for: .network)
+    else {
+        Issue.record("Expected a feature-local Network bootstrap failure.")
+        await runtime.close()
+        return
     }
+    #expect(failure.message.contains("contract attachment failure"))
+
+    await runtime.close()
 }

@@ -15,13 +15,13 @@ let package = Package(
         .macOS("15.4"),
     ],
     dependencies: [
-        .package(path: ".."),
+        .package(name: "WebInspectorKit", path: "..")
     ],
     targets: [
         .testTarget(
             name: "WebInspectorDataKitImportOnlyContractTests",
             dependencies: [
-                .product(name: "WebInspectorDataKit", package: "WebInspectorKit"),
+                .product(name: "WebInspectorDataKit", package: "WebInspectorKit")
             ],
             swiftSettings: strictSwiftSettings
         ),

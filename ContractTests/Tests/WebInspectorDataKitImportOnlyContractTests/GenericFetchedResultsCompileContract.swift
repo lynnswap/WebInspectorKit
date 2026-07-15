@@ -13,33 +13,33 @@ func genericFetchedResultsValueSurfaceCompilesForAnExternalModel() throws {
     descriptor.fetchLimit = 10
 
     let id = ContractQueryID(rawValue: 1)
-    let snapshot = WebInspectorFetchedResultsSnapshot<ContractQueryID, Never>(
+    let revision = WebInspectorFetchedResultsRevision(rawValue: 0)
+    let snapshot = WebInspectorFetchedResultsSnapshot<ContractQueryID>(
         itemIDs: [id]
     )
-    let update = WebInspectorFetchedResultsUpdate<ContractQueryID, Never>.initial(
-        revision: 0,
+    let update = WebInspectorFetchedResultsUpdate<ContractQueryID>.initial(
+        revision: revision,
         snapshot: snapshot
     )
 
-    #expect(snapshot.sections.isEmpty)
     #expect(snapshot.itemIDs == [id])
     #expect(descriptor.fetchOffset == 1)
     #expect(descriptor.fetchLimit == 10)
-    #expect(update == .initial(revision: 0, snapshot: snapshot))
+    guard case let .initial(updateRevision, updateSnapshot) = update else {
+        Issue.record("Expected a flat initial fetched-results update.")
+        return
+    }
+    #expect(updateRevision == revision)
+    #expect(updateSnapshot.itemIDs == [id])
 
     requireUpdateSequence(
-        WebInspectorFetchedResultsUpdateSequence<ContractQueryID, Never>.self
-    )
-    requireSectionedSnapshot(
-        WebInspectorFetchedResultsSnapshot<ContractQueryID, String>.self
+        WebInspectorFetchedResultsUpdateSequence<ContractQueryID>.self
     )
 }
 
 private func requireUpdateSequence<Sequence: AsyncSequence>(
     _: Sequence.Type
-) where Sequence.Element == WebInspectorFetchedResultsUpdate<ContractQueryID, Never> {}
-
-private func requireSectionedSnapshot<Snapshot>(_: Snapshot.Type) {}
+) where Sequence.Element == WebInspectorFetchedResultsUpdate<ContractQueryID> {}
 
 private struct ContractQueryID: WebInspectorPersistentIdentifier {
     typealias Model = ContractQueryModel

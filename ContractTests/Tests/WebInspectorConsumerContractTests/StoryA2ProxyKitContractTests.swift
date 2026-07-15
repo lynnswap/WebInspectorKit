@@ -59,81 +59,60 @@ func webInspectorProxyPublicLifecycleAndCommandSurfaceWorksFromConsumerPackage()
 }
 
 @Test
-func webInspectorProxyNetworkEventsMulticastToConsumerSubscribers() async throws {
+func webInspectorProxyNetworkEventsReachConsumerScope() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let page = runtime.page
+    let readiness = AsyncStream<Void>.makeStream()
 
     let eventTask = Task {
-        try await page.network.withEvents { firstEvents in
-            try await page.network.withEvents { secondEvents in
-                try await runtime.peer.emitTargetEvent(
-                    targetID: "page-main",
-                    method: "Network.responseReceived",
-                    parameters: ContractTestSupport.jsonObject([
-                        "requestId": "contract-multicast-request",
-                        "response": [
-                            "status": 204,
-                            "mimeType": "application/json",
-                        ],
-                        "type": "Fetch",
-                        "timestamp": 42,
-                    ])
-                )
-
-                var firstIterator = firstEvents.makeAsyncIterator()
-                var firstEvent: Network.Event?
-                while firstEvent == nil, let pageEvent = try await firstIterator.next() {
-                    if case let .event(_, event) = pageEvent {
-                        firstEvent = event
-                    }
+        try await page.network.withEvents { events in
+            var iterator = events.makeAsyncIterator()
+            readiness.continuation.yield()
+            while let pageEvent = try await iterator.next() {
+                if case let .event(_, event) = pageEvent {
+                    return event
                 }
-
-                var secondIterator = secondEvents.makeAsyncIterator()
-                var secondEvent: Network.Event?
-                while secondEvent == nil, let pageEvent = try await secondIterator.next() {
-                    if case let .event(_, event) = pageEvent {
-                        secondEvent = event
-                    }
-                }
-                return (firstEvent, secondEvent)
             }
+            throw ContractEventStreamEnded()
         }
     }
 
-    var command = try await runtime.peer.commands.next()
+    let command = try await runtime.peer.commands.next()
     #expect(command.destination == .target("page-main"))
     #expect(command.method == "Network.enable")
     try await runtime.peer.reply(to: command)
 
-    command = try await runtime.peer.commands.next()
-    #expect(command.destination == .target("page-main"))
-    #expect(command.method == "Network.disable")
-    try await runtime.peer.reply(to: command)
+    var readinessIterator = readiness.stream.makeAsyncIterator()
+    _ = await readinessIterator.next()
+    try await runtime.peer.emitTargetEvent(
+        targetID: "page-main",
+        method: "Network.dataReceived",
+        parameters: ContractTestSupport.jsonObject([
+            "requestId": "contract-scope-request",
+            "dataLength": 4,
+            "encodedDataLength": 3,
+            "timestamp": 42,
+        ])
+    )
 
-    let (firstValue, secondValue) = try await eventTask.value
-    let firstEvent = try #require(firstValue)
-    let secondEvent = try #require(secondValue)
+    let event = try await eventTask.value
 
-    guard case let .responseReceived(firstID, firstResponse, firstType, firstTimestamp) = firstEvent else {
-        Issue.record("Expected the first subscriber to receive Network.responseReceived.")
+    guard case let .dataReceived(id, dataLength, encodedDataLength, timestamp) = event else {
+        Issue.record("Expected the consumer scope to receive Network.dataReceived.")
         return
     }
-    guard case let .responseReceived(secondID, secondResponse, secondType, secondTimestamp) = secondEvent else {
-        Issue.record("Expected the second subscriber to receive Network.responseReceived.")
-        return
-    }
 
-    let expectedID = WebInspectorProxyTestFixtures.networkRequestID("contract-multicast-request")
-    #expect(firstID == expectedID)
-    #expect(secondID == expectedID)
-    #expect(firstResponse.status == 204)
-    #expect(secondResponse.status == 204)
-    #expect(firstType == .fetch)
-    #expect(secondType == .fetch)
-    #expect(firstTimestamp == 42)
-    #expect(secondTimestamp == 42)
+    let expectedID = WebInspectorProxyTestFixtures.networkRequestID(
+        "contract-scope-request"
+    )
+    #expect(id == expectedID)
+    #expect(dataLength == 4)
+    #expect(encodedDataLength == 3)
+    #expect(timestamp == 42)
     await runtime.close()
 }
+
+private struct ContractEventStreamEnded: Error {}
 
 private func domStructuredEventSurfaceCompiles(_ handle: DOM) async throws {
     try await handle.withEvents { events in
