@@ -1,9 +1,15 @@
 #if canImport(UIKit)
 import Observation
+import OSLog
 import UIKit
 import WebKit
 import WebInspectorDataKit
 import WebInspectorUIBase
+
+private let webInspectorSessionLifecycleLogger = Logger(
+    subsystem: "com.lynnswap.WebInspectorKit",
+    category: "WebInspectorUI.Lifecycle"
+)
 
 /// The UIKit-facing inspection session used by `WebInspectorViewController`.
 ///
@@ -257,8 +263,20 @@ public final class WebInspectorSession {
         guard context.status.state == .attached else {
             return
         }
-        try? await context.setElementPickerEnabled(false)
-        try? await context.hideHighlight()
+        do {
+            try await context.setElementPickerEnabled(false)
+        } catch {
+            webInspectorSessionLifecycleLogger.error(
+                "Element picker cleanup failed: \(String(describing: error), privacy: .public)"
+            )
+        }
+        do {
+            try await context.hideHighlight()
+        } catch {
+            webInspectorSessionLifecycleLogger.error(
+                "DOM highlight cleanup failed: \(String(describing: error), privacy: .public)"
+            )
+        }
     }
 
     private func startPageUserInterfaceStyleObservation(
