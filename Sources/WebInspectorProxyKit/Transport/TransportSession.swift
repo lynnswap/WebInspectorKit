@@ -149,10 +149,10 @@ package actor TransportSession {
         }
         closed = true
         for pending in replyStore.pendingReplies {
-            await pending.promise.fulfill(.failure(TransportSession.Error.transportClosed))
+            pending.promise.fulfill(.failure(TransportSession.Error.transportClosed))
         }
         for waiter in mainPageTargetWaiterStore.removeAll() {
-            await waiter.fulfill(.failure(TransportSession.Error.transportClosed))
+            waiter.fulfill(.failure(TransportSession.Error.transportClosed))
         }
         replyStore.removeAll()
         provisionalTargetMessageStore.removeAll()
@@ -182,7 +182,7 @@ package actor TransportSession {
                 } catch {
                     return
                 }
-                await self.failMainPageTargetWaiter(waiter.id, error: TransportSession.Error.missingMainPageTarget)
+                self.failMainPageTargetWaiter(waiter.id, error: TransportSession.Error.missingMainPageTarget)
             }
         }
         defer {
@@ -267,7 +267,7 @@ package actor TransportSession {
             try await backend.sendJSONString(message)
             try Task.checkCancellation()
         } catch {
-            await failPendingReply(.root(commandID), error: error)
+            failPendingReply(.root(commandID), error: error)
             throw error
         }
         return try await awaitReply(
@@ -308,7 +308,7 @@ package actor TransportSession {
             try await backend.sendJSONString(wrapperMessage)
             try Task.checkCancellation()
         } catch {
-            await failPendingReply(.target(key), error: error)
+            failPendingReply(.target(key), error: error)
             throw error
         }
         return try await awaitReply(
@@ -361,7 +361,7 @@ package actor TransportSession {
         targetID: ProtocolTarget.ID?
     ) async throws -> ProtocolCommand.Result {
         if Task.isCancelled {
-            await failPendingReply(key, error: CancellationError())
+            failPendingReply(key, error: CancellationError())
         }
         let timeoutTask: Task<Void, Never>? = responseTimeout.map { responseTimeout in
             let timeoutSleep = self.timeoutSleep
@@ -401,14 +401,14 @@ package actor TransportSession {
            let key = replyStore.takeTargetReplyKey(forRootWrapperID: id) {
             if parsed.errorMessage != nil,
                let pending = replyStore.removeTargetReply(for: key) {
-                await resolve(pending, parsed: parsed)
+                resolve(pending, parsed: parsed)
             }
             return
         }
 
         if let id = parsed.id,
            let pending = replyStore.removeRootReply(commandID: id) {
-            await resolve(pending, parsed: parsed)
+            resolve(pending, parsed: parsed)
             return
         }
 
@@ -465,7 +465,7 @@ package actor TransportSession {
         )
         let pendingStyleSheetAddedEvents: [ResolvedStyleSheetAddedEvent]
         do {
-            pendingStyleSheetAddedEvents = try await updateRegistryFromRootEvent(
+            pendingStyleSheetAddedEvents = try updateRegistryFromRootEvent(
                 method: method,
                 targetID: targetID,
                 sourceTargetID: sourceTargetID,
@@ -516,7 +516,7 @@ package actor TransportSession {
         if let id = parsed.id {
             let key = TransportSession.ReplyKey(targetID: targetID, commandID: id)
             if let pending = replyStore.removeTargetReply(for: key) {
-                await resolve(pending, parsed: parsed)
+                resolve(pending, parsed: parsed)
                 return
             }
         }
@@ -571,9 +571,9 @@ package actor TransportSession {
         )
     }
 
-    private func resolve(_ pending: TransportSession.PendingReply, parsed: ParsedProtocolMessage) async {
+    private func resolve(_ pending: TransportSession.PendingReply, parsed: ParsedProtocolMessage) {
         if let errorMessage = parsed.errorMessage {
-            await pending.promise.fulfill(
+            pending.promise.fulfill(
                 .failure(
                     TransportSession.Error.remoteError(
                         method: pending.method,
@@ -585,7 +585,7 @@ package actor TransportSession {
             return
         }
         let eventSequence = eventSequences.current
-        await pending.promise.fulfill(
+        pending.promise.fulfill(
             .success(
                 ProtocolCommand.Result(
                     domain: pending.domain,
@@ -604,7 +604,7 @@ package actor TransportSession {
         targetID: ProtocolTarget.ID?,
         sourceTargetID: ProtocolTarget.ID?,
         paramsData: Data
-    ) async throws -> [ResolvedStyleSheetAddedEvent] {
+    ) throws -> [ResolvedStyleSheetAddedEvent] {
         switch method {
         case "Target.targetCreated":
             guard let params = try? TransportMessageParser.decode(TargetCreatedParams.self, from: paramsData) else {
@@ -615,7 +615,7 @@ package actor TransportSession {
             guard let params = try? TransportMessageParser.decode(TargetDestroyedParams.self, from: paramsData) else {
                 return []
             }
-            await applyTargetDestroyed(params.targetId)
+            applyTargetDestroyed(params.targetId)
             return []
         case "Target.didCommitProvisionalTarget":
             guard let params = try? TransportMessageParser.decode(TargetCommittedParams.self, from: paramsData) else {
@@ -745,7 +745,7 @@ package actor TransportSession {
         )
     }
 
-    private func applyTargetDestroyed(_ targetID: ProtocolTarget.ID) async {
+    private func applyTargetDestroyed(_ targetID: ProtocolTarget.ID) {
         targetRegistry.removeTarget(targetID)
         networkOriginRegistry.removeTarget(targetID)
         provisionalTargetMessageStore.removeTarget(targetID)
@@ -754,7 +754,7 @@ package actor TransportSession {
         networkRouting.removeTarget(targetID)
         let pendingReplies = replyStore.removeTargetReplies(for: targetID)
         for pending in pendingReplies {
-            await pending.promise.fulfill(.failure(TransportSession.Error.missingTarget(targetID)))
+            pending.promise.fulfill(.failure(TransportSession.Error.missingTarget(targetID)))
         }
     }
 
@@ -1189,7 +1189,7 @@ package actor TransportSession {
         for continuation in eventSubscribers.orderedContinuations {
             continuation.yield(envelope)
         }
-        await notifyMainPageTargetWaitersIfNeeded(receivedSequence: eventSequence.sequence)
+        notifyMainPageTargetWaitersIfNeeded(receivedSequence: eventSequence.sequence)
     }
 
     private func resolveNetworkOriginTargetID(
@@ -1346,7 +1346,7 @@ package actor TransportSession {
         return targetRegistry.soleTargetID(forFrameID: frameID)
     }
 
-    private func notifyMainPageTargetWaitersIfNeeded(receivedSequence: UInt64) async {
+    private func notifyMainPageTargetWaitersIfNeeded(receivedSequence: UInt64) {
         guard let currentMainPageTargetID = targetRegistry.currentMainPageTargetID,
               !mainPageTargetWaiterStore.isEmpty else {
             return
@@ -1357,13 +1357,13 @@ package actor TransportSession {
             receivedSequence: receivedSequence
         )
         for waiter in waiters {
-            await waiter.fulfill(.success(result))
+            waiter.fulfill(.success(result))
         }
     }
 
-    private func failMainPageTargetWaiter(_ waiterID: UInt64, error: any Swift.Error) async {
+    private func failMainPageTargetWaiter(_ waiterID: UInt64, error: any Swift.Error) {
         let waiter = mainPageTargetWaiterStore.remove(id: waiterID)
-        await waiter?.fulfill(.failure(error))
+        waiter?.fulfill(.failure(error))
     }
 
     private func removeSubscriber(_ subscriberID: UInt64, domain: ProtocolDomain) {
@@ -1378,7 +1378,7 @@ package actor TransportSession {
         replyStore.removePendingReply(key)
     }
 
-    private func failPendingReply(_ key: TransportSession.PendingKey, error: any Swift.Error) async {
+    private func failPendingReply(_ key: TransportSession.PendingKey, error: any Swift.Error) {
         let pending: TransportSession.PendingReply?
         switch key {
         case let .root(commandID):
@@ -1387,10 +1387,10 @@ package actor TransportSession {
             pending = replyStore.removeTargetReply(for: targetReplyKey)
                 ?? replyStore.removeRetargetedReply(commandID: targetReplyKey.commandID)
         }
-        await pending?.promise.fulfill(.failure(error))
+        pending?.promise.fulfill(.failure(error))
     }
 
-    private func failPendingReplyFromTimeout(_ key: TransportSession.PendingKey, error: any Swift.Error) async {
+    private func failPendingReplyFromTimeout(_ key: TransportSession.PendingKey, error: any Swift.Error) {
         let pending: TransportSession.PendingReply?
         switch key {
         case let .root(commandID):
@@ -1398,7 +1398,7 @@ package actor TransportSession {
         case let .target(targetReplyKey):
             pending = replyStore.removeTargetReplyForTimeout(targetReplyKey)
         }
-        await pending?.promise.fulfill(.failure(error))
+        pending?.promise.fulfill(.failure(error))
     }
 
     private func markTargetReplyAsBufferedIfNeeded(
