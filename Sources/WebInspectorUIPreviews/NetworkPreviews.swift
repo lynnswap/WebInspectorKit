@@ -31,12 +31,11 @@ private enum NetworkPreviewFixtures {
         -> (WebInspectorDataKitTestRuntime, NetworkPanelModel)
     {
         let runtime = try await WebInspectorDataKitTestRuntime.start(
-            scenario: scenario(mode: mode),
-            isolation: MainActor.shared
+            scenario: scenario(mode: mode)
         )
         do {
             let model = try await NetworkPanelModel.make(
-                context: runtime.model
+                context: runtime.container.mainContext
             )
             switch mode {
             case .detail,
@@ -59,7 +58,7 @@ private enum NetworkPreviewFixtures {
         mode: Mode
     ) -> WebInspectorDataKitTestRuntime.Scenario {
         .init(
-            configuration: .init(domains: [.network]),
+            configuration: .init(enabledFeatures: [.network]),
             networkReplay: requests(mode: mode)
         )
     }
