@@ -258,12 +258,26 @@ public enum Network {
         /// The initiating source column, if any.
         public let column: Int?
 
+        /// The DOM node that initiated the request, if WebKit reported one.
+        ///
+        /// The identifier is scoped to the target that emitted the Network
+        /// event. A missing value means WebKit could not associate the request
+        /// with a bound DOM node.
+        public let nodeID: DOM.Node.ID?
+
         /// Creates request initiator information.
-        public init(kind: String, url: String? = nil, line: Int? = nil, column: Int? = nil) {
+        public init(
+            kind: String,
+            url: String? = nil,
+            line: Int? = nil,
+            column: Int? = nil,
+            nodeID: DOM.Node.ID? = nil
+        ) {
             self.kind = kind
             self.url = url
             self.line = line
             self.column = column
+            self.nodeID = nodeID
         }
     }
 
@@ -338,6 +352,7 @@ public enum Network {
         case requestWillBeSent(
             id: Request.ID,
             request: Request,
+            initiator: Initiator = Initiator(kind: "other"),
             resourceType: ResourceType?,
             redirectResponse: Response?,
             timestamp: Double
@@ -355,7 +370,13 @@ public enum Network {
         case loadingFailed(id: Request.ID, errorText: String, canceled: Bool, timestamp: Double)
 
         /// A request was served from the memory cache.
-        case requestServedFromMemoryCache(id: Request.ID, response: Response, resourceType: ResourceType?, timestamp: Double)
+        case requestServedFromMemoryCache(
+            id: Request.ID,
+            response: Response,
+            initiator: Initiator = Initiator(kind: "other"),
+            resourceType: ResourceType?,
+            timestamp: Double
+        )
 
         /// A WebSocket-specific event was emitted.
         case webSocket(WebSocketEvent)

@@ -3562,6 +3562,7 @@ extension WebInspectorContext {
             request = existing
             request.applyRequestWillBeSent(
                 request: payload,
+                initiator: nil,
                 resourceType: resourceType,
                 timestamp: timestamp
             )
@@ -3569,6 +3570,7 @@ extension WebInspectorContext {
         } else {
             request = NetworkRequest(
                 request: payload,
+                initiator: nil,
                 resourceType: resourceType,
                 timestamp: timestamp,
                 modelContext: self
@@ -3650,10 +3652,11 @@ extension WebInspectorContext {
     package func apply(_ event: Network.Event, isolation: isolated (any Actor) = #isolation) async {
         requireOwner(isolation)
         switch event {
-        case let .requestWillBeSent(id, request, resourceType, redirectResponse, timestamp):
+        case let .requestWillBeSent(id, request, initiator, resourceType, redirectResponse, timestamp):
             await applyRequestWillBeSent(
                 id: id,
                 request: request,
+                initiator: initiator,
                 resourceType: resourceType,
                 redirectResponse: redirectResponse,
                 timestamp: timestamp,
@@ -3691,10 +3694,11 @@ extension WebInspectorContext {
             await notifyNetworkRequestMutated(request, isolation: isolation)
         case let .webSocket(event):
             await apply(event, isolation: isolation)
-        case let .requestServedFromMemoryCache(id, response, resourceType, timestamp):
+        case let .requestServedFromMemoryCache(id, response, initiator, resourceType, timestamp):
             await applyRequestServedFromMemoryCache(
                 id: id,
                 response: response,
+                initiator: initiator,
                 resourceType: resourceType,
                 timestamp: timestamp,
                 isolation: isolation
@@ -3707,6 +3711,7 @@ extension WebInspectorContext {
     private func applyRequestWillBeSent(
         id proxyID: Network.Request.ID,
         request payload: Network.Request,
+        initiator: Network.Initiator,
         resourceType: Network.ResourceType?,
         redirectResponse: Network.Response?,
         timestamp: Double,
@@ -3732,11 +3737,22 @@ extension WebInspectorContext {
                 )
                 topologyMayHaveChanged = true
             } else if existing.isActive == false {
-                request.applyRequestWillBeSent(request: payload, resourceType: resourceType, timestamp: timestamp)
+                request.applyRequestWillBeSent(
+                    request: payload,
+                    initiator: initiator,
+                    resourceType: resourceType,
+                    timestamp: timestamp
+                )
                 topologyMayHaveChanged = true
             }
         } else {
-            request = NetworkRequest(request: payload, resourceType: resourceType, timestamp: timestamp, modelContext: self)
+            request = NetworkRequest(
+                request: payload,
+                initiator: initiator,
+                resourceType: resourceType,
+                timestamp: timestamp,
+                modelContext: self
+            )
             requestsByID[id] = request
             appendNetworkRequestID(id)
             inserted = true
@@ -3751,6 +3767,7 @@ extension WebInspectorContext {
     private func applyRequestServedFromMemoryCache(
         id proxyID: Network.Request.ID,
         response: Network.Response,
+        initiator: Network.Initiator,
         resourceType: Network.ResourceType?,
         timestamp: Double,
         isolation: isolated (any Actor)
@@ -3774,14 +3791,30 @@ extension WebInspectorContext {
                 method: "GET",
                 headers: response.requestHeaders ?? [:]
             )
-            request = NetworkRequest(request: payload, resourceType: resourceType, timestamp: timestamp, modelContext: self)
+            request = NetworkRequest(
+                request: payload,
+                initiator: initiator,
+                resourceType: resourceType,
+                timestamp: timestamp,
+                modelContext: self
+            )
             requestsByID[id] = request
             appendNetworkRequestID(id)
-            request.applyMemoryCache(response: response, resourceType: resourceType, timestamp: timestamp)
+            request.applyMemoryCache(
+                response: response,
+                initiator: initiator,
+                resourceType: resourceType,
+                timestamp: timestamp
+            )
             await notifyNetworkRequestInserted(request, isolation: isolation)
             return
         }
-        request.applyMemoryCache(response: response, resourceType: resourceType, timestamp: timestamp)
+        request.applyMemoryCache(
+            response: response,
+            initiator: initiator,
+            resourceType: resourceType,
+            timestamp: timestamp
+        )
         await notifyNetworkRequestMutated(request, isolation: isolation)
     }
 
@@ -3816,7 +3849,13 @@ extension WebInspectorContext {
                 method: "GET",
                 headers: response.requestHeaders ?? [:]
             )
-            request = NetworkRequest(request: payload, resourceType: resourceType, timestamp: timestamp, modelContext: self)
+            request = NetworkRequest(
+                request: payload,
+                initiator: nil,
+                resourceType: resourceType,
+                timestamp: timestamp,
+                modelContext: self
+            )
             requestsByID[id] = request
             appendNetworkRequestID(id)
             inserted = true
@@ -3889,7 +3928,13 @@ extension WebInspectorContext {
             request = existing
         } else {
             let payload = Network.Request(id: proxyID, url: url, method: "GET")
-            request = NetworkRequest(request: payload, resourceType: .webSocket, timestamp: nil, modelContext: self)
+            request = NetworkRequest(
+                request: payload,
+                initiator: nil,
+                resourceType: .webSocket,
+                timestamp: nil,
+                modelContext: self
+            )
             requestsByID[id] = request
             appendNetworkRequestID(id)
             inserted = true

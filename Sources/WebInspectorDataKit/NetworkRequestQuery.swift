@@ -305,6 +305,7 @@ package struct NetworkRequestRecordSortComparator: Sendable {
                     url: "https://example.test/resource",
                     method: "GET"
                 ),
+                initiator: nil,
                 resourceType: .fetch,
                 timestamp: lhsTimestamp,
                 modelContext: context
@@ -315,6 +316,7 @@ package struct NetworkRequestRecordSortComparator: Sendable {
                     url: "https://example.test/resource",
                     method: "GET"
                 ),
+                initiator: nil,
                 resourceType: .fetch,
                 timestamp: rhsTimestamp,
                 modelContext: context

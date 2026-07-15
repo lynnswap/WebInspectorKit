@@ -1441,11 +1441,11 @@ func transportBackendDeliversFrameNetworkEventsToCurrentPageRoute() async throws
         transport,
         targetID: ProtocolTarget.ID("frame-target"),
         method: "Network.requestWillBeSent",
-        params: #"{"requestId":"frame-request","frameId":"child-frame","request":{"url":"https://frame.example.test/","method":"GET"},"timestamp":7.5,"type":"Document"}"#
+        params: #"{"requestId":"frame-request","frameId":"child-frame","request":{"url":"https://frame.example.test/","method":"GET"},"initiator":{"type":"other","nodeId":7},"timestamp":7.5,"type":"Document"}"#
     )
 
     let event = try #require(try await value(of: eventTask))
-    guard case let .requestWillBeSent(id, request, resourceType, _, timestamp) = event else {
+    guard case let .requestWillBeSent(id, request, initiator, resourceType, _, timestamp) = event else {
         Issue.record("Expected current-page route to receive frame Network.requestWillBeSent.")
         return
     }
@@ -1453,6 +1453,7 @@ func transportBackendDeliversFrameNetworkEventsToCurrentPageRoute() async throws
     #expect(request.id == id)
     #expect(request.url == "https://frame.example.test/")
     #expect(request.method == "GET")
+    #expect(initiator.nodeID == DOM.Node.ID("7", scopedToTargetRawValue: "frame-target"))
     #expect(resourceType == .document)
     #expect(timestamp == 7.5)
 
@@ -1471,6 +1472,35 @@ func transportBackendDeliversFrameNetworkEventsToCurrentPageRoute() async throws
     let body = try await bodyTask.value
     #expect(body.data == "frame body")
     #expect(body.base64Encoded == false)
+}
+
+@Test
+func transportBackendTreatsUnboundNetworkInitiatorNodeAsMissing() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let eventTask = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    await waitForEventSubscription(target, domain: .network)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Network.requestWillBeSent",
+        params: #"{"requestId":"zero-node","request":{"url":"https://example.test/","method":"GET"},"initiator":{"type":"other","nodeId":0},"timestamp":1}"#
+    )
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .requestWillBeSent(_, _, initiator, _, _, _) = event else {
+        Issue.record("Expected Network.requestWillBeSent.")
+        return
+    }
+    #expect(initiator.nodeID == nil)
 }
 
 @Test
@@ -1582,11 +1612,11 @@ func transportBackendDecodesMemoryCacheResourceType() async throws {
         transport,
         targetID: ProtocolTarget.ID("page-main"),
         method: "Network.requestServedFromMemoryCache",
-        params: #"{"requestId":"cached-1","timestamp":3,"resource":{"url":"https://example.test/app.css","type":"Stylesheet","bodySize":1234,"response":{"url":"https://example.test/app.css","status":200,"mimeType":"text/css","headers":{}}}}"#
+        params: #"{"requestId":"cached-1","timestamp":3,"initiator":{"type":"other"},"resource":{"url":"https://example.test/app.css","type":"Stylesheet","bodySize":1234,"response":{"url":"https://example.test/app.css","status":200,"mimeType":"text/css","headers":{}}}}"#
     )
 
     let event = try #require(try await value(of: eventTask))
-    guard case let .requestServedFromMemoryCache(id, response, resourceType, timestamp) = event else {
+    guard case let .requestServedFromMemoryCache(id, response, _, resourceType, timestamp) = event else {
         Issue.record("Expected Network.requestServedFromMemoryCache event.")
         return
     }
@@ -1618,11 +1648,11 @@ func transportBackendKeepsBackendResourceIdentifierOnScopedFrameRequests() async
         transport,
         targetID: ProtocolTarget.ID("frame-target"),
         method: "Network.requestWillBeSent",
-        params: #"{"requestId":"frame-cached","request":{"url":"https://frame.example.test/cached","method":"GET"},"timestamp":1,"type":"Image","backendResourceIdentifier":{"sourceProcessID":"9","resourceID":"42"}}"#
+        params: #"{"requestId":"frame-cached","request":{"url":"https://frame.example.test/cached","method":"GET"},"initiator":{"type":"other"},"timestamp":1,"type":"Image","backendResourceIdentifier":{"sourceProcessID":"9","resourceID":"42"}}"#
     )
 
     let event = try #require(try await value(of: eventTask))
-    guard case let .requestWillBeSent(id, request, _, _, _) = event else {
+    guard case let .requestWillBeSent(id, request, _, _, _, _) = event else {
         Issue.record("Expected projected frame Network.requestWillBeSent.")
         return
     }
@@ -1681,11 +1711,11 @@ func transportBackendForwardsBackendResourceIdentifierToResponseBodyCommand() as
         transport,
         targetID: ProtocolTarget.ID("page-main"),
         method: "Network.requestWillBeSent",
-        params: #"{"requestId":"cached-request","request":{"url":"https://example.test/cached","method":"GET"},"timestamp":1,"type":"Image","backendResourceIdentifier":{"sourceProcessID":"77","resourceID":"1234"}}"#
+        params: #"{"requestId":"cached-request","request":{"url":"https://example.test/cached","method":"GET"},"initiator":{"type":"other"},"timestamp":1,"type":"Image","backendResourceIdentifier":{"sourceProcessID":"77","resourceID":"1234"}}"#
     )
 
     let event = try #require(try await value(of: eventTask))
-    guard case let .requestWillBeSent(id, request, _, _, _) = event else {
+    guard case let .requestWillBeSent(id, request, _, _, _, _) = event else {
         Issue.record("Expected Network.requestWillBeSent for the current page.")
         return
     }
@@ -1738,11 +1768,11 @@ func transportBackendDeliversParentlessFrameNetworkEventsToCurrentPageRoute() as
         transport,
         targetID: ProtocolTarget.ID("frame-page-target"),
         method: "Network.requestWillBeSent",
-        params: #"{"requestId":"frame-request","frameId":"child-frame","request":{"url":"https://frame.example.test/","method":"GET"},"timestamp":7.5,"type":"Document"}"#
+        params: #"{"requestId":"frame-request","frameId":"child-frame","request":{"url":"https://frame.example.test/","method":"GET"},"initiator":{"type":"other"},"timestamp":7.5,"type":"Document"}"#
     )
 
     let event = try #require(try await value(of: eventTask))
-    guard case let .requestWillBeSent(id, request, resourceType, _, timestamp) = event else {
+    guard case let .requestWillBeSent(id, request, _, resourceType, _, timestamp) = event else {
         Issue.record("Expected current-page route to receive parentless frame Network.requestWillBeSent.")
         return
     }
@@ -1782,7 +1812,7 @@ func transportBackendDoesNotDeliverUnrelatedFrameNetworkEventsToCurrentPageRoute
         transport,
         targetID: ProtocolTarget.ID("other-frame-target"),
         method: "Network.requestWillBeSent",
-        params: #"{"requestId":"other-frame-request","frameId":"other-child-frame","request":{"url":"https://other-frame.example.test/","method":"GET"},"timestamp":8.5,"type":"Document"}"#
+        params: #"{"requestId":"other-frame-request","frameId":"other-child-frame","request":{"url":"https://other-frame.example.test/","method":"GET"},"initiator":{"type":"other"},"timestamp":8.5,"type":"Document"}"#
     )
 
     try await Task.sleep(for: .milliseconds(100))

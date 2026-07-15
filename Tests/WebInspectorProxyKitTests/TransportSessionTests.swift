@@ -183,7 +183,7 @@ func targetReplyCarriesPerDomainSequenceWatermarks() async throws {
     await receiveTargetDispatch(
         session,
         targetID: .init("page-main"),
-        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1","request":{"url":"https://example.com/"},"timestamp":1}}"#
+        message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-1","request":{"url":"https://example.com/"},"initiator":{"type":"other"},"timestamp":1}}"#
     )
     await receiveTargetDispatch(
         session,
@@ -1074,7 +1074,7 @@ func domainStreamsReceiveIndependentTargetEventsInOrder() async throws {
     await receiveTargetDispatch(session, targetID: .init("frame-A"), message: #"{"method":"DOM.setChildNodes","params":{"parentId":1,"nodes":[]}}"#)
     await receiveTargetDispatch(session, targetID: .init("frame-A"), message: #"{"method":"CSS.styleSheetChanged","params":{"styleSheetId":"s1"}}"#)
     await receiveTargetDispatch(session, targetID: .init("frame-A"), message: #"{"method":"Console.messageAdded","params":{"message":{"text":"hello"}}}"#)
-    await receiveTargetDispatch(session, targetID: .init("page-main"), message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"r1","request":{"url":"https://example.com"},"timestamp":1}}"#)
+    await receiveTargetDispatch(session, targetID: .init("page-main"), message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"r1","request":{"url":"https://example.com"},"initiator":{"type":"other"},"timestamp":1}}"#)
 
     let domEvent = try await domEvents.event()
     let cssEvent = try await cssEvents.event()
@@ -1159,7 +1159,7 @@ func orderedStreamReceivesTargetEventsAcrossDomainsInTransportOrder() async thro
     let events = ProtocolEventRecorder(stream: stream)
 
     await receiveTargetDispatch(session, targetID: .init("page-main"), message: #"{"method":"DOM.documentUpdated","params":{}}"#)
-    await receiveTargetDispatch(session, targetID: .init("page-main"), message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"r1","request":{"url":"https://example.com"},"timestamp":1}}"#)
+    await receiveTargetDispatch(session, targetID: .init("page-main"), message: #"{"method":"Network.requestWillBeSent","params":{"requestId":"r1","request":{"url":"https://example.com"},"initiator":{"type":"other"},"timestamp":1}}"#)
     await receiveTargetDispatch(session, targetID: .init("page-main"), message: #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":7}}}"#)
     await receiveTargetDispatch(session, targetID: .init("page-main"), message: #"{"method":"DOM.childNodeCountUpdated","params":{"nodeId":3,"childNodeCount":2}}"#)
 

@@ -173,6 +173,7 @@ enum LiveProxyEventDecoder {
                     id: params.requestId,
                     backendResourceIdentifier: params.backendResourceIdentifier?.proxyIdentifier
                 ),
+                initiator: params.initiator.proxyInitiator,
                 resourceType: params.type.map(Network.ResourceType.init(rawValue:)),
                 redirectResponse: params.redirectResponse?.proxyResponse(fallbackURL: params.request.url),
                 timestamp: params.timestamp
@@ -214,6 +215,7 @@ enum LiveProxyEventDecoder {
             return .requestServedFromMemoryCache(
                 id: Network.Request.ID(params.requestId),
                 response: params.resource.proxyResponse,
+                initiator: params.initiator.proxyInitiator,
                 resourceType: Network.ResourceType(rawValue: params.resource.type),
                 timestamp: params.timestamp
             )
@@ -640,6 +642,7 @@ private struct StyleSheetHeaderPayload: Decodable {
 private struct RequestWillBeSentParams: Decodable {
     var requestId: String
     var request: RequestPayload
+    var initiator: InitiatorPayload
     var type: String?
     var redirectResponse: ResponsePayload?
     var timestamp: Double
@@ -686,7 +689,51 @@ private struct LoadingFailedParams: Decodable {
 private struct RequestServedFromMemoryCacheParams: Decodable {
     var requestId: String
     var timestamp: Double
+    var initiator: InitiatorPayload
     var resource: CachedResourcePayload
+}
+
+private struct InitiatorPayload: Decodable {
+    var type: String
+    var url: String?
+    var lineNumber: Double?
+    var nodeId: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case url
+        case lineNumber
+        case nodeId
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        type = try container.decode(String.self, forKey: .type)
+        url = try container.decodeIfPresent(String.self, forKey: .url)
+        lineNumber = try container.decodeIfPresent(Double.self, forKey: .lineNumber)
+        guard container.contains(.nodeId) else {
+            nodeId = nil
+            return
+        }
+        let rawNodeID = try container.decodeStringOrInteger(forKey: .nodeId)
+        guard let numericNodeID = Int64(rawNodeID) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .nodeId,
+                in: container,
+                debugDescription: "Network initiator nodeId must be an integer."
+            )
+        }
+        nodeId = numericNodeID > 0 ? rawNodeID : nil
+    }
+
+    var proxyInitiator: Network.Initiator {
+        Network.Initiator(
+            kind: type,
+            url: url,
+            line: lineNumber.map(Int.init),
+            nodeID: nodeId.map(DOM.Node.ID.init)
+        )
+    }
 }
 
 private struct RequestPayload: Decodable {

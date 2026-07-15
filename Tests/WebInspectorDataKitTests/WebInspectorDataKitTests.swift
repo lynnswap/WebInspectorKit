@@ -1677,7 +1677,7 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
         transport,
         targetID: oldTargetID,
         method: "Network.requestWillBeSent",
-        params: #"{"requestId":"commit-retained-request","request":{"url":"https://example.test/retained","method":"GET"},"type":"Fetch","timestamp":1}"#
+        params: #"{"requestId":"commit-retained-request","request":{"url":"https://example.test/retained","method":"GET"},"initiator":{"type":"other"},"type":"Fetch","timestamp":1}"#
     )
     try await waitUntil {
         networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)]
@@ -1796,7 +1796,7 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
         transport,
         targetID: newTargetID,
         method: "Network.requestWillBeSent",
-        params: #"{"requestId":"commit-post-request","request":{"url":"https://example.test/after-commit","method":"GET"},"type":"Fetch","timestamp":2}"#
+        params: #"{"requestId":"commit-post-request","request":{"url":"https://example.test/after-commit","method":"GET"},"initiator":{"type":"other"},"type":"Fetch","timestamp":2}"#
     )
     try await waitUntil {
         Set(networkResults.items.map(\.id)) == [
@@ -1878,7 +1878,7 @@ func currentPageTargetDestroyedDuringRetargetDoesNotDetachOrClearNetwork() async
         transport,
         targetID: oldTargetID,
         method: "Network.requestWillBeSent",
-        params: #"{"requestId":"destroy-retained-request","request":{"url":"https://example.test/retained","method":"GET"},"type":"Fetch","timestamp":1}"#
+        params: #"{"requestId":"destroy-retained-request","request":{"url":"https://example.test/retained","method":"GET"},"initiator":{"type":"other"},"type":"Fetch","timestamp":1}"#
     )
     try await waitUntil {
         networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)]
@@ -2269,7 +2269,7 @@ func mainFrameNavigatedReloadsDOMAndClearsRuntimeContexts() async throws {
         transport,
         targetID: targetID,
         method: "Network.requestWillBeSent",
-        params: #"{"requestId":"navigated-request","request":{"url":"https://example.test/after-frame-navigation","method":"GET"},"type":"Document","timestamp":3}"#
+        params: #"{"requestId":"navigated-request","request":{"url":"https://example.test/after-frame-navigation","method":"GET"},"initiator":{"type":"other"},"type":"Document","timestamp":3}"#
     )
     try await waitUntil {
         networkResults.items.map(\.id) == [NetworkRequest.ID(navigatedRequestID)]
@@ -5705,6 +5705,47 @@ func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
 
 @MainActor
 @Test
+func networkRequestPreservesInitialInitiatorAcrossRedirects() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("initiator-redirect")
+    let initialNodeID = DOM.Node.ID("17")
+
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: requestID,
+            request: Network.Request(id: requestID, url: "https://example.com/start", method: "GET"),
+            initiator: Network.Initiator(kind: "other", nodeID: initialNodeID),
+            resourceType: .document,
+            redirectResponse: nil,
+            timestamp: 1
+        ),
+        target: target
+    )
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: requestID,
+            request: Network.Request(id: requestID, url: "https://example.com/final", method: "GET"),
+            initiator: Network.Initiator(kind: "other", nodeID: DOM.Node.ID("99")),
+            resourceType: .document,
+            redirectResponse: Network.Response(
+                url: "https://example.com/start",
+                status: 302,
+                statusText: "Found"
+            ),
+            timestamp: 2
+        ),
+        target: target
+    )
+
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    try await waitUntil { results.items.first?.redirects.count == 1 }
+    let request = try #require(results.items.first)
+    #expect(request.initiator?.nodeID == initialNodeID)
+}
+
+@MainActor
+@Test
 func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
@@ -5714,6 +5755,7 @@ func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws
         .requestWillBeSent(
             id: requestID,
             request: Network.Request(id: requestID, url: "https://example.com/first", method: "GET"),
+            initiator: Network.Initiator(kind: "other", nodeID: DOM.Node.ID("41")),
             resourceType: .document,
             redirectResponse: nil,
             timestamp: 1
@@ -5738,6 +5780,7 @@ func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws
         .requestWillBeSent(
             id: requestID,
             request: Network.Request(id: requestID, url: "https://example.com/second", method: "GET"),
+            initiator: Network.Initiator(kind: "other", nodeID: DOM.Node.ID("42")),
             resourceType: .document,
             redirectResponse: Network.Response(status: 302),
             timestamp: 3
@@ -5754,6 +5797,7 @@ func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws
     #expect(request.finishedOrFailedTimestamp == nil)
     #expect(request.sourceMapURL == nil)
     #expect(request.metrics == nil)
+    #expect(request.initiator?.nodeID == DOM.Node.ID("42"))
 }
 
 @MainActor
@@ -5812,6 +5856,7 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
                 requestHeaders: ["Accept": "text/css"],
                 bodySize: 2048
             ),
+            initiator: Network.Initiator(kind: "other", nodeID: DOM.Node.ID("23")),
             resourceType: .stylesheet,
             timestamp: 5
         ),
@@ -5840,6 +5885,7 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
     #expect(request.decodedDataLength == 2048)
     #expect(request.encodedDataLength == 2048)
     #expect(request.responseBody.phase == .available)
+    #expect(request.initiator?.nodeID == DOM.Node.ID("23"))
     #expect(context.registeredRequest(for: request.id) === request)
 }
 

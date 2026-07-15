@@ -711,6 +711,9 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     /// The resource type reported by WebKit.
     public private(set) var resourceType: Network.ResourceType?
 
+    /// Information about what initiated the first request in this redirect chain.
+    public private(set) var initiator: Network.Initiator?
+
     /// The current request lifecycle state.
     public private(set) var state: State
 
@@ -795,6 +798,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
 
     init(
         request: Network.Request,
+        initiator: Network.Initiator?,
         resourceType: Network.ResourceType?,
         timestamp: Double?,
         modelContext: WebInspectorContext
@@ -802,6 +806,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         id = ID(request.id)
         url = request.url
         method = request.method
+        self.initiator = initiator
         self.resourceType = resourceType
         state = .pending
         status = nil
@@ -899,12 +904,14 @@ public final class NetworkRequest: WebInspectorFetchableModel {
 
     func applyRequestWillBeSent(
         request: Network.Request,
+        initiator: Network.Initiator?,
         resourceType: Network.ResourceType?,
         timestamp: Double
     ) {
         currentRequest = request
         url = request.url
         method = request.method
+        self.initiator = initiator
         self.resourceType = resourceType
         requestHeaders = request.headers
         status = nil
@@ -1022,7 +1029,13 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         state = .failed(errorText: errorText, canceled: canceled)
     }
 
-    func applyMemoryCache(response: Network.Response, resourceType: Network.ResourceType?, timestamp: Double) {
+    func applyMemoryCache(
+        response: Network.Response,
+        initiator: Network.Initiator,
+        resourceType: Network.ResourceType?,
+        timestamp: Double
+    ) {
+        self.initiator = self.initiator ?? initiator
         if let url = response.url {
             self.url = url
         }
