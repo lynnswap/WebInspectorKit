@@ -1428,7 +1428,11 @@ public final class WebInspectorContext {
             )
         }
         let result = try await currentPage.runtime.evaluate(expression, in: executionContext?.id.proxyID)
-        try validateRuntimeAuthority(authority)
+        try await validateRuntimeCommandResult(
+            authority,
+            returned: [result.object],
+            isolation: isolation
+        )
         return RuntimeEvaluation(
             object: registerRuntimeObject(result.object, owner: .client, authority: authority),
             isException: result.wasThrown
@@ -1747,7 +1751,12 @@ public final class WebInspectorContext {
         }
 
         let descriptors = try await currentPage.runtime.properties(of: proxyID)
-        try validateRuntimeAuthority(authority, object: object)
+        try await validateRuntimeCommandResult(
+            authority,
+            object: object,
+            returned: descriptors.flatMap(Self.runtimeRemoteObjects),
+            isolation: isolation
+        )
         return descriptors.map { descriptor in
             let remoteValue = descriptor.value
             let childObject = remoteValue.flatMap { value in
@@ -1775,7 +1784,12 @@ public final class WebInspectorContext {
         }
 
         let entries = try await currentPage.runtime.collectionEntries(of: proxyID)
-        try validateRuntimeAuthority(authority, object: object)
+        try await validateRuntimeCommandResult(
+            authority,
+            object: object,
+            returned: entries.flatMap(Self.runtimeRemoteObjects),
+            isolation: isolation
+        )
         return entries.map { entry in
             RuntimeObject.Entry(
                 key: entry.key.map { registerRuntimeObject($0, owner: .client, authority: authority) },
@@ -1821,6 +1835,71 @@ public final class WebInspectorContext {
                 throw WebInspectorProxyError.disconnected("Runtime command result is no longer current.")
             }
         }
+    }
+
+    private func validateRuntimeCommandResult(
+        _ authority: RuntimeObject.Authority,
+        object: RuntimeObject? = nil,
+        returned objects: [Runtime.RemoteObject],
+        isolation: isolated (any Actor)
+    ) async throws {
+        requireOwner(isolation)
+        do {
+            try validateRuntimeAuthority(authority, object: object)
+            guard objects.allSatisfy({
+                runtimeRemoteObject($0, belongsTo: authority.targetID)
+            }) else {
+                throw WebInspectorProxyError.disconnected("Runtime command result is no longer current.")
+            }
+        } catch {
+            await releaseReturnedRuntimeObjects(
+                objects,
+                authority: authority,
+                isolation: isolation
+            )
+            throw error
+        }
+    }
+
+    private func runtimeRemoteObject(
+        _ object: Runtime.RemoteObject,
+        belongsTo targetID: WebInspectorTarget.ID
+    ) -> Bool {
+        guard let targetScopeRawValue = object.id?.targetScopeRawValue else {
+            return true
+        }
+        return runtimeAuthorityTargetID(for: WebInspectorTarget.ID(targetScopeRawValue)) == targetID
+    }
+
+    private func releaseReturnedRuntimeObjects(
+        _ objects: [Runtime.RemoteObject],
+        authority: RuntimeObject.Authority,
+        isolation: isolated (any Actor)
+    ) async {
+        requireOwner(isolation)
+        guard currentPageGeneration == authority.pageGeneration,
+              let page = currentPage else {
+            return
+        }
+        let objectIDs = Set(objects.compactMap(\.id))
+        for objectID in objectIDs {
+            // Object groups are target-local, so each scoped ID must route its
+            // own cleanup. A retired target may reject cleanup; the authority
+            // error remains the command result in that case.
+            try? await page.runtime.releaseObject(objectID)
+        }
+    }
+
+    private static func runtimeRemoteObjects(
+        in descriptor: Runtime.PropertyDescriptor
+    ) -> [Runtime.RemoteObject] {
+        [descriptor.value, descriptor.get, descriptor.set, descriptor.symbol].compactMap { $0 }
+    }
+
+    private static func runtimeRemoteObjects(
+        in entry: Runtime.CollectionEntry
+    ) -> [Runtime.RemoteObject] {
+        [entry.key, entry.value].compactMap { $0 }
     }
 
     private func registerRuntimeObject(

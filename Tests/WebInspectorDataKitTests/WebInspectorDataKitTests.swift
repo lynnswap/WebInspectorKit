@@ -9371,6 +9371,7 @@ func lateEvaluateReplyDoesNotRegisterObjectAfterContextDestruction() async throw
         for: "Runtime",
         method: "evaluate"
     )
+    await runtime.backend.enqueue((), for: "Runtime", method: "releaseObject")
 
     var evaluationError: WebInspectorProxyError?
     let evaluationTask = Task { @MainActor in
@@ -9388,6 +9389,165 @@ func lateEvaluateReplyDoesNotRegisterObjectAfterContextDestruction() async throw
 
     await evaluationTask.value
     #expect(evaluationError == .disconnected("Runtime command result is no longer current."))
+    let commands = await runtime.backend.recordedCommands()
+    let releaseCommand = try #require(commands.last {
+        $0.domain == "Runtime" && $0.method == "releaseObject"
+    })
+    let releasePayload = try #require(
+        releaseCommand.payload.cast(as: Runtime.ReleaseObjectPayload.self)
+    )
+    #expect(releaseCommand.targetID == target.id)
+    #expect(releasePayload.id == Runtime.RemoteObject.ID("late-evaluate-object"))
+    #expect(context.state == .attached)
+}
+
+@MainActor
+@Test
+func evaluateRejectsRemoteObjectOwnedByDifferentTarget() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (_, context) = try await startContext(runtime: runtime)
+    let frameTargetID = WebInspectorTarget.ID("runtime-frame")
+    let otherTargetID = WebInspectorTarget.ID("other-runtime-frame")
+    let contextID = Runtime.ExecutionContext.ID(
+        "frame-context",
+        scopedToTargetRawValue: frameTargetID.rawValue
+    )
+    let otherObjectID = Runtime.RemoteObject.ID(
+        "foreign-object",
+        scopedToTargetRawValue: otherTargetID.rawValue
+    )
+
+    context.apply(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: contextID,
+            name: "Frame",
+            frameID: FrameID("runtime-frame-id"),
+            kind: .normal
+        )),
+        targetID: frameTargetID
+    )
+    let frameContext = try #require(context.executionContexts.first)
+
+    await runtime.backend.enqueue(
+        Runtime.EvaluationResult(
+            object: Runtime.RemoteObject(id: otherObjectID, kind: .object)
+        ),
+        for: "Runtime",
+        method: "evaluate"
+    )
+    await runtime.backend.enqueue((), for: "Runtime", method: "releaseObject")
+
+    do {
+        _ = try await context.evaluate("window", in: frameContext)
+        Issue.record("Expected an evaluation result from another target to be rejected.")
+    } catch let error as WebInspectorProxyError {
+        #expect(error == .disconnected("Runtime command result is no longer current."))
+    }
+
+    let commands = await runtime.backend.recordedCommands()
+    #expect(
+        commands.first {
+            $0.domain == "Runtime" && $0.method == "evaluate"
+        }?.targetID == frameTargetID
+    )
+    let releaseCommand = try #require(commands.first {
+        $0.domain == "Runtime" && $0.method == "releaseObject"
+    })
+    let releasePayload = try #require(
+        releaseCommand.payload.cast(as: Runtime.ReleaseObjectPayload.self)
+    )
+    #expect(releaseCommand.targetID == otherTargetID)
+    #expect(releasePayload.id == otherObjectID)
+    #expect(context.state == .attached)
+
+    let frameObjectID = Runtime.RemoteObject.ID(
+        "frame-object",
+        scopedToTargetRawValue: frameTargetID.rawValue
+    )
+    await runtime.backend.enqueue(
+        Runtime.EvaluationResult(
+            object: Runtime.RemoteObject(id: frameObjectID, kind: .object)
+        ),
+        for: "Runtime",
+        method: "evaluate"
+    )
+    let evaluation = try await context.evaluate("window", in: frameContext)
+    #expect(evaluation.object.canRequestProperties)
+}
+
+@MainActor
+@Test
+func propertiesRejectAccessorOwnedByDifferentTarget() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (_, context) = try await startContext(runtime: runtime)
+    let frameTargetID = WebInspectorTarget.ID("property-runtime-frame")
+    let otherTargetID = WebInspectorTarget.ID("other-property-runtime-frame")
+    let contextID = Runtime.ExecutionContext.ID(
+        "property-frame-context",
+        scopedToTargetRawValue: frameTargetID.rawValue
+    )
+
+    context.apply(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: contextID,
+            name: "Property frame",
+            frameID: FrameID("property-frame-id"),
+            kind: .normal
+        )),
+        targetID: frameTargetID
+    )
+    let frameContext = try #require(context.executionContexts.first)
+    let rootObjectID = Runtime.RemoteObject.ID(
+        "property-root",
+        scopedToTargetRawValue: frameTargetID.rawValue
+    )
+    await runtime.backend.enqueue(
+        Runtime.EvaluationResult(
+            object: Runtime.RemoteObject(id: rootObjectID, kind: .object)
+        ),
+        for: "Runtime",
+        method: "evaluate"
+    )
+    let root = try await context.evaluate("window", in: frameContext).object
+
+    let foreignAccessorID = Runtime.RemoteObject.ID(
+        "foreign-getter",
+        scopedToTargetRawValue: otherTargetID.rawValue
+    )
+    await runtime.backend.enqueue(
+        [
+            Runtime.PropertyDescriptor(
+                name: "value",
+                get: Runtime.RemoteObject(id: foreignAccessorID, kind: .function)
+            )
+        ],
+        for: "Runtime",
+        method: "getProperties"
+    )
+    await runtime.backend.enqueue((), for: "Runtime", method: "releaseObject")
+
+    do {
+        _ = try await root.properties()
+        Issue.record("Expected a property accessor from another target to be rejected.")
+    } catch let error as WebInspectorProxyError {
+        #expect(error == .disconnected("Runtime command result is no longer current."))
+    }
+
+    let commands = await runtime.backend.recordedCommands()
+    #expect(
+        commands.first {
+            $0.domain == "Runtime" && $0.method == "getProperties"
+        }?.targetID == frameTargetID
+    )
+    let releaseCommand = try #require(commands.first {
+        $0.domain == "Runtime" && $0.method == "releaseObject"
+    })
+    let releasePayload = try #require(
+        releaseCommand.payload.cast(as: Runtime.ReleaseObjectPayload.self)
+    )
+    #expect(releaseCommand.targetID == otherTargetID)
+    #expect(releasePayload.id == foreignAccessorID)
+    #expect(root.canRequestProperties)
     #expect(context.state == .attached)
 }
 
@@ -9654,6 +9814,7 @@ func destroyedTargetRejectsLateCollectionEntriesReply() async throws {
         for: "Runtime",
         method: "getCollectionEntries"
     )
+    await runtime.backend.enqueue((), for: "Runtime", method: "releaseObject")
     var entriesError: WebInspectorProxyError?
     let entriesTask = Task { @MainActor in
         do {
@@ -9681,6 +9842,20 @@ func destroyedTargetRejectsLateCollectionEntriesReply() async throws {
 
     await entriesTask.value
     #expect(entriesError == .disconnected("Runtime command result is no longer current."))
+    let commands = await runtime.backend.recordedCommands()
+    let releaseCommand = try #require(commands.last {
+        $0.domain == "Runtime" && $0.method == "releaseObject"
+    })
+    let releasePayload = try #require(
+        releaseCommand.payload.cast(as: Runtime.ReleaseObjectPayload.self)
+    )
+    #expect(releaseCommand.targetID == frameTargetID)
+    #expect(
+        releasePayload.id == Runtime.RemoteObject.ID(
+            "late-entry",
+            scopedToTargetRawValue: frameTargetID.rawValue
+        )
+    )
     #expect(context.state == .attached)
 }
 
