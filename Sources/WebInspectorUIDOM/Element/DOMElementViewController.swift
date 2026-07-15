@@ -12,10 +12,10 @@ package final class DOMElementViewController: UICollectionViewController {
     private var styleHydrationTask: Task<Void, Never>?
     private var styleHydrationGeneration: UInt64 = 0
     private var isStyleHydrationActive = false
-    private var selectedStylesObservation: PortableObservationTracking.Token?
-    private var selectedStylesRenderTask: Task<Void, Never>?
-    private var selectedStylesRenderGeneration: UInt64 = 0
-    private var observedSelectedNodeObjectID: ObjectIdentifier?
+    private let selectedStylesResults:
+        WebInspectorFetchedResultsController<CSSStyles>
+    private var selectedStylesUpdatesTask: Task<Void, Never>?
+    private var observedSelectedNodeID: DOMNode.ID?
     private var hasBoundSelectedNode = false
     private let styleSnapshotCoordinator = DOMElementStyleSnapshotCoordinator()
 
@@ -37,8 +37,12 @@ package final class DOMElementViewController: UICollectionViewController {
     private lazy var dataSource = makeDataSource()
 
     package init(model: DOMPanelModel) {
-        context = model.context
+        let context = model.context
+        self.context = context
         panelModel = model
+        selectedStylesResults = WebInspectorFetchedResultsController(
+            modelContext: context
+        )
         super.init(collectionViewLayout: Self.makeLayout())
     }
 
@@ -52,9 +56,9 @@ package final class DOMElementViewController: UICollectionViewController {
         resolveStyleRenderWaitersForTesting(result: false)
 #endif
         styleHydrationTask?.cancel()
-        selectedStylesRenderTask?.cancel()
+        selectedStylesUpdatesTask?.cancel()
         panelSelectionObservation?.cancel()
-        selectedStylesObservation?.cancel()
+        selectedStylesResults.synchronouslyInvalidateRegistration()
     }
 
     override package func viewDidLoad() {
@@ -70,21 +74,22 @@ package final class DOMElementViewController: UICollectionViewController {
             }
         }
         startObservingState()
+        observeSelectedStylesResults()
     }
 
     override package func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
         isStyleHydrationActive = true
-        if let selectedNode = currentSelectedNode {
-            scheduleSelectedStylesRender(for: selectedNode)
-            hydrateStylesIfNeeded(for: selectedNode, retryFailure: true)
+        observeSelectedStylesResults()
+        renderSelectedStyles(currentSelectedStyles)
+        if let selectedNodeID = observedSelectedNodeID {
+            hydrateStylesIfNeeded(for: selectedNodeID, retryFailure: true)
         }
     }
 
     override package func viewDidDisappear(_ animated: Bool) {
         isStyleHydrationActive = false
         cancelStyleHydration()
-        cancelSelectedStylesRender()
         super.viewDidDisappear(animated)
     }
 
@@ -204,65 +209,87 @@ package final class DOMElementViewController: UICollectionViewController {
         }
     }
 
-    private var currentSelectedNode: DOMNode? {
-        panelModel.selectedNode
-    }
-
     private func bindSelectedNode(_ node: DOMNode?) {
-        let nodeObjectID = node.map(ObjectIdentifier.init)
-        guard hasBoundSelectedNode == false || observedSelectedNodeObjectID != nodeObjectID else {
+        let nodeID = node?.id
+        guard hasBoundSelectedNode == false || observedSelectedNodeID != nodeID else {
             return
         }
         hasBoundSelectedNode = true
-        observedSelectedNodeObjectID = nodeObjectID
+        observedSelectedNodeID = nodeID
         cancelStyleHydration()
-        cancelSelectedStylesRender()
-        selectedStylesObservation?.cancel()
-        guard let node else {
-            selectedStylesObservation = nil
-            renderSelectedStyles(nil)
-            return
+        renderSelectedStyles(currentSelectedStyles)
+        if isStyleHydrationActive, let nodeID {
+            hydrateStylesIfNeeded(for: nodeID, retryFailure: true)
         }
-        let token = withPortableContinuousObservation { [weak self, weak node, nodeObjectID] _ in
-            guard let self,
-                  self.observedSelectedNodeObjectID == nodeObjectID else {
+    }
+
+    private func observeSelectedStylesResults() {
+        guard selectedStylesUpdatesTask == nil else { return }
+        let results = selectedStylesResults
+        let updates = results.updates
+        selectedStylesUpdatesTask = Task { @MainActor [weak self, results] in
+            do {
+                try await results.performFetch()
+            } catch is CancellationError {
                 return
-            }
-            guard let node else {
+            } catch {
+                WebInspectorUIDOMLog.error(
+                    "CSS styles query failed: \(String(describing: error))"
+                )
+                guard let self else { return }
+                self.selectedStylesUpdatesTask = nil
                 self.renderSelectedStyles(nil)
                 return
             }
-            let phase = self.sampleSelectedStylesDependencies(node.elementStyles)
-            self.scheduleSelectedStylesRender(for: node)
-            if phase == .needsRefresh {
-                self.hydrateStylesIfNeeded(for: node, retryFailure: false)
+
+            var isInitialPublication = true
+            for await _ in updates {
+                guard Task.isCancelled == false,
+                      let self else {
+                    return
+                }
+                guard let nodeID = self.observedSelectedNodeID else { continue }
+                self.selectedStylesResultsDidPublish(
+                    for: nodeID,
+                    retryFailure: isInitialPublication
+                )
+                isInitialPublication = false
             }
         }
-        selectedStylesObservation = token
-        hydrateStylesIfNeeded(for: node, retryFailure: true)
+    }
+
+    private func selectedStylesResultsDidPublish(
+        for nodeID: DOMNode.ID,
+        retryFailure: Bool
+    ) {
+        guard isStyleHydrationActive else { return }
+        renderSelectedStyles(currentSelectedStyles)
+        hydrateStylesIfNeeded(for: nodeID, retryFailure: retryFailure)
     }
 
     private func hydrateStylesIfNeeded(
-        for node: DOMNode,
+        for nodeID: DOMNode.ID,
         retryFailure: Bool
     ) {
         guard isStyleHydrationActive,
+              observedSelectedNodeID == nodeID,
+              selectedStylesResults.revision != nil,
               styleHydrationTask == nil else {
             return
         }
 
         let operation: @MainActor () async throws -> Void
-        switch node.elementStyles?.phase {
+        switch currentSelectedStyles?.phase {
         case nil, .unavailable:
             operation = { [context] in
-                _ = try await context.container.dom.loadStyles(for: node.id)
+                _ = try await context.container.dom.loadStyles(for: nodeID)
             }
         case .failed where retryFailure:
             operation = { [context] in
-                _ = try await context.container.dom.loadStyles(for: node.id)
+                _ = try await context.container.dom.loadStyles(for: nodeID)
             }
         case .needsRefresh:
-            guard let stylesID = node.elementStyles?.id else {
+            guard let stylesID = currentSelectedStyles?.id else {
                 return
             }
             operation = { [context] in
@@ -281,7 +308,7 @@ package final class DOMElementViewController: UICollectionViewController {
                 // Selection and visibility changes cancel obsolete hydration.
             } catch {
                 WebInspectorUIDOMLog.error(
-                    "CSS style hydration failed nodeID=\(String(describing: node.id)): "
+                    "CSS style hydration failed nodeID=\(String(describing: nodeID)): "
                         + String(describing: error)
                 )
             }
@@ -299,52 +326,14 @@ package final class DOMElementViewController: UICollectionViewController {
         styleHydrationGeneration &+= 1
     }
 
-    /// Observation callbacks only sample dependencies. Rendering is deferred
-    /// until replacement tracking has been installed, then reads the latest
-    /// model state so a mutation arriving during the callback cannot be lost.
-    private func scheduleSelectedStylesRender(for node: DOMNode) {
-        cancelSelectedStylesRender()
-        let nodeObjectID = ObjectIdentifier(node)
-        let generation = selectedStylesRenderGeneration
-        selectedStylesRenderTask = Task { @MainActor [weak self, weak node] in
-            await Task.yield()
-            guard !Task.isCancelled,
-                  let self,
-                  let node,
-                  self.selectedStylesRenderGeneration == generation,
-                  self.observedSelectedNodeObjectID == nodeObjectID else {
-                return
-            }
-            self.selectedStylesRenderTask = nil
-            self.renderSelectedStyles(node.elementStyles)
+    private var currentSelectedStyles: CSSStyles? {
+        guard let nodeID = observedSelectedNodeID else { return nil }
+        return selectedStylesResults.fetchedObjects?.first { styles in
+            styles.id == CSSStyles.ID(nodeID: nodeID)
         }
     }
 
-    /// Registers every property dependency that can change collection
-    /// topology. Individual visible rows own their remaining property reads.
-    private func sampleSelectedStylesDependencies(_ styles: CSSStyles?) -> CSSStyles.Phase? {
-        guard let styles else {
-            return nil
-        }
-        let phase = styles.phase
-        for section in styles.sections {
-            for property in section.style.properties {
-                _ = property.name
-                _ = property.value
-                _ = property.status
-            }
-        }
-        return phase
-    }
-
-    private func cancelSelectedStylesRender() {
-        selectedStylesRenderTask?.cancel()
-        selectedStylesRenderTask = nil
-        selectedStylesRenderGeneration &+= 1
-    }
-
-    /// Renders the selected node's latest styles after the observation
-    /// tracking pass has completed.
+    /// Renders the styles value accepted by the flat fetched-results owner.
     private func renderSelectedStyles(_ styles: CSSStyles?) {
         guard let styles else {
             applySnapshotUpdate(styleSnapshotCoordinator.updateUnavailable())
@@ -524,7 +513,7 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     package func renderCurrentStylesForTesting() {
-        renderSelectedStyles(currentSelectedNode?.elementStyles)
+        renderSelectedStyles(currentSelectedStyles)
     }
 
     private func finishStyleRenderForTesting() {

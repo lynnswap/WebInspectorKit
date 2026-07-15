@@ -197,13 +197,43 @@ package final class DOMElementStyleSnapshotCoordinator {
         }
     }
 
+    /// Immutable property content rendered by a visible row. Diffable item
+    /// identity remains stable while DataKit replaces a property's value.
+    private struct PropertyRenderContent: Equatable {
+        var id: CSSStyleProperty.ID
+        var name: String
+        var value: String
+        var priority: String?
+        var text: String?
+        var parsedOk: Bool
+        var status: CSSStyleProperty.Status
+        var implicit: Bool
+        var range: CSSStyle.SourceRange?
+        var isEditable: Bool
+        var isModifiedByInspector: Bool
+
+        init(_ property: CSSStyleProperty) {
+            id = property.id
+            name = property.name
+            value = property.value
+            priority = property.priority
+            text = property.text
+            parsedOk = property.parsedOk
+            status = property.status
+            implicit = property.implicit
+            range = property.range
+            isEditable = property.isEditable
+            isModifiedByInspector = property.isModifiedByInspector
+        }
+    }
+
     private struct VisibleRenderContent: Equatable {
         var sectionContents: [CSSStyleSection.ID: SectionRenderContent]
-        var propertyObjectIDs: [DOMElementStylePresentationItemIdentifier: ObjectIdentifier]
+        var propertyContents: [DOMElementStylePresentationItemIdentifier: PropertyRenderContent]
 
         static let empty = VisibleRenderContent(
             sectionContents: [:],
-            propertyObjectIDs: [:]
+            propertyContents: [:]
         )
     }
 
@@ -311,9 +341,9 @@ package final class DOMElementStyleSnapshotCoordinator {
             old: oldRenderContent.sectionContents,
             new: newRenderContent.sectionContents
         )
-        let replacedPropertyIDs = Self.updatedKeys(
-            old: oldRenderContent.propertyObjectIDs,
-            new: newRenderContent.propertyObjectIDs
+        let updatedPropertyIDs = Self.updatedKeys(
+            old: oldRenderContent.propertyContents,
+            new: newRenderContent.propertyContents
         )
 
         selectionEpoch?.hasRenderedLoadedSnapshot = true
@@ -340,14 +370,14 @@ package final class DOMElementStyleSnapshotCoordinator {
                 snapshot: snapshot,
                 animated: true,
                 placeholderMode: .none,
-                rebindVisiblePropertyRows: replacedPropertyIDs.isEmpty == false,
+                rebindVisiblePropertyRows: updatedPropertyIDs.isEmpty == false,
                 updatedSectionIDs: updatedSectionIDs
             )
         }
-        if updatedSectionIDs.isEmpty == false || replacedPropertyIDs.isEmpty == false {
+        if updatedSectionIDs.isEmpty == false || updatedPropertyIDs.isEmpty == false {
             return .none(
                 placeholderMode: .none,
-                rebindVisiblePropertyRows: replacedPropertyIDs.isEmpty == false,
+                rebindVisiblePropertyRows: updatedPropertyIDs.isEmpty == false,
                 updatedSectionIDs: updatedSectionIDs
             )
         }
@@ -390,13 +420,13 @@ package final class DOMElementStyleSnapshotCoordinator {
             old: oldRenderContent.sectionContents,
             new: newRenderContent.sectionContents
         )
-        let replacedPropertyIDs = Self.updatedKeys(
-            old: oldRenderContent.propertyObjectIDs,
-            new: newRenderContent.propertyObjectIDs
+        let updatedPropertyIDs = Self.updatedKeys(
+            old: oldRenderContent.propertyContents,
+            new: newRenderContent.propertyContents
         )
         return .none(
             placeholderMode: .none,
-            rebindVisiblePropertyRows: replacedPropertyIDs.isEmpty == false,
+            rebindVisiblePropertyRows: updatedPropertyIDs.isEmpty == false,
             updatedSectionIDs: updatedSectionIDs
         )
     }
@@ -456,8 +486,8 @@ package final class DOMElementStyleSnapshotCoordinator {
             sectionsByID[section.id] = section
         }
         var sectionContents: [CSSStyleSection.ID: SectionRenderContent] = [:]
-        var propertyObjectIDs: [
-            DOMElementStylePresentationItemIdentifier: ObjectIdentifier
+        var propertyContents: [
+            DOMElementStylePresentationItemIdentifier: PropertyRenderContent
         ] = [:]
 
         for visibleSection in visibleSections {
@@ -469,13 +499,13 @@ package final class DOMElementStyleSnapshotCoordinator {
                 guard let property = property(for: item, in: section) else {
                     continue
                 }
-                propertyObjectIDs[item] = ObjectIdentifier(property)
+                propertyContents[item] = PropertyRenderContent(property)
             }
         }
 
         return VisibleRenderContent(
             sectionContents: sectionContents,
-            propertyObjectIDs: propertyObjectIDs
+            propertyContents: propertyContents
         )
     }
 

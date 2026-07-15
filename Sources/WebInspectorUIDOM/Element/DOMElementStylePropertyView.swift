@@ -1,7 +1,6 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
 import WebInspectorDataKit
-import ObservationBridge
 import UIKit
 
 @MainActor
@@ -13,7 +12,7 @@ package final class DOMElementStylePropertyView: UIView {
     private var property: CSSStyleProperty?
     private var toggleAction: ToggleAction?
     private var toggleTask: Task<Void, Never>?
-    private var propertyObservation: PortableObservationTracking.Token?
+    private var bindingGeneration: UInt64 = 0
 
     override package init(frame: CGRect) {
         super.init(frame: frame)
@@ -25,38 +24,25 @@ package final class DOMElementStylePropertyView: UIView {
         nil
     }
 
-    isolated deinit {
-        propertyObservation?.cancel()
-    }
-
     package func bind(
         property: CSSStyleProperty,
         onToggle: ToggleAction? = nil
     ) {
-        if self.property !== property {
+        bindingGeneration &+= 1
+        if self.property?.id != property.id {
             // A submitted mutation is committed user work and outlives cell
             // reuse. Drop only this view's completion handle.
             toggleTask = nil
         }
-        propertyObservation?.cancel()
         self.property = property
         toggleAction = onToggle
-        propertyObservation = withPortableContinuousObservation { [weak self, weak property] _ in
-            guard let self,
-                  let property,
-                  self.property === property else {
-                return
-            }
-            self.renderAll(from: property)
-        }
+        renderAll(from: property)
     }
 
     package func clear() {
         // Do not cancel an accepted mutation when the collection view reuses
         // its presentation cell.
         toggleTask = nil
-        propertyObservation?.cancel()
-        propertyObservation = nil
         property = nil
         toggleAction = nil
         declarationTextView.attributedText = nil
@@ -116,9 +102,7 @@ package final class DOMElementStylePropertyView: UIView {
     }
 
     private func renderToggleState(from property: CSSStyleProperty, animated: Bool = false) {
-        if property.isMutationPending == false {
-            toggleSwitch.setOn(property.isEnabled, animated: animated)
-        }
+        toggleSwitch.setOn(property.isEnabled, animated: animated)
         toggleSwitch.isEnabled = canToggle(property)
     }
 
@@ -156,14 +140,17 @@ package final class DOMElementStylePropertyView: UIView {
             return
         }
         toggleSwitch.isEnabled = false
+        let submittedBindingGeneration = bindingGeneration
         toggleTask = Task { @MainActor [weak self] in
-            _ = await toggleAction(property, requestedEnabledState)
+            let accepted = await toggleAction(property, requestedEnabledState)
             guard let self,
-                  self.property === property else {
+                  let currentProperty = self.property,
+                  currentProperty.id == property.id else {
                 return
             }
+            let wasRebound = bindingGeneration != submittedBindingGeneration
             toggleTask = nil
-            if let currentProperty = self.property {
+            if accepted == false || wasRebound {
                 renderToggleState(from: currentProperty)
             }
         }
@@ -171,7 +158,6 @@ package final class DOMElementStylePropertyView: UIView {
 
     private func canToggle(_ property: CSSStyleProperty) -> Bool {
         property.isEditable
-            && property.isMutationPending == false
             && toggleAction != nil
             && toggleTask == nil
     }

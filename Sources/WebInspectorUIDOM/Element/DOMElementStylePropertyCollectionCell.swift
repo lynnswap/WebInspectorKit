@@ -1,7 +1,6 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
 import WebInspectorDataKit
-import ObservationBridge
 import UIKit
 
 @MainActor
@@ -11,7 +10,6 @@ package final class DOMElementStylePropertyCollectionCell: UICollectionViewListC
     private let propertyView = DOMElementStylePropertyView()
     private var property: CSSStyleProperty?
     private var toggleAction: DOMElementStylePropertyView.ToggleAction?
-    private var propertyObservation: PortableObservationTracking.Token?
 
     override package init(frame: CGRect) {
         super.init(frame: frame)
@@ -21,10 +19,6 @@ package final class DOMElementStylePropertyCollectionCell: UICollectionViewListC
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
-    }
-
-    isolated deinit {
-        propertyObservation?.cancel()
     }
 
     override package func prepareForReuse() {
@@ -49,23 +43,13 @@ package final class DOMElementStylePropertyCollectionCell: UICollectionViewListC
         self.property = property
         toggleAction = onToggle
         propertyView.bind(property: property, onToggle: onToggle)
-        propertyObservation?.cancel()
-        propertyObservation = withPortableContinuousObservation { [weak self, weak property] _ in
-            guard let self,
-                  let property,
-                  self.property === property else {
-                return
-            }
-            self.renderBackground(
-                isModifiedByInspector: property.isModifiedByInspector,
-                state: self.configurationState
-            )
-        }
+        renderBackground(
+            isModifiedByInspector: property.isModifiedByInspector,
+            state: configurationState
+        )
     }
 
     package func clear() {
-        propertyObservation?.cancel()
-        propertyObservation = nil
         property = nil
         toggleAction = nil
         propertyView.clear()

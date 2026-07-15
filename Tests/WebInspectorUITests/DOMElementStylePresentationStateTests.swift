@@ -12,7 +12,7 @@ extension WebInspectorUIRenderingTests {
 struct DOMElementStyleSnapshotCoordinatorTests {
     /// Keeps the weak `CSSStyles.modelContext` alive for the test lifetime.
     private let modelContext = WebInspectorModelContainer(
-        configuration: .init(domains: [.dom, .css])
+        configuration: .init(enabledFeatures: [.dom])
     ).mainContext
 
     @Test
@@ -136,10 +136,10 @@ struct DOMElementStyleSnapshotCoordinatorTests {
         #expect(containsVisibleProperty(named: "color", in: snapshot, coordinator: coordinator))
     }
 
-    /// Property content belongs to the stable observable property. The
-    /// collection snapshot remains a topology-only artifact.
+    /// Property content is an immutable value. Stable diffable identity keeps
+    /// the topology unchanged while the coordinator requests a visible rebind.
     @Test
-    func coordinatorDoesNotApplySnapshotForObservablePropertyContentChange() throws {
+    func coordinatorRebindsWithoutSnapshotForPropertyContentChange() throws {
         let coordinator = DOMElementStyleSnapshotCoordinator()
         let nodeStyles = makeStyles()
         load(nodeStyles, with: makeFlatMatchedStyles())
@@ -162,9 +162,11 @@ struct DOMElementStyleSnapshotCoordinatorTests {
         #expect(update.applyMode == .none)
         #expect(update.snapshot == nil)
         #expect(update.placeholderMode == .none)
+        #expect(update.rebindVisiblePropertyRows)
         let updatedSection = try #require(coordinator.section(for: initialItem.sectionID))
         let updatedProperty = try #require(coordinator.property(for: initialItem, in: updatedSection))
-        #expect(updatedProperty === initialProperty)
+        #expect(updatedProperty.id == initialProperty.id)
+        #expect(initialProperty.value == "0")
         #expect(updatedProperty.value == "4px")
         #expect(updatedProperty.text == "margin: 4px;")
     }
@@ -192,7 +194,7 @@ struct DOMElementStyleSnapshotCoordinatorTests {
         let reorderedSection = try #require(coordinator.section(for: firstItem.sectionID))
         let newFirstProperty = try #require(coordinator.property(for: firstItem, in: reorderedSection))
         #expect(newFirstProperty.name == "padding")
-        #expect(newFirstProperty !== oldFirstProperty)
+        #expect(newFirstProperty.id == oldFirstProperty.id)
     }
 
     /// DataKit's `applySetStyleText` rewrites sections in place and marks
@@ -222,9 +224,11 @@ struct DOMElementStyleSnapshotCoordinatorTests {
 
         #expect(update.applyMode == .none)
         #expect(update.snapshot == nil)
+        #expect(update.rebindVisiblePropertyRows)
         let updatedSection = try #require(coordinator.section(for: initialItem.sectionID))
         let updatedProperty = try #require(coordinator.property(for: initialItem, in: updatedSection))
-        #expect(updatedProperty === initialProperty)
+        #expect(updatedProperty.id == initialProperty.id)
+        #expect(initialProperty.text == "margin: 0;")
         #expect(updatedProperty.text == "/* margin: 4px; */")
     }
 
