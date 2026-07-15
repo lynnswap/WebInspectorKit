@@ -9,12 +9,21 @@ private let proxyLogger = Logger(subsystem: "WebInspectorKit", category: "WebIns
 /// An attached Web Inspector protocol connection for a `WKWebView`.
 public final class WebInspectorProxy: Sendable {
     public struct Configuration: Equatable, Sendable {
-        public var responseTimeout: Duration
-        public var bootstrapTimeout: Duration
+        /// The maximum time to wait for a protocol command reply.
+        ///
+        /// `nil` waits until WebKit replies, the connection closes, or the
+        /// calling task is cancelled. The default is `nil`.
+        public var responseTimeout: Duration?
+
+        /// The maximum time to wait for WebKit's initial page target.
+        ///
+        /// `nil` waits until the target arrives, the connection closes, or the
+        /// attaching task is cancelled. The default is `nil`.
+        public var bootstrapTimeout: Duration?
 
         public init(
-            responseTimeout: Duration = .seconds(5),
-            bootstrapTimeout: Duration = .seconds(5)
+            responseTimeout: Duration? = nil,
+            bootstrapTimeout: Duration? = nil
         ) {
             self.responseTimeout = responseTimeout
             self.bootstrapTimeout = bootstrapTimeout

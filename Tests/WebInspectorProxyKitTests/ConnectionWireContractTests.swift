@@ -10,6 +10,49 @@ private enum CompositeEvent: Sendable {
 }
 
 @Test
+func defaultConfigurationWaitsForWebKitWithoutSyntheticTimeouts() {
+    let configuration = WebInspectorProxy.Configuration()
+    let finiteConfiguration = WebInspectorProxy.Configuration(
+        responseTimeout: .seconds(30),
+        bootstrapTimeout: .seconds(45)
+    )
+
+    #expect(configuration.responseTimeout == nil)
+    #expect(configuration.bootstrapTimeout == nil)
+    #expect(finiteConfiguration.responseTimeout == .seconds(30))
+    #expect(finiteConfiguration.bootstrapTimeout == .seconds(45))
+}
+
+@Test
+func defaultCommandWaitEndsWhenConnectionCloses() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let documentTask = Task { try await runtime.page.dom.getDocument() }
+    let command = try await runtime.peer.commands.next()
+    #expect(command.method == "DOM.getDocument")
+
+    await runtime.close()
+
+    await #expect(throws: WebInspectorProxyError.closed) {
+        _ = try await documentTask.value
+    }
+}
+
+@Test
+func defaultCommandWaitEndsWhenCallerCancels() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let documentTask = Task { try await runtime.page.dom.getDocument() }
+    let command = try await runtime.peer.commands.next()
+    #expect(command.method == "DOM.getDocument")
+
+    documentTask.cancel()
+
+    await #expect(throws: CancellationError.self) {
+        _ = try await documentTask.value
+    }
+    await runtime.close()
+}
+
+@Test
 func scopeRegistrationDoesNotSynthesizeAGenerationReset() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     defer { Task { await runtime.close() } }

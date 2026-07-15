@@ -8,6 +8,25 @@ when upgrading WebInspectorKit. Sections are grouped by release, newest first.
 Unreleased builds require Swift 6.3+ and a minimum deployment target of iOS
 18.4+ or macOS 15.4+. The built-in UIKit inspector remains iOS-only.
 
+### Opt into inspector command deadlines only when required
+
+`WebInspectorProxy.Configuration` no longer applies a synthetic five-second
+deadline to normal WebKit replies or initial page-target discovery. Both
+`responseTimeout` and `bootstrapTimeout` are optional and default to `nil`, so
+operations wait until WebKit responds, the connection closes, or the caller is
+cancelled. A host that requires a finite deadline can still opt in explicitly:
+
+```swift
+let configuration = WebInspectorProxy.Configuration(
+    responseTimeout: .seconds(30),
+    bootstrapTimeout: .seconds(30)
+)
+let proxy = try await WebInspectorProxy(
+    attachingTo: webView,
+    configuration: configuration
+)
+```
+
 ### Adopt container-issued contexts and flat generic fetches
 
 `WebInspectorModelContext` no longer attaches to WebKit or owns DOM, Network,
