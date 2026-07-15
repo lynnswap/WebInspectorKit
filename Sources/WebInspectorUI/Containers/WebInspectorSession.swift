@@ -172,9 +172,7 @@ public final class WebInspectorSession {
         guard context.status.state == .attached else {
             return
         }
-        if context.isElementPickerEnabled {
-            try? await context.setElementPickerEnabled(false)
-        }
+        try? await context.setElementPickerEnabled(false)
         try? await context.hideHighlight()
     }
 

@@ -64,6 +64,15 @@ public final class WebInspectorContext {
 
     private typealias LoadedDOMDocument = (node: DOM.Node, generation: Int)
 
+    private struct ElementPickerDesiredState {
+        let id: UInt64
+        let pageGeneration: Int
+        let documentGeneration: Int
+        let requestedEnabled: Bool
+        let sourceRequestID: UInt64?
+        let cancellationFallbackEnabled: Bool
+    }
+
     private struct ElementPickerOperation {
         enum Intent: Equatable {
             case commandReply
@@ -75,7 +84,25 @@ public final class WebInspectorContext {
         let pageGeneration: Int
         let documentGeneration: Int
         let requestedEnabled: Bool
+        let sourceRequestID: UInt64?
         var intent: Intent
+        var waiters: [CheckedContinuation<ElementPickerOperationOutcome, Never>]
+    }
+
+    private struct ElementPickerOperationOutcome {
+        enum Resolution {
+            case applied
+            case inspectEvent
+            case invalidated
+            case commandFailure(any Error)
+            case cleanupFailure(any Error)
+        }
+
+        let pageGeneration: Int
+        let documentGeneration: Int
+        let requestedEnabled: Bool
+        let sourceRequestID: UInt64?
+        let resolution: Resolution
     }
 
     private struct StyleTrackingKey: Hashable {
@@ -166,6 +193,7 @@ public final class WebInspectorContext {
     private var inspectResolutionTask: Task<Void, Never>?
     private var inspectedNodeHighlightTask: Task<Void, Never>?
     private var elementPickerOperation: ElementPickerOperation?
+    private var elementPickerDesiredState: ElementPickerDesiredState?
     private var nextElementPickerOperationID: UInt64
     private var frameDocumentLoadTasks: [WebInspectorTarget.ID: Task<Void, Never>]
     private var styleRefreshTask: Task<Void, Never>?
@@ -240,6 +268,7 @@ public final class WebInspectorContext {
         inspectResolutionTask = nil
         inspectedNodeHighlightTask = nil
         elementPickerOperation = nil
+        elementPickerDesiredState = nil
         nextElementPickerOperationID = 0
         frameDocumentLoadTasks = [:]
         styleRefreshTask = nil
@@ -633,6 +662,10 @@ public final class WebInspectorContext {
         eventPumpAppliedSequenceForTestingStorage
     }
 
+    package var elementPickerDesiredStateForTesting: (id: UInt64, isEnabled: Bool)? {
+        elementPickerDesiredState.map { ($0.id, $0.requestedEnabled) }
+    }
+
     package func waitForEventPumpAppliedSequenceForTesting(
         after baselineSequence: UInt64,
         count: UInt64 = 1,
@@ -705,105 +738,345 @@ public final class WebInspectorContext {
     ) async throws {
         requireOwner(isolation)
         try Task.checkCancellation()
-        guard elementPickerOperation == nil else {
-            throw WebInspectorProxyError.commandFailed(
-                domain: "DOM",
-                method: "setInspectModeEnabled",
-                message: "An element picker transition is already in progress."
-            )
+        let cancellationFallbackEnabled: Bool
+        if let desiredState = elementPickerDesiredState,
+           desiredState.pageGeneration == currentPageGeneration,
+           desiredState.documentGeneration == domDocumentGeneration {
+            cancellationFallbackEnabled = desiredState.requestedEnabled
+        } else {
+            cancellationFallbackEnabled = isElementPickerEnabled
         }
-        guard isEnabled != isElementPickerEnabled else {
-            return
-        }
-        let page = try currentPageOrThrow()
-        precondition(
-            nextElementPickerOperationID < UInt64.max,
-            "WebInspectorContext exhausted element picker operation identifiers."
-        )
-        nextElementPickerOperationID += 1
-        let operationID = nextElementPickerOperationID
-        elementPickerOperation = ElementPickerOperation(
-            id: operationID,
+        let requestID = nextElementPickerID()
+        let request = ElementPickerDesiredState(
+            id: requestID,
             pageGeneration: currentPageGeneration,
             documentGeneration: domDocumentGeneration,
             requestedEnabled: isEnabled,
-            intent: .commandReply
+            sourceRequestID: requestID,
+            cancellationFallbackEnabled: cancellationFallbackEnabled
+        )
+        elementPickerDesiredState = request
+        var observedCancellation = false
+
+        while true {
+            if let operation = elementPickerOperation {
+                let outcome = await waitForElementPickerOperation(
+                    operation.id,
+                    isolation: isolation
+                )
+                try handleElementPickerOperationOutcome(
+                    outcome,
+                    for: request,
+                    observedCancellation: &observedCancellation
+                )
+                continue
+            }
+
+            try requireCurrentElementPickerRequest(request)
+            observeElementPickerCancellation(
+                for: request,
+                observedCancellation: &observedCancellation
+            )
+            guard let desiredState = elementPickerDesiredState else {
+                preconditionFailure("WebInspectorContext lost the element picker desired state.")
+            }
+            guard desiredState.pageGeneration == currentPageGeneration,
+                  desiredState.documentGeneration == domDocumentGeneration else {
+                setElementPickerSystemDesiredState(
+                    isElementPickerEnabled,
+                    sourceRequestID: nil
+                )
+                continue
+            }
+            guard desiredState.requestedEnabled != isElementPickerEnabled else {
+                if observedCancellation {
+                    throw CancellationError()
+                }
+                return
+            }
+
+            let page: WebInspectorTarget
+            do {
+                page = try currentPageOrThrow()
+            } catch {
+                if elementPickerDesiredState?.id == desiredState.id {
+                    setElementPickerSystemDesiredState(
+                        isElementPickerEnabled,
+                        sourceRequestID: nil
+                    )
+                }
+                throw error
+            }
+            let outcome = await performElementPickerOperation(
+                desiredState,
+                on: page,
+                drivingRequestID: request.id,
+                drivingRequestCancellationFallbackEnabled: request.cancellationFallbackEnabled,
+                isolation: isolation
+            )
+            try handleElementPickerOperationOutcome(
+                outcome,
+                for: request,
+                observedCancellation: &observedCancellation
+            )
+        }
+    }
+
+    package func toggleElementPickerEnabled(
+        isolation: isolated (any Actor) = #isolation
+    ) async throws {
+        requireOwner(isolation)
+        let requestedEnabled: Bool
+        if let desiredState = elementPickerDesiredState,
+           desiredState.pageGeneration == currentPageGeneration,
+           desiredState.documentGeneration == domDocumentGeneration {
+            requestedEnabled = desiredState.requestedEnabled
+        } else {
+            requestedEnabled = isElementPickerEnabled
+        }
+        try await setElementPickerEnabled(!requestedEnabled, isolation: isolation)
+    }
+
+    private func performElementPickerOperation(
+        _ desiredState: ElementPickerDesiredState,
+        on page: WebInspectorTarget,
+        drivingRequestID: UInt64,
+        drivingRequestCancellationFallbackEnabled: Bool,
+        isolation: isolated (any Actor)
+    ) async -> ElementPickerOperationOutcome {
+        requireOwner(isolation)
+        let operationID = nextElementPickerID()
+        elementPickerOperation = ElementPickerOperation(
+            id: operationID,
+            pageGeneration: desiredState.pageGeneration,
+            documentGeneration: desiredState.documentGeneration,
+            requestedEnabled: desiredState.requestedEnabled,
+            sourceRequestID: desiredState.sourceRequestID,
+            intent: .commandReply,
+            waiters: []
         )
         WebInspectorDataKitLog.debug(
-            "DOM picker setInspectMode start enabled=\(isEnabled) target=\(page.id.rawValue)"
+            "DOM picker setInspectMode start enabled=\(desiredState.requestedEnabled) target=\(page.id.rawValue)"
         )
         // Do not inherit caller cancellation here. Once WebKit accepts the
         // command, its reply is required to decide whether cancellation must
         // send one compensating disable.
         let commandResult = await Task {
-            try await page.dom.setInspectMode(enabled: isEnabled)
+            try await page.dom.setInspectMode(enabled: desiredState.requestedEnabled)
         }.result
-        let wasCancelled = Task.isCancelled
+        if Task.isCancelled {
+            supersedeElementPickerRequestForCancellation(
+                requestID: drivingRequestID,
+                sourceRequestID: drivingRequestID,
+                fallbackEnabled: drivingRequestCancellationFallbackEnabled
+            )
+        }
+        return await finishElementPickerOperation(
+            operationID,
+            commandResult: commandResult,
+            page: page,
+            isolation: isolation
+        )
+    }
 
+    private func finishElementPickerOperation(
+        _ operationID: UInt64,
+        commandResult: Result<Void, any Error>,
+        page: WebInspectorTarget,
+        isolation: isolated (any Actor)
+    ) async -> ElementPickerOperationOutcome {
+        requireOwner(isolation)
         guard let operation = elementPickerOperation,
               operation.id == operationID else {
-            throw staleElementPickerOperationError()
+            preconditionFailure("WebInspectorContext lost an in-flight element picker operation.")
         }
-        defer {
-            if elementPickerOperation?.id == operationID {
-                elementPickerOperation = nil
-            }
-        }
-        if case .inspectEvent = operation.intent {
-            if wasCancelled {
-                throw CancellationError()
-            }
-            return
-        }
-
         let operationIsCurrent = operation.pageGeneration == currentPageGeneration
             && operation.documentGeneration == domDocumentGeneration
             && operation.intent != .invalidated
+        let resolution: ElementPickerOperationOutcome.Resolution
 
-        switch commandResult {
-        case let .failure(error):
-            WebInspectorDataKitLog.debug(
-                "DOM picker setInspectMode failed enabled=\(isEnabled) target=\(page.id.rawValue): \(String(describing: error))"
-            )
-            guard operationIsCurrent else {
-                throw staleElementPickerOperationError()
+        if operation.intent == .inspectEvent {
+            resolution = .inspectEvent
+        } else if operationIsCurrent == false {
+            if case .success = commandResult,
+               operation.requestedEnabled {
+                do {
+                    try await disableElementPickerAfterSuccessfulEnable(
+                        on: page,
+                        operationID: operationID,
+                        isolation: isolation
+                    )
+                    resolution = .invalidated
+                } catch {
+                    resolution = .cleanupFailure(error)
+                }
+            } else {
+                resolution = .invalidated
             }
-            if wasCancelled {
-                throw CancellationError()
+        } else {
+            switch commandResult {
+            case let .failure(error):
+                WebInspectorDataKitLog.debug(
+                    "DOM picker setInspectMode failed enabled=\(operation.requestedEnabled) target=\(page.id.rawValue): \(String(describing: error))"
+                )
+                if let desiredState = elementPickerDesiredState,
+                   desiredState.pageGeneration == operation.pageGeneration,
+                   desiredState.documentGeneration == operation.documentGeneration,
+                   desiredState.requestedEnabled == operation.requestedEnabled {
+                    setElementPickerSystemDesiredState(
+                        isElementPickerEnabled,
+                        sourceRequestID: desiredState.sourceRequestID
+                    )
+                }
+                resolution = .commandFailure(error)
+            case .success:
+                isElementPickerEnabled = operation.requestedEnabled
+                notifyStatusChanged()
+                WebInspectorDataKitLog.debug(
+                    "DOM picker setInspectMode finished enabled=\(operation.requestedEnabled) target=\(page.id.rawValue)"
+                )
+                resolution = .applied
             }
-            throw error
-        case .success:
+        }
+
+        let outcome = ElementPickerOperationOutcome(
+            pageGeneration: operation.pageGeneration,
+            documentGeneration: operation.documentGeneration,
+            requestedEnabled: operation.requestedEnabled,
+            sourceRequestID: operation.sourceRequestID,
+            resolution: resolution
+        )
+        completeElementPickerOperation(operationID, with: outcome)
+        return outcome
+    }
+
+    private func waitForElementPickerOperation(
+        _ operationID: UInt64,
+        isolation: isolated (any Actor)
+    ) async -> ElementPickerOperationOutcome {
+        requireOwner(isolation)
+        return await withCheckedContinuation { continuation in
+            guard elementPickerOperation?.id == operationID else {
+                preconditionFailure("WebInspectorContext changed an element picker operation before registering its waiter.")
+            }
+            elementPickerOperation?.waiters.append(continuation)
+        }
+    }
+
+    private func completeElementPickerOperation(
+        _ operationID: UInt64,
+        with outcome: ElementPickerOperationOutcome
+    ) {
+        guard let operation = elementPickerOperation,
+              operation.id == operationID else {
+            preconditionFailure("WebInspectorContext completed an unknown element picker operation.")
+        }
+        elementPickerOperation = nil
+        for waiter in operation.waiters {
+            waiter.resume(returning: outcome)
+        }
+    }
+
+    private func handleElementPickerOperationOutcome(
+        _ outcome: ElementPickerOperationOutcome,
+        for request: ElementPickerDesiredState,
+        observedCancellation: inout Bool
+    ) throws {
+        switch outcome.resolution {
+        case let .commandFailure(error):
+            let belongsToRequestDocument = outcome.pageGeneration == request.pageGeneration
+                && outcome.documentGeneration == request.documentGeneration
+            if belongsToRequestDocument,
+               outcome.sourceRequestID == request.id
+                || outcome.requestedEnabled == request.requestedEnabled {
+                if Task.isCancelled,
+                   outcome.requestedEnabled == request.requestedEnabled {
+                    observeElementPickerCancellation(
+                        for: request,
+                        observedCancellation: &observedCancellation
+                    )
+                    throw CancellationError()
+                }
+                throw error
+            }
+        case let .cleanupFailure(error):
+            let belongsToRequestDocument = outcome.pageGeneration == request.pageGeneration
+                && outcome.documentGeneration == request.documentGeneration
+            if belongsToRequestDocument,
+               outcome.sourceRequestID == request.id
+                || outcome.requestedEnabled == request.requestedEnabled {
+                throw error
+            }
+        case .applied, .inspectEvent, .invalidated:
             break
         }
+        try requireCurrentElementPickerRequest(request)
+        observeElementPickerCancellation(
+            for: request,
+            observedCancellation: &observedCancellation
+        )
+    }
 
-        guard operationIsCurrent else {
-            if isEnabled {
-                try await disableElementPickerAfterSuccessfulEnable(
-                    on: page,
-                    operationID: operationID,
-                    isolation: isolation
-                )
-            }
+    private func requireCurrentElementPickerRequest(
+        _ request: ElementPickerDesiredState
+    ) throws {
+        guard request.pageGeneration == currentPageGeneration,
+              request.documentGeneration == domDocumentGeneration else {
             throw staleElementPickerOperationError()
         }
+    }
 
-        if isEnabled && wasCancelled {
-            try await disableElementPickerAfterSuccessfulEnable(
-                on: page,
-                operationID: operationID,
-                isolation: isolation
-            )
-            throw CancellationError()
+    private func observeElementPickerCancellation(
+        for request: ElementPickerDesiredState,
+        observedCancellation: inout Bool
+    ) {
+        guard observedCancellation == false,
+              Task.isCancelled else {
+            return
         }
-
-        isElementPickerEnabled = isEnabled
-        notifyStatusChanged()
-        WebInspectorDataKitLog.debug(
-            "DOM picker setInspectMode finished enabled=\(isEnabled) target=\(page.id.rawValue)"
+        observedCancellation = true
+        supersedeElementPickerRequestForCancellation(
+            requestID: request.id,
+            sourceRequestID: request.id,
+            fallbackEnabled: request.cancellationFallbackEnabled
         )
-        if wasCancelled {
-            throw CancellationError()
+    }
+
+    private func supersedeElementPickerRequestForCancellation(
+        requestID: UInt64,
+        sourceRequestID: UInt64,
+        fallbackEnabled: Bool
+    ) {
+        guard elementPickerDesiredState?.id == requestID else {
+            return
         }
+        setElementPickerSystemDesiredState(
+            fallbackEnabled,
+            sourceRequestID: sourceRequestID
+        )
+    }
+
+    private func setElementPickerSystemDesiredState(
+        _ isEnabled: Bool,
+        sourceRequestID: UInt64?
+    ) {
+        elementPickerDesiredState = ElementPickerDesiredState(
+            id: nextElementPickerID(),
+            pageGeneration: currentPageGeneration,
+            documentGeneration: domDocumentGeneration,
+            requestedEnabled: isEnabled,
+            sourceRequestID: sourceRequestID,
+            cancellationFallbackEnabled: isEnabled
+        )
+    }
+
+    private func nextElementPickerID() -> UInt64 {
+        precondition(
+            nextElementPickerOperationID < UInt64.max,
+            "WebInspectorContext exhausted element picker operation identifiers."
+        )
+        nextElementPickerOperationID += 1
+        return nextElementPickerOperationID
     }
 
     private func staleElementPickerOperationError() -> WebInspectorProxyError {
@@ -849,6 +1122,7 @@ public final class WebInspectorContext {
     }
 
     private func invalidateElementPickerOperation() {
+        setElementPickerSystemDesiredState(false, sourceRequestID: nil)
         guard var operation = elementPickerOperation,
               operation.intent == .commandReply else {
             return
@@ -2704,6 +2978,7 @@ extension WebInspectorContext {
                elementPickerOperation?.intent == .commandReply {
                 elementPickerOperation?.intent = .inspectEvent
             }
+            setElementPickerSystemDesiredState(false, sourceRequestID: nil)
             isElementPickerEnabled = false
             notifyStatusChanged()
             let inspectedNodeID = DOMNode.ID(id)
@@ -2771,6 +3046,7 @@ extension WebInspectorContext {
 
     package func seedElementPickerEnabled(_ isEnabled: Bool, isolation: isolated (any Actor) = #isolation) {
         requireOwner(isolation)
+        setElementPickerSystemDesiredState(isEnabled, sourceRequestID: nil)
         isElementPickerEnabled = isEnabled
         notifyStatusChanged()
     }

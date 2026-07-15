@@ -152,6 +152,12 @@ public final class DOMModelController {
     ) async throws {
         try await context.setElementPickerEnabled(enabled, isolation: isolation)
     }
+
+    package func toggleInspectMode(
+        isolation: isolated (any Actor) = #isolation
+    ) async throws {
+        try await context.toggleElementPickerEnabled(isolation: isolation)
+    }
 }
 
 /// Domain operation surface for CSS model commands.

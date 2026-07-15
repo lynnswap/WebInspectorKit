@@ -17,6 +17,41 @@ extension WebInspectorUIRenderingTests {
 struct ParentContainerTests {
     private struct AttachmentFailure: Error {}
 
+    private enum PickerShutdownRaceResult: Sendable {
+        case shutdownIntentRegistered
+        case retirementCompleted
+    }
+
+    private actor PickerShutdownRaceRecorder {
+        private var result: PickerShutdownRaceResult?
+        private var waiters: [CheckedContinuation<PickerShutdownRaceResult, Never>] = []
+
+        func record(_ result: PickerShutdownRaceResult) {
+            guard self.result == nil else {
+                return
+            }
+            self.result = result
+            let currentWaiters = waiters
+            waiters.removeAll()
+            for waiter in currentWaiters {
+                waiter.resume(returning: result)
+            }
+        }
+
+        func waitForResult() async -> PickerShutdownRaceResult {
+            if let result {
+                return result
+            }
+            return await withCheckedContinuation { continuation in
+                if let result {
+                    continuation.resume(returning: result)
+                } else {
+                    waiters.append(continuation)
+                }
+            }
+        }
+    }
+
     @Test
     func sessionAndViewControllerUseDOMAndNetworkTabsByDefault() {
         let session = WebInspectorSession()
@@ -789,6 +824,78 @@ struct ParentContainerTests {
     }
 
     @Test
+    func presentationEndSupersedesPendingElementPickerEnable() async throws {
+        let fixture = try await makeLiveSession()
+        let context = fixture.context
+        let enableGate = WebInspectorTestGate()
+
+        await fixture.runtime.backend.hold(
+            domain: "DOM",
+            method: "setInspectModeEnabled",
+            gate: enableGate
+        )
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "hideHighlight")
+
+        let enableTask = Task { @MainActor in
+            try await context.setElementPickerEnabled(true)
+        }
+        _ = await fixture.runtime.backend.waitForRecordedCommands(
+            domain: "DOM",
+            method: "setInspectModeEnabled",
+            count: 1
+        )
+        let enableDesiredStateID = try #require(context.elementPickerDesiredStateForTesting?.id)
+
+        let raceRecorder = PickerShutdownRaceRecorder()
+        let retirementTask = Task { @MainActor in
+            await fixture.session.retireRootPresentation(detach: false)
+            await raceRecorder.record(.retirementCompleted)
+        }
+        let desiredStateObservationTask = Task { @MainActor in
+            while context.elementPickerDesiredStateForTesting?.id == enableDesiredStateID
+                || context.elementPickerDesiredStateForTesting?.isEnabled != false {
+                guard Task.isCancelled == false else {
+                    return
+                }
+                await Task.yield()
+            }
+            await raceRecorder.record(.shutdownIntentRegistered)
+        }
+        let raceResult = await raceRecorder.waitForResult()
+        await enableGate.open()
+        desiredStateObservationTask.cancel()
+
+        try await enableTask.value
+        await retirementTask.value
+        await desiredStateObservationTask.value
+
+        #expect(raceResult == .shutdownIntentRegistered)
+        let pickerCommands = await fixture.runtime.backend.recordedCommands().filter {
+            $0.domain == "DOM" && $0.method == "setInspectModeEnabled"
+        }
+        #expect(pickerCommands.compactMap {
+            $0.payload.cast(as: DOM.SetInspectModeEnabledPayload.self)?.enabled
+        } == [true, false])
+        #expect(context.isElementPickerEnabled == false)
+    }
+
+    @Test
+    func presentationEndWithDisabledElementPickerSendsNoPickerCommand() async throws {
+        let fixture = try await makeLiveSession()
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "hideHighlight")
+
+        await fixture.session.retireRootPresentation(detach: false)
+
+        let pickerCommands = await fixture.runtime.backend.recordedCommands().filter {
+            $0.domain == "DOM" && $0.method == "setInspectModeEnabled"
+        }
+        #expect(pickerCommands.isEmpty)
+        #expect(fixture.context.isElementPickerEnabled == false)
+    }
+
+    @Test
     func topLevelContainerPropagatesBackgroundDrawingTraitToHosts() throws {
         guard #available(iOS 26.0, *) else {
             return
@@ -1079,6 +1186,52 @@ struct ParentContainerTests {
     private func makeFakeContainer() async throws -> WebInspectorContainer {
         let runtime = try await WebInspectorProxyTestRuntime.start()
         return WebInspectorContainer(proxy: runtime.proxy)
+    }
+
+    private struct LiveSessionFixture {
+        var runtime: WebInspectorProxyTestRuntime
+        var container: WebInspectorContainer
+        var context: WebInspectorContext
+        var session: WebInspectorSession
+    }
+
+    private func makeLiveSession() async throws -> LiveSessionFixture {
+        let runtime = try await WebInspectorProxyTestRuntime.start()
+        let target = try await runtime.proxy.waitForCurrentPage()
+        await runtime.backend.enqueue((), for: "Inspector", method: "enable")
+        await runtime.backend.enqueue((), for: "Inspector", method: "initialized")
+        await runtime.backend.enqueue((), for: "Runtime", method: "enable")
+        await runtime.backend.enqueue((), for: "Network", method: "enable")
+        await runtime.backend.enqueue(
+            DOM.Node(id: DOM.Node.ID("presentation-document"), nodeType: 9, nodeName: "#document"),
+            for: "DOM",
+            method: "getDocument"
+        )
+        await runtime.backend.enqueue((), for: "Console", method: "enable")
+
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
+        try await runtime.backend.waitForSubscribers(domain: "Inspector", target: target, count: 1)
+        try await runtime.backend.waitForSubscribers(domain: "CSS", target: target, count: 1)
+        try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 1)
+        try await runtime.backend.waitForSubscribers(domain: "Console", target: target, count: 1)
+        try await runtime.backend.waitForSubscribers(domain: "Runtime", target: target, count: 1)
+        if context.state != .attached {
+            for await status in context.statusUpdates {
+                if status.state == .attached {
+                    break
+                }
+                try #require(status.state == .attaching)
+            }
+        }
+        let session = WebInspectorSession(context: context)
+        return LiveSessionFixture(
+            runtime: runtime,
+            container: container,
+            context: context,
+            session: session
+        )
     }
 
     private func attach(
