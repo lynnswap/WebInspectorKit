@@ -189,7 +189,7 @@ where State: Sendable {
             self.subscription = subscription
         }
 
-        public mutating func next() async -> State? {
+        public nonisolated(nonsending) mutating func next() async -> State? {
             await subscription.mailbox.next()
         }
     }

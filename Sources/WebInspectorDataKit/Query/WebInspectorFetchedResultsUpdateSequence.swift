@@ -237,7 +237,7 @@ public struct WebInspectorFetchedResultsUpdateSequence<
             self.subscription = subscription
         }
 
-        public mutating func next() async -> Element? {
+        public nonisolated(nonsending) mutating func next() async -> Element? {
             await subscription.mailbox.next()
         }
     }
