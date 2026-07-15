@@ -142,6 +142,26 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
+    func windowAttachmentActivatesLateInstalledDOMRendering() async throws {
+        let fixture = try await DOMTreeRuntimeFixture.start()
+        let view = await fixture.makeView()
+        view.setRenderingActive(false)
+
+        let host = UIViewController()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 360, height: 480))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+
+        host.view.addSubview(view)
+        #expect(view.isRenderingActiveForTesting)
+
+        view.removeFromSuperview()
+        #expect(!view.isRenderingActiveForTesting)
+        window.isHidden = true
+        await fixture.close(view: view)
+    }
+
+    @Test
     func textDocumentVendsRowParagraphsWithStableIdentity() throws {
         let document = DOMTreeTextDocument()
         let rows = makeRowDocumentRows(["alpha", "beta"])
