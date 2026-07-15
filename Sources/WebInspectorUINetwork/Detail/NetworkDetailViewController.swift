@@ -718,7 +718,7 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func previewCandidate(for request: NetworkRequest) -> PreviewCandidate? {
         guard let kind = responseMediaPreviewKind(for: request) else {
-            return hasUsableStandardPreview(for: request)
+            return hasInspectableStandardPreview(for: request)
                 ? .standard(request)
                 : nil
         }
@@ -763,23 +763,21 @@ package final class NetworkDetailViewController: UIViewController {
         }
     }
 
-    private func hasUsableStandardPreview(for request: NetworkRequest) -> Bool {
+    private func hasInspectableStandardPreview(for request: NetworkRequest) -> Bool {
         if request.requestBody != nil {
             return true
         }
         guard request.hasResponseBody,
               request.method.caseInsensitiveCompare("HEAD") != .orderedSame,
               request.status.map({ status in
-                  (200..<300).contains(status)
+                  (100..<200).contains(status) == false
                       && status != 204
                       && status != 205
+                      && status != 304
               }) ?? true else {
             return false
         }
         if case .failed = request.state {
-            return false
-        }
-        if case .failed = request.responseBody.phase {
             return false
         }
         return true

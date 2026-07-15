@@ -673,6 +673,64 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func groupedPreviewTreatsNonMediaErrorResponseAsInspectable() async throws {
+        let context = makeContext()
+        let frameID = FrameID("main-frame")
+        let nodeID = DOM.Node.ID("grouped-error-response")
+        installNavigationVisit(in: context, frameID: frameID)
+        let successfulRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "successful-json",
+            url: "https://example.com/success.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "application/json"],
+            responseMIMEType: "application/json",
+            resourceType: .xhr,
+            timestamp: 1
+        ))
+        let errorRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "error-json",
+            url: "https://example.com/error.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "application/json"],
+            responseMIMEType: "application/json",
+            responseStatus: 404,
+            resourceType: .xhr,
+            timestamp: 4
+        ))
+        applyResponseBody(
+            to: context,
+            request: successfulRequest,
+            body: #"{"result":"success"}"#,
+            base64Encoded: false
+        )
+        applyResponseBody(
+            to: context,
+            request: errorRequest,
+            body: #"{"error":"not found"}"#,
+            base64Encoded: false
+        )
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(errorRequest)
+        let viewController = makeNetworkDetailViewController(
+            model: model,
+            initialMode: .preview
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(await waitUntilPreparedTextPreviewRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == errorRequest.id
+                && viewController.syntaxBodyViewControllerForTesting
+                    .syntaxViewForTesting.text.contains(#""error" : "not found""#)
+        })
+        #expect(model.selectedRequests.map(\.id) == [successfulRequest.id, errorRequest.id])
+    }
+
+    @Test
     func hiddenDetailDoesNotFetchResponseBodyUntilAppearingAgain() async throws {
         let context = makeContext()
         let request = try #require(
@@ -1510,6 +1568,54 @@ struct NetworkDetailViewControllerTests {
         #expect(viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting == playerIdentity)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
         #expect(playerFactory.players.count == 1)
+    }
+
+    @Test
+    func mediaPreviewCoordinatorReusesTemporaryFileForEquivalentBodyPublication() async throws {
+        let body = NetworkBody(
+            role: .response,
+            kind: .binary,
+            full: "not a real movie",
+            isBase64Encoded: false,
+            sourceSyntaxKind: .plainText,
+            phase: .loaded
+        )
+        let metadata = NetworkMediaPreviewMetadata(
+            mimeType: "video/mp4",
+            url: "https://media.example.com/download.php",
+            sourcePolicy: .body
+        )
+        let coordinator = NetworkMediaPreviewCoordinator()
+        var publishedPreviews: [NetworkMoviePreview] = []
+
+        let firstAction = coordinator.preparePreview(for: body, metadata: metadata) { result in
+            guard case .showMovie(let preview) = result else {
+                Issue.record("Movie preparation should publish a temporary-file preview")
+                return
+            }
+            publishedPreviews.append(preview)
+        }
+        guard case .loadingMovie = firstAction else {
+            Issue.record("The first movie body publication should start preparation")
+            return
+        }
+        await coordinator.waitUntilPreparationFinishedForTesting()
+
+        let firstPreview = try #require(publishedPreviews.first)
+        #expect(FileManager.default.fileExists(atPath: firstPreview.url.path))
+
+        let equivalentAction = coordinator.preparePreview(for: body, metadata: metadata) { _ in
+            Issue.record("An equivalent body publication should reuse the prepared preview")
+        }
+        guard case .active = equivalentAction else {
+            Issue.record("An equivalent body publication should keep the active preview")
+            return
+        }
+        #expect(publishedPreviews.count == 1)
+        #expect(FileManager.default.fileExists(atPath: firstPreview.url.path))
+
+        coordinator.cancel()
+        #expect(FileManager.default.fileExists(atPath: firstPreview.url.path) == false)
     }
 
     @Test
@@ -2829,6 +2935,130 @@ struct NetworkDetailViewControllerTests {
                 != firstPlayerID
         )
         #expect(model.selectedRequests.map(\.id) == [firstRequest.id, secondRequest.id])
+    }
+
+    @Test
+    func groupedPreviewFollowsNewerPlaylist() async throws {
+        let context = makeContext()
+        let frameID = FrameID("main-frame")
+        let nodeID = DOM.Node.ID("grouped-changing-playlist")
+        installNavigationVisit(in: context, frameID: frameID)
+        let firstRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "first-playlist",
+            url: "https://media.example.com/first.m3u8",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMIMEType: "application/vnd.apple.mpegurl",
+            resourceType: .media,
+            timestamp: 1
+        ))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(firstRequest)
+        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+            playerFactory.makePlayer
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == firstRequest.id
+                && viewController.syntaxBodyViewControllerForTesting
+                    .mediaPlayerURLForTesting?.absoluteString == firstRequest.url
+                && playerFactory.players.count == 1
+        })
+
+        let secondRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "second-playlist",
+            url: "https://media.example.com/second.m3u8",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMIMEType: "application/vnd.apple.mpegurl",
+            resourceType: .media,
+            timestamp: 4
+        ))
+
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == secondRequest.id
+                && viewController.syntaxBodyViewControllerForTesting
+                    .mediaPlayerURLForTesting?.absoluteString == secondRequest.url
+                && playerFactory.players.count == 2
+        })
+        #expect(model.selectedRequests.map(\.id) == [firstRequest.id, secondRequest.id])
+    }
+
+    @Test
+    func groupedPreviewTreatsPartialMediaAsAnOrdinaryMovieCandidate() async throws {
+        let context = makeContext()
+        let frameID = FrameID("main-frame")
+        let nodeID = DOM.Node.ID("grouped-partial-movie")
+        installNavigationVisit(in: context, frameID: frameID)
+        let fullRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "full",
+            url: "https://media.example.com/full.mp4",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "video/mp4"],
+            responseMIMEType: "video/mp4",
+            resourceType: .media,
+            timestamp: 1
+        ))
+        let ignoredRangeRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "ignored-range",
+            url: "https://media.example.com/ignored-range.mp4",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            requestHeaders: ["range": "bytes=0-1023"],
+            responseHeaders: ["content-type": "video/mp4"],
+            responseMIMEType: "video/mp4",
+            resourceType: .media,
+            timestamp: 2
+        ))
+        let partialRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "partial",
+            url: "https://media.example.com/partial.mp4",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            requestHeaders: ["range": "bytes=0-1023"],
+            responseHeaders: [
+                "content-type": "video/mp4",
+                "content-range": "bytes 0-1023/4096",
+            ],
+            responseMIMEType: "video/mp4",
+            responseStatus: 206,
+            resourceType: .media,
+            timestamp: 3
+        ))
+        for request in [fullRequest, ignoredRangeRequest, partialRequest] {
+            applyResponseBody(
+                to: context,
+                request: request,
+                body: "AAAA",
+                base64Encoded: true
+            )
+        }
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(partialRequest)
+        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+            playerFactory.makePlayer
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == partialRequest.id
+                && playerFactory.players.count == 1
+        })
     }
 
     @Test
