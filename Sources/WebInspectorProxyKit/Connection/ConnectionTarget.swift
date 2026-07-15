@@ -33,6 +33,7 @@ package extension ProtocolTarget {
     struct Record: Equatable, Sendable {
         package var id: ID
         package var kind: Kind
+        package var parentTargetID: ID?
         package var frameID: ProtocolFrame.ID?
         package var parentFrameID: ProtocolFrame.ID?
         package var advertisedDomains: Set<WebInspectorProtocolDomainToken>?
@@ -42,6 +43,7 @@ package extension ProtocolTarget {
         package init(
             id: ID,
             kind: Kind,
+            parentTargetID: ID? = nil,
             frameID: ProtocolFrame.ID? = nil,
             parentFrameID: ProtocolFrame.ID? = nil,
             advertisedDomains: Set<WebInspectorProtocolDomainToken>? = nil,
@@ -50,6 +52,7 @@ package extension ProtocolTarget {
         ) {
             self.id = id
             self.kind = kind
+            self.parentTargetID = parentTargetID
             self.frameID = frameID
             self.parentFrameID = parentFrameID
             self.advertisedDomains = advertisedDomains
@@ -58,7 +61,7 @@ package extension ProtocolTarget {
         }
 
         package var isTopLevelPage: Bool {
-            kind == .page && parentFrameID == nil
+            kind == .page && parentTargetID == nil && parentFrameID == nil
         }
     }
 }

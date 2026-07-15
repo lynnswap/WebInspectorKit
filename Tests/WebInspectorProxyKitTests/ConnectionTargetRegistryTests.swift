@@ -2,31 +2,22 @@ import Testing
 @testable import WebInspectorProxyKit
 
 @Test
-func targetKindUsesFrameTopologyForLegacyPageType() {
-    var registry = ConnectionTargetRegistry()
-    registry.insert(target(
-        "page-main",
-        kind: .page,
-        frameID: "main-frame"
-    ))
-
+func targetKindUsesTheProtocolTypeAndDeliveryTopology() {
+    let registry = ConnectionTargetRegistry()
+    #expect(registry.targetKind(
+        protocolType: "frame",
+        parentTargetID: nil,
+        parentFrameID: nil
+    ) == .frame)
     #expect(registry.targetKind(
         protocolType: "web-page",
-        frameID: ProtocolFrame.ID("child-frame"),
-        parentFrameID: ProtocolFrame.ID("main-frame"),
-        isProvisional: false
+        parentTargetID: ProtocolTarget.ID("page-main"),
+        parentFrameID: nil
     ) == .frame)
     #expect(registry.targetKind(
         protocolType: "page",
-        frameID: ProtocolFrame.ID("other-frame"),
-        parentFrameID: nil,
-        isProvisional: false
-    ) == .frame)
-    #expect(registry.targetKind(
-        protocolType: "page",
-        frameID: ProtocolFrame.ID("replacement-main-frame"),
-        parentFrameID: nil,
-        isProvisional: true
+        parentTargetID: nil,
+        parentFrameID: nil
     ) == .page)
 }
 
@@ -35,13 +26,11 @@ func topLevelCommitRetargetsTheLogicalPage() {
     var registry = ConnectionTargetRegistry()
     registry.insert(target(
         "page-old",
-        kind: .page,
-        frameID: "old-main-frame"
+        kind: .page
     ))
     registry.insert(target(
         "page-new",
         kind: .page,
-        frameID: "new-main-frame",
         isProvisional: true
     ))
 
@@ -63,27 +52,29 @@ func subframeCommitPreservesTheLogicalPageAndItsPhysicalTarget() {
     var registry = ConnectionTargetRegistry()
     registry.insert(target(
         "page-main",
-        kind: .page,
-        frameID: "main-frame"
+        kind: .page
+    ))
+    registry.insert(target(
+        "frame-old",
+        kind: .frame
     ))
     registry.insert(target(
         "frame-new",
         kind: .frame,
-        frameID: "child-frame",
-        parentFrameID: "main-frame",
         isProvisional: true
     ))
 
     let mutation = registry.commit(
-        old: ProtocolTarget.ID("page-main"),
+        old: ProtocolTarget.ID("frame-old"),
         new: ProtocolTarget.ID("frame-new")
     )
 
     #expect(!mutation.bindingChanged)
-    #expect(mutation.retiredTargetID == nil)
+    #expect(mutation.retiredTargetID == ProtocolTarget.ID("frame-old"))
     #expect(mutation.committedTargetID == ProtocolTarget.ID("frame-new"))
     #expect(registry.currentPageID == ProtocolTarget.ID("page-main"))
     #expect(registry.record(for: ProtocolTarget.ID("page-main")) != nil)
+    #expect(registry.record(for: ProtocolTarget.ID("frame-old")) == nil)
     #expect(registry.record(for: ProtocolTarget.ID("frame-new"))?.isProvisional == false)
 }
 
@@ -92,19 +83,16 @@ func currentPageSelectionIncludesFrameTargetsButNotWorkers() {
     var registry = ConnectionTargetRegistry()
     registry.insert(target(
         "page-main",
-        kind: .page,
-        frameID: "main-frame"
+        kind: .page
     ))
     registry.insert(target(
         "frame-one",
-        kind: .frame,
-        frameID: "child-frame",
-        parentFrameID: "main-frame"
+        kind: .frame
     ))
     registry.insert(target(
         "worker-one",
         kind: .worker,
-        frameID: "main-frame"
+        parentTargetID: "page-main"
     ))
 
     #expect(registry.selectedTargets(for: .currentPage) == [
@@ -114,51 +102,71 @@ func currentPageSelectionIncludesFrameTargetsButNotWorkers() {
 }
 
 @Test
-func currentPageSelectionExcludesProvisionalDescendantsUntilCommit() {
+func currentPageSelectionExcludesAProvisionalFrameUntilCommit() {
     var registry = ConnectionTargetRegistry()
     registry.insert(target(
         "page-main",
-        kind: .page,
-        frameID: "main-frame"
+        kind: .page
+    ))
+    registry.insert(target(
+        "frame-old",
+        kind: .frame
     ))
     registry.insert(target(
         "frame-new",
         kind: .frame,
-        frameID: "child-frame",
-        parentFrameID: "main-frame",
         isProvisional: true
-    ))
-    registry.insert(target(
-        "frame-descendant",
-        kind: .frame,
-        frameID: "grandchild-frame",
-        parentFrameID: "child-frame"
     ))
 
     #expect(registry.selectedTargets(for: .currentPage) == [
         ProtocolTarget.ID("page-main"),
+        ProtocolTarget.ID("frame-old"),
     ])
     _ = registry.commit(
-        old: ProtocolTarget.ID("page-main"),
+        old: ProtocolTarget.ID("frame-old"),
         new: ProtocolTarget.ID("frame-new")
     )
     #expect(registry.selectedTargets(for: .currentPage) == [
         ProtocolTarget.ID("page-main"),
         ProtocolTarget.ID("frame-new"),
-        ProtocolTarget.ID("frame-descendant"),
+    ])
+}
+
+@Test
+func currentPageDescendantSelectionFollowsNestedTargetDelivery() {
+    var registry = ConnectionTargetRegistry()
+    registry.insert(target("page-main", kind: .page))
+    registry.insert(target("frame-one", kind: .frame))
+    registry.insert(target(
+        "worker-one",
+        kind: .worker,
+        parentTargetID: "frame-one"
+    ))
+    registry.insert(target("service-worker", kind: .serviceWorker))
+
+    let selection = WebInspectorTargetSelectionPolicy.descendants(
+        kinds: [.frame, .worker, .serviceWorker],
+        includingAnchor: true
+    )
+    #expect(registry.selectedTargets(for: selection) == [
+        ProtocolTarget.ID("page-main"),
+        ProtocolTarget.ID("frame-one"),
+        ProtocolTarget.ID("worker-one"),
     ])
 }
 
 private func target(
     _ id: String,
     kind: ProtocolTarget.Kind,
-    frameID: String?,
+    parentTargetID: String? = nil,
+    frameID: String? = nil,
     parentFrameID: String? = nil,
     isProvisional: Bool = false
 ) -> ProtocolTarget.Record {
     ProtocolTarget.Record(
         id: ProtocolTarget.ID(id),
         kind: kind,
+        parentTargetID: parentTargetID.map { ProtocolTarget.ID($0) },
         frameID: frameID.map { ProtocolFrame.ID($0) },
         parentFrameID: parentFrameID.map { ProtocolFrame.ID($0) },
         isProvisional: isProvisional,

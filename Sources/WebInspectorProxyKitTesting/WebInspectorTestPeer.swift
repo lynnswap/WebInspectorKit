@@ -115,8 +115,7 @@ public actor WebInspectorTestPeer {
         /// The default committed main-page target installed by the test runtime.
         public static let initialPage = Target(
             id: "page-main",
-            type: "page",
-            frameID: "main-frame"
+            type: "page"
         )
 
         /// The physical target identifier.
@@ -237,11 +236,25 @@ public actor WebInspectorTestPeer {
     }
 
     /// Emits a raw `Target.targetCreated` event and waits until Core applies it.
-    public func createTarget(_ target: Target) async throws {
+    public func createTarget(
+        _ target: Target,
+        deliveredBy parentTargetID: String? = nil
+    ) async throws {
         let parameters = try WebInspectorTestJSONObject(encoding:
             TargetCreatedParameters(targetInfo: .init(target))
         )
-        try await emitRootEvent(method: "Target.targetCreated", parameters: parameters)
+        if let parentTargetID {
+            try await emitTargetEvent(
+                targetID: parentTargetID,
+                method: "Target.targetCreated",
+                parameters: parameters
+            )
+        } else {
+            try await emitRootEvent(
+                method: "Target.targetCreated",
+                parameters: parameters
+            )
+        }
     }
 
     /// Emits a raw `Target.didCommitProvisionalTarget` event and waits until

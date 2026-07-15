@@ -113,7 +113,7 @@ func compositeScopePreservesPageNetworkFIFOAndReplyBoundary() async throws {
     #expect(bootstrap.generation.rawValue == 1)
     #expect(bootstrap.semanticTarget?.id == .currentPage)
     #expect(bootstrap.semanticTarget?.kind == .page)
-    #expect(bootstrap.semanticTarget?.frameID?.rawValue == "main-frame")
+    #expect(bootstrap.semanticTarget?.frameID == nil)
     #expect(bootstrap.agentTarget?.id.rawValue == "page-main")
 
     try await runtime.peer.emitTargetEvent(
@@ -306,11 +306,10 @@ func descendantWorkerIsEnrolledAndEnabledAfterScopeRegistration() async throws {
         ),
         buffering: .bounded(4)
     )
-    try await runtime.peer.createTarget(.init(
-        id: "worker-one",
-        type: "worker",
-        frameID: "main-frame"
-    ))
+    try await runtime.peer.createTarget(
+        .init(id: "worker-one", type: "worker"),
+        deliveredBy: "page-main"
+    )
     try await replyNext(runtime.peer, method: "Runtime.enable", destination: .target("worker-one"))
 
     try await runtime.peer.emitTargetEvent(
@@ -333,14 +332,12 @@ func descendantWorkerIsEnrolledAndEnabledAfterScopeRegistration() async throws {
 }
 
 @Test
-func currentPageScopeIncludesWebPageTypedFrameDescendants() async throws {
+func currentPageScopeIncludesFrameTargetsWithoutInventedFrameMetadata() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     defer { Task { await runtime.close() } }
     try await runtime.peer.createTarget(.init(
         id: "frame-one",
-        type: "web-page",
-        frameID: "child-frame",
-        parentFrameID: "main-frame"
+        type: "frame"
     ))
 
     let scope = try await runtime.page.orderedScope(
@@ -370,14 +367,16 @@ func subframeCommitCannotConsumeTheCurrentPageBinding() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     defer { Task { await runtime.close() } }
     try await runtime.peer.createTarget(.init(
+        id: "frame-old",
+        type: "frame"
+    ))
+    try await runtime.peer.createTarget(.init(
         id: "frame-provisional",
-        type: "page",
-        frameID: "child-frame",
-        parentFrameID: "main-frame",
+        type: "frame",
         isProvisional: true
     ))
     try await runtime.peer.commitProvisionalTarget(
-        from: "page-main",
+        from: "frame-old",
         to: "frame-provisional"
     )
 
@@ -407,10 +406,12 @@ func provisionalTargetTrafficIsDeliveredOnlyAfterCommit() async throws {
     var iterator = scope.events.makeAsyncIterator()
 
     try await runtime.peer.createTarget(.init(
+        id: "frame-old",
+        type: "frame"
+    ))
+    try await runtime.peer.createTarget(.init(
         id: "frame-provisional",
-        type: "page",
-        frameID: "child-frame",
-        parentFrameID: "main-frame",
+        type: "frame",
         isProvisional: true
     ))
     try await runtime.peer.emitTargetEvent(
@@ -418,7 +419,7 @@ func provisionalTargetTrafficIsDeliveredOnlyAfterCommit() async throws {
         method: "DOM.documentUpdated"
     )
     try await runtime.peer.commitProvisionalTarget(
-        from: "page-main",
+        from: "frame-old",
         to: "frame-provisional"
     )
 

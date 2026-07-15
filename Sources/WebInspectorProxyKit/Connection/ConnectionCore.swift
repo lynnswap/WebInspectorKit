@@ -465,7 +465,11 @@ package actor ConnectionCore {
         deliveredBy targetID: ProtocolTarget.ID?
     ) async throws {
         let committedTargetID: ProtocolTarget.ID? = if method.domain.rawValue == "Target" {
-            try handleTargetControl(method: method, parameters: parameters)
+            try handleTargetControl(
+                method: method,
+                parameters: parameters,
+                deliveredBy: targetID
+            )
         } else {
             nil
         }
@@ -533,7 +537,8 @@ package actor ConnectionCore {
 
     private func handleTargetControl(
         method: WebInspectorProtocolMethod,
-        parameters: Data
+        parameters: Data,
+        deliveredBy parentTargetID: ProtocolTarget.ID?
     ) throws -> ProtocolTarget.ID? {
         switch method.rawValue {
         case "Target.targetCreated":
@@ -546,10 +551,10 @@ package actor ConnectionCore {
                 id: info.targetID,
                 kind: targets.targetKind(
                     protocolType: info.type,
-                    frameID: info.frameID,
-                    parentFrameID: info.parentFrameID,
-                    isProvisional: isProvisional
+                    parentTargetID: parentTargetID,
+                    parentFrameID: info.parentFrameID
                 ),
+                parentTargetID: parentTargetID,
                 frameID: info.frameID,
                 parentFrameID: info.parentFrameID,
                 advertisedDomains: info.domains.map { Set($0.map(WebInspectorProtocolDomainToken.init(rawValue:))) },

@@ -8,7 +8,6 @@ package struct ConnectionTargetRegistry: Sendable {
     }
 
     package private(set) var records: [ProtocolTarget.ID: ProtocolTarget.Record] = [:]
-    package private(set) var targetByFrame: [ProtocolFrame.ID: ProtocolTarget.ID] = [:]
     package private(set) var currentPageID: ProtocolTarget.ID?
 
     package init() {}
@@ -23,24 +22,12 @@ package struct ConnectionTargetRegistry: Sendable {
 
     package func targetKind(
         protocolType: String,
-        frameID: ProtocolFrame.ID?,
-        parentFrameID: ProtocolFrame.ID?,
-        isProvisional: Bool
+        parentTargetID: ProtocolTarget.ID?,
+        parentFrameID: ProtocolFrame.ID?
     ) -> ProtocolTarget.Kind {
         let protocolKind = ProtocolTarget.Kind(protocolType: protocolType)
         guard protocolKind == .page else { return protocolKind }
-        if parentFrameID != nil { return .frame }
-        if let frameID,
-           let existingTargetID = targetByFrame[frameID],
-           existingTargetID != currentPageID {
-            return .frame
-        }
-        if isProvisional { return .page }
-        if let currentFrameID = currentPage?.frameID,
-           let frameID,
-           frameID != currentFrameID {
-            return .frame
-        }
+        if parentTargetID != nil || parentFrameID != nil { return .frame }
         return .page
     }
 
@@ -48,9 +35,6 @@ package struct ConnectionTargetRegistry: Sendable {
     package mutating func insert(_ record: ProtocolTarget.Record) -> Bool {
         let hadCurrentPage = currentPageID != nil
         records[record.id] = record
-        if let frameID = record.frameID {
-            targetByFrame[frameID] = record.id
-        }
         if currentPageID == nil, record.isTopLevelPage, !record.isProvisional {
             currentPageID = record.id
         }
@@ -61,7 +45,6 @@ package struct ConnectionTargetRegistry: Sendable {
     package mutating func remove(_ id: ProtocolTarget.ID) -> Bool {
         let removedCurrentPage = currentPageID == id
         records.removeValue(forKey: id)
-        targetByFrame = targetByFrame.filter { $0.value != id }
         if removedCurrentPage {
             currentPageID = nil
         }
@@ -73,21 +56,6 @@ package struct ConnectionTargetRegistry: Sendable {
         old oldID: ProtocolTarget.ID,
         new newID: ProtocolTarget.ID
     ) -> CommitMutation {
-        if currentPageID == oldID,
-           var committedFrame = records[newID],
-           !committedFrame.isTopLevelPage {
-            committedFrame.isProvisional = false
-            records[newID] = committedFrame
-            if let frameID = committedFrame.frameID {
-                targetByFrame[frameID] = newID
-            }
-            return CommitMutation(
-                bindingChanged: false,
-                retiredTargetID: nil,
-                committedTargetID: newID
-            )
-        }
-
         let previousCurrentPageID = currentPageID
         let replacingCurrentPage = currentPageID == oldID
         let oldRecord = records.removeValue(forKey: oldID)
@@ -100,14 +68,11 @@ package struct ConnectionTargetRegistry: Sendable {
         }
 
         newRecord.id = newID
+        newRecord.parentTargetID = newRecord.parentTargetID ?? oldRecord?.parentTargetID
         newRecord.frameID = newRecord.frameID ?? oldRecord?.frameID
         newRecord.parentFrameID = newRecord.parentFrameID ?? oldRecord?.parentFrameID
         newRecord.isProvisional = false
         records[newID] = newRecord
-        targetByFrame = targetByFrame.filter { $0.value != oldID }
-        if let frameID = newRecord.frameID {
-            targetByFrame[frameID] = newID
-        }
         if replacingCurrentPage, newRecord.isTopLevelPage {
             currentPageID = newID
         } else if currentPageID == nil, newRecord.isTopLevelPage {
@@ -145,7 +110,12 @@ package struct ConnectionTargetRegistry: Sendable {
         for record in records.values where
             !record.isProvisional && policy.descendantKinds.contains(record.kind)
         {
-            if isDescendant(record, of: anchor) {
+            let isSelectedDescendant = if anchorID == currentPageID {
+                belongsToCurrentPage(record)
+            } else {
+                isDescendant(record, of: anchor)
+            }
+            if isSelectedDescendant {
                 selected.insert(record.id)
             }
         }
@@ -197,19 +167,35 @@ package struct ConnectionTargetRegistry: Sendable {
         of anchor: ProtocolTarget.Record
     ) -> Bool {
         guard candidate.id != anchor.id else { return false }
-        if candidate.frameID == anchor.frameID, anchor.frameID != nil { return true }
-        if candidate.parentFrameID == anchor.frameID, anchor.frameID != nil { return true }
-        guard var parentFrameID = candidate.parentFrameID else { return false }
-        var visited: Set<ProtocolFrame.ID> = []
-        while visited.insert(parentFrameID).inserted {
-            if parentFrameID == anchor.frameID { return true }
-            guard let parentTargetID = targetByFrame[parentFrameID],
-                  let parent = records[parentTargetID],
+        guard var parentTargetID = candidate.parentTargetID else { return false }
+        var visited: Set<ProtocolTarget.ID> = []
+        while visited.insert(parentTargetID).inserted {
+            if parentTargetID == anchor.id { return true }
+            guard let parent = records[parentTargetID],
                   !parent.isProvisional,
-                  let next = parent.parentFrameID else {
+                  let next = parent.parentTargetID else {
                 return false
             }
-            parentFrameID = next
+            parentTargetID = next
+        }
+        return false
+    }
+
+    private func belongsToCurrentPage(
+        _ candidate: ProtocolTarget.Record
+    ) -> Bool {
+        guard candidate.id != currentPageID else { return false }
+        if candidate.kind == .frame { return true }
+        guard var parentTargetID = candidate.parentTargetID else { return false }
+        var visited: Set<ProtocolTarget.ID> = []
+        while visited.insert(parentTargetID).inserted {
+            if parentTargetID == currentPageID { return true }
+            guard let parent = records[parentTargetID], !parent.isProvisional else {
+                return false
+            }
+            if parent.kind == .frame { return true }
+            guard let next = parent.parentTargetID else { return false }
+            parentTargetID = next
         }
         return false
     }
