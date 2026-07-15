@@ -20,6 +20,7 @@ package final class DOMPanelModel {
     @ObservationIgnored private var pickerStateTask: Task<Void, Never>?
     @ObservationIgnored private var pickerTask: Task<Void, Never>?
     @ObservationIgnored private var retirementTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingPickerSelectionID: DOMNode.ID?
     @ObservationIgnored private var isActive = true
 
     private init(
@@ -74,6 +75,7 @@ package final class DOMPanelModel {
         reveal: DOMRevealPolicy
     ) {
         guard isActive else { return }
+        pendingPickerSelectionID = nil
         guard let nodeID,
               nodeIDs.contains(nodeID),
               context.model(for: nodeID) != nil else {
@@ -99,6 +101,7 @@ package final class DOMPanelModel {
 
     package func cancelElementPicker() {
         guard isActive else { return }
+        pendingPickerSelectionID = nil
         pickerTask?.cancel()
         Task { [dom = context.container.dom] in
             await dom.cancelElementPicker()
@@ -112,6 +115,7 @@ package final class DOMPanelModel {
         }
         guard isActive else { return }
         isActive = false
+        pendingPickerSelectionID = nil
         let nodeUpdatesTask = nodeUpdatesTask
         let pickerStateTask = pickerStateTask
         let pickerTask = pickerTask
@@ -137,6 +141,7 @@ package final class DOMPanelModel {
 
     package func synchronouslyCancelForOwnerDeinit() {
         isActive = false
+        pendingPickerSelectionID = nil
         nodeUpdatesTask?.cancel()
         pickerStateTask?.cancel()
         pickerTask?.cancel()
@@ -168,13 +173,14 @@ package final class DOMPanelModel {
 
     private func startElementPicker() {
         guard pickerTask == nil else { return }
+        pendingPickerSelectionID = nil
         let dom = context.container.dom
         pickerTask = Task { @MainActor [weak self, dom] in
             defer { self?.pickerTask = nil }
             do {
                 let selectedID = try await dom.pickElement()
                 guard Task.isCancelled == false else { return }
-                self?.selectNode(selectedID, reveal: .selectAndScroll)
+                self?.receivePickerSelection(selectedID)
             } catch is CancellationError {
                 return
             } catch {
@@ -186,12 +192,28 @@ package final class DOMPanelModel {
     }
 
     private func reconcileSelectionMembership() {
-        guard let selection else { return }
-        guard nodeIDs.contains(selection.nodeID),
-              context.model(for: selection.nodeID) != nil else {
+        if let selection,
+           !hasPublishedNode(selection.nodeID) {
             publishSelection(nil, reveal: .none)
-            return
         }
+        publishPendingPickerSelectionIfAvailable()
+    }
+
+    private func receivePickerSelection(_ nodeID: DOMNode.ID) {
+        guard isActive else { return }
+        pendingPickerSelectionID = nodeID
+        publishPendingPickerSelectionIfAvailable()
+    }
+
+    private func publishPendingPickerSelectionIfAvailable() {
+        guard let nodeID = pendingPickerSelectionID,
+              hasPublishedNode(nodeID) else { return }
+        pendingPickerSelectionID = nil
+        publishSelection(nodeID, reveal: .selectAndScroll)
+    }
+
+    private func hasPublishedNode(_ nodeID: DOMNode.ID) -> Bool {
+        nodeIDs.contains(nodeID) && context.model(for: nodeID) != nil
     }
 
     private func publishSelection(
@@ -227,5 +249,12 @@ package final class DOMPanelModel {
 
     #if DEBUG
     package var isRetiredForTesting: Bool { isActive == false }
+    package var pendingPickerSelectionIDForTesting: DOMNode.ID? {
+        pendingPickerSelectionID
+    }
+
+    package func receivePickerSelectionForTesting(_ nodeID: DOMNode.ID) {
+        receivePickerSelection(nodeID)
+    }
     #endif
 }
