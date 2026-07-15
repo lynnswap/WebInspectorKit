@@ -19,6 +19,7 @@ func runtimeObjectScopeOwnsEvaluationPropertiesAndClose() async throws {
             with: try consoleRuntimeResourceTreeResult()
         )
         try await container.attach(owning: runtime.proxy)
+        #expect(await waitForRuntimeReady(in: container))
 
         do {
             await runtime.wire.respond(
@@ -76,6 +77,19 @@ func runtimeObjectScopeOwnsEvaluationPropertiesAndClose() async throws {
             throw error
         }
     }
+}
+
+@MainActor
+private func waitForRuntimeReady(
+    in container: WebInspectorModelContainer
+) async -> Bool {
+    for _ in 0..<1_000 {
+        if case .ready = container.runtime.state {
+            return true
+        }
+        await Task.yield()
+    }
+    return false
 }
 
 private func consoleRuntimeResourceTreeResult() throws

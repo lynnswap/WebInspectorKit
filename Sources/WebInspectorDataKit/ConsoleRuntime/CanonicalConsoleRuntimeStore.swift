@@ -175,6 +175,26 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
         ]
     }
 
+    package func frameTargetNormalContextRequiresReplacement(
+        _ context: Runtime.ExecutionContext,
+        scope: WebInspectorConsoleRuntimeEventScope
+    ) -> Bool {
+        guard scope.agentTarget.kind == .frame,
+            context.kind == .normal
+        else {
+            return false
+        }
+        return (runtimeContextIDsByAgentTargetID[scope.agentTarget.id] ?? [])
+            .contains { id in
+                guard let record = runtimeContextsByID[id] else {
+                    preconditionFailure(
+                        "Canonical Runtime agent index lost a record."
+                    )
+                }
+                return record.kind == .normal
+            }
+    }
+
     package func unresolvedConsoleMessageIDs(
         for rawRequestID: Network.Request.ID
     ) -> Set<CanonicalConsoleMessageIDStorage> {
@@ -540,7 +560,8 @@ package struct CanonicalConsoleRuntimeStore: Equatable, Sendable {
         _ frameID: FrameID
     ) -> CanonicalConsoleRuntimeTransaction {
         return CanonicalConsoleRuntimeTransaction(
-            runtimeContextChanges: removeRuntimeContexts(inFrame: frameID)
+            runtimeContextChanges: removeRuntimeContexts(inFrame: frameID),
+            resourceInvalidations: [.frameNavigated(frameID)]
         )
     }
 

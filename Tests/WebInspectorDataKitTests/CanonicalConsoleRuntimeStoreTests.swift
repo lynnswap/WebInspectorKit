@@ -34,6 +34,8 @@ private struct CanonicalConsoleRuntimeFixture {
     func scope(
         semanticTargetID: String = "page",
         agentTargetID: String? = nil,
+        semanticTargetKind: WebInspectorFeatureTarget.Kind? = nil,
+        agentTargetKind: WebInspectorFeatureTarget.Kind = .page,
         navigationEpoch: UInt64 = 1,
         runtimeBindingEpoch: UInt64? = 1,
         consoleBindingEpoch: UInt64? = 1,
@@ -44,13 +46,14 @@ private struct CanonicalConsoleRuntimeFixture {
             generation: pageGeneration ?? self.pageGeneration,
             semanticTarget: WebInspectorFeatureTarget(
                 id: WebInspectorTarget.ID(semanticTargetID),
-                kind: semanticTargetID == agentTargetID ? .page : .frame,
-                frameID: FrameID("frame-\(semanticTargetID)")
+                kind: semanticTargetKind
+                    ?? (semanticTargetID == agentTargetID ? .page : .frame),
+                frameID: nil
             ),
             agentTarget: WebInspectorFeatureTarget(
                 id: WebInspectorTarget.ID(agentTargetID),
-                kind: .page,
-                frameID: FrameID("frame-\(agentTargetID)")
+                kind: agentTargetKind,
+                frameID: nil
             )
         )
         return WebInspectorConsoleRuntimeEventScope(
@@ -626,13 +629,99 @@ func canonicalFrameNavigationDeletesOnlyThatFramesRuntimeContexts() throws {
     let transaction = fixture.store.frameWasNavigated(FrameID("frame-a"))
 
     #expect(transaction.runtimeContextChanges.count == 1)
-    #expect(transaction.resourceInvalidations.isEmpty)
+    #expect(
+        transaction.resourceInvalidations == [
+            .frameNavigated(FrameID("frame-a"))
+        ]
+    )
     #expect(
         Set(fixture.store.snapshot().runtimeContexts.map(\.record.id.rawContextID))
             == [
                 Runtime.ExecutionContext.ID("main-context"),
                 Runtime.ExecutionContext.ID("frame-b-context"),
             ]
+    )
+}
+
+@Test
+func canonicalFrameTargetNormalContextReplacementRequiresNoTargetFrameMetadata() throws {
+    var fixture = try CanonicalConsoleRuntimeFixture()
+    let scope = fixture.scope(
+        semanticTargetID: "frame-target",
+        semanticTargetKind: .frame,
+        agentTargetKind: .frame
+    )
+    _ = try fixture.store.reduceRuntime(
+        .executionContextCreated(
+            canonicalRuntimeContext(
+                id: "normal-old",
+                frameID: "owned-frame"
+            )
+        ),
+        scope: scope
+    )
+    _ = try fixture.store.reduceRuntime(
+        .executionContextCreated(
+            canonicalRuntimeContext(
+                id: "user-context",
+                frameID: "owned-frame",
+                kind: .user
+            )
+        ),
+        scope: scope
+    )
+
+    #expect(
+        fixture.store.frameTargetNormalContextRequiresReplacement(
+            canonicalRuntimeContext(
+                id: "normal-new",
+                frameID: "owned-frame"
+            ),
+            scope: scope
+        )
+    )
+    #expect(
+        !fixture.store.frameTargetNormalContextRequiresReplacement(
+            canonicalRuntimeContext(
+                id: "user-new",
+                frameID: "owned-frame",
+                kind: .user
+            ),
+            scope: scope
+        )
+    )
+
+    let replacementScope = fixture.scope(
+        semanticTargetID: "frame-target",
+        semanticTargetKind: .frame,
+        agentTargetKind: .frame,
+        navigationEpoch: 2,
+        runtimeBindingEpoch: 2
+    )
+    let runtimeBoundary = try #require(
+        try fixture.store.runtimeBindingDidAdvance(scope: replacementScope)
+    )
+    let navigationBoundary = try #require(
+        try fixture.store.semanticTargetNavigated(scope: replacementScope)
+    )
+    _ = try fixture.store.reduceRuntime(
+        .executionContextCreated(
+            canonicalRuntimeContext(
+                id: "normal-new",
+                frameID: "owned-frame"
+            )
+        ),
+        scope: replacementScope
+    )
+
+    #expect(runtimeBoundary.resourceInvalidations.count == 1)
+    #expect(navigationBoundary.runtimeContextChanges.count == 2)
+    #expect(
+        fixture.store.snapshot().runtimeContexts.map(\.record.name) == ["main"]
+    )
+    #expect(
+        fixture.store.snapshot().runtimeContexts.map(\.record.id.rawContextID)
+            == [Runtime.ExecutionContext.ID("normal-new")]
     )
 }
 

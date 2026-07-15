@@ -325,6 +325,7 @@ package enum CanonicalConsoleRuntimeResourceInvalidation: Equatable, Sendable {
         semanticTargetID: WebInspectorTarget.ID,
         navigationEpoch: WebInspectorNavigationEpoch
     )
+    case frameNavigated(FrameID)
     case frameDetached(FrameID)
     case targetLost(WebInspectorTarget.ID)
     case attachmentDetached(
