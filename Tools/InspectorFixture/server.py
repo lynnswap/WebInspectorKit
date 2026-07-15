@@ -8,12 +8,24 @@ import json
 import socket
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit
 
 
 CARD_COUNT: Final = 2_305
 MUTATION_EVENT_COUNT: Final = 2_305
+MEDIA_SEGMENT: Final = (Path(__file__).parent / "assets" / "fixture.ts").read_bytes()
+HLS_PLAYLIST: Final = b"""#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:1
+#EXT-X-MEDIA-SEQUENCE:0
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-INDEPENDENT-SEGMENTS
+#EXTINF:1.000,
+/media/fixture.ts
+#EXT-X-ENDLIST
+"""
 
 
 def _cards(count: int = CARD_COUNT) -> str:
@@ -50,6 +62,7 @@ def page_a() -> bytes:
     </div>
     <nav aria-label="Fixture navigation">
       <a id="navigate-b" href="/b">Navigate to page B</a>
+      <a id="target-blank" href="/b?source=target-blank" target="_blank" rel="opener">Open page B in target blank</a>
       <button id="mutation-burst" type="button">Emit {MUTATION_EVENT_COUNT} DOM mutations</button>
       <button id="replace-feed" type="button">Replace dynamic feed</button>
     </nav>
@@ -60,6 +73,26 @@ def page_a() -> bytes:
       <button id="picker-target" class="picker-target" type="button">
         Pick me and inspect computed styles
       </button>
+      <section class="fixture-feature-controls" aria-label="Interactive inspector targets">
+        <div class="fixture-control-group">
+          <h2>JavaScript dialogs</h2>
+          <button id="dialog-alert" type="button">Show alert</button>
+          <button id="dialog-confirm" type="button">Show confirm</button>
+          <button id="dialog-prompt" type="button">Show prompt</button>
+          <output id="dialog-status" aria-live="polite">Dialogs idle</output>
+        </div>
+        <div class="fixture-control-group">
+          <h2>Request and response bodies</h2>
+          <button id="post-round-trip" type="button">Send local JSON POST</button>
+          <output id="post-status" aria-live="polite">POST idle</output>
+        </div>
+        <div class="fixture-control-group">
+          <h2>Local HLS movie</h2>
+          <button id="load-movie-preview" type="button">Load local HLS movie</button>
+          <output id="movie-status" aria-live="polite">Movie idle</output>
+          <video id="fixture-movie" controls preload="none" playsinline width="160" height="90" aria-label="Finite local HLS fixture"></video>
+        </div>
+      </section>
       <fixture-shadow id="shadow-host"></fixture-shadow>
       <iframe id="fixture-frame" src="/frame" title="Same-origin fixture frame"></iframe>
       <img id="redirect-image" src="/redirect-image" alt="Redirected fixture image" width="160" height="90">
@@ -140,12 +173,20 @@ button, a { font: inherit; }
 #network-status { margin-left: 8px; opacity: .65; }
 .fixture-diagnostics { display: grid; gap: 12px; padding: 20px; }
 .picker-target {
+  --fixture-used-color: #13276c;
+  --fixture-unused-color: #d52b72;
+  --fixture-unused-spacing: 17px;
   position: relative; width: min(420px, 100%); padding: 22px 30px;
   border: 4px solid #2d57d8; border-radius: 18px; background: #dfe7ff;
-  color: #13276c; font-weight: 700; box-shadow: 0 8px 30px #2d57d833;
+  color: var(--fixture-used-color); font-weight: 700; box-shadow: 0 8px 30px #2d57d833;
 }
 .picker-target::before { content: "::before"; color: #ca3767; margin-right: 8px; }
 .picker-target::after { content: "::after"; color: #137b58; margin-left: 8px; }
+.fixture-feature-controls { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.fixture-control-group { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; padding: 12px; border: 1px solid #8885; border-radius: 12px; }
+.fixture-control-group h2 { flex-basis: 100%; margin: 0; font-size: 15px; }
+.fixture-control-group output { flex-basis: 100%; font-size: 12px; opacity: .72; }
+#fixture-movie { display: block; background: #182047; border-radius: 8px; }
 fixture-shadow { display: block; padding: 12px; border: 2px dashed #7d53c5; }
 #fixture-frame { width: min(560px, 100%); height: 150px; border: 2px solid #b4781d; }
 #redirect-image { width: 160px; height: 90px; object-fit: cover; }
@@ -216,9 +257,65 @@ function replaceDynamicFeed() {{
   feed.replaceChildren(fragment);
 }}
 
+function runAlertDialog() {{
+  alert("Inspector fixture alert");
+  document.querySelector("#dialog-status").textContent = "Alert dismissed";
+}}
+
+function runConfirmDialog() {{
+  const accepted = confirm("Inspector fixture confirm?");
+  document.querySelector("#dialog-status").textContent = accepted
+    ? "Confirm accepted"
+    : "Confirm declined";
+}}
+
+function runPromptDialog() {{
+  const value = prompt("Inspector fixture prompt", "fixture default");
+  document.querySelector("#dialog-status").textContent = value === null
+    ? "Prompt cancelled"
+    : `Prompt value: ${{value}}`;
+}}
+
+async function postRoundTrip() {{
+  const status = document.querySelector("#post-status");
+  status.textContent = "POST pending";
+  const response = await fetch("/api/echo", {{
+    method: "POST",
+    headers: {{
+      "Content-Type": "application/json",
+      "X-Inspector-Fixture-Request": "post-round-trip",
+    }},
+    body: JSON.stringify({{
+      fixture: "request-body",
+      sequence: 1,
+      items: ["alpha", "beta"],
+    }}),
+  }});
+  if (!response.ok) {{
+    throw new Error(`POST failed with HTTP ${{response.status}}`);
+  }}
+  const value = await response.json();
+  status.textContent = `POST complete: ${{value.fixture}} received ${{value.received.fixture}}`;
+}}
+
+function loadMoviePreview() {{
+  const video = document.querySelector("#fixture-movie");
+  video.src = "/media/fixture.m3u8";
+  video.load();
+  document.querySelector("#movie-status").textContent = "Local HLS requested";
+}}
+
 window.runInspectorMutationBurst = emitMutationBurst;
 document.querySelector("#mutation-burst").addEventListener("click", emitMutationBurst);
 document.querySelector("#replace-feed").addEventListener("click", replaceDynamicFeed);
+document.querySelector("#dialog-alert").addEventListener("click", runAlertDialog);
+document.querySelector("#dialog-confirm").addEventListener("click", runConfirmDialog);
+document.querySelector("#dialog-prompt").addEventListener("click", runPromptDialog);
+document.querySelector("#post-round-trip").addEventListener("click", postRoundTrip);
+document.querySelector("#load-movie-preview").addEventListener("click", loadMoviePreview);
+document.querySelector("#fixture-movie").addEventListener("loadedmetadata", () => {{
+  document.querySelector("#movie-status").textContent = "Local HLS metadata loaded";
+}});
 exerciseNetwork();
 """.encode("utf-8")
 
@@ -271,6 +368,10 @@ class InspectorFixtureHandler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.OK, "text/javascript; charset=utf-8", PAGE_B_JS)
         elif path == "/assets/image.svg":
             self._send(HTTPStatus.OK, "image/svg+xml", IMAGE_SVG)
+        elif path == "/media/fixture.m3u8":
+            self._send(HTTPStatus.OK, "application/vnd.apple.mpegurl", HLS_PLAYLIST)
+        elif path == "/media/fixture.ts":
+            self._send(HTTPStatus.OK, "video/mp2t", MEDIA_SEGMENT)
         elif path == "/api/data":
             self._send(HTTPStatus.OK, "application/json", JSON_DATA)
         elif path == "/api/detail":
@@ -289,6 +390,55 @@ class InspectorFixtureHandler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.OK, "text/plain; charset=utf-8", b"ok\n")
         else:
             self._send(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8", b"not found\n")
+
+    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        body = self._read_request_body()
+        if body is None:
+            return
+
+        path = urlsplit(self.path).path
+        if path != "/api/echo":
+            self._send(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8", b"not found\n")
+            return
+
+        try:
+            request_value = json.loads(body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._send(HTTPStatus.BAD_REQUEST, "text/plain; charset=utf-8", b"invalid json\n")
+            return
+
+        response = json.dumps(
+            {
+                "fixture": "response-body",
+                "received": request_value,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        self._send(HTTPStatus.OK, "application/json", response)
+
+    def _read_request_body(self) -> bytes | None:
+        content_length = self.headers.get("Content-Length")
+        if content_length is None:
+            self._send(
+                HTTPStatus.LENGTH_REQUIRED,
+                "text/plain; charset=utf-8",
+                b"content length required\n",
+            )
+            return None
+
+        try:
+            length = int(content_length)
+        except ValueError:
+            length = -1
+        if length < 0:
+            self._send(
+                HTTPStatus.BAD_REQUEST,
+                "text/plain; charset=utf-8",
+                b"invalid content length\n",
+            )
+            return None
+        return self.rfile.read(length)
 
     def _send(self, status: HTTPStatus, content_type: str, body: bytes) -> None:
         self.send_response(status)
