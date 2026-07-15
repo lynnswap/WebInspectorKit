@@ -78,6 +78,22 @@ public final class WebInspectorContext {
         var intent: Intent
     }
 
+    private struct StyleTrackingKey: Hashable {
+        var targetID: WebInspectorTarget.ID
+        var pageBindingID: String?
+
+        init(_ target: WebInspectorTarget) {
+            targetID = target.id
+            pageBindingID = target.pageBindingID
+        }
+    }
+
+    private struct StyleTrackingAcquisition {
+        var generation: UInt64
+        var target: WebInspectorTarget
+        var task: Task<Void, any Error>
+    }
+
 #if DEBUG
     private struct EventPumpAppliedWaiterForTesting {
         var minimumSequence: UInt64
@@ -156,6 +172,9 @@ public final class WebInspectorContext {
     private var styleRefreshGeneration: Int
     private var isStyleHydrationActive: Bool
     private var styleToggleTasks: [CSSStyleProperty.ID: Task<Void, Never>]
+    private var styleTrackingTargets: [StyleTrackingKey: WebInspectorTarget]
+    private var styleTrackingAcquisitions: [StyleTrackingKey: StyleTrackingAcquisition]
+    private var nextStyleTrackingAcquisitionGeneration: UInt64
     private var eventPumps: [WebInspectorEventPump]
 #if DEBUG
     private var eventPumpAppliedSequenceForTestingStorage: UInt64
@@ -163,6 +182,7 @@ public final class WebInspectorContext {
     private var nextEventPumpAppliedWaiterIDForTesting: UInt64
 #endif
     private var inspectorTrackingTarget: WebInspectorTarget?
+    private var pageTrackingTarget: WebInspectorTarget?
     private var networkTrackingTarget: WebInspectorTarget?
     private var runtimeTrackingTarget: WebInspectorTarget?
     private var consoleTrackingTarget: WebInspectorTarget?
@@ -226,6 +246,9 @@ public final class WebInspectorContext {
         styleRefreshGeneration = 0
         isStyleHydrationActive = false
         styleToggleTasks = [:]
+        styleTrackingTargets = [:]
+        styleTrackingAcquisitions = [:]
+        nextStyleTrackingAcquisitionGeneration = 0
         eventPumps = []
 #if DEBUG
         eventPumpAppliedSequenceForTestingStorage = 0
@@ -233,6 +256,7 @@ public final class WebInspectorContext {
         nextEventPumpAppliedWaiterIDForTesting = 0
 #endif
         inspectorTrackingTarget = nil
+        pageTrackingTarget = nil
         networkTrackingTarget = nil
         runtimeTrackingTarget = nil
         consoleTrackingTarget = nil
@@ -289,6 +313,9 @@ public final class WebInspectorContext {
         inspectedNodeHighlightTask?.cancel()
         cancelFrameDocumentLoadTasks()
         styleRefreshTask?.cancel()
+        for acquisition in styleTrackingAcquisitions.values {
+            acquisition.task.cancel()
+        }
         for task in styleToggleTasks.values {
             task.cancel()
         }
@@ -1456,6 +1483,14 @@ public final class WebInspectorContext {
             guard isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
+            try await enablePageTracking(on: target, generation: generation, isolation: isolation)
+            guard Task.isCancelled == false else {
+                await disableEnabledDomainsAfterCancellation(isolation: isolation)
+                return
+            }
+            guard isCurrentPageGeneration(generation, isolation: isolation) else {
+                return
+            }
             try await enableRuntimeTracking(on: target, generation: generation, isolation: isolation)
             guard Task.isCancelled == false else {
                 await disableEnabledDomainsAfterCancellation(isolation: isolation)
@@ -1544,9 +1579,14 @@ public final class WebInspectorContext {
 
     private func discardCurrentPageDomainLeases(isolation: isolated (any Actor)) async {
         _ = isolation
+        await discardStyleTrackingLeases(isolation: isolation)
         if let target = inspectorTrackingTarget {
             inspectorTrackingTarget = nil
             await domainEnablement.discardLease(.inspector, on: target)
+        }
+        if let target = pageTrackingTarget {
+            pageTrackingTarget = nil
+            await domainEnablement.discardLease(.page, on: target)
         }
         if let target = runtimeTrackingTarget {
             runtimeTrackingTarget = nil
@@ -1590,6 +1630,20 @@ public final class WebInspectorContext {
         runtimeTrackingTarget = target
     }
 
+    private func enablePageTracking(
+        on target: WebInspectorTarget,
+        generation: Int,
+        isolation: isolated (any Actor)
+    ) async throws {
+        _ = isolation
+        try await domainEnablement.acquire(.page, on: target)
+        guard isCurrentPageGeneration(generation, isolation: isolation) else {
+            await releaseLateAcquiredDomain(.page, on: target, isolation: isolation)
+            return
+        }
+        pageTrackingTarget = target
+    }
+
     private func enableConsoleTracking(
         on target: WebInspectorTarget,
         generation: Int,
@@ -1616,6 +1670,146 @@ public final class WebInspectorContext {
             return
         }
         networkTrackingTarget = target
+    }
+
+    private func ensureStyleTracking(
+        on target: WebInspectorTarget,
+        isolation: isolated (any Actor)
+    ) async throws -> Bool {
+        _ = isolation
+        let key = StyleTrackingKey(target)
+        if styleTrackingTargets[key] != nil {
+            return true
+        }
+
+        let acquisition: StyleTrackingAcquisition
+        if let existing = styleTrackingAcquisitions[key] {
+            acquisition = existing
+        } else {
+            let generation = nextStyleTrackingAcquisitionGeneration
+            nextStyleTrackingAcquisitionGeneration += 1
+            let registry = domainEnablement
+            let task = Task<Void, any Error> {
+                try await registry.acquireStyleAccess(on: target)
+            }
+            acquisition = StyleTrackingAcquisition(
+                generation: generation,
+                target: target,
+                task: task
+            )
+            styleTrackingAcquisitions[key] = acquisition
+        }
+
+        do {
+            try await acquisition.task.value
+        } catch {
+            if styleTrackingAcquisitions[key]?.generation == acquisition.generation {
+                styleTrackingAcquisitions[key] = nil
+            }
+            throw error
+        }
+
+        if styleTrackingTargets[key] != nil {
+            return true
+        }
+        guard styleTrackingAcquisitions[key]?.generation == acquisition.generation else {
+            return false
+        }
+        styleTrackingAcquisitions[key] = nil
+        styleTrackingTargets[key] = target
+        return true
+    }
+
+    private func discardStyleTrackingLeases(isolation: isolated (any Actor)) async {
+        _ = isolation
+        let enabledTargets = sortedStyleTrackingTargets(Array(styleTrackingTargets.values))
+        let pendingAcquisitions = styleTrackingAcquisitions.values.sorted {
+            styleTrackingSortKey($0.target) < styleTrackingSortKey($1.target)
+        }
+        styleTrackingTargets = [:]
+        styleTrackingAcquisitions = [:]
+
+        for target in enabledTargets {
+            await domainEnablement.discardStyleAccess(on: target)
+        }
+        for acquisition in pendingAcquisitions {
+            do {
+                try await acquisition.task.value
+                await domainEnablement.discardStyleAccess(on: acquisition.target)
+            } catch {
+                // No release is valid here: a failed registry acquisition
+                // never creates a lease.
+            }
+        }
+    }
+
+    private func discardStyleTrackingLeases(forDestroyedTargetID targetID: WebInspectorTarget.ID) {
+        let enabledKeys = styleTrackingTargets.keys.filter { $0.targetID == targetID }
+        let enabledTargets = sortedStyleTrackingTargets(enabledKeys.compactMap { key in
+            styleTrackingTargets.removeValue(forKey: key)
+        })
+        let pendingKeys = styleTrackingAcquisitions.keys.filter { $0.targetID == targetID }
+        let pendingAcquisitions = pendingKeys.compactMap { key in
+            styleTrackingAcquisitions.removeValue(forKey: key)
+        }.sorted {
+            styleTrackingSortKey($0.target) < styleTrackingSortKey($1.target)
+        }
+        guard enabledTargets.isEmpty == false || pendingAcquisitions.isEmpty == false else {
+            return
+        }
+
+        let registry = domainEnablement
+        Task {
+            for target in enabledTargets {
+                await registry.discardStyleAccess(on: target)
+            }
+            for acquisition in pendingAcquisitions {
+                do {
+                    try await acquisition.task.value
+                    await registry.discardStyleAccess(on: acquisition.target)
+                } catch {
+                    // No release is valid here: a failed registry acquisition
+                    // never creates a lease.
+                }
+            }
+        }
+    }
+
+    private func disableStyleTracking(isolation: isolated (any Actor)) async -> WebInspectorProxyError? {
+        _ = isolation
+        let enabledTargets = sortedStyleTrackingTargets(Array(styleTrackingTargets.values))
+        let pendingAcquisitions = styleTrackingAcquisitions.values.sorted {
+            styleTrackingSortKey($0.target) < styleTrackingSortKey($1.target)
+        }
+        styleTrackingTargets = [:]
+        styleTrackingAcquisitions = [:]
+
+        var firstError: WebInspectorProxyError?
+        for target in enabledTargets {
+            if let error = await domainEnablement.releaseStyleAccess(on: target), firstError == nil {
+                firstError = error
+            }
+        }
+        for acquisition in pendingAcquisitions {
+            do {
+                try await acquisition.task.value
+                if let error = await domainEnablement.releaseStyleAccess(on: acquisition.target), firstError == nil {
+                    firstError = error
+                }
+            } catch {
+                // No release is valid here: a failed registry acquisition
+                // never creates a lease.
+            }
+        }
+        return firstError
+    }
+
+    private func sortedStyleTrackingTargets(_ targets: [WebInspectorTarget]) -> [WebInspectorTarget] {
+        targets.sorted { styleTrackingSortKey($0) < styleTrackingSortKey($1) }
+    }
+
+    private func styleTrackingSortKey(_ target: WebInspectorTarget) -> String {
+        "\(target.id.rawValue)\u{0}\(target.pageBindingID ?? "")"
     }
 
     private func releaseLateAcquiredDomain(
@@ -1695,10 +1889,12 @@ public final class WebInspectorContext {
         isolation: isolated (any Actor)
     ) async -> WebInspectorProxyError? {
         let consoleError = await disableConsoleTracking(isolation: isolation)
+        let styleError = await disableStyleTracking(isolation: isolation)
         let runtimeError = await disableRuntimeTracking(isolation: isolation)
         let networkError = await disableNetworkTracking(isolation: isolation)
+        let pageError = await disablePageTracking(isolation: isolation)
         let inspectorError = await disableInspectorTracking(isolation: isolation)
-        return consoleError ?? runtimeError ?? networkError ?? inspectorError
+        return consoleError ?? styleError ?? runtimeError ?? networkError ?? pageError ?? inspectorError
     }
 
     private func disableInspectorTracking(
@@ -1721,6 +1917,17 @@ public final class WebInspectorContext {
         }
         consoleTrackingTarget = nil
         return await domainEnablement.release(.console, on: target)
+    }
+
+    private func disablePageTracking(
+        isolation: isolated (any Actor)
+    ) async -> WebInspectorProxyError? {
+        _ = isolation
+        guard let target = pageTrackingTarget else {
+            return nil
+        }
+        pageTrackingTarget = nil
+        return await domainEnablement.release(.page, on: target)
     }
 
     private func disableRuntimeTracking(
@@ -2270,6 +2477,10 @@ extension WebInspectorContext {
             guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
+            try await enablePageTracking(on: target, generation: generation, isolation: isolation)
+            guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
+                return
+            }
             try await enableRuntimeTracking(on: target, generation: generation, isolation: isolation)
             guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
@@ -2338,6 +2549,7 @@ extension WebInspectorContext {
         isolation: isolated (any Actor)
     ) {
         guard targetID == .currentPage else {
+            discardStyleTrackingLeases(forDestroyedTargetID: targetID)
             return
         }
         guard currentPage != nil else {
@@ -3364,15 +3576,25 @@ extension WebInspectorContext {
         guard isCurrentStyleRefresh(node: node, generation: generation) else {
             return
         }
-        guard let currentPage else {
+        guard currentPage != nil else {
             styles.markUnavailable()
             return
         }
 
         do {
-            guard let payloads = try await selectedStylePayloadsWithCSSAgentCompatibility(
+            let target = try domTarget(owning: node.id.proxyID)
+            guard try await ensureStyleTracking(on: target, isolation: isolation) else {
+                if isCurrentStyleRefresh(node: node, generation: generation) {
+                    styles.markUnavailable()
+                }
+                return
+            }
+            guard isCurrentStyleRefresh(node: node, generation: generation) else {
+                return
+            }
+            guard let payloads = try await selectedStylePayloads(
                 for: node,
-                target: currentPage,
+                target: target,
                 generation: generation,
                 isolation: isolation
             ) else { return }
@@ -3395,43 +3617,6 @@ extension WebInspectorContext {
                 method: "getMatchedStylesForNode/getInlineStylesForNode/getComputedStyleForNode",
                 message: String(describing: error)
             ))
-        }
-    }
-
-    private func selectedStylePayloadsWithCSSAgentCompatibility(
-        for node: DOMNode,
-        target: WebInspectorTarget,
-        generation: Int,
-        isolation: isolated (any Actor) = #isolation
-    ) async throws -> SelectedStylePayloads? {
-        _ = isolation
-        do {
-            return try await selectedStylePayloads(
-                for: node,
-                target: target,
-                generation: generation,
-                isolation: isolation
-            )
-        } catch let error as WebInspectorProxyError {
-            guard shouldRetrySelectedStyleLoadAfterEnablingCSSAgent(error) else {
-                throw error
-            }
-            guard isCurrentStyleRefresh(node: node, generation: generation) else {
-                return nil
-            }
-            // Enable the CSS agent that rejected the style reads: for a
-            // frame-owned node that is the frame target, not the semantic
-            // current page the reads were retargeted away from.
-            try await domTarget(owning: node.id.proxyID).css.enable()
-            guard isCurrentStyleRefresh(node: node, generation: generation) else {
-                return nil
-            }
-            return try await selectedStylePayloads(
-                for: node,
-                target: target,
-                generation: generation,
-                isolation: isolation
-            )
         }
     }
 
@@ -3459,20 +3644,6 @@ extension WebInspectorContext {
             inlineStyles: inlineStyles,
             computedProperties: computedProperties
         )
-    }
-
-    private func shouldRetrySelectedStyleLoadAfterEnablingCSSAgent(_ error: WebInspectorProxyError) -> Bool {
-        guard case let .commandFailed(domain, method, message) = error,
-              domain == "CSS",
-              [
-                "getMatchedStylesForNode",
-                "getInlineStylesForNode",
-                "getComputedStyleForNode",
-              ].contains(method) else {
-            return false
-        }
-
-        return message.lowercased().contains("enable")
     }
 
     private func isCurrentStyleRefresh(node: DOMNode, generation: Int) -> Bool {

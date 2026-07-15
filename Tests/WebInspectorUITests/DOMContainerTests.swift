@@ -1382,6 +1382,7 @@ struct DOMContainerTests {
     private func enqueueLiveStartupReplies(on backend: WebInspectorTestBackend, document: DOM.Node) async {
         await backend.enqueue((), for: "Inspector", method: "enable")
         await backend.enqueue((), for: "Inspector", method: "initialized")
+        await backend.enqueue((), for: "Page", method: "enable")
         await backend.enqueue((), for: "Runtime", method: "enable")
         await backend.enqueue((), for: "Network", method: "enable")
         await backend.enqueue(document, for: "DOM", method: "getDocument")

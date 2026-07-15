@@ -932,6 +932,7 @@ private func makeLiveNetworkModelFixture() async throws -> LiveNetworkModelFixtu
     let target = try await runtime.proxy.waitForCurrentPage()
     await runtime.backend.enqueue((), for: "Inspector", method: "enable")
     await runtime.backend.enqueue((), for: "Inspector", method: "initialized")
+    await runtime.backend.enqueue((), for: "Page", method: "enable")
     await runtime.backend.enqueue((), for: "Runtime", method: "enable")
     await runtime.backend.enqueue((), for: "Network", method: "enable")
     await runtime.backend.enqueue(

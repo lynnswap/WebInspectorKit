@@ -31,6 +31,42 @@ func transportCommandBackendDispatchesPageReloadThroughTargetRoute() async throw
 }
 
 @Test
+func transportCommandBackendDispatchesPageLifecycleCommandsThroughTargetRoute() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+
+    let enableTask = Task {
+        try await target.page.enable()
+    }
+    let enable = try await waitForTargetMessage(backend, method: "Page.enable")
+    #expect(enable.targetIdentifier == ProtocolTarget.ID("page-main"))
+    #expect(try messageParameters(enable.message).isEmpty)
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    try await enableTask.value
+
+    let disableTask = Task {
+        try await target.page.disable()
+    }
+    let disable = try await waitForTargetMessage(backend, method: "Page.disable")
+    #expect(disable.targetIdentifier == ProtocolTarget.ID("page-main"))
+    #expect(try messageParameters(disable.message).isEmpty)
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+    try await disableTask.value
+}
+
+@Test
 func transportCommandBackendDecodesDOMRequestNodeResult() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))

@@ -3,20 +3,26 @@ import WebInspectorProxyKit
 
 enum WebInspectorEnabledDomain: Hashable, Sendable {
     case inspector
+    case page
     case console
     case network
     case runtime
+    case css
 
     var rawValue: String {
         switch self {
         case .inspector:
             return "Inspector"
+        case .page:
+            return "Page"
         case .console:
             return "Console"
         case .network:
             return "Network"
         case .runtime:
             return "Runtime"
+        case .css:
+            return "CSS"
         }
     }
 
@@ -25,12 +31,16 @@ enum WebInspectorEnabledDomain: Hashable, Sendable {
         case .inspector:
             try await target.inspector.enable()
             try await target.inspector.initialized()
+        case .page:
+            try await target.page.enable()
         case .console:
             try await target.console.enable()
         case .network:
             try await target.network.enable()
         case .runtime:
             try await target.runtime.enable()
+        case .css:
+            try await target.css.enable()
         }
     }
 
@@ -38,12 +48,16 @@ enum WebInspectorEnabledDomain: Hashable, Sendable {
         switch self {
         case .inspector:
             try await target.inspector.disable()
+        case .page:
+            try await target.page.disable()
         case .console:
             try await target.console.disable()
         case .network:
             try await target.network.disable()
         case .runtime:
             try await target.runtime.disable()
+        case .css:
+            try await target.css.disable()
         }
     }
 
@@ -96,6 +110,42 @@ actor WebInspectorDomainEnablementRegistry {
         acquireWaitingForDisableSequenceForTestingStorage = 0
         acquireWaitingForDisableWaitersForTesting = []
 #endif
+    }
+
+    func acquireStyleAccess(on target: WebInspectorTarget) async throws {
+        guard case .page = target.kind else {
+            try await acquire(.css, on: target)
+            return
+        }
+
+        try await acquire(.page, on: target)
+        do {
+            try await acquire(.css, on: target)
+        } catch {
+            if let rollbackError = await release(.page, on: target) {
+                WebInspectorDataKitLog.debug(
+                    "style access Page rollback failed target=\(target.id.rawValue) error=\(String(describing: rollbackError))"
+                )
+            }
+            throw error
+        }
+    }
+
+    func releaseStyleAccess(on target: WebInspectorTarget) async -> WebInspectorProxyError? {
+        let cssError = await release(.css, on: target)
+        guard case .page = target.kind else {
+            return cssError
+        }
+        let pageError = await release(.page, on: target)
+        return cssError ?? pageError
+    }
+
+    func discardStyleAccess(on target: WebInspectorTarget) {
+        discardLease(.css, on: target)
+        guard case .page = target.kind else {
+            return
+        }
+        discardLease(.page, on: target)
     }
 
 #if DEBUG

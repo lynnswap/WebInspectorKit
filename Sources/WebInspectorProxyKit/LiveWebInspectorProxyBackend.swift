@@ -880,7 +880,9 @@ private enum LiveProxyCommandEncoder {
             let payload = try payload(command.payload, as: Page.ReloadPayload.self, command: command)
             return try data(["ignoreCache": payload.ignoringCache])
 
-        case (.dom, "getDocument"),
+        case (.page, "enable"),
+             (.page, "disable"),
+             (.dom, "getDocument"),
              (.dom, "hideHighlight"),
              (.dom, "markUndoableState"),
              (.dom, "undo"),

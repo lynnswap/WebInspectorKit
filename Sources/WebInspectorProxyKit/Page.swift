@@ -10,6 +10,22 @@ public enum Page {
             self.context = context
         }
 
+        package func enable() async throws {
+            try await context.dispatchVoid(
+                domain: .page,
+                method: "enable",
+                payload: EnablePayload()
+            )
+        }
+
+        package func disable() async throws {
+            try await context.dispatchVoid(
+                domain: .page,
+                method: "disable",
+                payload: DisablePayload()
+            )
+        }
+
         /// Reloads the inspected page.
         public func reload(ignoringCache: Bool = false) async throws {
             try await context.dispatchVoid(
@@ -18,6 +34,14 @@ public enum Page {
                 payload: ReloadPayload(ignoringCache: ignoringCache)
             )
         }
+    }
+
+    package struct EnablePayload: Sendable {
+        package init() {}
+    }
+
+    package struct DisablePayload: Sendable {
+        package init() {}
     }
 
     package struct ReloadPayload: Sendable {
