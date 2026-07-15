@@ -15,6 +15,15 @@ package final class PresentationContentStore {
         case closed
     }
 
+    private enum ResourceFailureDisposition {
+        case failed(String)
+        case closed
+    }
+
+    private enum RequiredNetworkResourceError: Error {
+        case connectionEnded
+    }
+
     @MainActor
     private final class Resource<Value> {
         enum State {
@@ -28,14 +37,30 @@ package final class PresentationContentStore {
         private(set) var state: State = .idle
         private let makeValue: @MainActor () async throws -> Value
         private let retireValue: @MainActor (Value) async -> Void
+        private let failureDisposition: @MainActor (any Error)
+            -> ResourceFailureDisposition
         private var task: Task<Void, Never>?
 
         init(
             makeValue: @escaping @MainActor () async throws -> Value,
-            retireValue: @escaping @MainActor (Value) async -> Void
+            retireValue: @escaping @MainActor (Value) async -> Void,
+            failureDisposition: @escaping @MainActor (any Error)
+                -> ResourceFailureDisposition = { error in
+                    if let commandError = error as? WebInspectorCommandError {
+                        switch commandError {
+                        case .connection, .containerClosed:
+                            return .closed
+                        case .staleIdentifier, .featureUnavailable, .targetChanged,
+                            .rejected, .timedOut:
+                            break
+                        }
+                    }
+                    return .failed(error.localizedDescription)
+                }
         ) {
             self.makeValue = makeValue
             self.retireValue = retireValue
+            self.failureDisposition = failureDisposition
         }
 
         isolated deinit {
@@ -83,10 +108,21 @@ package final class PresentationContentStore {
                         return
                     }
                     task = nil
-                    state = .failed(error.localizedDescription)
+                    switch failureDisposition(error) {
+                    case let .failed(message):
+                        state = .failed(message)
+                    case .closed:
+                        state = .closed
+                    }
                     onChange()
                 }
             }
+        }
+
+        func restart(onChange: @escaping @MainActor () -> Void) {
+            guard case .closed = state else { return }
+            state = .idle
+            start(onChange: onChange)
         }
 
         func close(onChange: @escaping @MainActor () -> Void) async {
@@ -134,6 +170,11 @@ package final class PresentationContentStore {
         let task: Task<Void, Never>
     }
 
+    private enum RequiredNetworkReadiness: Equatable, Sendable {
+        case ready
+        case connectionEnded
+    }
+
     package typealias NetworkPanelModelFactory = @MainActor (
         WebInspectorModelContext
     ) async throws -> NetworkPanelModel
@@ -152,10 +193,15 @@ package final class PresentationContentStore {
         WebInspectorTab.ContentKey: Resource<UIViewController>
     ] = [:]
     private var domRetryTask: RetryTaskHandle?
-    private var networkRetryTask: RetryTaskHandle?
     private var customRetryTasks: [
         WebInspectorTab.ContentKey: RetryTaskHandle
     ] = [:]
+    private var containerStateTask: Task<Void, Never>?
+
+    #if DEBUG
+    private let containerFailureRetirementPublisher =
+        _WebInspectorStatePublisher<Int>(0)
+    #endif
 
     private var domViewControllers: [WeakBox<DOMTabResourceViewController>] = []
     private var networkViewControllers: [WeakBox<NetworkTabResourceViewController>] = []
@@ -175,14 +221,34 @@ package final class PresentationContentStore {
         self.context = context
         self.makeDOMPanelModel = makeDOMPanelModel
         self.makeNetworkPanelModel = makeNetworkPanelModel
+        containerStateTask = Task { @MainActor [weak self, container = context.modelContainer] in
+            var states = container.stateUpdates.makeAsyncIterator()
+            while let state = await states.next() {
+                guard Task.isCancelled == false else { return }
+                switch state {
+                case .failed:
+                    await self?.closeResourcesForConnectionLoss()
+                case .attaching, .attached:
+                    self?.restartResourcesAfterConnectionRecovery()
+                case .closing, .closed:
+                    await self?.closeResourcesForConnectionLoss()
+                    return
+                case .detached, .detaching:
+                    continue
+                }
+            }
+        }
     }
 
     isolated deinit {
         domRetryTask?.task.cancel()
-        networkRetryTask?.task.cancel()
         for retryTask in customRetryTasks.values {
             retryTask.task.cancel()
         }
+        containerStateTask?.cancel()
+        #if DEBUG
+        containerFailureRetirementPublisher.finish()
+        #endif
         for viewController in domViewControllers {
             viewController.value?.synchronouslyResetForOwnerDeinit()
         }
@@ -227,7 +293,6 @@ package final class PresentationContentStore {
         let resource = networkResource ?? makeNetworkResource()
         networkResource = resource
         let viewController = NetworkTabResourceViewController(
-            retryAction: { [weak self] in self?.retryNetwork() },
             makeReadyViewController: makeReadyViewController
         )
         networkViewControllers.append(WeakBox(viewController))
@@ -279,25 +344,21 @@ package final class PresentationContentStore {
         let networkResource = networkResource
         let customResources = Array(customResources.values)
         let domRetryTask = domRetryTask?.task
-        let networkRetryTask = networkRetryTask?.task
         let customRetryTasks = customRetryTasks.values.map(\.task)
 
         self.domResource = nil
         self.networkResource = nil
         self.customResources.removeAll(keepingCapacity: false)
         self.domRetryTask = nil
-        self.networkRetryTask = nil
         self.customRetryTasks.removeAll(keepingCapacity: false)
         resetViewControllers()
         contentCache.removeAll()
 
         domRetryTask?.cancel()
-        networkRetryTask?.cancel()
         for retryTask in customRetryTasks {
             retryTask.cancel()
         }
         await domRetryTask?.value
-        await networkRetryTask?.value
         for retryTask in customRetryTasks {
             await retryTask.value
         }
@@ -306,6 +367,36 @@ package final class PresentationContentStore {
         await networkResource?.close {}
         for resource in customResources {
             await resource.close {}
+        }
+    }
+
+    private func closeResourcesForConnectionLoss() async {
+        let domResource = domResource
+        let networkResource = networkResource
+        let customResources = customResources
+
+        await domResource?.close { [weak self] in self?.renderDOM() }
+        await networkResource?.close { [weak self] in self?.renderNetwork() }
+        for (key, resource) in customResources {
+            await resource.close { [weak self] in
+                self?.renderCustomResource(for: key)
+            }
+        }
+
+        #if DEBUG
+        containerFailureRetirementPublisher.publish(
+            containerFailureRetirementPublisher.current + 1
+        )
+        #endif
+    }
+
+    private func restartResourcesAfterConnectionRecovery() {
+        domResource?.restart { [weak self] in self?.renderDOM() }
+        networkResource?.restart { [weak self] in self?.renderNetwork() }
+        for (key, resource) in customResources {
+            resource.restart { [weak self] in
+                self?.renderCustomResource(for: key)
+            }
         }
     }
 
@@ -323,15 +414,39 @@ package final class PresentationContentStore {
     }
 
     private func makeNetworkResource() -> Resource<NetworkPanelModel> {
-        Resource(
+        precondition(
+            context.modelContainer.configuration.enabledFeatures.contains(.network),
+            "The built-in Network tab requires the Network feature."
+        )
+        return Resource(
             makeValue: { [context, makeNetworkPanelModel] in
-                try await Self.waitForFeatures(
-                    [.network],
+                guard await Self.waitForRequiredNetwork(
                     in: context.modelContainer
-                )
-                return try await makeNetworkPanelModel(context.modelContext)
+                ) else {
+                    throw RequiredNetworkResourceError.connectionEnded
+                }
+                do {
+                    return try await makeNetworkPanelModel(context.modelContext)
+                } catch is CancellationError {
+                    throw RequiredNetworkResourceError.connectionEnded
+                } catch {
+                    guard Self.isTerminal(context.modelContainer.state) else {
+                        preconditionFailure(
+                            "Network panel construction failed while its required connection remained active: \(error)"
+                        )
+                    }
+                    throw RequiredNetworkResourceError.connectionEnded
+                }
             },
-            retireValue: { await $0.retire() }
+            retireValue: { await $0.retire() },
+            failureDisposition: { error in
+                guard error is RequiredNetworkResourceError else {
+                    preconditionFailure(
+                        "Required Network resource escaped its connection boundary: \(error)"
+                    )
+                }
+                return .closed
+            }
         )
     }
 
@@ -343,30 +458,13 @@ package final class PresentationContentStore {
         let context = context
         let task = Task { @MainActor [weak self, resource] in
             defer { self?.finishDOMRetryTask(id: retryTaskID) }
-            await context.modelContainer.retryFeature(.dom)
+            await context.modelContainer.dom.retry()
             guard Task.isCancelled == false,
                   let self,
                   self.domResource === resource else { return }
             resource.start { [weak self] in self?.renderDOM() }
         }
         domRetryTask = RetryTaskHandle(id: retryTaskID, task: task)
-    }
-
-    private func retryNetwork() {
-        guard let resource = networkResource,
-              case .failed = resource.state,
-              networkRetryTask == nil else { return }
-        let retryTaskID = UUID()
-        let context = context
-        let task = Task { @MainActor [weak self, resource] in
-            defer { self?.finishNetworkRetryTask(id: retryTaskID) }
-            await context.modelContainer.retryFeature(.network)
-            guard Task.isCancelled == false,
-                  let self,
-                  self.networkResource === resource else { return }
-            resource.start { [weak self] in self?.renderNetwork() }
-        }
-        networkRetryTask = RetryTaskHandle(id: retryTaskID, task: task)
     }
 
     private func retryCustomResource(
@@ -383,7 +481,11 @@ package final class PresentationContentStore {
                 self?.finishCustomRetryTask(for: key, id: retryTaskID)
             }
             for feature in requiredFeatures {
-                await context.modelContainer.retryFeature(feature)
+                if feature == .dom {
+                    await context.modelContainer.dom.retry()
+                } else if feature == .consoleRuntime {
+                    await context.modelContainer.console.retry()
+                }
                 guard Task.isCancelled == false else { return }
             }
             guard let self,
@@ -403,11 +505,6 @@ package final class PresentationContentStore {
         domRetryTask = nil
     }
 
-    private func finishNetworkRetryTask(id: UUID) {
-        guard networkRetryTask?.id == id else { return }
-        networkRetryTask = nil
-    }
-
     private func finishCustomRetryTask(
         for key: WebInspectorTab.ContentKey,
         id: UUID
@@ -421,28 +518,150 @@ package final class PresentationContentStore {
         in container: WebInspectorModelContainer
     ) async throws {
         for feature in features {
-            var states = container.featureStateUpdates(for: feature)
-                .makeAsyncIterator()
-            var becameReady = false
-            while let state = await states.next() {
-                switch state {
-                case .ready:
-                    becameReady = true
-                case .unavailable(_, let error):
-                    throw WebInspectorCommandError.featureUnavailable(
-                        feature,
-                        error
-                    )
-                case .disabled:
-                    throw WebInspectorTabFeatureError.disabled(feature)
-                case .synchronizing, .recovering:
-                    continue
+            try await waitForFeature(feature, in: container)
+        }
+    }
+
+    private static func waitForFeature(
+        _ feature: WebInspectorFeatureID,
+        in container: WebInspectorModelContainer
+    ) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                var states = container.featureStateUpdates(for: feature)
+                    .makeAsyncIterator()
+                while let state = await states.next() {
+                    try Task.checkCancellation()
+                    switch state {
+                    case .ready:
+                        if case .attached = container.state {
+                            return
+                        }
+                    case let .unavailable(_, error):
+                        guard feature != .network else {
+                            preconditionFailure(
+                                "A required Network feature cannot become unavailable: \(error)"
+                            )
+                        }
+                        throw WebInspectorCommandError.featureUnavailable(
+                            feature,
+                            error
+                        )
+                    case .disabled:
+                        if case .attached = container.state,
+                           container.configuration.enabledFeatures.contains(feature) == false {
+                            throw WebInspectorTabFeatureError.disabled(feature)
+                        }
+                    case .synchronizing, .recovering:
+                        continue
+                    }
                 }
-                break
-            }
-            guard becameReady else {
+                try Task.checkCancellation()
                 throw WebInspectorCommandError.containerClosed
             }
+            group.addTask {
+                var states = container.stateUpdates.makeAsyncIterator()
+                while let state = await states.next() {
+                    try Task.checkCancellation()
+                    switch state {
+                    case .attached:
+                        switch container.featureState(for: feature) {
+                        case .ready:
+                            return
+                        case let .unavailable(_, error):
+                            guard feature != .network else {
+                                preconditionFailure(
+                                    "A required Network feature cannot become unavailable: \(error)"
+                                )
+                            }
+                            throw WebInspectorCommandError.featureUnavailable(
+                                feature,
+                                error
+                            )
+                        case .disabled:
+                            if container.configuration.enabledFeatures.contains(feature) == false {
+                                throw WebInspectorTabFeatureError.disabled(feature)
+                            }
+                        case .synchronizing, .recovering:
+                            continue
+                        }
+                    case let .failed(_, failure):
+                        throw WebInspectorCommandError.connection(failure)
+                    case .closing, .closed:
+                        throw WebInspectorCommandError.containerClosed
+                    case .detached, .attaching, .detaching:
+                        continue
+                    }
+                }
+                try Task.checkCancellation()
+                throw WebInspectorCommandError.containerClosed
+            }
+            guard try await group.next() != nil else {
+                throw WebInspectorCommandError.containerClosed
+            }
+            group.cancelAll()
+        }
+    }
+
+    private static func waitForRequiredNetwork(
+        in container: WebInspectorModelContainer
+    ) async -> Bool {
+        await withTaskGroup(of: RequiredNetworkReadiness.self) { group in
+            group.addTask {
+                var states = container.featureStateUpdates(for: .network)
+                    .makeAsyncIterator()
+                while let state = await states.next() {
+                    if Task.isCancelled {
+                        return .connectionEnded
+                    }
+                    switch state {
+                    case .ready:
+                        if case .attached = container.state {
+                            return .ready
+                        }
+                    case let .unavailable(_, error):
+                        preconditionFailure(
+                            "A required Network feature cannot become unavailable: \(error)"
+                        )
+                    case .disabled, .synchronizing, .recovering:
+                        continue
+                    }
+                }
+                return .connectionEnded
+            }
+            group.addTask {
+                var states = container.stateUpdates.makeAsyncIterator()
+                while let state = await states.next() {
+                    if Task.isCancelled {
+                        return .connectionEnded
+                    }
+                    switch state {
+                    case .attached:
+                        if case .ready = container.featureState(for: .network) {
+                            return .ready
+                        }
+                    case .failed, .closing, .closed:
+                        return .connectionEnded
+                    case .detached, .attaching, .detaching:
+                        continue
+                    }
+                }
+                return .connectionEnded
+            }
+            let result = await group.next() ?? .connectionEnded
+            group.cancelAll()
+            return result == .ready
+        }
+    }
+
+    private static func isTerminal(
+        _ state: WebInspectorModelContainer.State
+    ) -> Bool {
+        switch state {
+        case .failed, .closing, .closed:
+            true
+        case .detached, .attaching, .attached, .detaching:
+            false
         }
     }
 
@@ -467,7 +686,7 @@ package final class PresentationContentStore {
         case let .failed(message):
             viewController.showFailure(message)
         case .closed:
-            viewController.showLoading()
+            viewController.showClosed()
         }
     }
 
@@ -492,9 +711,11 @@ package final class PresentationContentStore {
         case let .ready(model):
             viewController.showReady(model)
         case let .failed(message):
-            viewController.showFailure(message)
+            preconditionFailure(
+                "Required Network resource published a local failure: \(message)"
+            )
         case .closed:
-            viewController.showLoading()
+            viewController.showClosed()
         }
     }
 
@@ -522,7 +743,7 @@ package final class PresentationContentStore {
         case let .failed(message):
             viewController.showFailure(message)
         case .closed:
-            viewController.showLoading()
+            viewController.showClosed()
         }
     }
 
@@ -562,8 +783,19 @@ package final class PresentationContentStore {
         await domResource?.waitForAttempt()
     }
     package func waitForNetworkResourceTaskForTesting() async {
-        await networkRetryTask?.task.value
         await networkResource?.waitForAttempt()
+    }
+    package var containerFailureRetirementCountForTesting: Int {
+        containerFailureRetirementPublisher.current
+    }
+    package func waitForContainerFailureRetirementForTesting(
+        after baselineCount: Int
+    ) async {
+        var updates = containerFailureRetirementPublisher.updates()
+            .makeAsyncIterator()
+        while let count = await updates.next() {
+            if count > baselineCount { return }
+        }
     }
     package func waitForCustomResourceTaskForTesting(
         for key: WebInspectorTab.ContentKey

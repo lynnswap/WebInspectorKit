@@ -114,7 +114,6 @@ private actor DataKitImportOnlyActor {
 
         _ = modelContainer.network.state
         _ = modelContainer.network.stateUpdates
-        await modelContainer.network.retry()
         try await modelContainer.network.clear()
         _ = try await modelContainer.network.responseBody(for: requestID)
 

@@ -4672,23 +4672,6 @@
         }
       }
     },
-    "network.loading.failed.title" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Network Unavailable"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ネットワークを利用できません"
-          }
-        }
-      }
-    },
     "network.loading.title" : {
       "extractionState" : "stale",
       "localizations" : {

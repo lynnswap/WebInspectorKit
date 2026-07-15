@@ -354,26 +354,115 @@ func dataKitTestingCountsReplacementBoundaryAndClosesDeterministically()
 
 @MainActor
 @Test
-func dataKitTestingPublishesFeatureLocalBootstrapFailure() async throws {
-    let runtime = try await WebInspectorDataKitTestRuntime.start(
-        scenario: .init(
-            configuration: .init(enabledFeatures: [.network]),
-            attachFailure: .init(
-                domain: .network,
-                message: "injected Network startup failure"
+func dataKitTestingEscalatesRequiredNetworkBootstrapFailure() async {
+    do {
+        _ = try await WebInspectorDataKitTestRuntime.start(
+            scenario: .init(
+                configuration: .init(enabledFeatures: [.network]),
+                attachFailure: .init(
+                    domain: .network,
+                    message: "injected Network startup failure"
+                )
             )
         )
-    )
-    let boundary = try await runtime.boundarySnapshot()
-
-    #expect(runtime.container.state.isAttached)
-    guard
-        case let .unavailable(_, .bootstrap(failure)) =
-            boundary.featureState(for: .network)
-    else {
-        preconditionFailure("An injected bootstrap failure must stay feature-local.")
+        Issue.record("A required Network bootstrap failure did not fail the connection.")
+    } catch let WebInspectorDataKitTestRuntime.RuntimeError.connectionFailed(failure) {
+        guard case let .requiredFeature(featureID, .bootstrap(description)) = failure else {
+            Issue.record("Expected a required-feature bootstrap failure, got \(failure).")
+            return
+        }
+        #expect(featureID == .network)
+        #expect(description.message.contains("injected Network startup failure"))
+    } catch {
+        Issue.record("Expected a connection failure, got \(error).")
     }
-    #expect(failure.message.contains("injected Network startup failure"))
+}
+
+@MainActor
+@Test
+func dataKitTestingEscalatesExhaustedRequiredNetworkRecovery() async throws {
+    let request = WebInspectorDataKitTestRuntime.NetworkRequest(
+        id: "recovery-exhaustion",
+        url: "https://example.test/recovery-exhaustion"
+    )
+    let runtime = try await WebInspectorDataKitTestRuntime.start(
+        scenario: .init(
+            configuration: .init(enabledFeatures: [.dom, .network]),
+            networkReplay: [request]
+        )
+    )
+    var networkStates = runtime.container.network.stateUpdates.makeAsyncIterator()
+    guard case let .ready(_, initialRevision) = await networkStates.next() else {
+        preconditionFailure("A started Network feature must initially be ready.")
+    }
+
+    try await runtime.emitNetworkLoadingFinished(request)
+    var observedRecoveredRevision = false
+    recovery: while let state = await networkStates.next() {
+        switch state {
+        case let .ready(_, revision) where revision > initialRevision:
+            observedRecoveredRevision = true
+            break recovery
+        case let .unavailable(_, error):
+            Issue.record("Required Network published feature-local failure: \(error).")
+            break recovery
+        case .disabled:
+            Issue.record("The connection ended during the first recovery attempt.")
+            break recovery
+        case .synchronizing, .ready, .recovering:
+            continue
+        }
+    }
+    #expect(observedRecoveredRevision)
+
+    var terminalNetworkStates = runtime.container.network.stateUpdates
+        .makeAsyncIterator()
+    guard case .ready = await terminalNetworkStates.next() else {
+        preconditionFailure("The first Network recovery must restore readiness.")
+    }
+    var containerStates = runtime.container.stateUpdates.makeAsyncIterator()
+    guard case .attached = await containerStates.next() else {
+        preconditionFailure("The recovered container must remain attached.")
+    }
+
+    try await runtime.emitNetworkLoadingFinished(request)
+    terminal: while let state = await terminalNetworkStates.next() {
+        switch state {
+        case let .unavailable(_, error):
+            Issue.record("Required Network published feature-local failure: \(error).")
+            break terminal
+        case .disabled:
+            break terminal
+        case .synchronizing, .ready, .recovering:
+            continue
+        }
+    }
+
+    var observedFailure: WebInspectorConnectionFailure?
+    containerFailure: while let state = await containerStates.next() {
+        switch state {
+        case let .failed(_, failure):
+            observedFailure = failure
+            break containerFailure
+        case .detached, .attaching, .attached, .detaching:
+            continue
+        case .closing, .closed:
+            preconditionFailure("The runtime closed without publishing the Network failure.")
+        }
+    }
+    let failure = try #require(observedFailure)
+    guard case let .requiredFeature(
+        featureID,
+        .recoveryBudgetExhausted(description)
+    ) = failure else {
+        Issue.record("Expected exhausted required-Network recovery, got \(failure).")
+        await runtime.close()
+        return
+    }
+    #expect(featureID == .network)
+    #expect(description.code == "network.recovery.exhausted")
+    #expect(runtime.container.network.state == .disabled)
+    #expect(runtime.container.dom.state == .disabled)
 
     await runtime.close()
 }

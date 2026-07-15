@@ -36,7 +36,6 @@ package protocol WebInspectorModelFeature: Actor {
         store: WebInspectorModelStoreSink
     ) async -> WebInspectorFeatureTermination
 
-    func retry() async
     func close() async
 }
 

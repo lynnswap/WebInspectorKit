@@ -4,6 +4,10 @@ import WebInspectorProxyKit
 public protocol WebInspectorFeatureHandle: Sendable {
     var state: WebInspectorFeatureState { get }
     var stateUpdates: WebInspectorStateUpdates<WebInspectorFeatureState> { get }
+}
+
+/// A feature whose semantic owner can recover after explicit user intent.
+public protocol WebInspectorRetryableFeatureHandle: WebInspectorFeatureHandle {
     func retry() async
 }
 

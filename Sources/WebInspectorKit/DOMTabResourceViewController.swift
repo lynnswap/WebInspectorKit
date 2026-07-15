@@ -9,6 +9,7 @@ package final class DOMTabResourceViewController: UIViewController {
         case loading
         case ready
         case failed(String)
+        case closed
     }
 
     private let retryAction: @MainActor () -> Void
@@ -70,6 +71,12 @@ package final class DOMTabResourceViewController: UIViewController {
             self?.retryAction()
         }
         contentUnavailableConfiguration = configuration
+    }
+
+    package func showClosed() {
+        phase = .closed
+        removeReadyViewController()
+        contentUnavailableConfiguration = nil
     }
 
     package func synchronouslyResetForOwnerDeinit() {

@@ -104,9 +104,6 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
         )
         self.connectionOwner = connectionOwner
         page = WebInspectorPageCommands(owner: connectionOwner)
-        featureRegistry.install(.dom) { await domFeature.retry() }
-        featureRegistry.install(.network) { await networkFeature.retry() }
-        featureRegistry.install(.consoleRuntime) { await consoleRuntimeFeature.retry() }
     }
 
     package init(
@@ -157,9 +154,6 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
         )
         self.connectionOwner = connectionOwner
         page = WebInspectorPageCommands(owner: connectionOwner)
-        featureRegistry.install(.dom) { await domFeature.retry() }
-        featureRegistry.install(.network) { await networkFeature.retry() }
-        featureRegistry.install(.consoleRuntime) { await consoleRuntimeFeature.retry() }
     }
 
     public static func == (
@@ -220,11 +214,6 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
         for featureID: WebInspectorFeatureID
     ) -> WebInspectorStateUpdates<WebInspectorFeatureState> {
         featureRegistry.updates(for: featureID)
-    }
-
-    /// Requests feature-local retry without creating another feature runner.
-    public func retryFeature(_ featureID: WebInspectorFeatureID) async {
-        await featureRegistry.retry(featureID)
     }
 
     /// Permanently closes context issuance and the canonical store.

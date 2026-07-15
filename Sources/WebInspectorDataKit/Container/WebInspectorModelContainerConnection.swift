@@ -292,14 +292,18 @@ package actor WebInspectorModelContainerConnectionOwner {
             currentSessionID == sessionID
         else { return }
         phase = .failed(generation)
+        // This method is entered by the monitor task itself. Remove that handle
+        // before teardown so the owner never awaits its current task.
+        connectionMonitor = nil
         await tearDownConnection()
         statePublisher.publish(.failed(generation: generation, failure: failure))
     }
 
     private func tearDownConnection() async {
+        let connectionMonitor = connectionMonitor
+        self.connectionMonitor = nil
         connectionMonitor?.cancel()
-        connectionMonitor = nil
-        let tasks = featureTasks.values
+        let tasks = Array(featureTasks.values)
         featureTasks.removeAll(keepingCapacity: true)
         for task in tasks { task.cancel() }
 
@@ -307,11 +311,14 @@ package actor WebInspectorModelContainerConnectionOwner {
         await network.close()
         await consoleRuntime.close()
 
+        for task in tasks { await task.value }
+
         if let proxy {
             self.proxy = nil
             WebInspectorProxyOwnership.shared.release(proxy, for: ownerID)
             await proxy.close()
         }
+        await connectionMonitor?.value
     }
 }
 

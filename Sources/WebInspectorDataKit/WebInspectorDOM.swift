@@ -1368,7 +1368,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
 }
 
 /// Public typed facade over the container-owned DOM feature actor.
-public final class WebInspectorDOM: WebInspectorFeatureHandle, Sendable {
+public final class WebInspectorDOM: WebInspectorRetryableFeatureHandle, Sendable {
     private let owner: WebInspectorDOMFeature
     private let registry: WebInspectorFeatureRegistry
     private let pickerPublisher: _WebInspectorStatePublisher<WebInspectorElementPickerState>

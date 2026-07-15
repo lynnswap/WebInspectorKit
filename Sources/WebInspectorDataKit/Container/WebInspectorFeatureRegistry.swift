@@ -2,16 +2,13 @@ import Synchronization
 
 private final class _WebInspectorFeatureSlot: @unchecked Sendable {
     let state: _WebInspectorStatePublisher<WebInspectorFeatureState>
-    var retry: (@Sendable () async -> Void)?
 
     init(state: WebInspectorFeatureState = .disabled) {
         self.state = _WebInspectorStatePublisher(state)
     }
 }
 
-/// The ID-keyed owner for generic feature state, observation, and retry.
-/// Concrete DOM/Network/Console facades delegate here instead of introducing
-/// a central switch over feature implementations.
+/// The ID-keyed owner for generic feature state and observation.
 package final class WebInspectorFeatureRegistry: @unchecked Sendable {
     private struct Storage {
         var slots: [WebInspectorFeatureID: _WebInspectorFeatureSlot] = [:]
@@ -25,18 +22,6 @@ package final class WebInspectorFeatureRegistry: @unchecked Sendable {
             for featureID in enabledFeatures {
                 storage.slots[featureID] = _WebInspectorFeatureSlot()
             }
-        }
-    }
-
-    package func install(
-        _ featureID: WebInspectorFeatureID,
-        retry: @escaping @Sendable () async -> Void
-    ) {
-        storage.withLock { storage in
-            guard !storage.isFinished else { return }
-            let slot = storage.slots[featureID] ?? _WebInspectorFeatureSlot()
-            slot.retry = retry
-            storage.slots[featureID] = slot
         }
     }
 
@@ -57,15 +42,6 @@ package final class WebInspectorFeatureRegistry: @unchecked Sendable {
         for featureID: WebInspectorFeatureID
     ) -> WebInspectorStateUpdates<WebInspectorFeatureState> {
         slot(for: featureID).state.updates()
-    }
-
-    package func retry(_ featureID: WebInspectorFeatureID) async {
-        let retry = storage.withLock {
-            storage -> (@Sendable () async -> Void)? in
-            guard !storage.isFinished else { return nil }
-            return storage.slots[featureID]?.retry
-        }
-        await retry?()
     }
 
     package func finish() {

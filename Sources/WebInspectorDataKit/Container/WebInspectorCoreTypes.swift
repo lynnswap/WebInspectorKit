@@ -132,6 +132,7 @@ public enum WebInspectorConnectionFailure: Error, Equatable, Sendable {
     case native(WebInspectorFailureDescription)
     case transportEnvelope(WebInspectorFailureDescription)
     case targetControlPlane(WebInspectorFailureDescription)
+    case requiredFeature(WebInspectorFeatureID, WebInspectorFeatureError)
 }
 
 /// Failures from attaching one container to a Web view.

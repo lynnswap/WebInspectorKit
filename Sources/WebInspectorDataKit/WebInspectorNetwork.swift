@@ -32,8 +32,6 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
     private var state: WebInspectorFeatureState = .disabled
     private var recoveryBudget = WebInspectorFeatureRecoveryBudget()
     private var closeRequested = false
-    private var explicitRetryRequested = false
-    private var retryWaiter: CheckedContinuation<Void, Never>?
     private var isConsumingOrderedScopeEvents = false
 
     package init(registry: WebInspectorFeatureRegistry) {
@@ -47,7 +45,6 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
         self.connection = connection
         storeSink = store
         closeRequested = false
-        explicitRetryRequested = false
         recoveryBudget = WebInspectorFeatureRecoveryBudget()
         if let canonicalStore {
             precondition(
@@ -82,16 +79,8 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                         phase: request.fingerprint.phase,
                         message: String(describing: request.reason)
                     )
-                    await publish(
-                        .unavailable(
-                            generation: generation,
-                            error: .recoveryBudgetExhausted(summary)
-                        )
-                    )
-                    await waitForExplicitRetry()
-                    recoveryBudget.begin(
-                        generation: await currentGeneration(),
-                        explicitRetry: true
+                    return await requiredFeatureTermination(
+                        .recoveryBudgetExhausted(summary)
                     )
                 }
             } catch {
@@ -100,42 +89,23 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                     orderedScope = nil
                     return termination(for: error)
                 }
-                let generation = await currentGeneration()
-                await publish(
-                    .unavailable(
-                        generation: generation,
-                        error: .bootstrap(
-                            webInspectorFailureDescription(
-                                error,
-                                code: "network.bootstrap.failed",
-                                phase: "bootstrap"
-                            )
+                let featureError = (error as? WebInspectorFeatureError)
+                    ?? .bootstrap(
+                        webInspectorFailureDescription(
+                            error,
+                            code: "network.bootstrap.failed",
+                            phase: "bootstrap"
                         )
                     )
-                )
-                await waitForExplicitRetry()
-                recoveryBudget.begin(
-                    generation: await currentGeneration(),
-                    explicitRetry: true
-                )
+                return await requiredFeatureTermination(featureError)
             }
         }
         return .detached
     }
 
-    package func retry() async {
-        guard case .unavailable = state else { return }
-        explicitRetryRequested = true
-        retryWaiter?.resume()
-        retryWaiter = nil
-    }
-
     package func close() async {
         guard !closeRequested else { return }
         closeRequested = true
-        explicitRetryRequested = true
-        retryWaiter?.resume()
-        retryWaiter = nil
         await orderedScope?.close()
         orderedScope = nil
         if let storeSink {
@@ -759,15 +729,6 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
         return WebInspectorPageGeneration(rawValue: generation.rawValue)
     }
 
-    private func waitForExplicitRetry() async {
-        if explicitRetryRequested {
-            explicitRetryRequested = false
-            return
-        }
-        await withCheckedContinuation { retryWaiter = $0 }
-        explicitRetryRequested = false
-    }
-
     private func isConnectionTerminal(_ error: any Error) -> Bool {
         guard let proxy = error as? WebInspectorProxyError else { return false }
         switch proxy {
@@ -787,6 +748,14 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                 message: String(describing: error)
             )
         )
+    }
+
+    private func requiredFeatureTermination(
+        _ error: WebInspectorFeatureError
+    ) async -> WebInspectorFeatureTermination {
+        await orderedScope?.close()
+        orderedScope = nil
+        return .connectionFailed(.requiredFeature(.network, error))
     }
 
     private func connectionFailure(
@@ -816,7 +785,6 @@ public final class WebInspectorNetwork: WebInspectorFeatureHandle, Sendable {
         registry.updates(for: .network)
     }
 
-    public func retry() async { await owner.retry() }
     public func clear() async throws { try await owner.clear() }
     public func responseBody(for id: NetworkRequest.ID) async throws -> Network.Body {
         try await owner.responseBody(for: id)

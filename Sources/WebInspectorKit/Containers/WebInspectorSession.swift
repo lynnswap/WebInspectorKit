@@ -27,6 +27,7 @@ public final class WebInspectorSession {
     ) -> any WebInspectorPageUserInterfaceStyleObserving
     @ObservationIgnored private var pageUserInterfaceStyleObserver:
         (any WebInspectorPageUserInterfaceStyleObserving)?
+    @ObservationIgnored private var containerStateTask: Task<Void, Never>?
 
     #if DEBUG
     package private(set) var detachCountForTesting = 0
@@ -43,6 +44,7 @@ public final class WebInspectorSession {
                 apply: apply
             )
         }
+        startContainerStateObservation()
     }
 
     package init(
@@ -55,9 +57,11 @@ public final class WebInspectorSession {
         self.modelContainer = modelContainer
         self.pinnedModelContext = modelContainer.mainContext
         self.makePageUserInterfaceStyleObserver = makePageUserInterfaceStyleObserver
+        startContainerStateObservation()
     }
 
     isolated deinit {
+        containerStateTask?.cancel()
         stopPageUserInterfaceStyleObservation()
     }
 
@@ -71,7 +75,9 @@ public final class WebInspectorSession {
                 to: webView,
                 proxyConfiguration: proxyConfiguration
             )
-            startPageUserInterfaceStyleObservation(for: webView)
+            if case .attached = modelContainer.state {
+                startPageUserInterfaceStyleObservation(for: webView)
+            }
         } catch {
             stopPageUserInterfaceStyleObservation()
             throw error
@@ -103,6 +109,25 @@ public final class WebInspectorSession {
         observer.start()
     }
 
+    private func startContainerStateObservation() {
+        let modelContainer = modelContainer
+        containerStateTask = Task { @MainActor [weak self] in
+            var states = modelContainer.stateUpdates.makeAsyncIterator()
+            while let state = await states.next() {
+                guard Task.isCancelled == false else { return }
+                switch state {
+                case .failed, .detaching, .detached:
+                    self?.stopPageUserInterfaceStyleObservation()
+                case .closing, .closed:
+                    self?.stopPageUserInterfaceStyleObservation()
+                    return
+                case .attaching, .attached:
+                    continue
+                }
+            }
+        }
+    }
+
     private func stopPageUserInterfaceStyleObservation() {
         pageUserInterfaceStyleObserver?.invalidate()
         pageUserInterfaceStyleObserver = nil
@@ -119,6 +144,12 @@ public final class WebInspectorSession {
 extension WebInspectorSession {
     package var hasPageUserInterfaceStyleObserverForTesting: Bool {
         pageUserInterfaceStyleObserver != nil
+    }
+
+    package func startPageUserInterfaceStyleObservationForTesting(
+        for webView: WKWebView
+    ) {
+        startPageUserInterfaceStyleObservation(for: webView)
     }
 }
 #endif

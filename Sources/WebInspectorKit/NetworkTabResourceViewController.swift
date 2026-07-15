@@ -8,21 +8,18 @@ package final class NetworkTabResourceViewController: UIViewController {
     package enum Phase: Equatable {
         case loading
         case ready
-        case failed(String)
+        case closed
     }
 
-    private let retryAction: @MainActor () -> Void
     private let makeReadyViewController: @MainActor (NetworkPanelModel)
         -> UIViewController
     private var readyViewController: UIViewController?
     package private(set) var phase: Phase = .loading
 
     package init(
-        retryAction: @escaping @MainActor () -> Void,
         makeReadyViewController: @escaping @MainActor (NetworkPanelModel)
             -> UIViewController
     ) {
-        self.retryAction = retryAction
         self.makeReadyViewController = makeReadyViewController
         super.init(nibName: nil, bundle: nil)
         showLoading()
@@ -49,27 +46,10 @@ package final class NetworkTabResourceViewController: UIViewController {
         installReadyViewController(makeReadyViewController(model))
     }
 
-    package func showFailure(_ message: String) {
-        phase = .failed(message)
+    package func showClosed() {
+        phase = .closed
         removeReadyViewController()
-        var configuration = UIContentUnavailableConfiguration.empty()
-        configuration.image = UIImage(systemName: "exclamationmark.triangle")
-        configuration.text = String(
-            localized: "network.loading.failed.title",
-            defaultValue: "Network Unavailable",
-            bundle: WebInspectorUILocalization.bundle
-        )
-        configuration.secondaryText = message
-        configuration.button = .bordered()
-        configuration.button.title = String(
-            localized: "resource.retry",
-            defaultValue: "Retry",
-            bundle: WebInspectorUILocalization.bundle
-        )
-        configuration.buttonProperties.primaryAction = UIAction { [weak self] _ in
-            self?.retryAction()
-        }
-        contentUnavailableConfiguration = configuration
+        contentUnavailableConfiguration = nil
     }
 
     package func synchronouslyResetForOwnerDeinit() {

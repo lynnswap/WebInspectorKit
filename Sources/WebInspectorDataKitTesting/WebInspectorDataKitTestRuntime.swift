@@ -186,7 +186,8 @@ public actor WebInspectorDataKitTestRuntime {
         /// Another raw-input operation is suspended on the runtime.
         case inputOperationInProgress
 
-        /// The production connection reached a physical terminal failure.
+        /// The production connection reached a physical failure or a required
+        /// semantic feature could not sustain the connection contract.
         case connectionFailed(WebInspectorConnectionFailure)
     }
 
@@ -229,7 +230,9 @@ public actor WebInspectorDataKitTestRuntime {
         /// The enabled feature represented by this boundary.
         public let featureID: WebInspectorFeatureID
 
-        /// The feature's captured `ready` or `unavailable` state.
+        /// The feature's captured terminal boundary state. Retryable features
+        /// may be `unavailable`; required Network failure instead fails the
+        /// connection and throws from the boundary operation.
         public let state: WebInspectorFeatureState
 
         fileprivate init(
@@ -243,9 +246,12 @@ public actor WebInspectorDataKitTestRuntime {
 
     /// A testing-only raw-input and feature-owner boundary.
     ///
-    /// Every listed feature is either `ready` or `unavailable` when captured.
-    /// A replacement advances the generation of features that were ready;
-    /// already-unavailable features remain terminal without an implicit retry.
+    /// Every listed feature has reached its supported boundary state when
+    /// captured. A replacement advances the generation of features that were
+    /// ready; already-unavailable retryable features remain terminal without
+    /// an implicit retry. Required Network failure throws
+    /// `RuntimeError.connectionFailed` after connection teardown instead of
+    /// producing a feature boundary.
     /// This snapshot does not imply that a consumer's ModelContext or
     /// fetched-results controller has applied that revision.
     public struct BoundarySnapshot: Equatable, Sendable {
@@ -284,7 +290,8 @@ public actor WebInspectorDataKitTestRuntime {
     private var isInputOperationActive: Bool
 
     /// Starts the production path and waits for each enabled feature to reach
-    /// `ready` or feature-local `unavailable`.
+    /// its supported boundary state. Required Network failure joins connection
+    /// teardown and throws `RuntimeError.connectionFailed`.
     public nonisolated static func start(
         scenario: Scenario = .init()
     ) async throws -> WebInspectorDataKitTestRuntime {
@@ -324,7 +331,9 @@ public actor WebInspectorDataKitTestRuntime {
         await driver.counterSnapshot()
     }
 
-    /// Waits until all enabled features are currently `ready` or `unavailable`.
+    /// Waits until all enabled features reach their supported boundary state.
+    /// Required Network failure throws `RuntimeError.connectionFailed` after
+    /// connection teardown.
     ///
     /// This boundary stops at feature owners. A consumer that needs context or
     /// query completion waits on its own fetched-results update sequence.
@@ -577,6 +586,43 @@ public actor WebInspectorDataKitTestRuntime {
     }
 
     private nonisolated static func waitForTerminalFeatureState(
+        _ featureID: WebInspectorFeatureID,
+        in container: WebInspectorModelContainer,
+        after requiredGeneration: WebInspectorPageGeneration?
+    ) async throws -> FeatureBoundary {
+        try await withThrowingTaskGroup(of: FeatureBoundary.self) { group in
+            group.addTask {
+                try await waitForFeatureBoundary(
+                    featureID,
+                    in: container,
+                    after: requiredGeneration
+                )
+            }
+            group.addTask {
+                var states = container.stateUpdates.makeAsyncIterator()
+                while let state = await states.next() {
+                    try Task.checkCancellation()
+                    switch state {
+                    case let .failed(_, failure):
+                        throw RuntimeError.connectionFailed(failure)
+                    case .closing, .closed:
+                        throw RuntimeError.closed
+                    case .detached, .attaching, .attached, .detaching:
+                        continue
+                    }
+                }
+                try Task.checkCancellation()
+                throw RuntimeError.closed
+            }
+            guard let boundary = try await group.next() else {
+                throw RuntimeError.closed
+            }
+            group.cancelAll()
+            return boundary
+        }
+    }
+
+    private nonisolated static func waitForFeatureBoundary(
         _ featureID: WebInspectorFeatureID,
         in container: WebInspectorModelContainer,
         after requiredGeneration: WebInspectorPageGeneration?

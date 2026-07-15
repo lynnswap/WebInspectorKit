@@ -1,8 +1,10 @@
 #if canImport(UIKit)
 import Testing
 import UIKit
+import WebKit
 import WebInspectorDataKit
 import WebInspectorDataKitTesting
+import WebInspectorProxyKitTesting
 import WebInspectorTestSupport
 @testable import WebInspectorKit
 @testable import WebInspectorUIBase
@@ -13,12 +15,6 @@ extension WebInspectorUIRenderingTests {
     @MainActor
     @Suite
     struct ParentContainerTests {
-        private struct NetworkResourceFailure: LocalizedError {
-            var errorDescription: String? {
-                "Network bootstrap failed."
-            }
-        }
-
         @Test
         func catalogOwnsDefaultTabsWhileSessionOwnsOnlyModelContext() {
             let session = WebInspectorSession()
@@ -223,35 +219,178 @@ extension WebInspectorUIRenderingTests {
         }
 
         @Test
-        func networkResourceFailureReplacesLoadingWithoutCreatingContent() async throws {
-            let runtime = try await makeRuntime(enabledFeatures: [.network])
-            let session = WebInspectorSession(modelContainer: runtime.container)
+        func networkResourceClosesWithoutFeatureLocalFailureSurface() async {
+            let container = WebInspectorModelContainer(
+                configuration: .init(enabledFeatures: [.network])
+            )
+            let session = WebInspectorSession(modelContainer: container)
             let contentStore = PresentationContentStore(
-                context: WebInspectorTab.Context(session: session),
-                makeNetworkPanelModel: { _ in
-                    throw NetworkResourceFailure()
-                }
+                context: WebInspectorTab.Context(session: session)
             )
             let host = contentStore.networkViewController { _ in
-                Issue.record("A failed Network resource must not create ready content.")
+                Issue.record("A closed Network resource must not create ready content.")
                 return UIViewController()
             }
 
+            #expect(contentStore.networkResourceStatus == .loading)
+            #expect(host.phase == .loading)
+            await container.close()
             await contentStore.waitForNetworkResourceTaskForTesting()
 
-            #expect(
-                contentStore.networkResourceStatus
-                    == .failed("Network bootstrap failed.")
-            )
-            #expect(host.phase == .failed("Network bootstrap failed."))
+            #expect(contentStore.networkResourceStatus == .closed)
+            #expect(host.phase == .closed)
             #expect(host.readyViewControllerForTesting == nil)
-            #expect(
-                (host.contentUnavailableConfiguration as? UIContentUnavailableConfiguration)?
-                    .secondaryText == "Network bootstrap failed."
-            )
+            #expect(host.contentUnavailableConfiguration == nil)
 
             await contentStore.clear()
+        }
+
+        @Test
+        func requiredNetworkFailureRetiresReadyPresentationResources() async throws {
+            let request = WebInspectorDataKitTestRuntime.NetworkRequest(
+                id: "presentation-recovery-exhaustion",
+                url: "https://example.test/presentation-recovery-exhaustion"
+            )
+            let runtime = try await WebInspectorDataKitTestRuntime.start(
+                scenario: .init(
+                    configuration: .init(enabledFeatures: [.dom, .network]),
+                    networkReplay: [request]
+                )
+            )
+            let fixture = PresentationFixture(container: runtime.container)
+            let domHost = fixture.contentStore.domViewController { _ in
+                UIViewController()
+            }
+            let networkHost = fixture.contentStore.networkViewController { _ in
+                UIViewController()
+            }
+            await fixture.contentStore.waitForDOMResourceTaskForTesting()
+            await fixture.contentStore.waitForNetworkResourceTaskForTesting()
+            let domModel = try #require(
+                fixture.contentStore.domPanelModelForTesting
+            )
+            let networkModel = try #require(
+                fixture.contentStore.networkPanelModelForTesting
+            )
+            #expect(domHost.phase == .ready)
+            #expect(networkHost.phase == .ready)
+
+            let retirementBaseline = fixture.contentStore
+                .containerFailureRetirementCountForTesting
+            let failure = try await exhaustRequiredNetworkRecovery(
+                request,
+                in: runtime
+            )
+            await fixture.contentStore
+                .waitForContainerFailureRetirementForTesting(
+                    after: retirementBaseline
+                )
+
+            guard case let .requiredFeature(
+                featureID,
+                .recoveryBudgetExhausted(description)
+            ) = failure else {
+                Issue.record("Expected exhausted required-Network recovery, got \(failure).")
+                await fixture.contentStore.clear()
+                await runtime.close()
+                return
+            }
+            #expect(featureID == .network)
+            #expect(description.code == "network.recovery.exhausted")
+            #expect(domModel.isRetiredForTesting)
+            #expect(networkModel.isRetiredForTesting)
+            #expect(fixture.contentStore.domResourceStatus == .closed)
+            #expect(fixture.contentStore.networkResourceStatus == .closed)
+            #expect(fixture.contentStore.domPanelModelForTesting == nil)
+            #expect(fixture.contentStore.networkPanelModelForTesting == nil)
+            #expect(domHost.phase == .closed)
+            #expect(networkHost.phase == .closed)
+            #expect(domHost.readyViewControllerForTesting == nil)
+            #expect(networkHost.readyViewControllerForTesting == nil)
+            #expect(domHost.contentUnavailableConfiguration == nil)
+            #expect(networkHost.contentUnavailableConfiguration == nil)
+
+            await fixture.contentStore.clear()
             await runtime.close()
+        }
+
+        @Test
+        func requiredNetworkFailureStopsPageAppearanceObservation() async throws {
+            let request = WebInspectorDataKitTestRuntime.NetworkRequest(
+                id: "appearance-recovery-exhaustion",
+                url: "https://example.test/appearance-recovery-exhaustion"
+            )
+            let runtime = try await WebInspectorDataKitTestRuntime.start(
+                scenario: .init(
+                    configuration: .init(enabledFeatures: [.network]),
+                    networkReplay: [request]
+                )
+            )
+            let observer = PageUserInterfaceStyleObserverSpy()
+            let session = WebInspectorSession(
+                modelContainer: runtime.container,
+                makePageUserInterfaceStyleObserver: { _, _ in observer }
+            )
+            session.startPageUserInterfaceStyleObservationForTesting(
+                for: WKWebView()
+            )
+            #expect(observer.startCount == 1)
+            #expect(session.hasPageUserInterfaceStyleObserverForTesting)
+
+            _ = try await exhaustRequiredNetworkRecovery(request, in: runtime)
+            await observer.invalidated.waiter.wait()
+
+            #expect(observer.invalidateCount == 1)
+            #expect(session.hasPageUserInterfaceStyleObserverForTesting == false)
+            #expect(session.pageUserInterfaceStyle == .unspecified)
+            await runtime.close()
+        }
+
+        @Test
+        func presentationResourcesRestartAfterContainerReattachment() async throws {
+            let container = WebInspectorModelContainer(
+                configuration: .init(enabledFeatures: [.network])
+            )
+            let firstRuntime = try await makeNetworkProxyRuntime()
+            try await container.attach(owning: firstRuntime.runtime.proxy)
+            let fixture = PresentationFixture(container: container)
+            let host = fixture.contentStore.networkViewController { _ in
+                UIViewController()
+            }
+            await fixture.contentStore.waitForNetworkResourceTaskForTesting()
+            let firstModel = try #require(
+                fixture.contentStore.networkPanelModelForTesting
+            )
+            #expect(host.phase == .ready)
+
+            let retirementBaseline = fixture.contentStore
+                .containerFailureRetirementCountForTesting
+            await firstRuntime.runtime.close()
+            await fixture.contentStore
+                .waitForContainerFailureRetirementForTesting(
+                    after: retirementBaseline
+                )
+            await firstRuntime.wire.stop()
+            #expect(firstModel.isRetiredForTesting)
+            #expect(host.phase == .closed)
+
+            let secondRuntime = try await makeNetworkProxyRuntime()
+            try await container.attach(owning: secondRuntime.runtime.proxy)
+            await fixture.contentStore.waitForNetworkResourceTaskForTesting()
+            let secondModel = try #require(
+                fixture.contentStore.networkPanelModelForTesting
+            )
+
+            #expect(secondModel !== firstModel)
+            #expect(secondModel.isRetiredForTesting == false)
+            #expect(fixture.contentStore.networkResourceStatus == .ready)
+            #expect(host.phase == .ready)
+            #expect(host.readyViewControllerForTesting != nil)
+
+            await fixture.contentStore.clear()
+            await container.close()
+            await secondRuntime.runtime.close()
+            await secondRuntime.wire.stop()
         }
 
         @Test
@@ -983,6 +1122,24 @@ extension WebInspectorUIRenderingTests {
             }
         }
 
+        @MainActor
+        private final class PageUserInterfaceStyleObserverSpy:
+            WebInspectorPageUserInterfaceStyleObserving
+        {
+            let invalidated = WebInspectorTestGate()
+            private(set) var startCount = 0
+            private(set) var invalidateCount = 0
+
+            func start() {
+                startCount += 1
+            }
+
+            func invalidate() {
+                invalidateCount += 1
+                invalidated.open()
+            }
+        }
+
         private func makeRuntime(
             enabledFeatures: Set<WebInspectorFeatureID>
         ) async throws -> WebInspectorDataKitTestRuntime {
@@ -991,6 +1148,92 @@ extension WebInspectorUIRenderingTests {
                     configuration: .init(enabledFeatures: enabledFeatures)
                 )
             )
+        }
+
+        private func makeNetworkProxyRuntime() async throws -> (
+            runtime: WebInspectorProxyTestRuntime,
+            wire: WebInspectorRawWireDriver
+        ) {
+            let runtime = try await WebInspectorProxyTestRuntime.start()
+            let wire = WebInspectorRawWireDriver(peer: runtime.peer)
+            await wire.start()
+            await wire.respond(to: "Page.enable")
+            await wire.respond(to: "Network.enable")
+            await wire.respond(
+                to: "Page.getResourceTree",
+                with: try WebInspectorTestJSONObject(
+                    json: #"""
+                    {
+                        "frameTree": {
+                            "frame": {
+                                "id": "main-frame",
+                                "loaderId": "main-frame-loader",
+                                "name": "",
+                                "url": "",
+                                "mimeType": "text/html"
+                            },
+                            "resources": []
+                        }
+                    }
+                    """#
+                )
+            )
+            await wire.respond(to: "Network.disable")
+            await wire.respond(to: "Page.disable")
+            return (runtime, wire)
+        }
+
+        private func exhaustRequiredNetworkRecovery(
+            _ request: WebInspectorDataKitTestRuntime.NetworkRequest,
+            in runtime: WebInspectorDataKitTestRuntime
+        ) async throws -> WebInspectorConnectionFailure {
+            var networkStates = runtime.container.network.stateUpdates
+                .makeAsyncIterator()
+            guard case let .ready(_, initialRevision) = await networkStates.next() else {
+                preconditionFailure("A started Network feature must initially be ready.")
+            }
+
+            try await runtime.emitNetworkLoadingFinished(request)
+            var observedRecoveredRevision = false
+            recovery: while let state = await networkStates.next() {
+                switch state {
+                case let .ready(_, revision) where revision > initialRevision:
+                    observedRecoveredRevision = true
+                    break recovery
+                case let .unavailable(_, error):
+                    Issue.record(
+                        "Required Network published feature-local failure: \(error)."
+                    )
+                    break recovery
+                case .disabled:
+                    preconditionFailure(
+                        "The connection ended during the first recovery attempt."
+                    )
+                case .synchronizing, .ready, .recovering:
+                    continue
+                }
+            }
+            guard observedRecoveredRevision else {
+                preconditionFailure("Network did not publish a recovered revision.")
+            }
+
+            var containerStates = runtime.container.stateUpdates
+                .makeAsyncIterator()
+            guard case .attached = await containerStates.next() else {
+                preconditionFailure("The recovered container must remain attached.")
+            }
+            try await runtime.emitNetworkLoadingFinished(request)
+            while let state = await containerStates.next() {
+                switch state {
+                case let .failed(_, failure):
+                    return failure
+                case .detached, .attaching, .attached, .detaching:
+                    continue
+                case .closing, .closed:
+                    throw WebInspectorCommandError.containerClosed
+                }
+            }
+            throw WebInspectorCommandError.containerClosed
         }
 
         private func makeNoOpTab(

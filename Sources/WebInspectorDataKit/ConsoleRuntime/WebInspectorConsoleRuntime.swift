@@ -710,7 +710,7 @@ package actor WebInspectorConsoleRuntimeFeature: WebInspectorModelFeature {
     }
 }
 
-public final class WebInspectorConsole: WebInspectorFeatureHandle, Sendable {
+public final class WebInspectorConsole: WebInspectorRetryableFeatureHandle, Sendable {
     private let owner: WebInspectorConsoleRuntimeFeature
     private let registry: WebInspectorFeatureRegistry
 
@@ -733,7 +733,7 @@ public final class WebInspectorConsole: WebInspectorFeatureHandle, Sendable {
     }
 }
 
-public final class WebInspectorRuntime: WebInspectorFeatureHandle, Sendable {
+public final class WebInspectorRuntime: WebInspectorRetryableFeatureHandle, Sendable {
     private let owner: WebInspectorConsoleRuntimeFeature
     private let registry: WebInspectorFeatureRegistry
 
