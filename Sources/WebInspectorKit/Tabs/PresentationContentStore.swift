@@ -26,6 +26,11 @@ package final class PresentationContentStore {
 
     @MainActor
     private final class Resource<Value> {
+        private struct CloseTaskHandle {
+            let id: UUID
+            let task: Task<Void, Never>
+        }
+
         enum State {
             case idle
             case loading
@@ -40,6 +45,7 @@ package final class PresentationContentStore {
         private let failureDisposition: @MainActor (any Error)
             -> ResourceFailureDisposition
         private var task: Task<Void, Never>?
+        private var closeTask: CloseTaskHandle?
 
         init(
             makeValue: @escaping @MainActor () async throws -> Value,
@@ -65,6 +71,7 @@ package final class PresentationContentStore {
 
         isolated deinit {
             task?.cancel()
+            closeTask?.task.cancel()
         }
 
         var status: ResourceStatus {
@@ -121,14 +128,21 @@ package final class PresentationContentStore {
 
         @discardableResult
         func restart(onChange: @escaping @MainActor () -> Void) -> Bool {
-            guard case .closed = state else { return false }
+            guard case .closed = state, closeTask == nil else { return false }
             state = .idle
             start(onChange: onChange)
             return true
         }
 
         func close(onChange: @escaping @MainActor () -> Void) async {
-            guard case .closed = state else {
+            let handle: CloseTaskHandle
+            if let closeTask {
+                handle = closeTask
+            } else {
+                if case .closed = state {
+                    return
+                }
+
                 let runningTask = task
                 let readyValue: Value?
                 if case let .ready(value) = state {
@@ -141,12 +155,26 @@ package final class PresentationContentStore {
                 task = nil
                 runningTask?.cancel()
                 onChange()
-                await runningTask?.value
-                if let readyValue {
-                    await retireValue(readyValue)
+
+                let id = UUID()
+                let retireValue = retireValue
+                let task = Task { @MainActor in
+                    await runningTask?.value
+                    if let readyValue {
+                        await retireValue(readyValue)
+                    }
                 }
-                return
+                handle = CloseTaskHandle(id: id, task: task)
+                closeTask = handle
             }
+
+            await handle.task.value
+            finishCloseTask(id: handle.id)
+        }
+
+        private func finishCloseTask(id: UUID) {
+            guard closeTask?.id == id else { return }
+            closeTask = nil
         }
 
         func readyValue() -> Value? {
@@ -155,7 +183,11 @@ package final class PresentationContentStore {
         }
 
         func waitForAttempt() async {
-            await task?.value
+            if let closeTask {
+                await closeTask.task.value
+            } else {
+                await task?.value
+            }
         }
     }
 

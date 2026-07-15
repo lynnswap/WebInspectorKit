@@ -167,6 +167,64 @@ struct CustomTabResourceTests {
     }
 
     @Test
+    func dismissalJoinsFactoryRetirementAlreadyStartedByConnectionFailure()
+        async throws
+    {
+        let key = WebInspectorTab.ContentKey(
+            tabID: .init(rawValue: "lifecycle-race"),
+            contentID: "root"
+        )
+        let factoryStarted = WebInspectorTestGate()
+        let factoryRelease = WebInspectorContextReply<Void>()
+        let container = WebInspectorModelContainer(
+            configuration: .init(enabledFeatures: [])
+        )
+        let session = WebInspectorSession(modelContainer: container)
+        let context = WebInspectorTab.Context(session: session)
+        let store = PresentationContentStore(context: context)
+        let host = store.customViewController(
+            for: key,
+            context: context,
+            requiredFeatures: []
+        ) { _ in
+            factoryStarted.open()
+            try await factoryRelease.value()
+            return UIViewController()
+        }
+        await factoryStarted.waiter.wait()
+
+        let failure = WebInspectorConnectionFailure.native(
+            WebInspectorFailureDescription(
+                code: "test.connection.failed",
+                phase: "test",
+                message: "Injected connection failure."
+            )
+        )
+        container.publishState(
+            .failed(generation: .init(rawValue: 1), failure: failure)
+        )
+        while host.phase != .closed {
+            await Task.yield()
+        }
+
+        var didClear = false
+        let clear = Task { @MainActor in
+            await store.clear()
+            didClear = true
+        }
+        for _ in 0..<100 {
+            if didClear { break }
+            await Task.yield()
+        }
+        #expect(didClear == false)
+
+        factoryRelease.succeed(())
+        await clear.value
+        #expect(didClear)
+        await container.close()
+    }
+
+    @Test
     func catalogAndContainerExposeTheSameFeatureContract() throws {
         let console = WebInspectorTab(
             id: .init(rawValue: "console"),
