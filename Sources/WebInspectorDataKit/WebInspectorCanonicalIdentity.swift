@@ -424,6 +424,7 @@ package struct CanonicalNetworkOpaqueInitiatorKey: Hashable, Sendable {
     package let pageGeneration: WebInspectorPageGeneration
     package let semanticTargetID: WebInspectorTarget.ID
     package let agentTargetID: WebInspectorTarget.ID
+    package let frameID: FrameID?
     package let targetAuthority: CanonicalNetworkRegisteredTargetAuthority?
     package let rawNodeID: DOM.Node.ID
 
@@ -433,6 +434,7 @@ package struct CanonicalNetworkOpaqueInitiatorKey: Hashable, Sendable {
         pageGeneration: WebInspectorPageGeneration,
         semanticTargetID: WebInspectorTarget.ID,
         agentTargetID: WebInspectorTarget.ID,
+        frameID: FrameID? = nil,
         targetAuthority: CanonicalNetworkRegisteredTargetAuthority?,
         rawNodeID: DOM.Node.ID
     ) {
@@ -441,6 +443,7 @@ package struct CanonicalNetworkOpaqueInitiatorKey: Hashable, Sendable {
         self.pageGeneration = pageGeneration
         self.semanticTargetID = semanticTargetID
         self.agentTargetID = agentTargetID
+        self.frameID = frameID
         self.targetAuthority = targetAuthority
         self.rawNodeID = rawNodeID
     }
@@ -451,6 +454,7 @@ package struct CanonicalNetworkOpaqueInitiatorKey: Hashable, Sendable {
         pageGeneration: WebInspectorPageGeneration,
         semanticTargetID: WebInspectorTarget.ID,
         agentTargetID: WebInspectorTarget.ID,
+        frameID: FrameID? = nil,
         navigationEpoch: WebInspectorNavigationEpoch,
         rawNodeID: DOM.Node.ID
     ) {
@@ -460,6 +464,7 @@ package struct CanonicalNetworkOpaqueInitiatorKey: Hashable, Sendable {
             pageGeneration: pageGeneration,
             semanticTargetID: semanticTargetID,
             agentTargetID: agentTargetID,
+            frameID: frameID,
             targetAuthority: CanonicalNetworkRegisteredTargetAuthority(
                 targetID: semanticTargetID,
                 navigationEpoch: navigationEpoch,

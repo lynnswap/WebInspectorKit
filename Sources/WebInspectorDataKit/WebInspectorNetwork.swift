@@ -4,6 +4,65 @@ import WebInspectorProxyKit
 package enum WebInspectorNetworkWireEvent: Sendable {
     case network(WebInspectorRoutedEvent<Network.Event>)
     case page(WebInspectorRoutedEvent<Page.Event>)
+    case domDocumentUpdated(WebInspectorRoutedEvent<DOM.Event>)
+}
+
+private struct WebInspectorNetworkFrameNavigationTimeline: Sendable {
+    private struct Visit: Sendable {
+        let loaderID: String
+        let epoch: WebInspectorNavigationEpoch
+    }
+
+    private var committed: Visit?
+    private var pendingEpochByLoaderID: [String: WebInspectorNavigationEpoch] = [:]
+    private var lastAllocatedEpoch: WebInspectorNavigationEpoch
+
+    init(initialLoaderID: String) {
+        let initial = WebInspectorNavigationEpoch(rawValue: 0)
+        committed = Visit(loaderID: initialLoaderID, epoch: initial)
+        lastAllocatedEpoch = initial
+    }
+
+    mutating func epoch(for loaderID: String) -> WebInspectorNavigationEpoch {
+        if let committed, committed.loaderID == loaderID {
+            return committed.epoch
+        }
+        if let pending = pendingEpochByLoaderID[loaderID] {
+            return pending
+        }
+        let epoch = allocateEpoch()
+        pendingEpochByLoaderID[loaderID] = epoch
+        return epoch
+    }
+
+    mutating func commit(loaderID: String) -> WebInspectorNavigationEpoch {
+        if let committed, committed.loaderID == loaderID {
+            pendingEpochByLoaderID.removeAll(keepingCapacity: true)
+            return committed.epoch
+        }
+        let epoch: WebInspectorNavigationEpoch
+        if let pending = pendingEpochByLoaderID[loaderID] {
+            epoch = pending
+        } else {
+            epoch = allocateEpoch()
+        }
+        committed = Visit(loaderID: loaderID, epoch: epoch)
+        pendingEpochByLoaderID.removeAll(keepingCapacity: true)
+        return epoch
+    }
+
+    mutating func retire() {
+        committed = nil
+        pendingEpochByLoaderID.removeAll(keepingCapacity: true)
+    }
+
+    private mutating func allocateEpoch() -> WebInspectorNavigationEpoch {
+        let (next, overflow) = lastAllocatedEpoch.rawValue.addingReportingOverflow(1)
+        precondition(!overflow, "Network navigation epoch exhausted.")
+        let epoch = WebInspectorNavigationEpoch(rawValue: next)
+        lastAllocatedEpoch = epoch
+        return epoch
+    }
 }
 
 private enum WebInspectorNetworkBodyLocator: Sendable {
@@ -23,20 +82,46 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
         let frameID: FrameID
     }
 
+    private struct DOMBindingRouteKey: Hashable, Sendable {
+        let attachmentGeneration: WebInspectorAttachmentGeneration
+        let pageGeneration: WebInspectorPageGeneration
+        let semanticTargetID: WebInspectorTarget.ID
+        let agentTargetID: WebInspectorTarget.ID
+    }
+
     private let registry: WebInspectorFeatureRegistry
+    private let bindingBarrier: WebInspectorDOMBindingBarrier
+    private let usesDOMBinding: Bool
     private var connection: WebInspectorFeatureConnection?
     private var storeSink: WebInspectorModelStoreSink?
     private var orderedScope: WebInspectorOrderedEventScope<WebInspectorNetworkWireEvent>?
     private var canonicalStore: CanonicalNetworkStore?
     private var bodyLocators: [CanonicalNetworkRequestIDStorage: WebInspectorNetworkBodyLocator] = [:]
-    private var navigationEpochs: [WebInspectorTarget.ID: WebInspectorNavigationEpoch] = [:]
-    private var frameLoaderIDs: [FrameLoaderKey: String] = [:]
+    private var navigationTimelines: [
+        FrameLoaderKey: WebInspectorNetworkFrameNavigationTimeline
+    ] = [:]
+    private var domDocumentCutByRoute: [DOMBindingRouteKey: UInt64] = [:]
     private var state: WebInspectorFeatureState = .disabled
     private var closeRequested = false
     private var isConsumingOrderedScopeEvents = false
 
-    package init(registry: WebInspectorFeatureRegistry) {
+    #if DEBUG
+        package private(set) var liveLocatorRecordVisitCountForTesting = 0
+        package private(set) var requestStartProcessingCountForTesting = 0
+
+        package func resetLiveLocatorRecordVisitCountForTesting() {
+            liveLocatorRecordVisitCountForTesting = 0
+        }
+    #endif
+
+    package init(
+        registry: WebInspectorFeatureRegistry,
+        bindingBarrier: WebInspectorDOMBindingBarrier,
+        usesDOMBinding: Bool
+    ) {
         self.registry = registry
+        self.bindingBarrier = bindingBarrier
+        self.usesDOMBinding = usesDOMBinding
     }
 
     package func run(
@@ -46,8 +131,8 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
         self.connection = connection
         storeSink = store
         closeRequested = false
-        navigationEpochs.removeAll(keepingCapacity: true)
-        frameLoaderIDs.removeAll(keepingCapacity: true)
+        navigationTimelines.removeAll(keepingCapacity: true)
+        domDocumentCutByRoute.removeAll(keepingCapacity: true)
         if let canonicalStore {
             precondition(
                 canonicalStore.storeID == connection.storeID,
@@ -167,15 +252,29 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
             !isConsumingOrderedScopeEvents,
             "Only one Network ordered scope may reduce live events at a time."
         )
+        var decoders = [
+            NetworkWireCoding.eventDecoder.routed().map(WebInspectorNetworkWireEvent.network),
+            PageWireCoding.eventDecoder.routed().map(WebInspectorNetworkWireEvent.page),
+        ]
+        let capabilities = [
+            NetworkWireCoding.capability,
+            PageWireCoding.capability,
+        ]
+        if usesDOMBinding {
+            decoders.append(
+                DOMWireCoding.eventDecoder
+                    .filtering(
+                        method: WebInspectorProtocolMethod(
+                            rawValue: "DOM.documentUpdated"
+                        )
+                    )
+                    .routed()
+                    .map(WebInspectorNetworkWireEvent.domDocumentUpdated)
+            )
+        }
         let descriptor = WebInspectorOrderedScopeDescriptor<WebInspectorNetworkWireEvent>(
-            decoders: [
-                NetworkWireCoding.eventDecoder.routed().map(WebInspectorNetworkWireEvent.network),
-                PageWireCoding.eventDecoder.routed().map(WebInspectorNetworkWireEvent.page),
-            ],
-            capabilities: [
-                NetworkWireCoding.capability,
-                PageWireCoding.capability,
-            ]
+            decoders: decoders,
+            capabilities: capabilities
         )
         let previousScope = orderedScope
         let scope = try await connection.page.orderedScope(
@@ -212,16 +311,11 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                     )
                     continue
                 }
-                let currentTimeline = await storeSink.metadataValue(
-                    for: webInspectorDOMBindingTimelineKey,
-                    default: WebInspectorDOMBindingTimeline()
-                )
                 guard var staged = canonicalStore else { continue }
                 var stagedLocators = bodyLocators
                 do {
                     try await reduce(
                         event,
-                        timeline: currentTimeline,
                         staged: &staged,
                         locators: &stagedLocators,
                         origin: .live,
@@ -263,17 +357,16 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
             }
 
             let route = try featureScope(from: reply)
-            navigationEpochs = [
-                route.semanticTargetID: WebInspectorNavigationEpoch(rawValue: 0)
-            ]
-            frameLoaderIDs.removeAll(keepingCapacity: true)
-            installFrameLoaders(
+            navigationTimelines.removeAll(keepingCapacity: true)
+            domDocumentCutByRoute.removeAll(keepingCapacity: true)
+            installSnapshotNavigationTimelines(
                 from: reply.value,
                 agentTargetID: route.agentTargetID
             )
-            let timeline = await storeSink.metadataValue(
-                for: webInspectorDOMBindingTimelineKey,
-                default: WebInspectorDOMBindingTimeline()
+            let invalidatedSnapshotFrameIDs = try snapshotFrameIDsInvalidated(
+                in: reply.value,
+                by: prefix,
+                agentTargetID: route.agentTargetID
             )
             let oldSnapshot = canonicalStore?.snapshot
             var staged =
@@ -288,7 +381,6 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
             for event in prefix {
                 try await reduce(
                     event,
-                    timeline: timeline,
                     staged: &staged,
                     locators: &stagedLocators,
                     origin: .enableReplay,
@@ -296,7 +388,9 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                 )
             }
             if closeRequested { throw CancellationError() }
-            for resource in snapshotResources(reply.value) {
+            for resource in snapshotResources(reply.value)
+            where !invalidatedSnapshotFrameIDs.contains(resource.frameID)
+            {
                 let resourceScope = snapshotScope(for: resource, route: route)
                 let result = try staged.reconcileSnapshotResource(
                     resource,
@@ -309,7 +403,6 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                     )
                 }
             }
-            installLiveLocators(from: staged, into: &stagedLocators)
             removeMissingLocators(staged: staged, locators: &stagedLocators)
             staged.finishBootstrap()
 
@@ -339,7 +432,6 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
 
     private func reduce(
         _ pageEvent: WebInspectorPageEvent<WebInspectorNetworkWireEvent>,
-        timeline: WebInspectorDOMBindingTimeline,
         staged: inout CanonicalNetworkStore,
         locators: inout [CanonicalNetworkRequestIDStorage: WebInspectorNetworkBodyLocator],
         origin: CanonicalNetworkEventOrigin,
@@ -348,39 +440,40 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
         switch pageEvent {
         case .reset:
             return
+        case let .event(_, .domDocumentUpdated(routed)):
+            guard case .documentUpdated = routed.value else { return }
+            let route = try featureScope(from: routed)
+            guard let connection else { throw CancellationError() }
+            let key = domBindingRouteKey(
+                attachmentGeneration: connection.attachmentGeneration,
+                route: route
+            )
+            domDocumentCutByRoute[key] = max(
+                domDocumentCutByRoute[key] ?? 0,
+                routed.sequence.rawValue
+            )
         case let .event(_, .page(routed)):
             let route = try featureScope(from: routed)
             switch routed.value {
             case let .frameNavigated(frame):
-                if origin == .live {
-                    observeNavigation(frame, route: route)
-                }
+                commitNavigation(frame, route: route)
             case let .frameDetached(frameID):
-                frameLoaderIDs = frameLoaderIDs.filter {
-                    $0.key.frameID != frameID
-                }
-                let lostTargetID =
-                    route.agentTarget.frameID == frameID
-                    ? route.semanticTargetID
-                    : WebInspectorTarget.ID(frameID.rawValue)
-                let transaction = try staged.targetWasLost(
-                    lostTargetID
+                retireNavigation(
+                    frameID: frameID
                 )
-                if let transaction {
-                    if publishesTransaction {
-                        try await commit(transaction, staged: staged)
-                    }
-                    removeMissingLocators(staged: staged, locators: &locators)
-                }
             case .unknown:
                 break
             }
         case let .event(_, .network(routed)):
             let route = try featureScope(from: routed)
-            let canonicalScope = networkScope(
+            #if DEBUG
+                if case .requestWillBeSent = routed.value {
+                    requestStartProcessingCountForTesting += 1
+                }
+            #endif
+            let canonicalScope = try await networkScope(
                 for: routed,
                 route: route,
-                timeline: timeline,
                 staged: staged
             )
             guard
@@ -390,13 +483,16 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                 origin: origin
                 )
             else {
-                installLiveLocators(from: staged, into: &locators)
                 return
             }
             if publishesTransaction {
                 try await commit(transaction, staged: staged)
             }
-            installLiveLocators(from: staged, into: &locators)
+            updateLiveLocators(
+                for: transaction,
+                staged: staged,
+                locators: &locators
+            )
         }
     }
 
@@ -493,7 +589,12 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
         for resource: CanonicalNetworkSnapshotResource,
         route: WebInspectorFeatureEventScope
     ) -> WebInspectorCanonicalNetworkEventScope {
-        WebInspectorCanonicalNetworkEventScope(
+        let epoch = navigationEpoch(
+            agentTargetID: route.agentTargetID,
+            frameID: resource.frameID,
+            loaderID: resource.loaderID
+        )
+        return WebInspectorCanonicalNetworkEventScope(
             modelScope: route,
             membership: CanonicalNetworkRequestMembership(
                 pageGeneration: route.generation,
@@ -504,9 +605,7 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                 ),
                 targetAuthority: CanonicalNetworkRegisteredTargetAuthority(
                     targetID: route.semanticTargetID,
-                    navigationEpoch: navigationEpoch(
-                        for: route.semanticTargetID
-                    ),
+                    navigationEpoch: epoch,
                     domBindingEpoch: nil
                 ),
                 frameID: resource.frameID,
@@ -515,11 +614,30 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
         )
     }
 
-    private func installLiveLocators(
-        from staged: CanonicalNetworkStore,
-        into locators: inout [CanonicalNetworkRequestIDStorage: WebInspectorNetworkBodyLocator]
+    private func updateLiveLocators(
+        for transaction: CanonicalNetworkTransaction,
+        staged: CanonicalNetworkStore,
+        locators: inout [CanonicalNetworkRequestIDStorage: WebInspectorNetworkBodyLocator]
     ) {
-        for record in staged.requests {
+        for change in transaction.requestChanges {
+            let requestID: CanonicalNetworkRequestIDStorage
+            switch change {
+            case let .insert(record, _):
+                requestID = record.id
+            case let .update(id, _, _):
+                requestID = id
+            case let .delete(id):
+                locators[id] = nil
+                continue
+            }
+            guard let record = staged.request(for: requestID) else {
+                preconditionFailure(
+                    "A non-delete Network change lost its canonical request."
+                )
+            }
+            #if DEBUG
+                liveLocatorRecordVisitCountForTesting += 1
+            #endif
             guard let alias = staged.rawRequestAlias(for: record.id) else {
                 continue
             }
@@ -552,39 +670,62 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
     private func networkScope(
         for event: WebInspectorRoutedEvent<Network.Event>,
         route: WebInspectorFeatureEventScope,
-        timeline: WebInspectorDOMBindingTimeline,
         staged: CanonicalNetworkStore
-    ) -> WebInspectorCanonicalNetworkEventScope {
+    ) async throws -> WebInspectorCanonicalNetworkEventScope {
         if case let .requestWillBeSent(_, request, _, _, _, _) = event.value,
             let rawOrigin = request.origin
         {
-            let semanticTargetID: WebInspectorTarget.ID
-            if rawOrigin.targetID == route.agentTargetID.rawValue {
-                semanticTargetID = route.semanticTargetID
-            } else {
-                semanticTargetID =
-                    rawOrigin.targetID.map(WebInspectorTarget.ID.init)
-                    ?? route.semanticTargetID
+            let canMapFrame: Bool
+            switch route.agentTarget.kind {
+            case .page, .frame:
+                canMapFrame = true
+            case .worker, .other:
+                canMapFrame = false
             }
-            let origin: CanonicalNetworkRequestOrigin =
-                rawOrigin.targetID == nil
-                ? .mappedFrame(frameID: rawOrigin.frameID, targetID: semanticTargetID)
-                : .protocolTarget(semanticTargetID)
-            let binding = timeline.scope(
-                at: event.sequence.rawValue,
-                generation: route.generation,
-                semanticTargetID: semanticTargetID,
-                agentTargetID: route.agentTargetID
-            )
+            let mapsToRoutedPage = canMapFrame
+                && (
+                    rawOrigin.targetID == nil
+                        || rawOrigin.targetID == route.agentTargetID.rawValue
+                        || rawOrigin.targetID == route.semanticTargetID.rawValue
+                )
+            let origin: CanonicalNetworkRequestOrigin
+            let targetAuthority: CanonicalNetworkRegisteredTargetAuthority?
+            if mapsToRoutedPage {
+                origin = .mappedFrame(
+                    frameID: rawOrigin.frameID,
+                    targetID: route.semanticTargetID
+                )
+                let binding = try await domBindingScope(
+                    at: event.sequence.rawValue,
+                    route: route
+                )
+                targetAuthority = CanonicalNetworkRegisteredTargetAuthority(
+                    targetID: route.semanticTargetID,
+                    navigationEpoch: navigationEpoch(
+                        agentTargetID: route.agentTargetID,
+                        frameID: rawOrigin.frameID,
+                        loaderID: rawOrigin.loaderID
+                    ),
+                    domBindingEpoch: binding?.bindingScopeID
+                )
+            } else {
+                let protocolTargetID = rawOrigin.targetID.map(
+                    WebInspectorTarget.ID.init
+                ) ?? route.agentTargetID
+                origin = .protocolTarget(protocolTargetID)
+                targetAuthority = protocolTargetID == route.agentTargetID
+                    ? CanonicalNetworkRegisteredTargetAuthority(
+                        targetID: protocolTargetID,
+                        navigationEpoch: WebInspectorNavigationEpoch(rawValue: 0),
+                        domBindingEpoch: nil
+                    )
+                    : nil
+            }
             let membership = CanonicalNetworkRequestMembership(
                 pageGeneration: route.generation,
                 agentTargetID: route.agentTargetID,
                 origin: origin,
-                targetAuthority: CanonicalNetworkRegisteredTargetAuthority(
-                    targetID: semanticTargetID,
-                    navigationEpoch: navigationEpoch(for: semanticTargetID),
-                    domBindingEpoch: binding?.bindingScopeID
-                ),
+                targetAuthority: targetAuthority,
                 frameID: rawOrigin.frameID,
                 loaderID: rawOrigin.loaderID
             )
@@ -612,9 +753,7 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                 origin: .eventTarget(route.semanticTargetID),
                 targetAuthority: CanonicalNetworkRegisteredTargetAuthority(
                     targetID: route.semanticTargetID,
-                    navigationEpoch: navigationEpoch(
-                        for: route.semanticTargetID
-                    ),
+                    navigationEpoch: WebInspectorNavigationEpoch(rawValue: 0),
                     domBindingEpoch: nil
                 ),
                 frameID: nil,
@@ -624,12 +763,27 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
     }
 
     private func navigationEpoch(
-        for targetID: WebInspectorTarget.ID
+        agentTargetID: WebInspectorTarget.ID,
+        frameID: FrameID,
+        loaderID: String?
     ) -> WebInspectorNavigationEpoch {
-        navigationEpochs[targetID] ?? WebInspectorNavigationEpoch(rawValue: 0)
+        guard let loaderID else {
+            return WebInspectorNavigationEpoch(rawValue: 0)
+        }
+        let key = FrameLoaderKey(
+            agentTargetID: agentTargetID,
+            frameID: frameID
+        )
+        var timeline = navigationTimelines[key]
+            ?? WebInspectorNetworkFrameNavigationTimeline(
+                initialLoaderID: loaderID
+            )
+        let epoch = timeline.epoch(for: loaderID)
+        navigationTimelines[key] = timeline
+        return epoch
     }
 
-    private func observeNavigation(
+    private func commitNavigation(
         _ frame: Page.Frame,
         route: WebInspectorFeatureEventScope
     ) {
@@ -637,36 +791,157 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
             agentTargetID: route.agentTargetID,
             frameID: frame.id
         )
-        let previous = frameLoaderIDs.updateValue(frame.loaderID, forKey: key)
-        guard previous != frame.loaderID,
-            route.agentTarget.frameID == frame.id
-        else {
-            return
-        }
-        let current = navigationEpoch(for: route.semanticTargetID)
-        let (next, overflow) = current.rawValue.addingReportingOverflow(1)
-        precondition(!overflow, "Network navigation epoch exhausted.")
-        navigationEpochs[route.semanticTargetID] = WebInspectorNavigationEpoch(
-            rawValue: next
-        )
+        var timeline = navigationTimelines[key]
+            ?? WebInspectorNetworkFrameNavigationTimeline(
+                initialLoaderID: frame.loaderID
+            )
+        _ = timeline.commit(loaderID: frame.loaderID)
+        navigationTimelines[key] = timeline
     }
 
-    private func installFrameLoaders(
+    private func retireNavigation(
+        frameID: FrameID
+    ) {
+        for key in navigationTimelines.keys where key.frameID == frameID {
+            navigationTimelines[key]?.retire()
+        }
+    }
+
+    private func installSnapshotNavigationTimelines(
         from tree: Page.ResourceTree,
         agentTargetID: WebInspectorTarget.ID
     ) {
-        frameLoaderIDs[
-            FrameLoaderKey(
-                agentTargetID: agentTargetID,
-                frameID: tree.frame.id
-            )
-        ] = tree.frame.loaderID
+        installNavigationTimelineIfNeeded(
+            agentTargetID: agentTargetID,
+            frameID: tree.frame.id,
+            loaderID: tree.frame.loaderID
+        )
         for child in tree.childFrames {
-            installFrameLoaders(
+            installSnapshotNavigationTimelines(
                 from: child,
                 agentTargetID: agentTargetID
             )
         }
+    }
+
+    private func installNavigationTimelineIfNeeded(
+        agentTargetID: WebInspectorTarget.ID,
+        frameID: FrameID,
+        loaderID: String
+    ) {
+        let key = FrameLoaderKey(
+            agentTargetID: agentTargetID,
+            frameID: frameID
+        )
+        if navigationTimelines[key] == nil {
+            navigationTimelines[key] = WebInspectorNetworkFrameNavigationTimeline(
+                initialLoaderID: loaderID
+            )
+        }
+    }
+
+    private func snapshotFrameIDsInvalidated(
+        in tree: Page.ResourceTree,
+        by events: [WebInspectorPageEvent<WebInspectorNetworkWireEvent>],
+        agentTargetID: WebInspectorTarget.ID
+    ) throws -> Set<FrameID> {
+        var loaderIDByFrameID: [FrameID: String] = [:]
+        var childFrameIDsByFrameID: [FrameID: [FrameID]] = [:]
+        func record(_ tree: Page.ResourceTree) {
+            loaderIDByFrameID[tree.frame.id] = tree.frame.loaderID
+            childFrameIDsByFrameID[tree.frame.id] = tree.childFrames.map(\.frame.id)
+            for child in tree.childFrames {
+                record(child)
+            }
+        }
+        record(tree)
+
+        var invalidated: Set<FrameID> = []
+        func invalidate(_ frameID: FrameID) {
+            guard invalidated.insert(frameID).inserted else { return }
+            for childFrameID in childFrameIDsByFrameID[frameID] ?? [] {
+                invalidate(childFrameID)
+            }
+        }
+
+        for event in events {
+            guard case let .event(_, .page(routed)) = event else { continue }
+            let route = try featureScope(from: routed)
+            guard route.agentTargetID == agentTargetID else { continue }
+            switch routed.value {
+            case let .frameNavigated(frame):
+                if let snapshotLoaderID = loaderIDByFrameID[frame.id],
+                    snapshotLoaderID != frame.loaderID
+                {
+                    invalidate(frame.id)
+                }
+                loaderIDByFrameID[frame.id] = frame.loaderID
+            case let .frameDetached(frameID):
+                if loaderIDByFrameID[frameID] != nil {
+                    invalidate(frameID)
+                }
+            case .unknown:
+                continue
+            }
+        }
+        return invalidated
+    }
+
+    private func domBindingScope(
+        at sequence: UInt64,
+        route: WebInspectorFeatureEventScope
+    ) async throws -> WebInspectorCanonicalDOMEventScope? {
+        guard usesDOMBinding, let connection, let storeSink else { return nil }
+        let routeKey = domBindingRouteKey(
+            attachmentGeneration: connection.attachmentGeneration,
+            route: route
+        )
+        let requiredBoundary = domDocumentCutByRoute[routeKey]
+        while true {
+            try Task.checkCancellation()
+            let observation = bindingBarrier.observation(
+                for: connection.attachmentGeneration
+            )
+            if observation.isUnavailable { return nil }
+            let timeline = await storeSink.metadataValue(
+                for: webInspectorDOMBindingTimelineKey,
+                default: WebInspectorDOMBindingTimeline()
+            )
+            if timeline.hasProcessed(
+                through: requiredBoundary,
+                attachmentGeneration: connection.attachmentGeneration,
+                generation: route.generation,
+                semanticTargetID: route.semanticTargetID,
+                agentTargetID: route.agentTargetID
+            ) {
+                return timeline.scope(
+                    at: sequence,
+                    attachmentGeneration: connection.attachmentGeneration,
+                    generation: route.generation,
+                    semanticTargetID: route.semanticTargetID,
+                    agentTargetID: route.agentTargetID
+                )
+            }
+            if requiredBoundary == nil,
+                case let .ready(generation, _) = registry.state(for: .dom),
+                generation == route.generation
+            {
+                return nil
+            }
+            try await bindingBarrier.waitForChange(after: observation.version)
+        }
+    }
+
+    private func domBindingRouteKey(
+        attachmentGeneration: WebInspectorAttachmentGeneration,
+        route: WebInspectorFeatureEventScope
+    ) -> DOMBindingRouteKey {
+        DOMBindingRouteKey(
+            attachmentGeneration: attachmentGeneration,
+            pageGeneration: route.generation,
+            semanticTargetID: route.semanticTargetID,
+            agentTargetID: route.agentTargetID
+        )
     }
 
     private func rawRequestID(in event: Network.Event) -> Network.Request.ID? {
@@ -703,18 +978,13 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
             throw connectionFailure(
                 code: "network.route.missing",
                         phase: "events",
-                        message: "Network event lacked semantic or agent target authority."
+                message: "Network event lacked semantic or agent target authority."
             )
         }
-        let agentTarget = WebInspectorFeatureTarget(agent)
-        let semanticTarget =
-            agentTarget.kind == .frame
-            ? agentTarget
-            : WebInspectorFeatureTarget(semantic)
         return WebInspectorFeatureEventScope(
             generation: WebInspectorPageGeneration(rawValue: event.generation.rawValue),
-            semanticTarget: semanticTarget,
-            agentTarget: agentTarget
+            semanticTarget: WebInspectorFeatureTarget(semantic),
+            agentTarget: WebInspectorFeatureTarget(agent)
         )
     }
 

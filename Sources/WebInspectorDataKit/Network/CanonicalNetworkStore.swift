@@ -2969,6 +2969,7 @@ private extension CanonicalNetworkStore {
                 pageGeneration: membership.pageGeneration,
                 semanticTargetID: membership.semanticTargetID,
                 agentTargetID: membership.agentTargetID,
+                frameID: membership.frameID,
                 targetAuthority: membership.targetAuthority,
                 rawNodeID: rawNodeID
             ))

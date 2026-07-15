@@ -74,6 +74,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
 
     private let registry: WebInspectorFeatureRegistry
     private let pickerPublisher: _WebInspectorStatePublisher<WebInspectorElementPickerState>
+    private let bindingBarrier: WebInspectorDOMBindingBarrier
     private var connection: WebInspectorFeatureConnection?
     private var store: WebInspectorModelStoreSink?
     private var orderedScope: WebInspectorOrderedEventScope<WebInspectorDOMWireEvent>?
@@ -94,10 +95,12 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
 
     package init(
         registry: WebInspectorFeatureRegistry,
-        pickerPublisher: _WebInspectorStatePublisher<WebInspectorElementPickerState>
+        pickerPublisher: _WebInspectorStatePublisher<WebInspectorElementPickerState>,
+        bindingBarrier: WebInspectorDOMBindingBarrier
     ) {
         self.registry = registry
         self.pickerPublisher = pickerPublisher
+        self.bindingBarrier = bindingBarrier
     }
 
     package func run(
@@ -127,6 +130,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         } catch is CancellationError {
             return .detached
         } catch let WebInspectorProxyError.unsupported(requirements) {
+            bindingBarrier.markUnavailable(connection.attachmentGeneration)
             await orderedScope?.close()
             orderedScope = nil
             guard !closeRequested else { return .detached }
@@ -148,6 +152,9 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     package func close() async {
         guard !closeRequested else { return }
         closeRequested = true
+        if let connection {
+            bindingBarrier.markUnavailable(connection.attachmentGeneration)
+        }
         await closeStyleCommitGate()
         await retirePicker(
             with: WebInspectorCommandError.containerClosed,
@@ -557,6 +564,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                     )
                     try await bootstrapCurrentDocument(in: scope, store: store)
                 } else {
+                    try await markUnboundDocumentUpdateIfNeeded(event)
                     try await apply(event)
                 }
             }
@@ -574,6 +582,10 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
             let prefix = try await scope.drain(through: reply.boundary)
             if closeRequested { throw CancellationError() }
             let route = try featureScope(from: reply)
+            try await markUnboundDocumentUpdates(
+                in: prefix,
+                excluding: route
+            )
             let reset = lastReset(in: prefix)
             let documentCuts = try currentDocumentCuts(in: prefix, route: route)
             let lastCutIndex = [reset?.index, documentCuts.last?.index]
@@ -642,7 +654,11 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                     initialValue: WebInspectorDOMBindingTimeline()
                 ) { timeline, _ in
                     let binding = try existingBinding
-                        ?? timeline.issue(after: boundary, route: route)
+                        ?? timeline.issue(
+                            after: boundary,
+                            route: route,
+                            attachmentGeneration: connection.attachmentGeneration
+                        )
                     var stagedDOM = baseDOM
                     var stagedCSS = baseCSS
                     var canonical = try stagedDOM.bootstrap(
@@ -685,6 +701,7 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                     )
                     return (transaction, (stagedDOM, stagedCSS, binding))
                 }
+                bindingBarrier.signalTimelineChange()
                 reducer = result.output.0
                 cssReducer = result.output.1
                 currentBindingScope = result.output.2
@@ -902,7 +919,8 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
 
         guard let baseDOM = reducer,
             let baseCSS = cssReducer,
-            let store
+            let store,
+            let connection
         else {
             throw WebInspectorFeatureError.bootstrap(
                 WebInspectorFailureDescription(
@@ -919,7 +937,11 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                 updating: webInspectorDOMBindingTimelineKey,
                 initialValue: WebInspectorDOMBindingTimeline()
             ) { timeline, _ in
-                let binding = try timeline.issue(after: boundary, route: route)
+                let binding = try timeline.issue(
+                    after: boundary,
+                    route: route,
+                    attachmentGeneration: connection.attachmentGeneration
+                )
                 var stagedDOM = baseDOM
                 var stagedCSS = baseCSS
                 var canonical = try stagedDOM.invalidateDocument(binding)
@@ -942,11 +964,64 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                 return (transaction, (stagedDOM, stagedCSS, binding))
             }
         }
+        bindingBarrier.signalTimelineChange()
         reducer = result.output.0
         cssReducer = result.output.1
         currentBindingScope = result.output.2
         loadedStyles.removeAll(keepingCapacity: true)
         transition(to: .synchronizing(generation: route.generation))
+    }
+
+    private func markUnboundDocumentUpdates(
+        in events: [WebInspectorPageEvent<WebInspectorDOMWireEvent>],
+        excluding currentRoute: WebInspectorFeatureEventScope
+    ) async throws {
+        for event in events {
+            guard case let .event(_, event) = event,
+                case let .dom(routed) = event,
+                case .documentUpdated = routed.value
+            else { continue }
+            let route = try featureScope(from: routed)
+            guard route != currentRoute else { continue }
+            try await markUnboundDocumentUpdate(
+                after: routed.sequence.rawValue,
+                route: route
+            )
+        }
+    }
+
+    private func markUnboundDocumentUpdateIfNeeded(
+        _ event: WebInspectorDOMWireEvent
+    ) async throws {
+        guard case let .dom(routed) = event,
+            case .documentUpdated = routed.value
+        else { return }
+        try await markUnboundDocumentUpdate(
+            after: routed.sequence.rawValue,
+            route: featureScope(from: routed)
+        )
+    }
+
+    private func markUnboundDocumentUpdate(
+        after boundary: UInt64,
+        route: WebInspectorFeatureEventScope
+    ) async throws {
+        guard binding(for: route) == nil,
+            let store,
+            let connection
+        else { return }
+        _ = try await store.commit(
+            WebInspectorModelTransaction(),
+            updating: webInspectorDOMBindingTimelineKey,
+            initialValue: WebInspectorDOMBindingTimeline()
+        ) { timeline, _ in
+            timeline.markProcessed(
+                through: boundary,
+                route: route,
+                attachmentGeneration: connection.attachmentGeneration
+            )
+        }
+        bindingBarrier.signalTimelineChange()
     }
 
     // MARK: Helpers

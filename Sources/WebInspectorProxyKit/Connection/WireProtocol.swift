@@ -138,14 +138,21 @@ package struct WebInspectorWireCommand<Result: Sendable>: Sendable {
 
 package struct WebInspectorEventDecoder<Event: Sendable>: Sendable {
     package let domain: WebInspectorProtocolDomainToken
+    private let acceptsBody: @Sendable (WebInspectorRoutedEventEnvelope) -> Bool
     private let decodeBody: @Sendable (WebInspectorRoutedEventEnvelope) throws -> Event
 
     package init(
         domain: WebInspectorProtocolDomainToken,
+        accepts: @escaping @Sendable (WebInspectorRoutedEventEnvelope) -> Bool = { _ in true },
         decode: @escaping @Sendable (WebInspectorRoutedEventEnvelope) throws -> Event
     ) {
         self.domain = domain
+        acceptsBody = accepts
         decodeBody = decode
+    }
+
+    package func accepts(_ envelope: WebInspectorRoutedEventEnvelope) -> Bool {
+        acceptsBody(envelope)
     }
 
     package func decode(_ envelope: WebInspectorRoutedEventEnvelope) throws -> Event {
@@ -155,13 +162,31 @@ package struct WebInspectorEventDecoder<Event: Sendable>: Sendable {
     package func map<Mapped: Sendable>(
         _ transform: @escaping @Sendable (Event) -> Mapped
     ) -> WebInspectorEventDecoder<Mapped> {
-        WebInspectorEventDecoder<Mapped>(domain: domain) { envelope in
+        WebInspectorEventDecoder<Mapped>(
+            domain: domain,
+            accepts: acceptsBody
+        ) { envelope in
             transform(try decodeBody(envelope))
         }
     }
 
+    package func filtering(
+        method: WebInspectorProtocolMethod
+    ) -> WebInspectorEventDecoder<Event> {
+        WebInspectorEventDecoder<Event>(
+            domain: domain,
+            accepts: { envelope in
+                envelope.method == method && acceptsBody(envelope)
+            },
+            decode: decodeBody
+        )
+    }
+
     package func routed() -> WebInspectorEventDecoder<WebInspectorRoutedEvent<Event>> {
-        WebInspectorEventDecoder<WebInspectorRoutedEvent<Event>>(domain: domain) { envelope in
+        WebInspectorEventDecoder<WebInspectorRoutedEvent<Event>>(
+            domain: domain,
+            accepts: acceptsBody
+        ) { envelope in
             WebInspectorRoutedEvent(
                 sequence: envelope.sequence,
                 generation: envelope.generation,

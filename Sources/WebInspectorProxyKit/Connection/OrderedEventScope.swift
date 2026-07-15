@@ -263,7 +263,9 @@ package struct ConnectionOrderedScopeSink: Sendable {
         let decoders = descriptor.decoders
         domains = Set(decoders.map(\.domain))
         deliver = { envelope in
-            guard let decoder = decoders.first(where: { $0.domain == envelope.method.domain }) else {
+            guard let decoder = decoders.first(where: {
+                $0.domain == envelope.method.domain && $0.accepts(envelope)
+            }) else {
                 return .unrelated
             }
             do {

@@ -76,11 +76,17 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
         )
         self.featureRegistry = featureRegistry
         let pickerPublisher = _WebInspectorStatePublisher<WebInspectorElementPickerState>(.idle)
+        let domBindingBarrier = WebInspectorDOMBindingBarrier()
         let domFeature = WebInspectorDOMFeature(
             registry: featureRegistry,
-            pickerPublisher: pickerPublisher
+            pickerPublisher: pickerPublisher,
+            bindingBarrier: domBindingBarrier
         )
-        let networkFeature = WebInspectorNetworkFeature(registry: featureRegistry)
+        let networkFeature = WebInspectorNetworkFeature(
+            registry: featureRegistry,
+            bindingBarrier: domBindingBarrier,
+            usesDOMBinding: configuration.enabledFeatures.contains(.dom)
+        )
         let consoleRuntimeFeature = WebInspectorConsoleRuntimeFeature(registry: featureRegistry)
         self.domFeature = domFeature
         self.networkFeature = networkFeature
@@ -126,11 +132,17 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
         )
         self.featureRegistry = featureRegistry
         let pickerPublisher = _WebInspectorStatePublisher<WebInspectorElementPickerState>(.idle)
+        let domBindingBarrier = WebInspectorDOMBindingBarrier()
         let domFeature = WebInspectorDOMFeature(
             registry: featureRegistry,
-            pickerPublisher: pickerPublisher
+            pickerPublisher: pickerPublisher,
+            bindingBarrier: domBindingBarrier
         )
-        let networkFeature = WebInspectorNetworkFeature(registry: featureRegistry)
+        let networkFeature = WebInspectorNetworkFeature(
+            registry: featureRegistry,
+            bindingBarrier: domBindingBarrier,
+            usesDOMBinding: configuration.enabledFeatures.contains(.dom)
+        )
         let consoleRuntimeFeature = WebInspectorConsoleRuntimeFeature(registry: featureRegistry)
         self.domFeature = domFeature
         self.networkFeature = networkFeature
