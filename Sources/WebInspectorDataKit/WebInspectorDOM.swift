@@ -18,12 +18,47 @@ private struct WebInspectorDOMRecoveryRequest: Error, Sendable {
 package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     package static let id = WebInspectorFeatureID.dom
 
-    private enum PickerPhase {
+    private enum PickerEnableIntent {
+        case activate
+        case cancelAfterEnable
+        case selected(Result<DOMNode.ID, any Error>)
+        case resolveRemoteObject(
+            Runtime.RemoteObject.ID,
+            WebInspectorCanonicalDOMEventScope
+        )
+    }
+
+    private enum PickerOperationPhase {
+        case enabling(
+            task: Task<Void, Never>,
+            intent: PickerEnableIntent
+        )
+        case active
+        case resolvingSelection(task: Task<Void, Never>)
+        case disabling(task: Task<Void, Never>)
+        case retiring
+
+        var task: Task<Void, Never>? {
+            switch self {
+            case let .enabling(task, _),
+                let .resolvingSelection(task),
+                let .disabling(task):
+                task
+            case .active, .retiring:
+                nil
+            }
+        }
+    }
+
+    private struct PickerOperation {
+        let id: UInt64
+        let continuation: CheckedContinuation<DOMNode.ID, any Error>
+        var phase: PickerOperationPhase
+    }
+
+    private enum PickerState {
         case idle
-        case enabling(UInt64)
-        case active(UInt64)
-        case resolving(UInt64)
-        case disabling(UInt64)
+        case operation(PickerOperation)
         case unavailable(WebInspectorFeatureError)
     }
 
@@ -42,12 +77,8 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     private var explicitRetryRequested = false
     private var retryWaiter: CheckedContinuation<Void, Never>?
 
-    private var pickerPhase: PickerPhase = .idle
+    private var pickerState: PickerState = .idle
     private var nextPickerOperationID: UInt64 = 0
-    private var pickerContinuation:
-        CheckedContinuation<DOMNode.ID, any Error>?
-    private var pickerEarlyResult: Result<DOMNode.ID, any Error>?
-    private var pickerCancelRequested = false
 
     package init(
         registry: WebInspectorFeatureRegistry,
@@ -66,16 +97,10 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         closeRequested = false
         explicitRetryRequested = false
         recoveryBudget = WebInspectorFeatureRecoveryBudget()
-        reducer = WebInspectorCanonicalDOMReducer(
-            storeID: connection.storeID,
-            attachmentGeneration: connection.attachmentGeneration
-        )
-        cssReducer = WebInspectorCanonicalCSSReducer(
-            storeID: connection.storeID,
-            attachmentGeneration: connection.attachmentGeneration
-        )
+        // Do not replace the reducers here: after detach they still describe
+        // the last committed records that the next bootstrap must delete in
+        // its atomic attachment-generation replacement transaction.
         currentBindingScope = nil
-        loadedStyles.removeAll(keepingCapacity: true)
         await publish(.synchronizing(generation: await currentGeneration()))
 
         while !closeRequested {
@@ -171,7 +196,10 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         explicitRetryRequested = true
         retryWaiter?.resume()
         retryWaiter = nil
-        await retirePicker(for: .containerClosed, disableBackend: true)
+        await retirePicker(
+            with: WebInspectorCommandError.containerClosed,
+            disableBackend: true
+        )
         await orderedScope?.close()
         orderedScope = nil
         connection = nil
@@ -409,49 +437,36 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     // MARK: Picker
 
     package func pickElement() async throws -> DOMNode.ID {
-        guard case .idle = pickerPhase else {
-            if case let .unavailable(error) = pickerPhase {
-                throw WebInspectorElementPickerError.unavailable(error)
-            }
+        guard !closeRequested else {
+            throw WebInspectorCommandError.containerClosed
+        }
+        switch pickerState {
+        case .idle:
+            break
+        case let .unavailable(error):
+            throw WebInspectorElementPickerError.unavailable(error)
+        case .operation:
             throw WebInspectorElementPickerError.busy
         }
         guard let connection else { throw WebInspectorCommandError.containerClosed }
         nextPickerOperationID &+= 1
         let operationID = nextPickerOperationID
-        pickerCancelRequested = false
-        pickerEarlyResult = nil
-        pickerPhase = .enabling(operationID)
-        pickerPublisher.publish(.enabling)
-
-        do {
-            try await connection.page.dom.setInspectMode(enabled: true)
-        } catch {
-            pickerPhase = .idle
-            pickerPublisher.publish(.idle)
-            throw WebInspectorElementPickerError.enableFailed(
-                webInspectorFailureDescription(error, code: "picker.enable", phase: "DOM.setInspectModeEnabled")
-            )
-        }
-
-        guard pickerOperationID == operationID else {
-            throw WebInspectorElementPickerError.targetChanged
-        }
-        if pickerCancelRequested || closeRequested {
-            try await disablePicker(operationID: operationID)
-            throw CancellationError()
-        }
-        if let result = pickerEarlyResult {
-            pickerEarlyResult = nil
-            pickerPhase = .idle
-            pickerPublisher.publish(.idle)
-            return try result.get()
-        }
-
-        pickerPhase = .active(operationID)
-        pickerPublisher.publish(.active)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                pickerContinuation = continuation
+                let task = Task {
+                    await self.runPickerEnable(
+                        operationID: operationID,
+                        connection: connection
+                    )
+                }
+                pickerState = .operation(
+                    PickerOperation(
+                        id: operationID,
+                        continuation: continuation,
+                        phase: .enabling(task: task, intent: .activate)
+                    )
+                )
+                pickerPublisher.publish(.enabling)
             }
         } onCancel: {
             Task { await self.cancelPicker(operationID: operationID) }
@@ -459,30 +474,13 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     }
 
     package func cancelElementPicker() async {
-        switch pickerPhase {
-        case .idle, .unavailable:
-            return
-        case let .enabling(operationID):
-            pickerCancelRequested = true
-            pickerPhase = .disabling(operationID)
-            pickerPublisher.publish(.disabling)
-        case let .active(operationID):
-            await cancelPicker(operationID: operationID)
-        case let .resolving(operationID):
-            pickerContinuation?.resume(throwing: CancellationError())
-            pickerContinuation = nil
-            pickerEarlyResult = .failure(CancellationError())
-            pickerPhase = .idle
-            pickerPublisher.publish(.idle)
-            _ = operationID
-        case .disabling:
-            return
-        }
+        guard case let .operation(operation) = pickerState else { return }
+        cancelPicker(operationID: operation.id)
     }
 
     package func retryElementPicker() async {
-        guard case .unavailable = pickerPhase else { return }
-        pickerPhase = .idle
+        guard case .unavailable = pickerState else { return }
+        pickerState = .idle
         pickerPublisher.publish(.idle)
     }
 
@@ -621,14 +619,14 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                     resetPublishedDocument: true
                 )
             case let .inspect(rawID):
-                await resolvePicker(rawNodeID: rawID, binding: binding)
+                resolvePicker(rawNodeID: rawID, binding: binding)
             default:
                 try await reduceDOM(routed.value, binding: binding, method: routed.method.rawValue)
             }
         case let .inspector(routed):
             guard let binding = binding(for: try featureScope(from: routed)) else { return }
             if case let .inspect(object, _) = routed.value, let objectID = object.id {
-                await resolvePicker(remoteObjectID: objectID, binding: binding)
+                resolvePicker(remoteObjectID: objectID, binding: binding)
             }
         case let .css(routed):
             guard let binding = binding(for: try featureScope(from: routed)) else { return }
@@ -762,7 +760,10 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         loadedStyles.removeAll(keepingCapacity: true)
         currentBindingScope = nil
         transition(to: .synchronizing(generation: generation))
-        await retirePicker(for: .targetChanged, disableBackend: false)
+        await retirePicker(
+            with: WebInspectorElementPickerError.targetChanged,
+            disableBackend: false
+        )
     }
 
     // MARK: Helpers
@@ -1000,173 +1001,369 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         )
     }
 
-    private var pickerOperationID: UInt64? {
-        switch pickerPhase {
-        case .idle, .unavailable: nil
-        case let .enabling(id), let .active(id), let .resolving(id), let .disabling(id): id
+    private func runPickerEnable(
+        operationID: UInt64,
+        connection: WebInspectorFeatureConnection
+    ) async {
+        let result: Result<Void, any Error>
+        do {
+            try await connection.page.dom.setInspectMode(enabled: true)
+            result = .success(())
+        } catch {
+            result = .failure(error)
+        }
+        finishPickerEnable(
+            result,
+            operationID: operationID,
+            connection: connection
+        )
+    }
+
+    private func finishPickerEnable(
+        _ result: Result<Void, any Error>,
+        operationID: UInt64,
+        connection: WebInspectorFeatureConnection
+    ) {
+        guard case let .operation(operation) = pickerState,
+            operation.id == operationID,
+            case let .enabling(_, intent) = operation.phase
+        else { return }
+
+        switch intent {
+        case .activate:
+            switch result {
+            case .success:
+                var active = operation
+                active.phase = .active
+                pickerState = .operation(active)
+                pickerPublisher.publish(.active)
+            case let .failure(error):
+                finishPickerOperation(
+                    .failure(
+                        WebInspectorElementPickerError.enableFailed(
+                            webInspectorFailureDescription(
+                                error,
+                                code: "picker.enable",
+                                phase: "DOM.setInspectModeEnabled"
+                            )
+                        )
+                    ),
+                    operationID: operationID
+                )
+            }
+        case .cancelAfterEnable:
+            switch result {
+            case .success:
+                beginPickerDisable(
+                    operationID: operationID,
+                    connection: connection,
+                    publishState: false
+                )
+            case .failure:
+                finishPickerOperation(
+                    .failure(CancellationError()),
+                    operationID: operationID
+                )
+            }
+        case let .selected(selection):
+            // The inspect event is backend proof that searching was enabled and
+            // then returned to idle; a later command reply cannot supersede it.
+            finishPickerOperation(selection, operationID: operationID)
+        case let .resolveRemoteObject(remoteObjectID, binding):
+            beginPickerResolution(
+                remoteObjectID: remoteObjectID,
+                binding: binding,
+                operationID: operationID,
+                connection: connection,
+                publishState: false
+            )
         }
     }
 
-    private func cancelPicker(operationID: UInt64) async {
-        guard pickerOperationID == operationID else { return }
-        pickerCancelRequested = true
-        switch pickerPhase {
-        case .enabling:
-            pickerPhase = .disabling(operationID)
-            pickerPublisher.publish(.disabling)
+    private func cancelPicker(operationID: UInt64) {
+        guard case let .operation(operation) = pickerState,
+            operation.id == operationID
+        else { return }
+
+        switch operation.phase {
+        case let .enabling(task, intent):
+            switch intent {
+            case .activate:
+                var cancelPending = operation
+                cancelPending.phase = .enabling(
+                    task: task,
+                    intent: .cancelAfterEnable
+                )
+                pickerState = .operation(cancelPending)
+                pickerPublisher.publish(.disabling)
+            case .cancelAfterEnable:
+                return
+            case .selected, .resolveRemoteObject:
+                task.cancel()
+                finishPickerOperation(
+                    .failure(CancellationError()),
+                    operationID: operationID
+                )
+            }
         case .active:
-            do { try await disablePicker(operationID: operationID) }
-            catch { }
-        case .resolving:
-            pickerContinuation?.resume(throwing: CancellationError())
-            pickerContinuation = nil
-            pickerPhase = .idle
-            pickerPublisher.publish(.idle)
-        case .disabling, .idle, .unavailable:
-            break
+            guard let connection else {
+                preconditionFailure("An active picker must retain its feature connection.")
+            }
+            beginPickerDisable(
+                operationID: operationID,
+                connection: connection,
+                publishState: true
+            )
+        case let .resolvingSelection(task):
+            task.cancel()
+            finishPickerOperation(
+                .failure(CancellationError()),
+                operationID: operationID
+            )
+        case .disabling, .retiring:
+            return
         }
     }
 
-    private func disablePicker(operationID: UInt64) async throws {
-        guard let connection else { throw WebInspectorCommandError.containerClosed }
-        pickerPhase = .disabling(operationID)
-        pickerPublisher.publish(.disabling)
+    private func beginPickerDisable(
+        operationID: UInt64,
+        connection: WebInspectorFeatureConnection,
+        publishState: Bool
+    ) {
+        guard case var .operation(operation) = pickerState,
+            operation.id == operationID
+        else { return }
+        let task = Task {
+            await self.runPickerDisable(
+                operationID: operationID,
+                connection: connection
+            )
+        }
+        operation.phase = .disabling(task: task)
+        pickerState = .operation(operation)
+        if publishState {
+            pickerPublisher.publish(.disabling)
+        }
+    }
+
+    private func runPickerDisable(
+        operationID: UInt64,
+        connection: WebInspectorFeatureConnection
+    ) async {
         var lastError: (any Error)?
         for _ in 0..<2 {
+            guard !Task.isCancelled else { return }
             do {
                 try await connection.page.dom.setInspectMode(enabled: false)
-                pickerContinuation?.resume(throwing: CancellationError())
-                pickerContinuation = nil
-                pickerPhase = .idle
-                pickerPublisher.publish(.idle)
+                finishPickerDisable(.success(()), operationID: operationID)
                 return
             } catch {
+                guard !Task.isCancelled else { return }
                 lastError = error
             }
         }
-        let failure = WebInspectorFeatureError.command(
-            webInspectorFailureDescription(
-                lastError ?? WebInspectorCommandError.targetChanged,
+        guard let lastError else {
+            preconditionFailure("The bounded picker disable loop must record a failure.")
+        }
+        finishPickerDisable(.failure(lastError), operationID: operationID)
+    }
+
+    private func finishPickerDisable(
+        _ result: Result<Void, any Error>,
+        operationID: UInt64
+    ) {
+        guard case let .operation(operation) = pickerState,
+            operation.id == operationID,
+            case .disabling = operation.phase
+        else { return }
+
+        switch result {
+        case .success:
+            finishPickerOperation(
+                .failure(CancellationError()),
+                operationID: operationID
+            )
+        case let .failure(error):
+            let description = webInspectorFailureDescription(
+                error,
                 code: "picker.disable",
                 phase: "DOM.setInspectModeEnabled"
             )
-        )
-        pickerContinuation?.resume(
-            throwing: WebInspectorElementPickerError.disableFailed(
-                webInspectorFailureDescription(
-                    lastError ?? WebInspectorCommandError.targetChanged,
-                    code: "picker.disable",
-                    phase: "DOM.setInspectModeEnabled"
-                )
+            let failure = WebInspectorFeatureError.command(description)
+            pickerState = .unavailable(failure)
+            pickerPublisher.publish(.unavailable(failure))
+            operation.continuation.resume(
+                throwing: WebInspectorElementPickerError.disableFailed(description)
             )
-        )
-        pickerContinuation = nil
-        pickerPhase = .unavailable(failure)
-        pickerPublisher.publish(.unavailable(failure))
-        throw WebInspectorElementPickerError.disableFailed(
-            webInspectorFailureDescription(
-                lastError ?? WebInspectorCommandError.targetChanged,
-                code: "picker.disable",
-                phase: "DOM.setInspectModeEnabled"
-            )
-        )
+        }
     }
 
     private func resolvePicker(
         rawNodeID: DOM.Node.ID,
         binding: WebInspectorCanonicalDOMEventScope
-    ) async {
-        guard let operationID = pickerOperationID,
-            pickerAcceptsSelection
-        else { return }
-        pickerPhase = .resolving(operationID)
-        pickerPublisher.publish(.resolvingSelection)
-        let result: Result<DOMNode.ID, any Error>
-        do {
-            guard let reducer,
-                let canonical = try reducer.nodeID(for: rawNodeID, in: binding)
-            else { throw WebInspectorCommandError.staleIdentifier }
-            result = .success(DOMNode.ID(canonical: canonical))
-        } catch {
-            result = .failure(
-                WebInspectorElementPickerError.selectionResolutionFailed(
-                    webInspectorFailureDescription(error, code: "picker.resolve", phase: "DOM.inspect")
-                )
+    ) {
+        guard case var .operation(operation) = pickerState else { return }
+        let result = pickerSelectionResult(
+            rawNodeID: rawNodeID,
+            binding: binding,
+            phase: "DOM.inspect"
+        )
+
+        switch operation.phase {
+        case let .enabling(task, .activate):
+            operation.phase = .enabling(
+                task: task,
+                intent: .selected(result)
             )
+            pickerState = .operation(operation)
+            pickerPublisher.publish(.resolvingSelection)
+        case .active:
+            pickerPublisher.publish(.resolvingSelection)
+            finishPickerOperation(result, operationID: operation.id)
+        case .enabling, .resolvingSelection, .disabling, .retiring:
+            return
         }
-        completePicker(result, operationID: operationID)
     }
 
     private func resolvePicker(
         remoteObjectID: Runtime.RemoteObject.ID,
         binding: WebInspectorCanonicalDOMEventScope
-    ) async {
-        guard let operationID = pickerOperationID,
-            pickerAcceptsSelection,
-            let connection
+    ) {
+        guard case var .operation(operation) = pickerState else { return }
+
+        switch operation.phase {
+        case let .enabling(task, .activate):
+            operation.phase = .enabling(
+                task: task,
+                intent: .resolveRemoteObject(remoteObjectID, binding)
+            )
+            pickerState = .operation(operation)
+            pickerPublisher.publish(.resolvingSelection)
+        case .active:
+            guard let connection else {
+                preconditionFailure("An active picker must retain its feature connection.")
+            }
+            beginPickerResolution(
+                remoteObjectID: remoteObjectID,
+                binding: binding,
+                operationID: operation.id,
+                connection: connection,
+                publishState: true
+            )
+        case .enabling, .resolvingSelection, .disabling, .retiring:
+            return
+        }
+    }
+
+    private func beginPickerResolution(
+        remoteObjectID: Runtime.RemoteObject.ID,
+        binding: WebInspectorCanonicalDOMEventScope,
+        operationID: UInt64,
+        connection: WebInspectorFeatureConnection,
+        publishState: Bool
+    ) {
+        guard case var .operation(operation) = pickerState,
+            operation.id == operationID
         else { return }
-        pickerPhase = .resolving(operationID)
-        pickerPublisher.publish(.resolvingSelection)
+        let task = Task {
+            await self.runPickerResolution(
+                remoteObjectID: remoteObjectID,
+                binding: binding,
+                operationID: operationID,
+                connection: connection
+            )
+        }
+        operation.phase = .resolvingSelection(task: task)
+        pickerState = .operation(operation)
+        if publishState {
+            pickerPublisher.publish(.resolvingSelection)
+        }
+    }
+
+    private func runPickerResolution(
+        remoteObjectID: Runtime.RemoteObject.ID,
+        binding: WebInspectorCanonicalDOMEventScope,
+        operationID: UInt64,
+        connection: WebInspectorFeatureConnection
+    ) async {
+        let result: Result<DOMNode.ID, any Error>
         do {
-            let rawID = try await connection.page.dom.requestNode(
+            let rawNodeID = try await connection.page.dom.requestNode(
                 forRemoteObject: remoteObjectID
             )
-            guard let reducer,
-                let canonical = try reducer.nodeID(for: rawID, in: binding)
-            else { throw WebInspectorCommandError.staleIdentifier }
-            completePicker(.success(DOMNode.ID(canonical: canonical)), operationID: operationID)
+            result = pickerSelectionResult(
+                rawNodeID: rawNodeID,
+                binding: binding,
+                phase: "DOM.requestNode"
+            )
         } catch {
-            completePicker(
-                .failure(
-                    WebInspectorElementPickerError.selectionResolutionFailed(
-                        webInspectorFailureDescription(error, code: "picker.resolve", phase: "DOM.requestNode")
+            guard !Task.isCancelled else { return }
+            result = .failure(
+                WebInspectorElementPickerError.selectionResolutionFailed(
+                    webInspectorFailureDescription(
+                        error,
+                        code: "picker.resolve",
+                        phase: "DOM.requestNode"
                     )
-                ),
-                operationID: operationID
+                )
+            )
+        }
+        finishPickerOperation(result, operationID: operationID)
+    }
+
+    private func pickerSelectionResult(
+        rawNodeID: DOM.Node.ID,
+        binding: WebInspectorCanonicalDOMEventScope,
+        phase: String
+    ) -> Result<DOMNode.ID, any Error> {
+        do {
+            guard let reducer,
+                let canonical = try reducer.nodeID(for: rawNodeID, in: binding)
+            else { throw WebInspectorCommandError.staleIdentifier }
+            return .success(DOMNode.ID(canonical: canonical))
+        } catch {
+            return .failure(
+                WebInspectorElementPickerError.selectionResolutionFailed(
+                    webInspectorFailureDescription(
+                        error,
+                        code: "picker.resolve",
+                        phase: phase
+                    )
+                )
             )
         }
     }
 
-    private var pickerAcceptsSelection: Bool {
-        switch pickerPhase {
-        case .enabling, .active, .resolving: true
-        default: false
-        }
-    }
-
-    private func completePicker(
+    private func finishPickerOperation(
         _ result: Result<DOMNode.ID, any Error>,
         operationID: UInt64
     ) {
-        guard pickerOperationID == operationID else { return }
-        if let continuation = pickerContinuation {
-            pickerContinuation = nil
-            continuation.resume(with: result)
-        } else {
-            pickerEarlyResult = result
-        }
-        pickerPhase = .idle
+        guard case let .operation(operation) = pickerState,
+            operation.id == operationID
+        else { return }
+        pickerState = .idle
         pickerPublisher.publish(.idle)
+        operation.continuation.resume(with: result)
     }
 
     private func retirePicker(
-        for error: WebInspectorCommandError,
+        with error: any Error,
         disableBackend: Bool
     ) async {
-        guard pickerOperationID != nil else {
-            pickerPhase = .idle
+        guard case var .operation(operation) = pickerState else {
+            pickerState = .idle
             pickerPublisher.publish(.idle)
             return
         }
-        pickerCancelRequested = true
+        operation.phase.task?.cancel()
+        operation.phase = .retiring
+        pickerState = .operation(operation)
         if disableBackend, let connection {
+            // Connection teardown is the physical cleanup authority. Failure is
+            // terminal with that connection and cannot make the picker reusable.
             _ = try? await connection.page.dom.setInspectMode(enabled: false)
         }
-        pickerContinuation?.resume(throwing: error)
-        pickerContinuation = nil
-        pickerEarlyResult = .failure(error)
-        pickerPhase = .idle
-        pickerPublisher.publish(.idle)
+        finishPickerOperation(.failure(error), operationID: operation.id)
     }
 }
 
