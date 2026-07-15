@@ -8458,7 +8458,7 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
                 statusText: "OK",
                 mimeType: "text/css",
                 headers: ["Content-Type": "text/css"],
-                source: Network.Source(rawValue: "memory-cache"),
+                source: Network.Source(rawValue: "network"),
                 requestHeaders: ["Accept": "text/css"],
                 bodySize: 2048
             ),

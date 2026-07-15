@@ -538,7 +538,7 @@ package final class NetworkPanelModel {
     private func insertRequestWithoutPublishing(_ request: NetworkRequest) {
         let sequence = takeCreationSequence()
         requestCreationMetadataByID[request.id] = RequestCreationMetadata(
-            timestamp: request.requestSentTimestamp,
+            timestamp: request.logicalStartTimestamp,
             sequence: sequence,
             lifecycleRevision: request.lifecycleRevision
         )
@@ -552,7 +552,7 @@ package final class NetworkPanelModel {
             entriesByID[entryID] = NetworkListEntry(
                 id: entryID,
                 request: request,
-                chronologyTimestamp: request.requestSentTimestamp,
+                chronologyTimestamp: request.logicalStartTimestamp,
                 chronologySequence: sequence
             )
             orderedEntryIDs.append(entryID)
@@ -568,19 +568,27 @@ package final class NetworkPanelModel {
         let previousRequest = requestsByID[request.id]
         let previousStatusSeverity = requestStatusSeverityByID[request.id]
         let lifecycleRestarted: Bool
-        if let metadata = requestCreationMetadataByID[request.id] {
+        let chronologyTimestampChanged: Bool
+        if var metadata = requestCreationMetadataByID[request.id] {
             lifecycleRestarted = metadata.lifecycleRevision != request.lifecycleRevision
+            chronologyTimestampChanged = metadata.timestamp != request.logicalStartTimestamp
             if lifecycleRestarted {
-                requestCreationMetadataByID[request.id] = RequestCreationMetadata(
-                    timestamp: request.requestSentTimestamp,
+                metadata = RequestCreationMetadata(
+                    timestamp: request.logicalStartTimestamp,
                     sequence: takeCreationSequence(),
                     lifecycleRevision: request.lifecycleRevision
                 )
+            } else if chronologyTimestampChanged {
+                metadata.timestamp = request.logicalStartTimestamp
+            }
+            if lifecycleRestarted || chronologyTimestampChanged {
+                requestCreationMetadataByID[request.id] = metadata
             }
         } else {
             lifecycleRestarted = false
+            chronologyTimestampChanged = false
             requestCreationMetadataByID[request.id] = RequestCreationMetadata(
-                timestamp: request.requestSentTimestamp,
+                timestamp: request.logicalStartTimestamp,
                 sequence: takeCreationSequence(),
                 lifecycleRevision: request.lifecycleRevision
             )
@@ -599,7 +607,7 @@ package final class NetworkPanelModel {
                 from: previousStatusSeverity,
                 to: request.statusSeverity
             )
-            if previousRequest !== request || lifecycleRestarted {
+            if previousRequest !== request || lifecycleRestarted || chronologyTimestampChanged {
 #if DEBUG
                 memberTraversalCountStorageForTesting += entry.requests.count
 #endif
@@ -609,7 +617,7 @@ package final class NetworkPanelModel {
                 if previousRequest !== request {
                     entry.replaceRequest(at: index, with: request)
                 }
-                if lifecycleRestarted {
+                if lifecycleRestarted || chronologyTimestampChanged {
                     repositionRequest(at: index, in: entry)
                     refreshEntryChronologyAndOrdering(
                         entry,

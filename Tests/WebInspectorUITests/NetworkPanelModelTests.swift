@@ -1076,6 +1076,115 @@ func missingVisitOrInitiatorAlwaysProducesSingletonEntries() async {
 
 @Test
 @MainActor
+func redirectDoesNotReorderLogicalRequestChronologyWhenPanelStartsLater() async throws {
+    let context = makeContext()
+    let firstID = await applyPendingRequest(
+        to: context,
+        requestID: "first",
+        url: "https://example.test/start",
+        resourceType: .document,
+        timestamp: 1
+    )
+    let secondID = await applyPendingRequest(
+        to: context,
+        requestID: "second",
+        url: "https://example.test/second",
+        resourceType: .fetch,
+        timestamp: 2
+    )
+
+    await applyRedirectRequest(
+        to: context,
+        requestID: "first",
+        url: "https://example.test/final",
+        method: "GET",
+        resourceType: .document,
+        redirectURL: "https://example.test/start",
+        timestamp: 3
+    )
+
+    let redirectedRequest = try #require(context.registeredRequest(for: firstID))
+    #expect(redirectedRequest.requestSentTimestamp == 3)
+    #expect(redirectedRequest.logicalStartTimestamp == 1)
+
+    let model = NetworkPanelModel(context: context)
+
+    #expect(model.displayRequestIDs == [secondID, firstID])
+}
+
+@Test
+@MainActor
+func webSocketHandshakeEstablishesLogicalChronologyWhenPanelStartsLater() async throws {
+    let context = makeContext()
+    let socketProxyID = Network.Request.ID("socket")
+    await context.apply(.webSocket(.created(
+        id: socketProxyID,
+        url: "wss://example.test/socket"
+    )))
+    await context.apply(.webSocket(.handshakeRequest(
+        id: socketProxyID,
+        request: Network.Request(
+            id: socketProxyID,
+            url: "wss://example.test/socket",
+            method: "GET"
+        ),
+        timestamp: 1
+    )))
+    let laterID = await applyPendingRequest(
+        to: context,
+        requestID: "later",
+        url: "https://example.test/later",
+        resourceType: .fetch,
+        timestamp: 2
+    )
+    let socketRequest = try #require(context.registeredRequest(forProxyID: socketProxyID))
+
+    #expect(socketRequest.requestSentTimestamp == 1)
+    #expect(socketRequest.logicalStartTimestamp == 1)
+
+    let model = NetworkPanelModel(context: context)
+
+    #expect(model.displayRequestIDs == [laterID, socketRequest.id])
+}
+
+@Test
+@MainActor
+func liveWebSocketHandshakePublishesEstablishedLogicalChronology() async throws {
+    let context = makeContext()
+    let socketProxyID = Network.Request.ID("live-socket")
+    await context.apply(.webSocket(.created(
+        id: socketProxyID,
+        url: "wss://example.test/live"
+    )))
+    let earlierID = await applyPendingRequest(
+        to: context,
+        requestID: "earlier",
+        url: "https://example.test/earlier",
+        resourceType: .fetch,
+        timestamp: 1
+    )
+    let socketRequest = try #require(context.registeredRequest(forProxyID: socketProxyID))
+    let model = NetworkPanelModel(context: context)
+    #expect(model.displayRequestIDs == [earlierID, socketRequest.id])
+    let transactionBaseline = model.rawTransactionDeliveryCountForTesting
+
+    await context.apply(.webSocket(.handshakeRequest(
+        id: socketProxyID,
+        request: Network.Request(
+            id: socketProxyID,
+            url: "wss://example.test/live",
+            method: "GET"
+        ),
+        timestamp: 2
+    )))
+
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: transactionBaseline))
+    #expect(socketRequest.logicalStartTimestamp == 2)
+    #expect(model.displayRequestIDs == [socketRequest.id, earlierID])
+}
+
+@Test
+@MainActor
 func groupedFilterRequiresOneMemberToMatchSearchAndResourceFilter() async {
     let context = makeContext()
     let frameID = FrameID("main-frame")
@@ -1381,6 +1490,7 @@ func reusedProtocolRequestIDPublishesLatestLifecycleAndReordersSingleton() async
     #expect(model.selectedEntryID == reusedEntryID)
     #expect(model.selectedRequest?.url == "https://example.test/latest")
     #expect(model.selectedRequest?.requestSentTimestamp == 3)
+    #expect(model.selectedRequest?.logicalStartTimestamp == 3)
     #expect(model.selectedRequest?.lifecycleRevision == 1)
     #expect(model.listTransactionPublicationCountForTesting == publicationBaseline + 1)
 }
