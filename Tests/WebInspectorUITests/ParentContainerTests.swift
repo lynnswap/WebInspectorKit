@@ -375,7 +375,13 @@ extension WebInspectorUIRenderingTests {
             #expect(host.phase == .closed)
 
             let secondRuntime = try await makeNetworkProxyRuntime()
+            let restartBaseline = fixture.contentStore
+                .containerAttachmentRestartCountForTesting
             try await container.attach(owning: secondRuntime.runtime.proxy)
+            await fixture.contentStore
+                .waitForContainerAttachmentRestartForTesting(
+                    after: restartBaseline
+                )
             await fixture.contentStore.waitForNetworkResourceTaskForTesting()
             let secondModel = try #require(
                 fixture.contentStore.networkPanelModelForTesting
@@ -386,6 +392,51 @@ extension WebInspectorUIRenderingTests {
             #expect(fixture.contentStore.networkResourceStatus == .ready)
             #expect(host.phase == .ready)
             #expect(host.readyViewControllerForTesting != nil)
+
+            await fixture.contentStore.clear()
+            await container.close()
+            await secondRuntime.runtime.close()
+            await secondRuntime.wire.stop()
+        }
+
+        @Test
+        func presentationResourcesReplacePriorGenerationAfterNormalReattachment() async throws {
+            let container = WebInspectorModelContainer(
+                configuration: .init(enabledFeatures: [.network])
+            )
+            let firstRuntime = try await makeNetworkProxyRuntime()
+            try await container.attach(owning: firstRuntime.runtime.proxy)
+            let fixture = PresentationFixture(container: container)
+            let host = fixture.contentStore.networkViewController { _ in
+                UIViewController()
+            }
+            await fixture.contentStore.waitForNetworkResourceTaskForTesting()
+            let firstModel = try #require(
+                fixture.contentStore.networkPanelModelForTesting
+            )
+
+            await container.detach()
+            await firstRuntime.wire.stop()
+            #expect(container.state == .detached)
+            #expect(firstModel.isRetiredForTesting == false)
+            #expect(host.phase == .ready)
+
+            let secondRuntime = try await makeNetworkProxyRuntime()
+            let restartBaseline = fixture.contentStore
+                .containerAttachmentRestartCountForTesting
+            try await container.attach(owning: secondRuntime.runtime.proxy)
+            await fixture.contentStore
+                .waitForContainerAttachmentRestartForTesting(
+                    after: restartBaseline
+                )
+            await fixture.contentStore.waitForNetworkResourceTaskForTesting()
+            let secondModel = try #require(
+                fixture.contentStore.networkPanelModelForTesting
+            )
+
+            #expect(firstModel.isRetiredForTesting)
+            #expect(secondModel !== firstModel)
+            #expect(host.phase == .ready)
 
             await fixture.contentStore.clear()
             await container.close()

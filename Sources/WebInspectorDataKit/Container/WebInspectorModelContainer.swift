@@ -241,6 +241,16 @@ public final class WebInspectorModelContainer: Equatable, Sendable {
         statePublisher.publish(state)
     }
 
+    package func joinCloseIfNeeded() async -> Bool {
+        switch statePublisher.current {
+        case .closing, .closed:
+            _ = try? await closeReply.value()
+            return true
+        case .detached, .attaching, .attached, .detaching, .failed:
+            return false
+        }
+    }
+
     @MainActor
     private var closedMainContext: WebInspectorModelContext {
         if let cachedClosedMainContext { return cachedClosedMainContext }

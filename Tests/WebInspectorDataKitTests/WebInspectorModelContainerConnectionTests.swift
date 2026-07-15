@@ -1,5 +1,7 @@
 import Testing
 @testable import WebInspectorDataKit
+import WebInspectorProxyKit
+import WebInspectorProxyKitTesting
 
 @MainActor
 @Test
@@ -34,5 +36,245 @@ func modelContainerPublishesLatestOwnedLifecycleState() async throws {
         var lateStates = container.stateUpdates.makeAsyncIterator()
         #expect(await lateStates.next() == .closed)
         #expect(await lateStates.next() == nil)
+    }
+}
+
+@MainActor
+@Test
+func connectionFailureRejectsReattachmentUntilOwnedTeardownCompletes()
+    async throws
+{
+    let container = WebInspectorModelContainer(
+        configuration: .init(enabledFeatures: [.dom, .network])
+    )
+
+    try await withDataKitTestRuntime { firstRuntime in
+        try await withDataKitTestRuntime { secondRuntime in
+            try await queueDOMAndNetworkStartup(on: firstRuntime)
+            let networkFailure = await firstRuntime.wire.deferFailure(
+                to: "Page.getResourceTree",
+                message: "injected required Network bootstrap failure"
+            )
+            await firstRuntime.wire.respond(to: "DOM.setInspectModeEnabled")
+            let pickerRetirement = await firstRuntime.wire.deferReply(
+                to: "DOM.setInspectModeEnabled"
+            )
+            await queueDOMAndNetworkTeardown(on: firstRuntime)
+
+            try await container.attach(owning: firstRuntime.proxy)
+            _ = await firstRuntime.wire.observations.waitForCommands(
+                method: "Page.getResourceTree",
+                count: 1
+            )
+            await waitForFeature(.dom, toBecomeReadyIn: container)
+
+            let picker = Task { try await container.dom.pickElement() }
+            _ = await firstRuntime.wire.observations.waitForCompletedCommands(
+                method: "DOM.setInspectModeEnabled",
+                count: 1
+            )
+            await waitForPicker(.active, in: container)
+
+            networkFailure.open()
+            _ = await firstRuntime.wire.observations.waitForCommands(
+                method: "DOM.setInspectModeEnabled",
+                count: 2
+            )
+
+            var rejectedDuringTeardown = false
+            do {
+                try await container.attach(owning: secondRuntime.proxy)
+                Issue.record("A failing connection accepted a replacement attachment.")
+            } catch let error as WebInspectorAttachmentError {
+                #expect(error == .attachmentInProgress)
+                rejectedDuringTeardown = error == .attachmentInProgress
+            } catch {
+                Issue.record("Expected attachmentInProgress, got \(error).")
+            }
+
+            pickerRetirement.open()
+            await #expect(throws: WebInspectorCommandError.containerClosed) {
+                _ = try await picker.value
+            }
+
+            guard rejectedDuringTeardown else {
+                await container.close()
+                return
+            }
+
+            let failure = await waitForConnectionFailure(in: container)
+            guard case let .requiredFeature(featureID, .bootstrap(description)) = failure else {
+                Issue.record("Expected a required Network bootstrap failure, got \(failure).")
+                await container.close()
+                return
+            }
+            #expect(featureID == .network)
+            #expect(description.message.contains("injected required Network bootstrap failure"))
+
+            try await queueDOMAndNetworkStartup(on: secondRuntime)
+            await secondRuntime.wire.respond(
+                to: "Page.getResourceTree",
+                with: try connectionResourceTreeResult()
+            )
+            await secondRuntime.wire.respond(to: "Page.reload")
+            await queueDOMAndNetworkTeardown(on: secondRuntime)
+
+            try await container.attach(owning: secondRuntime.proxy)
+            await waitForFeature(.dom, toBecomeReadyIn: container)
+            await waitForFeature(.network, toBecomeReadyIn: container)
+            try await container.page.reload()
+            await container.close()
+        }
+    }
+}
+
+@MainActor
+@Test
+func detachJoinsConcurrentContainerCloseThroughContextRetirement()
+    async
+{
+    let container = WebInspectorModelContainer(
+        configuration: .init(enabledFeatures: [])
+    )
+    let context = container.mainContext
+    let controlStarted = DataKitRawWireGate()
+    let releaseControl = DataKitRawWireGate()
+    #expect(
+        context.lifecycle.ingress.enqueueControl(
+            _WebInspectorContextControlOperation { _ in
+                controlStarted.open()
+                await releaseControl.waiter.wait()
+            }
+        )
+    )
+    await controlStarted.waiter.wait()
+
+    let closeTask = Task { @MainActor in
+        await container.close()
+    }
+    while container.state != .closing {
+        await Task.yield()
+    }
+
+    let detachStarted = DataKitRawWireGate()
+    let allowDetach = DataKitRawWireGate()
+    let returnedState = ContainerStateRecorder()
+    let detachTask = Task { @MainActor in
+        detachStarted.open()
+        await allowDetach.waiter.wait()
+        await container.detach()
+        await returnedState.record(container.state)
+    }
+    await detachStarted.waiter.wait()
+    allowDetach.open()
+
+    for _ in 0..<100 {
+        if await returnedState.snapshot() != nil { break }
+        await Task.yield()
+    }
+    #expect(await returnedState.snapshot() == nil)
+
+    releaseControl.open()
+    await closeTask.value
+    await detachTask.value
+    #expect(await returnedState.snapshot() == .closed)
+    #expect(container.state == .closed)
+}
+
+@MainActor
+private func queueDOMAndNetworkStartup(
+    on runtime: DataKitTestRuntime
+) async throws {
+    await runtime.wire.respond(to: "Page.enable")
+    await runtime.wire.respond(to: "Network.enable")
+    await runtime.wire.respond(to: "Inspector.enable")
+    await runtime.wire.respond(to: "Inspector.initialized")
+    await runtime.wire.respond(to: "CSS.enable")
+    await runtime.wire.respond(
+        to: "DOM.getDocument",
+        with: try domDocumentResult(
+            DOM.Node(
+                id: DOM.Node.ID("document"),
+                nodeType: 9,
+                nodeName: "#document",
+                frameID: FrameID("main-frame")
+            )
+        )
+    )
+}
+
+@MainActor
+private func queueDOMAndNetworkTeardown(
+    on runtime: DataKitTestRuntime
+) async {
+    await runtime.wire.respond(to: "Network.disable")
+    await runtime.wire.respond(to: "CSS.disable")
+    await runtime.wire.respond(to: "Inspector.disable")
+    await runtime.wire.respond(to: "Page.disable")
+}
+
+private func waitForPicker(
+    _ expected: WebInspectorElementPickerState,
+    in container: WebInspectorModelContainer
+) async {
+    var states = container.dom.elementPickerStateUpdates.makeAsyncIterator()
+    while let state = await states.next() {
+        if state == expected { return }
+    }
+    preconditionFailure("The picker state stream closed before reaching \(expected).")
+}
+
+private func waitForFeature(
+    _ featureID: WebInspectorFeatureID,
+    toBecomeReadyIn container: WebInspectorModelContainer
+) async {
+    var states = container.featureStateUpdates(for: featureID)
+        .makeAsyncIterator()
+    while let state = await states.next() {
+        if case .ready = state { return }
+    }
+    preconditionFailure("The \(featureID.name) state stream closed before becoming ready.")
+}
+
+private func waitForConnectionFailure(
+    in container: WebInspectorModelContainer
+) async -> WebInspectorConnectionFailure {
+    var states = container.stateUpdates.makeAsyncIterator()
+    while let state = await states.next() {
+        if case let .failed(_, failure) = state { return failure }
+    }
+    preconditionFailure("The container state stream closed before publishing failure.")
+}
+
+private func connectionResourceTreeResult() throws
+    -> WebInspectorTestJSONObject
+{
+    try testJSONObject(
+        #"""
+        {
+          "frameTree": {
+            "frame": {
+              "id": "main-frame",
+              "loaderId": "main-frame-loader",
+              "name": "",
+              "url": "https://example.test/",
+              "mimeType": "text/html"
+            },
+            "resources": []
+          }
+        }
+        """#
+    )
+}
+
+private actor ContainerStateRecorder {
+    private var state: WebInspectorModelContainer.State?
+
+    func record(_ state: WebInspectorModelContainer.State) {
+        self.state = state
+    }
+
+    func snapshot() -> WebInspectorModelContainer.State? {
+        state
     }
 }

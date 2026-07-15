@@ -119,10 +119,12 @@ package final class PresentationContentStore {
             }
         }
 
-        func restart(onChange: @escaping @MainActor () -> Void) {
-            guard case .closed = state else { return }
+        @discardableResult
+        func restart(onChange: @escaping @MainActor () -> Void) -> Bool {
+            guard case .closed = state else { return false }
             state = .idle
             start(onChange: onChange)
+            return true
         }
 
         func close(onChange: @escaping @MainActor () -> Void) async {
@@ -197,9 +199,12 @@ package final class PresentationContentStore {
         WebInspectorTab.ContentKey: RetryTaskHandle
     ] = [:]
     private var containerStateTask: Task<Void, Never>?
+    private var resourceAttachmentGeneration: WebInspectorAttachmentGeneration?
 
     #if DEBUG
     private let containerFailureRetirementPublisher =
+        _WebInspectorStatePublisher<Int>(0)
+    private let containerAttachmentRestartPublisher =
         _WebInspectorStatePublisher<Int>(0)
     #endif
 
@@ -221,20 +226,16 @@ package final class PresentationContentStore {
         self.context = context
         self.makeDOMPanelModel = makeDOMPanelModel
         self.makeNetworkPanelModel = makeNetworkPanelModel
+        resourceAttachmentGeneration = Self.attachmentGeneration(
+            in: context.modelContainer.state
+        )
         containerStateTask = Task { @MainActor [weak self, container = context.modelContainer] in
             var states = container.stateUpdates.makeAsyncIterator()
             while let state = await states.next() {
                 guard Task.isCancelled == false else { return }
-                switch state {
-                case .failed:
-                    await self?.closeResourcesForConnectionLoss()
-                case .attaching, .attached:
-                    self?.restartResourcesAfterConnectionRecovery()
-                case .closing, .closed:
-                    await self?.closeResourcesForConnectionLoss()
+                guard let self else { return }
+                if await self.reconcileResources(with: state) == false {
                     return
-                case .detached, .detaching:
-                    continue
                 }
             }
         }
@@ -248,6 +249,7 @@ package final class PresentationContentStore {
         containerStateTask?.cancel()
         #if DEBUG
         containerFailureRetirementPublisher.finish()
+        containerAttachmentRestartPublisher.finish()
         #endif
         for viewController in domViewControllers {
             viewController.value?.synchronouslyResetForOwnerDeinit()
@@ -370,7 +372,53 @@ package final class PresentationContentStore {
         }
     }
 
-    private func closeResourcesForConnectionLoss() async {
+    private func reconcileResources(
+        with state: WebInspectorModelContainer.State
+    ) async -> Bool {
+        switch state {
+        case let .attaching(generation), let .attached(generation):
+            if let resourceAttachmentGeneration,
+               resourceAttachmentGeneration != generation {
+                await closeResources()
+            }
+            resourceAttachmentGeneration = generation
+            restartResourcesAfterConnectionRecovery()
+            return true
+        case let .failed(generation, _):
+            resourceAttachmentGeneration = generation
+            await closeResources()
+            #if DEBUG
+            containerFailureRetirementPublisher.publish(
+                containerFailureRetirementPublisher.current + 1
+            )
+            #endif
+            return true
+        case let .detaching(generation):
+            resourceAttachmentGeneration = generation
+            return true
+        case .detached:
+            return true
+        case .closing, .closed:
+            await closeResources()
+            return false
+        }
+    }
+
+    private static func attachmentGeneration(
+        in state: WebInspectorModelContainer.State
+    ) -> WebInspectorAttachmentGeneration? {
+        switch state {
+        case let .attaching(generation),
+            let .attached(generation),
+            let .detaching(generation),
+            let .failed(generation, _):
+            generation
+        case .detached, .closing, .closed:
+            nil
+        }
+    }
+
+    private func closeResources() async {
         let domResource = domResource
         let networkResource = networkResource
         let customResources = customResources
@@ -382,22 +430,31 @@ package final class PresentationContentStore {
                 self?.renderCustomResource(for: key)
             }
         }
-
-        #if DEBUG
-        containerFailureRetirementPublisher.publish(
-            containerFailureRetirementPublisher.current + 1
-        )
-        #endif
     }
 
     private func restartResourcesAfterConnectionRecovery() {
-        domResource?.restart { [weak self] in self?.renderDOM() }
-        networkResource?.restart { [weak self] in self?.renderNetwork() }
+        var didRestartResource = false
+        if domResource?.restart(onChange: { [weak self] in self?.renderDOM() }) == true {
+            didRestartResource = true
+        }
+        if networkResource?.restart(onChange: { [weak self] in self?.renderNetwork() }) == true {
+            didRestartResource = true
+        }
         for (key, resource) in customResources {
-            resource.restart { [weak self] in
+            if resource.restart(onChange: { [weak self] in
                 self?.renderCustomResource(for: key)
+            }) {
+                didRestartResource = true
             }
         }
+
+        #if DEBUG
+        if didRestartResource {
+            containerAttachmentRestartPublisher.publish(
+                containerAttachmentRestartPublisher.current + 1
+            )
+        }
+        #endif
     }
 
     private func makeDOMResource() -> Resource<DOMPanelModel> {
@@ -792,6 +849,18 @@ package final class PresentationContentStore {
         after baselineCount: Int
     ) async {
         var updates = containerFailureRetirementPublisher.updates()
+            .makeAsyncIterator()
+        while let count = await updates.next() {
+            if count > baselineCount { return }
+        }
+    }
+    package var containerAttachmentRestartCountForTesting: Int {
+        containerAttachmentRestartPublisher.current
+    }
+    package func waitForContainerAttachmentRestartForTesting(
+        after baselineCount: Int
+    ) async {
+        var updates = containerAttachmentRestartPublisher.updates()
             .makeAsyncIterator()
         while let count = await updates.next() {
             if count > baselineCount { return }

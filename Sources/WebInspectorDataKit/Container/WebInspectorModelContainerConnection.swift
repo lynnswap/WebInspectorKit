@@ -33,13 +33,29 @@ package struct WebInspectorAttachmentReservation: Hashable, Sendable {
 
 /// Sole owner of one physical ProxyKit connection and all feature runners.
 package actor WebInspectorModelContainerConnectionOwner {
+    private struct TeardownOperation: Sendable {
+        let id: UUID
+        let task: Task<Void, Never>
+    }
+
     private enum Phase {
         case detached
         case attaching(WebInspectorAttachmentReservation)
         case attached(sessionID: UUID, generation: WebInspectorAttachmentGeneration)
-        case detaching
-        case failed(WebInspectorAttachmentGeneration)
-        case closing
+        case failing(
+            generation: WebInspectorAttachmentGeneration,
+            failure: WebInspectorConnectionFailure,
+            teardown: TeardownOperation
+        )
+        case detaching(
+            generation: WebInspectorAttachmentGeneration,
+            teardown: TeardownOperation
+        )
+        case failed(
+            generation: WebInspectorAttachmentGeneration,
+            failure: WebInspectorConnectionFailure
+        )
+        case closing(TeardownOperation)
         case closed
     }
 
@@ -79,9 +95,9 @@ package actor WebInspectorModelContainerConnectionOwner {
         switch phase {
         case .detached, .failed:
             break
-        case .attaching:
+        case .attaching, .failing, .detaching:
             throw WebInspectorAttachmentError.attachmentInProgress
-        case .attached, .detaching:
+        case .attached:
             throw WebInspectorAttachmentError.alreadyAttached
         case .closing, .closed:
             throw WebInspectorAttachmentError.containerClosed
@@ -114,7 +130,10 @@ package actor WebInspectorModelContainerConnectionOwner {
     ) {
         guard case let .attaching(current) = phase, current == reservation else { return }
         if let failure {
-            phase = .failed(reservation.generation)
+            phase = .failed(
+                generation: reservation.generation,
+                failure: failure
+            )
             statePublisher.publish(
                 .failed(generation: reservation.generation, failure: failure)
             )
@@ -132,13 +151,16 @@ package actor WebInspectorModelContainerConnectionOwner {
             throw WebInspectorAttachmentError.containerClosed
         }
         guard WebInspectorProxyOwnership.shared.claim(candidate, for: ownerID) else {
-            phase = .failed(reservation.generation)
             let failure = WebInspectorConnectionFailure.targetControlPlane(
                 WebInspectorFailureDescription(
                     code: "attachment.proxy.in-use",
                     phase: "attach",
                     message: "The ProxyKit connection is already owned by another model container."
                 )
+            )
+            phase = .failed(
+                generation: reservation.generation,
+                failure: failure
             )
             statePublisher.publish(.failed(generation: reservation.generation, failure: failure))
             throw WebInspectorAttachmentError.webViewAlreadyAttached
@@ -183,39 +205,84 @@ package actor WebInspectorModelContainerConnectionOwner {
     }
 
     package func detach() async {
+        let generation: WebInspectorAttachmentGeneration
+        let teardown: TeardownOperation
         switch phase {
         case let .attaching(reservation):
             phase = .detached
             statePublisher.publish(.detached)
             _ = reservation
-        case let .attached(_, generation), .failed(let generation):
-            phase = .detaching
-            statePublisher.publish(.detaching(generation: generation))
-            await tearDownConnection()
-            phase = .detached
-            statePublisher.publish(.detached)
-        case .detached, .detaching:
             return
-        case .closing, .closed:
+        case let .attached(_, attachedGeneration):
+            generation = attachedGeneration
+            teardown = makeTeardownOperation()
+            phase = .detaching(generation: generation, teardown: teardown)
+            statePublisher.publish(.detaching(generation: generation))
+        case let .failing(failingGeneration, _, currentTeardown):
+            generation = failingGeneration
+            teardown = currentTeardown
+            phase = .detaching(generation: generation, teardown: teardown)
+            statePublisher.publish(.detaching(generation: generation))
+        case let .failed(failedGeneration, _):
+            generation = failedGeneration
+            teardown = makeTeardownOperation()
+            phase = .detaching(generation: generation, teardown: teardown)
+            statePublisher.publish(.detaching(generation: generation))
+        case let .detaching(currentGeneration, currentTeardown):
+            generation = currentGeneration
+            teardown = currentTeardown
+        case .detached:
+            return
+        case let .closing(currentTeardown):
+            await currentTeardown.task.value
+            return
+        case .closed:
             return
         }
+
+        await teardown.task.value
+        guard case let .detaching(currentGeneration, currentTeardown) = phase,
+              currentGeneration == generation,
+              currentTeardown.id == teardown.id else { return }
+        phase = .detached
+        statePublisher.publish(.detached)
     }
 
     package func close() async {
+        let teardown: TeardownOperation
         switch phase {
         case .closed:
             return
-        case .closing:
-            return
-        default:
-            phase = .closing
+        case let .closing(currentTeardown):
+            teardown = currentTeardown
+        case let .failing(_, _, currentTeardown),
+            let .detaching(_, currentTeardown):
+            teardown = currentTeardown
+            phase = .closing(teardown)
+        case .detached, .attaching, .attached, .failed:
+            teardown = makeTeardownOperation()
+            phase = .closing(teardown)
         }
-        await tearDownConnection()
+
+        await teardown.task.value
+        guard case let .closing(currentTeardown) = phase,
+              currentTeardown.id == teardown.id else { return }
         phase = .closed
     }
 
     package func reload(ignoringCache: Bool) async throws {
-        guard let proxy else { throw WebInspectorCommandError.containerClosed }
+        let proxy: WebInspectorProxy
+        switch phase {
+        case .attached:
+            guard let currentProxy = self.proxy else {
+                throw WebInspectorCommandError.containerClosed
+            }
+            proxy = currentProxy
+        case let .failing(_, failure, _), let .failed(_, failure):
+            throw WebInspectorCommandError.connection(failure)
+        case .detached, .attaching, .detaching, .closing, .closed:
+            throw WebInspectorCommandError.containerClosed
+        }
         do { try await proxy.page.page.reload(ignoringCache: ignoringCache) }
         catch {
             throw webInspectorCommandError(
@@ -267,9 +334,10 @@ package actor WebInspectorModelContainerConnectionOwner {
         case .detached:
             return
         case let .connectionFailed(failure):
-            phase = .failed(generation)
-            await tearDownConnection()
-            statePublisher.publish(.failed(generation: generation, failure: failure))
+            await failConnection(
+                generation: generation,
+                failure: failure
+            )
         case .containerClosed:
             let failure = WebInspectorConnectionFailure.native(
                 WebInspectorFailureDescription(
@@ -278,9 +346,10 @@ package actor WebInspectorModelContainerConnectionOwner {
                     message: "The model store closed while a feature was active."
                 )
             )
-            phase = .failed(generation)
-            await tearDownConnection()
-            statePublisher.publish(.failed(generation: generation, failure: failure))
+            await failConnection(
+                generation: generation,
+                failure: failure
+            )
         }
     }
 
@@ -291,15 +360,43 @@ package actor WebInspectorModelContainerConnectionOwner {
         guard case let .attached(currentSessionID, generation) = phase,
             currentSessionID == sessionID
         else { return }
-        phase = .failed(generation)
         // This method is entered by the monitor task itself. Remove that handle
-        // before teardown so the owner never awaits its current task.
+        // before creating the teardown operation so it cannot join its caller.
         connectionMonitor = nil
-        await tearDownConnection()
-        statePublisher.publish(.failed(generation: generation, failure: failure))
+        await failConnection(generation: generation, failure: failure)
     }
 
-    private func tearDownConnection() async {
+    private func failConnection(
+        generation: WebInspectorAttachmentGeneration,
+        failure: WebInspectorConnectionFailure
+    ) async {
+        let teardown = makeTeardownOperation()
+        phase = .failing(
+            generation: generation,
+            failure: failure,
+            teardown: teardown
+        )
+        await teardown.task.value
+        guard case let .failing(currentGeneration, currentFailure, currentTeardown) = phase,
+              currentGeneration == generation,
+              currentFailure == failure,
+              currentTeardown.id == teardown.id else { return }
+        phase = .failed(generation: generation, failure: failure)
+        statePublisher.publish(
+            .failed(generation: generation, failure: failure)
+        )
+    }
+
+    private func makeTeardownOperation() -> TeardownOperation {
+        let id = UUID()
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.tearDownConnectionResources()
+        }
+        return TeardownOperation(id: id, task: task)
+    }
+
+    private func tearDownConnectionResources() async {
         let connectionMonitor = connectionMonitor
         self.connectionMonitor = nil
         connectionMonitor?.cancel()
@@ -389,5 +486,9 @@ public extension WebInspectorModelContainer {
         }
     }
 
-    func detach() async { await connectionOwner.detach() }
+    func detach() async {
+        if await joinCloseIfNeeded() { return }
+        await connectionOwner.detach()
+        _ = await joinCloseIfNeeded()
+    }
 }
