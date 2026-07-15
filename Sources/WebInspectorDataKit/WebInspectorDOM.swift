@@ -99,8 +99,6 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     private var pickerState: PickerState = .idle
     private var nextPickerOperationID: UInt64 = 0
     private var pickerNodeWaiter: PickerNodeWaiter?
-    private var pickerHighlightTask: Task<Void, Never>?
-    private var pickerHighlightTaskID: UUID?
 
     package init(
         registry: WebInspectorFeatureRegistry,
@@ -210,7 +208,6 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         guard !closeRequested else { return }
         closeRequested = true
         await closeStyleCommitGate()
-        cancelPickerHighlight()
         explicitRetryRequested = true
         retryWaiter?.resume()
         retryWaiter = nil
@@ -868,7 +865,6 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         generation: WebInspectorPageGeneration
     ) async throws {
         currentBindingScope = nil
-        cancelPickerHighlight()
         await retirePicker(
             with: WebInspectorElementPickerError.targetChanged,
             disableBackend: false
@@ -908,7 +904,6 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
     ) async throws {
         guard binding(for: route) != nil else { return }
         currentBindingScope = nil
-        cancelPickerHighlight()
         invalidatePickerSelectionForDocumentChange()
 
         guard let baseDOM = reducer,
@@ -1776,11 +1771,6 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                 materializeMissingSubtree: true,
                 connection: connection
             )
-            startPickerHighlight(
-                rawNodeID: rawNodeID,
-                binding: binding,
-                connection: connection
-            )
             result = .success(nodeID)
         } catch {
             guard !Task.isCancelled else { return }
@@ -1860,11 +1850,6 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
                 binding: binding,
                 operationID: operationID,
                 materializeMissingSubtree: false,
-                connection: connection
-            )
-            startPickerHighlight(
-                rawNodeID: rawNodeID,
-                binding: binding,
                 connection: connection
             )
             result = .success(nodeID)
@@ -2030,55 +2015,6 @@ package actor WebInspectorDOMFeature: WebInspectorModelFeature {
         case .active, .disabling, .retiring:
             return
         }
-    }
-
-    private func startPickerHighlight(
-        rawNodeID: DOM.Node.ID,
-        binding: WebInspectorCanonicalDOMEventScope,
-        connection: WebInspectorFeatureConnection
-    ) {
-        cancelPickerHighlight()
-        let taskID = UUID()
-        pickerHighlightTaskID = taskID
-        pickerHighlightTask = Task {
-            await self.runPickerHighlight(
-                rawNodeID: rawNodeID,
-                binding: binding,
-                connection: connection,
-                taskID: taskID
-            )
-        }
-    }
-
-    private func runPickerHighlight(
-        rawNodeID: DOM.Node.ID,
-        binding: WebInspectorCanonicalDOMEventScope,
-        connection: WebInspectorFeatureConnection,
-        taskID: UUID
-    ) async {
-        defer { finishPickerHighlight(taskID: taskID) }
-        guard currentBindingScope == binding else { return }
-        do {
-            try await connection.page.dom.highlightNode(rawNodeID)
-        } catch is CancellationError {
-            return
-        } catch {
-            WebInspectorDataKitLog.error(
-                "DOM picker highlight restore failed: \(String(describing: error))"
-            )
-        }
-    }
-
-    private func finishPickerHighlight(taskID: UUID) {
-        guard pickerHighlightTaskID == taskID else { return }
-        pickerHighlightTask = nil
-        pickerHighlightTaskID = nil
-    }
-
-    private func cancelPickerHighlight() {
-        pickerHighlightTask?.cancel()
-        pickerHighlightTask = nil
-        pickerHighlightTaskID = nil
     }
 
     private func finishPickerOperation(

@@ -168,7 +168,6 @@ func pickerConsumesInspectThatArrivesBeforeTheEnableReplyAndCanReenable() async 
             let enableReply = await runtime.wire.deferReply(
                 to: "DOM.setInspectModeEnabled"
             )
-            await runtime.wire.respond(to: "DOM.highlightNode")
             let firstSelection = Task {
                 try await container.dom.pickElement()
             }
@@ -189,7 +188,6 @@ func pickerConsumesInspectThatArrivesBeforeTheEnableReplyAndCanReenable() async 
             #expect(container.dom.elementPickerState == .idle)
 
             await runtime.wire.respond(to: "DOM.setInspectModeEnabled")
-            await runtime.wire.respond(to: "DOM.highlightNode")
             let secondSelection = Task {
                 try await container.dom.pickElement()
             }
@@ -212,7 +210,7 @@ func pickerConsumesInspectThatArrivesBeforeTheEnableReplyAndCanReenable() async 
 
 @MainActor
 @Test
-func pickerCarriesInspectAcrossOrdinaryDocumentBootstrapAndRestoresHighlight() async throws {
+func pickerCarriesInspectAcrossOrdinaryDocumentBootstrap() async throws {
     let container = WebInspectorModelContainer(
         configuration: .init(enabledFeatures: [.dom])
     )
@@ -224,7 +222,6 @@ func pickerCarriesInspectAcrossOrdinaryDocumentBootstrapAndRestoresHighlight() a
             #expect(await waitForDOMReady(in: container))
 
             await runtime.wire.respond(to: "DOM.setInspectModeEnabled")
-            await runtime.wire.respond(to: "DOM.highlightNode")
             let nextDocumentReply = await runtime.wire.deferReply(
                 to: "DOM.getDocument",
                 with: try domDocumentResult(
@@ -269,10 +266,6 @@ func pickerCarriesInspectAcrossOrdinaryDocumentBootstrapAndRestoresHighlight() a
             nextDocumentReply.open()
 
             #expect(rawDOMNodeID(try await selection.value) == "next-body")
-            _ = await runtime.wire.observations.waitForCompletedCommands(
-                method: "DOM.highlightNode",
-                count: 1
-            )
             #expect(container.dom.elementPickerState == .idle)
             #expect(runtime.wire.observations.commandMethods.filter {
                 $0 == "Page.enable"
@@ -303,7 +296,6 @@ func inspectorPickerWaitsForRequestNodePathCommitBeforePublishingSelection() asy
                 to: "DOM.requestNode",
                 with: try testJSONObject(#"{"nodeId":"deep-node"}"#)
             )
-            await runtime.wire.respond(to: "DOM.highlightNode")
             let selection = Task {
                 try await container.dom.pickElement()
             }
@@ -334,10 +326,6 @@ func inspectorPickerWaitsForRequestNodePathCommitBeforePublishingSelection() asy
             requestNodeReply.open()
 
             #expect(rawDOMNodeID(try await selection.value) == "deep-node")
-            _ = await runtime.wire.observations.waitForCompletedCommands(
-                method: "DOM.highlightNode",
-                count: 1
-            )
             #expect(container.dom.elementPickerState == .idle)
             await container.close()
         }
