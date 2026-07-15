@@ -8,6 +8,7 @@ package final class NetworkTabResourceViewController: UIViewController {
     package enum Phase: Equatable {
         case loading
         case ready
+        case failed(String)
         case closed
     }
 
@@ -44,6 +45,20 @@ package final class NetworkTabResourceViewController: UIViewController {
         phase = .ready
         contentUnavailableConfiguration = nil
         installReadyViewController(makeReadyViewController(model))
+    }
+
+    package func showFailure(_ message: String) {
+        phase = .failed(message)
+        removeReadyViewController()
+        var configuration = UIContentUnavailableConfiguration.empty()
+        configuration.image = UIImage(systemName: "exclamationmark.triangle")
+        configuration.text = String(
+            localized: "network.error.title",
+            defaultValue: "Network Error",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        configuration.secondaryText = message
+        contentUnavailableConfiguration = configuration
     }
 
     package func showClosed() {

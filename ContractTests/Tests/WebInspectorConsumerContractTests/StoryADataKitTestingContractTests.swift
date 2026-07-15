@@ -49,26 +49,27 @@ func readyDataKitScenarioIsUsableFromAConsumerPackage() async throws {
 
 @MainActor
 @Test
-func dataKitScenarioEscalatesRequiredNetworkAttachmentFailure() async {
-    do {
-        _ = try await WebInspectorDataKitTestRuntime.start(
-            scenario: .init(
-                configuration: .init(enabledFeatures: [.network]),
-                attachFailure: .init(
-                    domain: .network,
-                    message: "contract attachment failure"
-                )
+func dataKitScenarioPublishesFeatureLocalAttachmentFailure() async throws {
+    let runtime = try await WebInspectorDataKitTestRuntime.start(
+        scenario: .init(
+            configuration: .init(enabledFeatures: [.network]),
+            attachFailure: .init(
+                domain: .network,
+                message: "contract attachment failure"
             )
         )
-        Issue.record("A required Network failure did not fail the connection.")
-    } catch let WebInspectorDataKitTestRuntime.RuntimeError.connectionFailed(failure) {
-        guard case let .requiredFeature(featureID, .bootstrap(description)) = failure else {
-            Issue.record("Expected a required-feature Network failure, got \(failure).")
-            return
-        }
-        #expect(featureID == .network)
-        #expect(description.message.contains("contract attachment failure"))
-    } catch {
-        Issue.record("Expected a connection failure, got \(error).")
+    )
+    let boundary = try await runtime.boundarySnapshot()
+
+    guard
+        case let .unavailable(_, .bootstrap(failure)) =
+            boundary.featureState(for: .network)
+    else {
+        Issue.record("Expected a feature-local Network bootstrap failure.")
+        await runtime.close()
+        return
     }
+    #expect(failure.message.contains("contract attachment failure"))
+
+    await runtime.close()
 }

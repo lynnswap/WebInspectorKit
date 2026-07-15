@@ -93,90 +93,50 @@ func webViewAttachmentReservationHasOneContainerOwner() async throws {
 
 @MainActor
 @Test
-func connectionFailureRejectsReattachmentUntilOwnedTeardownCompletes()
-    async throws
-{
+func networkBootstrapFailureRemainsFeatureLocal() async throws {
     let container = WebInspectorModelContainer(
         configuration: .init(enabledFeatures: [.dom, .network])
     )
 
-    try await withDataKitTestRuntime { firstRuntime in
-        try await withDataKitTestRuntime { secondRuntime in
-            try await queueDOMAndNetworkStartup(on: firstRuntime)
-            let networkFailure = await firstRuntime.wire.deferFailure(
-                to: "Page.getResourceTree",
-                message: "injected required Network bootstrap failure"
-            )
-            await firstRuntime.wire.respond(to: "DOM.setInspectModeEnabled")
-            let pickerRetirement = await firstRuntime.wire.deferReply(
-                to: "DOM.setInspectModeEnabled"
-            )
-            await queueDOMAndNetworkTeardown(on: firstRuntime)
+    try await withDataKitTestRuntime { runtime in
+        try await queueDOMAndNetworkStartup(on: runtime)
+        let networkFailure = await runtime.wire.deferFailure(
+            to: "Page.getResourceTree",
+            message: "injected Network bootstrap failure"
+        )
+        await queueDOMAndNetworkTeardown(on: runtime)
 
-            try await container.attach(owning: firstRuntime.proxy)
-            _ = await firstRuntime.wire.observations.waitForCommands(
-                method: "Page.getResourceTree",
-                count: 1
-            )
-            await waitForFeature(.dom, toBecomeReadyIn: container)
+        try await container.attach(owning: runtime.proxy)
+        _ = await runtime.wire.observations.waitForCommands(
+            method: "Page.getResourceTree",
+            count: 1
+        )
+        await waitForFeature(.dom, toBecomeReadyIn: container)
 
-            let picker = Task { try await container.dom.pickElement() }
-            _ = await firstRuntime.wire.observations.waitForCompletedCommands(
-                method: "DOM.setInspectModeEnabled",
-                count: 1
-            )
-            await waitForPicker(.active, in: container)
+        networkFailure.open()
+        let error = await waitForFeatureToBecomeUnavailable(
+            .network,
+            in: container
+        )
 
-            networkFailure.open()
-            _ = await firstRuntime.wire.observations.waitForCommands(
-                method: "DOM.setInspectModeEnabled",
-                count: 2
-            )
-
-            var rejectedDuringTeardown = false
-            do {
-                try await container.attach(owning: secondRuntime.proxy)
-                Issue.record("A failing connection accepted a replacement attachment.")
-            } catch let error as WebInspectorAttachmentError {
-                #expect(error == .attachmentInProgress)
-                rejectedDuringTeardown = error == .attachmentInProgress
-            } catch {
-                Issue.record("Expected attachmentInProgress, got \(error).")
-            }
-
-            pickerRetirement.open()
-            await #expect(throws: WebInspectorCommandError.containerClosed) {
-                _ = try await picker.value
-            }
-
-            guard rejectedDuringTeardown else {
-                await container.close()
-                return
-            }
-
-            let failure = await waitForConnectionFailure(in: container)
-            guard case let .requiredFeature(featureID, .bootstrap(description)) = failure else {
-                Issue.record("Expected a required Network bootstrap failure, got \(failure).")
-                await container.close()
-                return
-            }
-            #expect(featureID == .network)
-            #expect(description.message.contains("injected required Network bootstrap failure"))
-
-            try await queueDOMAndNetworkStartup(on: secondRuntime)
-            await secondRuntime.wire.respond(
-                to: "Page.getResourceTree",
-                with: try connectionResourceTreeResult()
-            )
-            await secondRuntime.wire.respond(to: "Page.reload")
-            await queueDOMAndNetworkTeardown(on: secondRuntime)
-
-            try await container.attach(owning: secondRuntime.proxy)
-            await waitForFeature(.dom, toBecomeReadyIn: container)
-            await waitForFeature(.network, toBecomeReadyIn: container)
-            try await container.page.reload()
+        guard case let .bootstrap(description) = error else {
+            Issue.record("Expected a Network bootstrap failure, got \(error).")
             await container.close()
+            return
         }
+        #expect(description.message.contains("injected Network bootstrap failure"))
+        guard case .attached = container.state else {
+            Issue.record("Network bootstrap failure changed container state to \(container.state).")
+            await container.close()
+            return
+        }
+        guard case .ready = container.dom.state else {
+            Issue.record("Network bootstrap failure changed DOM state to \(container.dom.state).")
+            await container.close()
+            return
+        }
+
+        await container.close()
     }
 }
 
@@ -399,14 +359,17 @@ private func waitForFeature(
     preconditionFailure("The \(featureID.name) state stream closed before becoming ready.")
 }
 
-private func waitForConnectionFailure(
+private func waitForFeatureToBecomeUnavailable(
+    _ featureID: WebInspectorFeatureID,
     in container: WebInspectorModelContainer
-) async -> WebInspectorConnectionFailure {
-    var states = container.stateUpdates.makeAsyncIterator()
+) async -> WebInspectorFeatureError {
+    var states = container.featureStateUpdates(for: featureID).makeAsyncIterator()
     while let state = await states.next() {
-        if case let .failed(_, failure) = state { return failure }
+        if case let .unavailable(_, error) = state { return error }
     }
-    preconditionFailure("The container state stream closed before publishing failure.")
+    preconditionFailure(
+        "The \(featureID.name) state stream closed before publishing unavailable."
+    )
 }
 
 private func connectionResourceTreeResult() throws

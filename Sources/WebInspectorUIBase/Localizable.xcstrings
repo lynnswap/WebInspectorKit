@@ -4672,6 +4672,23 @@
         }
       }
     },
+    "network.error.title" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Network Error"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ネットワークエラー"
+          }
+        }
+      }
+    },
     "network.loading.title" : {
       "extractionState" : "stale",
       "localizations" : {

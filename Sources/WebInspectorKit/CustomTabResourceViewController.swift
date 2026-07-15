@@ -42,7 +42,10 @@ package final class CustomTabResourceViewController: UIViewController {
         installReadyViewController(viewController)
     }
 
-    package func showFailure(_ message: String) {
+    package func showFailure(
+        _ message: String,
+        allowsRetry: Bool = true
+    ) {
         phase = .failed(message)
         removeReadyViewController()
         var configuration = UIContentUnavailableConfiguration.empty()
@@ -53,14 +56,16 @@ package final class CustomTabResourceViewController: UIViewController {
             bundle: WebInspectorUILocalization.bundle
         )
         configuration.secondaryText = message
-        configuration.button = .bordered()
-        configuration.button.title = String(
-            localized: "custom.loading.retry",
-            defaultValue: "Retry",
-            bundle: WebInspectorUILocalization.bundle
-        )
-        configuration.buttonProperties.primaryAction = UIAction { [weak self] _ in
-            self?.retryAction()
+        if allowsRetry {
+            configuration.button = .bordered()
+            configuration.button.title = String(
+                localized: "custom.loading.retry",
+                defaultValue: "Retry",
+                bundle: WebInspectorUILocalization.bundle
+            )
+            configuration.buttonProperties.primaryAction = UIAction { [weak self] _ in
+                self?.retryAction()
+            }
         }
         contentUnavailableConfiguration = configuration
     }

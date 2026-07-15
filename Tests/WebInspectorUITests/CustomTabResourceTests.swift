@@ -125,6 +125,64 @@ struct CustomTabResourceTests {
     }
 
     @Test
+    func nonRetryableFeatureFailureDoesNotExposeRetryAction() async {
+        let key = WebInspectorTab.ContentKey(
+            tabID: .init(rawValue: "network-dependent"),
+            contentID: "root"
+        )
+        let container = WebInspectorModelContainer(
+            configuration: .init(enabledFeatures: [.network])
+        )
+        container.publishState(.attached(generation: .init(rawValue: 1)))
+        container.featureRegistry.publish(
+            .unavailable(
+                generation: .init(rawValue: 1),
+                error: .bootstrap(
+                    WebInspectorFailureDescription(
+                        code: "network.bootstrap.failed",
+                        phase: "bootstrap",
+                        message: "Injected Network failure."
+                    )
+                )
+            ),
+            for: .network
+        )
+        let session = WebInspectorSession(modelContainer: container)
+        let context = WebInspectorTab.Context(session: session)
+        let store = PresentationContentStore(context: context)
+        var factoryCallCount = 0
+        let host = store.customViewController(
+            for: key,
+            context: context,
+            requiredFeatures: [.network]
+        ) { _ in
+            factoryCallCount += 1
+            return UIViewController()
+        }
+        await store.waitForCustomResourceTaskForTesting(for: key)
+
+        guard case .failed = host.phase else {
+            Issue.record("The Network-dependent resource did not publish failure.")
+            await store.clear()
+            await container.close()
+            return
+        }
+        #expect(factoryCallCount == 0)
+        #expect(
+            (host.contentUnavailableConfiguration
+                as? UIContentUnavailableConfiguration)?
+                .buttonProperties.primaryAction == nil
+        )
+
+        host.retryForTesting()
+        await store.waitForCustomResourceTaskForTesting(for: key)
+        #expect(factoryCallCount == 0)
+
+        await store.clear()
+        await container.close()
+    }
+
+    @Test
     func factoryTaskDoesNotRetainStoreAndLateCompletionCannotPublish() async throws {
         let key = WebInspectorTab.ContentKey(
             tabID: .init(rawValue: "lifecycle"),

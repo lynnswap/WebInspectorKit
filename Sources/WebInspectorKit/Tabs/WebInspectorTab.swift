@@ -6,8 +6,8 @@ import WebInspectorUIBase
 /// A tab shown by the built-in WebInspectorKit interface.
 ///
 /// Built-in and app-provided tabs use the same registry entry. The factory is
-/// invoked at most once at a time for a presentation resource; failures are
-/// retryable and are not cached.
+/// invoked at most once at a time for a presentation resource. App-provided
+/// factory failures remain visible until the user explicitly retries them.
 @MainActor
 public struct WebInspectorTab: Equatable, Hashable, Identifiable {
     /// Stable identity for an inspector tab.

@@ -16,12 +16,8 @@ package final class PresentationContentStore {
     }
 
     private enum ResourceFailureDisposition {
-        case failed(String)
+        case failed(String, allowsRetry: Bool)
         case closed
-    }
-
-    private enum RequiredNetworkResourceError: Error {
-        case connectionEnded
     }
 
     @MainActor
@@ -35,7 +31,7 @@ package final class PresentationContentStore {
             case idle
             case loading
             case ready(Value)
-            case failed(String)
+            case failed(String, allowsRetry: Bool)
             case closed
         }
 
@@ -56,12 +52,17 @@ package final class PresentationContentStore {
                         switch commandError {
                         case .connection, .containerClosed:
                             return .closed
-                        case .staleIdentifier, .featureUnavailable, .targetChanged,
-                            .rejected, .timedOut:
+                        case let .featureUnavailable(featureID, _):
+                            return .failed(
+                                error.localizedDescription,
+                                allowsRetry: featureID != .network
+                            )
+                        case .staleIdentifier, .targetChanged, .rejected,
+                            .timedOut:
                             break
                         }
                     }
-                    return .failed(error.localizedDescription)
+                    return .failed(error.localizedDescription, allowsRetry: true)
                 }
         ) {
             self.makeValue = makeValue
@@ -79,16 +80,16 @@ package final class PresentationContentStore {
             case .idle: .idle
             case .loading: .loading
             case .ready: .ready
-            case let .failed(message): .failed(message)
+            case let .failed(message, _): .failed(message)
             case .closed: .closed
             }
         }
 
         func start(onChange: @escaping @MainActor () -> Void) {
             switch state {
-            case .idle, .failed:
+            case .idle:
                 break
-            case .loading, .ready, .closed:
+            case .loading, .ready, .failed, .closed:
                 return
             }
 
@@ -116,14 +117,20 @@ package final class PresentationContentStore {
                     }
                     task = nil
                     switch failureDisposition(error) {
-                    case let .failed(message):
-                        state = .failed(message)
+                    case let .failed(message, allowsRetry):
+                        state = .failed(message, allowsRetry: allowsRetry)
                     case .closed:
                         state = .closed
                     }
                     onChange()
                 }
             }
+        }
+
+        func retry(onChange: @escaping @MainActor () -> Void) {
+            guard case .failed(_, allowsRetry: true) = state else { return }
+            state = .idle
+            start(onChange: onChange)
         }
 
         @discardableResult
@@ -202,11 +209,6 @@ package final class PresentationContentStore {
     private struct RetryTaskHandle {
         let id: UUID
         let task: Task<Void, Never>
-    }
-
-    private enum RequiredNetworkReadiness: Equatable, Sendable {
-        case ready
-        case connectionEnded
     }
 
     package typealias NetworkPanelModelFactory = @MainActor (
@@ -503,39 +505,15 @@ package final class PresentationContentStore {
     }
 
     private func makeNetworkResource() -> Resource<NetworkPanelModel> {
-        precondition(
-            context.modelContainer.configuration.enabledFeatures.contains(.network),
-            "The built-in Network tab requires the Network feature."
-        )
-        return Resource(
+        Resource(
             makeValue: { [context, makeNetworkPanelModel] in
-                guard await Self.waitForRequiredNetwork(
+                try await Self.waitForFeatures(
+                    [.network],
                     in: context.modelContainer
-                ) else {
-                    throw RequiredNetworkResourceError.connectionEnded
-                }
-                do {
-                    return try await makeNetworkPanelModel(context.modelContext)
-                } catch is CancellationError {
-                    throw RequiredNetworkResourceError.connectionEnded
-                } catch {
-                    guard Self.isTerminal(context.modelContainer.state) else {
-                        preconditionFailure(
-                            "Network panel construction failed while its required connection remained active: \(error)"
-                        )
-                    }
-                    throw RequiredNetworkResourceError.connectionEnded
-                }
+                )
+                return try await makeNetworkPanelModel(context.modelContext)
             },
-            retireValue: { await $0.retire() },
-            failureDisposition: { error in
-                guard error is RequiredNetworkResourceError else {
-                    preconditionFailure(
-                        "Required Network resource escaped its connection boundary: \(error)"
-                    )
-                }
-                return .closed
-            }
+            retireValue: { await $0.retire() }
         )
     }
 
@@ -551,7 +529,7 @@ package final class PresentationContentStore {
             guard Task.isCancelled == false,
                   let self,
                   self.domResource === resource else { return }
-            resource.start { [weak self] in self?.renderDOM() }
+            resource.retry { [weak self] in self?.renderDOM() }
         }
         domRetryTask = RetryTaskHandle(id: retryTaskID, task: task)
     }
@@ -579,7 +557,7 @@ package final class PresentationContentStore {
             }
             guard let self,
                   self.customResources[key] === resource else { return }
-            resource.start { [weak self] in
+            resource.retry { [weak self] in
                 self?.renderCustomResource(for: key)
             }
         }
@@ -627,11 +605,6 @@ package final class PresentationContentStore {
                             return
                         }
                     case let .unavailable(_, error):
-                        guard feature != .network else {
-                            preconditionFailure(
-                                "A required Network feature cannot become unavailable: \(error)"
-                            )
-                        }
                         throw WebInspectorCommandError.featureUnavailable(
                             feature,
                             error
@@ -658,11 +631,6 @@ package final class PresentationContentStore {
                         case .ready:
                             return
                         case let .unavailable(_, error):
-                            guard feature != .network else {
-                                preconditionFailure(
-                                    "A required Network feature cannot become unavailable: \(error)"
-                                )
-                            }
                             throw WebInspectorCommandError.featureUnavailable(
                                 feature,
                                 error
@@ -692,68 +660,6 @@ package final class PresentationContentStore {
         }
     }
 
-    private static func waitForRequiredNetwork(
-        in container: WebInspectorModelContainer
-    ) async -> Bool {
-        await withTaskGroup(of: RequiredNetworkReadiness.self) { group in
-            group.addTask {
-                var states = container.featureStateUpdates(for: .network)
-                    .makeAsyncIterator()
-                while let state = await states.next() {
-                    if Task.isCancelled {
-                        return .connectionEnded
-                    }
-                    switch state {
-                    case .ready:
-                        if case .attached = container.state {
-                            return .ready
-                        }
-                    case let .unavailable(_, error):
-                        preconditionFailure(
-                            "A required Network feature cannot become unavailable: \(error)"
-                        )
-                    case .disabled, .synchronizing, .recovering:
-                        continue
-                    }
-                }
-                return .connectionEnded
-            }
-            group.addTask {
-                var states = container.stateUpdates.makeAsyncIterator()
-                while let state = await states.next() {
-                    if Task.isCancelled {
-                        return .connectionEnded
-                    }
-                    switch state {
-                    case .attached:
-                        if case .ready = container.featureState(for: .network) {
-                            return .ready
-                        }
-                    case .failed, .closing, .closed:
-                        return .connectionEnded
-                    case .detached, .attaching, .detaching:
-                        continue
-                    }
-                }
-                return .connectionEnded
-            }
-            let result = await group.next() ?? .connectionEnded
-            group.cancelAll()
-            return result == .ready
-        }
-    }
-
-    private static func isTerminal(
-        _ state: WebInspectorModelContainer.State
-    ) -> Bool {
-        switch state {
-        case .failed, .closing, .closed:
-            true
-        case .detached, .attaching, .attached, .detaching:
-            false
-        }
-    }
-
     private func renderDOM() {
         domViewControllers = domViewControllers.filter { box in
             guard let viewController = box.value else { return false }
@@ -772,7 +678,7 @@ package final class PresentationContentStore {
             viewController.showLoading()
         case let .ready(model):
             viewController.showReady(model)
-        case let .failed(message):
+        case let .failed(message, _):
             viewController.showFailure(message)
         case .closed:
             viewController.showClosed()
@@ -799,10 +705,8 @@ package final class PresentationContentStore {
             viewController.showLoading()
         case let .ready(model):
             viewController.showReady(model)
-        case let .failed(message):
-            preconditionFailure(
-                "Required Network resource published a local failure: \(message)"
-            )
+        case let .failed(message, _):
+            viewController.showFailure(message)
         case .closed:
             viewController.showClosed()
         }
@@ -829,8 +733,11 @@ package final class PresentationContentStore {
             viewController.showLoading()
         case let .ready(content):
             viewController.showReady(content)
-        case let .failed(message):
-            viewController.showFailure(message)
+        case let .failed(message, allowsRetry):
+            viewController.showFailure(
+                message,
+                allowsRetry: allowsRetry
+            )
         case .closed:
             viewController.showClosed()
         }

@@ -79,8 +79,9 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                         phase: request.fingerprint.phase,
                         message: String(describing: request.reason)
                     )
-                    return await requiredFeatureTermination(
-                        .recoveryBudgetExhausted(summary)
+                    return await becomeUnavailable(
+                        .recoveryBudgetExhausted(summary),
+                        generation: generation
                     )
                 }
             } catch {
@@ -97,7 +98,7 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
                             phase: "bootstrap"
                         )
                     )
-                return await requiredFeatureTermination(featureError)
+                return await becomeUnavailable(featureError)
             }
         }
         return .detached
@@ -750,12 +751,26 @@ package actor WebInspectorNetworkFeature: WebInspectorModelFeature {
         )
     }
 
-    private func requiredFeatureTermination(
-        _ error: WebInspectorFeatureError
+    private func becomeUnavailable(
+        _ error: WebInspectorFeatureError,
+        generation: WebInspectorPageGeneration? = nil
     ) async -> WebInspectorFeatureTermination {
         await orderedScope?.close()
         orderedScope = nil
-        return .connectionFailed(.requiredFeature(.network, error))
+        guard !closeRequested else { return .detached }
+        let unavailableGeneration: WebInspectorPageGeneration
+        if let generation {
+            unavailableGeneration = generation
+        } else {
+            unavailableGeneration = await currentGeneration()
+        }
+        await publish(
+            .unavailable(
+                generation: unavailableGeneration,
+                error: error
+            )
+        )
+        return .detached
     }
 
     private func connectionFailure(

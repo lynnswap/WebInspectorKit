@@ -209,9 +209,7 @@ final class CanonicalNetworkPanelFixture {
             case .ready:
                 return
             case let .unavailable(_, error):
-                preconditionFailure(
-                    "A required Network fixture cannot become unavailable: \(error)"
-                )
+                throw NetworkFixtureError.featureUnavailable(error)
             case .disabled, .synchronizing, .recovering:
                 continue
             }
@@ -235,6 +233,7 @@ final class CanonicalNetworkPanelFixture {
 }
 
 private enum NetworkFixtureError: Error {
+    case featureUnavailable(WebInspectorFeatureError)
     case featureStateEnded
     case missingLifecycleScope
     case queryEnded

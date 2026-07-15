@@ -354,33 +354,33 @@ func dataKitTestingCountsReplacementBoundaryAndClosesDeterministically()
 
 @MainActor
 @Test
-func dataKitTestingEscalatesRequiredNetworkBootstrapFailure() async {
-    do {
-        _ = try await WebInspectorDataKitTestRuntime.start(
-            scenario: .init(
-                configuration: .init(enabledFeatures: [.network]),
-                attachFailure: .init(
-                    domain: .network,
-                    message: "injected Network startup failure"
-                )
+func dataKitTestingPublishesFeatureLocalBootstrapFailure() async throws {
+    let runtime = try await WebInspectorDataKitTestRuntime.start(
+        scenario: .init(
+            configuration: .init(enabledFeatures: [.network]),
+            attachFailure: .init(
+                domain: .network,
+                message: "injected Network startup failure"
             )
         )
-        Issue.record("A required Network bootstrap failure did not fail the connection.")
-    } catch let WebInspectorDataKitTestRuntime.RuntimeError.connectionFailed(failure) {
-        guard case let .requiredFeature(featureID, .bootstrap(description)) = failure else {
-            Issue.record("Expected a required-feature bootstrap failure, got \(failure).")
-            return
-        }
-        #expect(featureID == .network)
-        #expect(description.message.contains("injected Network startup failure"))
-    } catch {
-        Issue.record("Expected a connection failure, got \(error).")
+    )
+    let boundary = try await runtime.boundarySnapshot()
+
+    #expect(runtime.container.state.isAttached)
+    guard
+        case let .unavailable(_, .bootstrap(failure)) =
+            boundary.featureState(for: .network)
+    else {
+        preconditionFailure("An injected bootstrap failure must stay feature-local.")
     }
+    #expect(failure.message.contains("injected Network startup failure"))
+
+    await runtime.close()
 }
 
 @MainActor
 @Test
-func dataKitTestingEscalatesExhaustedRequiredNetworkRecovery() async throws {
+func dataKitTestingConfinesExhaustedNetworkRecoveryToNetwork() async throws {
     let request = WebInspectorDataKitTestRuntime.NetworkRequest(
         id: "recovery-exhaustion",
         url: "https://example.test/recovery-exhaustion"
@@ -404,7 +404,7 @@ func dataKitTestingEscalatesExhaustedRequiredNetworkRecovery() async throws {
             observedRecoveredRevision = true
             break recovery
         case let .unavailable(_, error):
-            Issue.record("Required Network published feature-local failure: \(error).")
+            Issue.record("Network exhausted recovery before its first retry: \(error).")
             break recovery
         case .disabled:
             Issue.record("The connection ended during the first recovery attempt.")
@@ -426,43 +426,32 @@ func dataKitTestingEscalatesExhaustedRequiredNetworkRecovery() async throws {
     }
 
     try await runtime.emitNetworkLoadingFinished(request)
+    var terminalError: WebInspectorFeatureError?
     terminal: while let state = await terminalNetworkStates.next() {
         switch state {
         case let .unavailable(_, error):
-            Issue.record("Required Network published feature-local failure: \(error).")
+            terminalError = error
             break terminal
         case .disabled:
+            Issue.record("Network disabled instead of publishing feature-local failure.")
             break terminal
         case .synchronizing, .ready, .recovering:
             continue
         }
     }
 
-    var observedFailure: WebInspectorConnectionFailure?
-    containerFailure: while let state = await containerStates.next() {
-        switch state {
-        case let .failed(_, failure):
-            observedFailure = failure
-            break containerFailure
-        case .detached, .attaching, .attached, .detaching:
-            continue
-        case .closing, .closed:
-            preconditionFailure("The runtime closed without publishing the Network failure.")
-        }
-    }
-    let failure = try #require(observedFailure)
-    guard case let .requiredFeature(
-        featureID,
-        .recoveryBudgetExhausted(description)
-    ) = failure else {
-        Issue.record("Expected exhausted required-Network recovery, got \(failure).")
+    guard case let .recoveryBudgetExhausted(description) = try #require(terminalError) else {
+        Issue.record("Expected exhausted Network recovery, got \(String(describing: terminalError)).")
         await runtime.close()
         return
     }
-    #expect(featureID == .network)
     #expect(description.code == "network.recovery.exhausted")
-    #expect(runtime.container.network.state == .disabled)
-    #expect(runtime.container.dom.state == .disabled)
+    #expect(runtime.container.state.isAttached)
+    guard case .ready = runtime.container.dom.state else {
+        Issue.record("Network recovery failure changed DOM state to \(runtime.container.dom.state).")
+        await runtime.close()
+        return
+    }
 
     await runtime.close()
 }

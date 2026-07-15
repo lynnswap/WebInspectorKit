@@ -401,8 +401,6 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
              .transportEnvelope(let failure),
              .targetControlPlane(let failure):
             localizedDescription(for: failure)
-        case .requiredFeature(_, let error):
-            localizedDescription(for: error)
         }
     }
 
