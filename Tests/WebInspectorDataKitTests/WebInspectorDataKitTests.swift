@@ -2028,24 +2028,29 @@ func transportBackedFrameNavigationClearsRestoredPickerHighlight() async throws 
 @Test
 func transportBackedFrameRuntimeAndConsoleEventsKeepTargetScope() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
-    let frameTargetID = ProtocolTarget.ID("frame-runtime")
+    let frameTargetID = ProtocolTarget.ID("frame-42-7")
     let frameTarget = WebInspectorTarget.ID(frameTargetID.rawValue)
     let scopedContextID = Runtime.ExecutionContext.ID("7", scopedToTargetRawValue: frameTargetID.rawValue)
     let (backend, transport, context) = try await startTransportBackedContext(
         targetID: pageTargetID,
-        documentID: "1"
+        documentID: "1",
+        protocolProfile: .latest
     )
     let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
     let startupMessageCount = await backend.sentTargetMessages().count
 
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-runtime","type":"page","frameId":"frame-runtime","parentFrameId":"main-frame","isProvisional":false}}}"#
+    await installTransportFrameTarget(
+        in: transport,
+        pageTargetID: pageTargetID,
+        targetID: frameTargetID,
+        frameID: "frame-7.42",
+        parentFrameID: "main-frame"
     )
     await receiveTransportTargetEvent(
         transport,
         targetID: frameTargetID,
         method: "Runtime.executionContextCreated",
-        params: #"{"context":{"id":7,"name":"Frame","frameId":"frame-runtime","type":"normal"}}"#
+        params: #"{"context":{"id":7,"name":"Frame","frameId":"frame-7.42","type":"normal"}}"#
     )
     try await waitUntil {
         context.executionContexts.contains { $0.id == RuntimeContext.ID(scopedContextID) }
@@ -2116,16 +2121,21 @@ func consoleMessagesClearedForDistinctTargetsDoNotSendRuntimeCommands() async th
 @Test
 func transportBackedStyleSheetTextEditRoutesToFrameTargetAndMarksUndo() async throws {
     let pageTargetID = ProtocolTarget.ID("page-main")
-    let frameTargetID = ProtocolTarget.ID("frame-css")
+    let frameTargetID = ProtocolTarget.ID("frame-42-7")
     let styleSheetID = CSS.StyleSheet.ID("frame-sheet", scopedToTargetRawValue: frameTargetID.rawValue)
     let (backend, transport, context) = try await startTransportBackedContext(
         targetID: pageTargetID,
-        documentID: "1"
+        documentID: "1",
+        protocolProfile: .latest
     )
     let startupMessageCount = await backend.sentTargetMessages().count
 
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-css","type":"page","frameId":"frame-css","parentFrameId":"main-frame","isProvisional":false}}}"#
+    await installTransportFrameTarget(
+        in: transport,
+        pageTargetID: pageTargetID,
+        targetID: frameTargetID,
+        frameID: "frame-7.42",
+        parentFrameID: "main-frame"
     )
 
     let editTask = Task { @MainActor in
@@ -10180,10 +10190,15 @@ private func emitFinishedRequest(
 @MainActor
 private func startTransportBackedContext(
     targetID: ProtocolTarget.ID,
-    documentID: String
+    documentID: String,
+    protocolProfile: WebInspectorProtocolProfile = .released26
 ) async throws -> (FakeTransportBackend, TransportSession, WebInspectorContext) {
     let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: protocolProfile,
+        responseTimeout: .milliseconds(750)
+    )
     await installTransportPageTarget(in: transport, targetID: targetID)
     let proxy = try await WebInspectorProxy(transport: transport)
     let container = WebInspectorContainer(proxy: proxy)
@@ -10289,10 +10304,37 @@ private func installTransportPageTarget(
     targetID: ProtocolTarget.ID,
     frameID: String = "main-frame"
 ) async {
-    let targetID = jsonEscapedString(targetID.rawValue)
-    let frameID = jsonEscapedString(frameID)
+    let escapedTargetID = jsonEscapedString(targetID.rawValue)
+    let escapedFrameID = jsonEscapedString(frameID)
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"\#(targetID)","type":"page","frameId":"\#(frameID)","isProvisional":false}}}"#
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"\#(escapedTargetID)","type":"page","isProvisional":false,"isPaused":false}}}"#
+    )
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: targetID,
+        method: "Page.frameNavigated",
+        params: #"{"frame":{"id":"\#(escapedFrameID)","loaderId":"main-loader","name":"Main","url":"https://example.test/","securityOrigin":"https://example.test","mimeType":"text/html"}}"#
+    )
+}
+
+private func installTransportFrameTarget(
+    in transport: TransportSession,
+    pageTargetID: ProtocolTarget.ID,
+    targetID: ProtocolTarget.ID,
+    frameID: String,
+    parentFrameID: String
+) async {
+    let escapedTargetID = jsonEscapedString(targetID.rawValue)
+    let escapedFrameID = jsonEscapedString(frameID)
+    let escapedParentFrameID = jsonEscapedString(parentFrameID)
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: pageTargetID,
+        method: "Page.frameNavigated",
+        params: #"{"frame":{"id":"\#(escapedFrameID)","parentId":"\#(escapedParentFrameID)","loaderId":"frame-loader","name":"Frame","url":"https://frame.example.test/","securityOrigin":"https://frame.example.test","mimeType":"text/html"}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"\#(escapedTargetID)","type":"frame","isProvisional":false,"isPaused":false}}}"#
     )
 }
 

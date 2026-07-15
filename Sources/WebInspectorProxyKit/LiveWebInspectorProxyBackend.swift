@@ -107,7 +107,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
             return WebInspectorProxyError.timeout(domain: domain, method: method)
         case let .remoteError(method, _, message):
             return WebInspectorProxyError.commandFailed(domain: domain, method: method, message: message)
-        case .malformedMessage, .missingMainPageTarget, .missingTarget:
+        case .malformedMessage, .missingMainPageTarget, .missingTarget, .unsupportedDomain:
             return WebInspectorProxyError.commandFailed(
                 domain: domain,
                 method: method,
@@ -144,6 +144,14 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
             let snapshot = await transport.snapshot()
             return snapshot.currentMainPageTargetID?.rawValue == rawValue
         case .currentPage:
+            if event.domain == .network,
+               let membership = event.networkPageMembership {
+                return membership == .currentPage
+            }
+            if event.domain == .page,
+               let belongedToCurrentPage = event.rootPageBelongedToCurrentPage {
+                return belongedToCurrentPage
+            }
             let snapshot = await transport.snapshot()
             if event.domain == .target,
                event.method == "Target.targetDestroyed" {
@@ -151,6 +159,11 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
                 // route by event-time facts retained by the transport.
                 return event.destroyedCurrentMainPageTarget
                     || event.destroyedProvisionalTargetInCurrentPageHierarchy
+            }
+            if event.domain == .page,
+               event.method == "Page.frameDetached",
+               event.detachedCurrentPageFrameTarget {
+                return true
             }
             guard let currentMainPageTargetID = snapshot.currentMainPageTargetID else {
                 return false
@@ -171,7 +184,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
                 guard event.method != "DOM.documentUpdated" else {
                     return false
                 }
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+                return isCurrentPageFrameTarget(record)
             case .inspector:
                 // Inspector excludes frame targets in WebKit's protocol. A
                 // frame-origin inspect event is not rewritten into a page event.
@@ -180,13 +193,15 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
                 // WebKit's page/ProxyingNetworkAgent owns process-wide
                 // Network.enable. This branch only projects target-wrapped
                 // frame Network events if WebKit emits them.
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+                return isCurrentPageFrameTarget(record)
             case .css:
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+                return isCurrentPageFrameTarget(record)
             case .console:
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+                return isCurrentPageFrameTarget(record)
             case .runtime:
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+                return isCurrentPageFrameTarget(record)
+            case .page:
+                return isCurrentPageFrameTarget(record)
             default:
                 return false
             }
@@ -194,40 +209,12 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
     }
 
     private nonisolated func isCurrentPageFrameTarget(
-        _ record: ProtocolTarget.Record,
-        in snapshot: TransportSession.Snapshot,
-        currentMainPageTargetID: ProtocolTarget.ID
+        _ record: ProtocolTarget.Record
     ) -> Bool {
-        guard record.kind == .frame,
-              let mainFrameID = snapshot.targetsByID[currentMainPageTargetID]?.frameID else {
-            return false
-        }
-
-        guard var parentFrameID = record.parentFrameID else {
-            // WebKit may omit parentFrameId for a cross-origin frame target even
-            // though its frameId differs from the current page's main frame.
-            // TransportTargetRegistry already classifies that target as .frame;
-            // the current-page route must preserve the same semantic boundary
-            // or picker, DOM, and Network events are silently filtered.
-            guard let frameID = record.frameID else {
-                return false
-            }
-            return frameID != mainFrameID
-        }
-
-        var visitedFrameIDs = Set<ProtocolFrame.ID>()
-        while visitedFrameIDs.insert(parentFrameID).inserted {
-            if parentFrameID == mainFrameID {
-                return true
-            }
-            guard let parentTargetID = snapshot.frameTargetIDsByFrameID[parentFrameID],
-                  let parentRecord = snapshot.targetsByID[parentTargetID],
-                  let nextParentFrameID = parentRecord.parentFrameID else {
-                return false
-            }
-            parentFrameID = nextParentFrameID
-        }
-        return false
+        // Frame targets are inventoried by the inspected page's
+        // WebPageInspectorController. Page topology is payload state, not the
+        // ownership boundary, and can legitimately arrive after domain events.
+        record.kind == .frame && !record.isProvisional
     }
 
     private nonisolated func projectedEvent(
@@ -235,6 +222,13 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         from event: ProtocolEvent,
         route: RoutingTargetID
     ) async -> WebInspectorProxyEvent {
+        if case let .network(networkEvent) = proxyEvent,
+           let stableScopeTargetID = event.networkScopeTargetID {
+            return .network(scopedNetworkEvent(
+                networkEvent,
+                targetRawValue: stableScopeTargetID.rawValue
+            ))
+        }
         let snapshot = await transport.snapshot()
         let scopedProxyEvent = scopedAgentOwnedEvent(proxyEvent, from: event, route: route, snapshot: snapshot)
         guard case .currentPage = route.storage,
@@ -244,7 +238,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         guard let currentMainPageTargetID = snapshot.currentMainPageTargetID,
               targetID != currentMainPageTargetID,
               let record = snapshot.targetsByID[targetID],
-              isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID) else {
+              isCurrentPageFrameTarget(record) else {
             return scopedProxyEvent
         }
         switch scopedProxyEvent {
@@ -253,7 +247,11 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         case let .css(cssEvent):
             return .css(scopedCSSEvent(cssEvent, targetRawValue: targetID.rawValue))
         case let .network(networkEvent):
-            return .network(scopedNetworkEvent(networkEvent, targetRawValue: targetID.rawValue))
+            let stableScopeTargetID = event.networkScopeTargetID ?? targetID
+            return .network(scopedNetworkEvent(
+                networkEvent,
+                targetRawValue: stableScopeTargetID.rawValue
+            ))
         default:
             return scopedProxyEvent
         }

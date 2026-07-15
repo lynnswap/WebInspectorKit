@@ -13,9 +13,7 @@ func nativeInitialTargetDiscoveryAppliesEverySynchronousMainQueueCallback() asyn
         graph.receiver.receive(
             targetCreatedMessage(
                 id: "initial-page",
-                type: "page",
-                frameID: "main-frame",
-                domains: ["DOM", "Network"]
+                type: "page"
             )
         )
     }
@@ -23,9 +21,7 @@ func nativeInitialTargetDiscoveryAppliesEverySynchronousMainQueueCallback() asyn
         graph.receiver.receive(
             targetCreatedMessage(
                 id: "initial-frame",
-                type: "frame",
-                frameID: "child-frame",
-                domains: ["DOM", "CSS"]
+                type: "frame"
             )
         )
     }
@@ -39,12 +35,8 @@ func nativeInitialTargetDiscoveryAppliesEverySynchronousMainQueueCallback() asyn
     let page = try #require(snapshot.targetsByID[ProtocolTarget.ID("initial-page")])
     let frame = try #require(snapshot.targetsByID[ProtocolTarget.ID("initial-frame")])
     #expect(snapshot.currentMainPageTargetID == page.id)
-    #expect(page.capabilities.contains(ProtocolTarget.Capabilities.dom))
-    #expect(page.capabilities.contains(ProtocolTarget.Capabilities.network))
-    #expect(
-        frame.capabilities
-            == [ProtocolTarget.Capabilities.dom, ProtocolTarget.Capabilities.css]
-    )
+    #expect(page.capabilities == .pageDefault)
+    #expect(frame.capabilities.isEmpty)
 
     await graph.close()
 }
@@ -60,8 +52,7 @@ func nativeInitialTargetDiscoveryDoesNotCompleteDuringFinalCallback() async thro
         graph.receiver.receive(
             targetCreatedMessage(
                 id: "initial-page",
-                type: "page",
-                frameID: "main-frame"
+                type: "page"
             )
         )
     }
@@ -69,9 +60,7 @@ func nativeInitialTargetDiscoveryDoesNotCompleteDuringFinalCallback() async thro
         graph.receiver.receive(
             targetCreatedMessage(
                 id: "initial-frame",
-                type: "frame",
-                frameID: "child-frame",
-                domains: ["DOM", "CSS"]
+                type: "frame"
             )
         )
     }
@@ -108,16 +97,14 @@ func receiverDrainWatermarkDoesNotWaitForNewerLiveCallback() async {
     graph.receiver.receive(
         targetCreatedMessage(
             id: "initial-page",
-            type: "page",
-            frameID: "main-frame"
+            type: "page"
         )
     )
     let initialTail = graph.receiver.tailOrdinal()
     graph.receiver.receive(
         targetCreatedMessage(
             id: "live-frame",
-            type: "frame",
-            frameID: "child-frame"
+            type: "frame"
         )
     )
     let liveTail = graph.receiver.tailOrdinal()
@@ -162,8 +149,7 @@ func nativeConnectionCloseAwaitsActiveReceiverTurnBeforeBackendDetach() async {
     graph.receiver.receive(
         targetCreatedMessage(
             id: "active-page",
-            type: "page",
-            frameID: "main-frame"
+            type: "page"
         )
     )
     await parser.waitUntilBlocked()
@@ -317,15 +303,7 @@ private func waitForReceiverCloseWaiter(receiver: TransportReceiver) async {
 
 private func targetCreatedMessage(
     id: String,
-    type: String,
-    frameID: String,
-    domains: [String]? = nil
+    type: String
 ) -> String {
-    let domainJSON =
-        domains.map { domains in
-            let values = domains.map { #""\#($0)""# }.joined(separator: ",")
-            return #", "domains":[\#(values)]"#
-        } ?? ""
-    return
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"\#(id)","type":"\#(type)","frameId":"\#(frameID)"\#(domainJSON),"isProvisional":false}}}"#
+    #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"\#(id)","type":"\#(type)","isProvisional":false,"isPaused":false}}}"#
 }

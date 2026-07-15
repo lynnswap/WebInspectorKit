@@ -1,4 +1,10 @@
 import Foundation
+import OSLog
+
+private let transportLogger = Logger(
+    subsystem: "WebInspectorKit",
+    category: "TransportSession"
+)
 
 package actor TransportSession {
     package typealias TimeoutSleep = @Sendable (Duration) async throws -> Void
@@ -6,6 +12,7 @@ package actor TransportSession {
     package typealias MessageParser = @Sendable (String) async throws -> ParsedProtocolMessage
 
     private let backend: any TransportBackend
+    private let protocolProfile: WebInspectorProtocolProfile
     private let responseTimeout: Duration?
     private let timeoutSleep: TimeoutSleep
     private let responseTimeoutDidFire: ResponseTimeoutDidFire
@@ -17,6 +24,7 @@ package actor TransportSession {
     private var targetRegistry: TransportTargetRegistry
     private var provisionalTargetMessageStore: TransportProvisionalTargetMessageStore
     private var styleSheetRouting: TransportStyleSheetRouting
+    private var networkRouting: TransportNetworkRouting
     private var runtimeContextRegistry: RuntimeContextRegistry
     private var networkOriginRegistry: TransportNetworkOriginRegistry
     private var eventSubscribers: TransportEventSubscriberRegistry
@@ -25,6 +33,7 @@ package actor TransportSession {
 
     package init(
         backend: any TransportBackend,
+        protocolProfile: WebInspectorProtocolProfile = .released26,
         responseTimeout: Duration? = nil,
         timeoutSleep: TimeoutSleep? = nil,
         responseTimeoutDidFire: ResponseTimeoutDidFire? = nil,
@@ -33,6 +42,7 @@ package actor TransportSession {
         }
     ) {
         self.backend = backend
+        self.protocolProfile = protocolProfile
         self.responseTimeout = responseTimeout
         self.timeoutSleep = timeoutSleep ?? { try await Task.sleep(for: $0) }
         self.responseTimeoutDidFire = responseTimeoutDidFire ?? {}
@@ -44,6 +54,7 @@ package actor TransportSession {
         targetRegistry = TransportTargetRegistry()
         provisionalTargetMessageStore = TransportProvisionalTargetMessageStore()
         styleSheetRouting = TransportStyleSheetRouting()
+        networkRouting = TransportNetworkRouting()
         runtimeContextRegistry = RuntimeContextRegistry()
         networkOriginRegistry = TransportNetworkOriginRegistry()
         eventSubscribers = TransportEventSubscriberRegistry()
@@ -89,18 +100,32 @@ package actor TransportSession {
         case .root:
             return try await sendRoot(command)
         case let .target(targetID):
-            guard targetRegistry.containsTarget(targetID) else {
-                throw TransportSession.Error.missingTarget(targetID)
+            let routingTargetID = command.domain == .network
+                ? networkRouting.routingTargetID(forStableTargetID: targetID)
+                : targetID
+            guard let target = targetRegistry.target(for: routingTargetID) else {
+                if command.domain == .network,
+                   protocolProfile.usesRootNetworkAgent(
+                       forFrameTargetID: routingTargetID
+                   ) {
+                    return try await sendRoot(
+                        command,
+                        semanticTargetID: routingTargetID
+                    )
+                }
+                throw TransportSession.Error.missingTarget(routingTargetID)
             }
-            if let result = transportLocalResult(for: command, targetID: targetID) {
+            if protocolProfile.usesRootAgent(command.domain, for: target.kind) {
+                return try await sendRoot(command, semanticTargetID: routingTargetID)
+            }
+            try requireSupport(for: command, targetID: routingTargetID)
+            if let result = transportLocalResult(for: command, targetID: routingTargetID) {
                 return result
             }
-            return try await sendTarget(command, targetID: targetID)
+            return try await sendTarget(command, targetID: routingTargetID)
         case let .octopus(pageTarget):
             let resolvedTarget = try pageTarget ?? currentMainPageTarget()
-            guard targetRegistry.containsTarget(resolvedTarget) else {
-                throw TransportSession.Error.missingTarget(resolvedTarget)
-            }
+            try requireSupport(for: command, targetID: resolvedTarget)
             if let result = transportLocalResult(for: command, targetID: resolvedTarget) {
                 return result
             }
@@ -131,6 +156,7 @@ package actor TransportSession {
         }
         replyStore.removeAll()
         provisionalTargetMessageStore.removeAll()
+        networkRouting.removeAll()
         eventSubscribers.finishAndRemoveAll()
         await backend.detach()
     }
@@ -182,6 +208,7 @@ package actor TransportSession {
             currentMainPageTargetID: targetRegistry.currentMainPageTargetID,
             targetsByID: targetRegistry.targetsByID,
             frameTargetIDsByFrameID: targetRegistry.frameTargetIDsByFrameID,
+            parentFrameIDsByFrameID: targetRegistry.parentFrameIDsByFrameID,
             executionContextsByKey: runtimeContextRegistry.contextsByKey,
             pendingRootReplyIDs: replyStore.pendingRootReplyIDs,
             pendingTargetReplyKeys: replyStore.pendingTargetReplyKeys
@@ -202,13 +229,31 @@ package actor TransportSession {
         targetRegistry.targetID(forFrameID: frameID)
     }
 
-    private func sendRoot(_ command: ProtocolCommand) async throws -> ProtocolCommand.Result {
+    private func requireSupport(
+        for command: ProtocolCommand,
+        targetID: ProtocolTarget.ID
+    ) throws {
+        guard let target = targetRegistry.target(for: targetID) else {
+            throw TransportSession.Error.missingTarget(targetID)
+        }
+        guard protocolProfile.supports(command.domain, on: target.kind) else {
+            throw TransportSession.Error.unsupportedDomain(
+                command.domain,
+                targetID: targetID
+            )
+        }
+    }
+
+    private func sendRoot(
+        _ command: ProtocolCommand,
+        semanticTargetID: ProtocolTarget.ID? = nil
+    ) async throws -> ProtocolCommand.Result {
         let commandID = allocateCommandID()
         let promise = ReplyPromise<ProtocolCommand.Result>()
         replyStore.insertRootReply(TransportSession.PendingReply(
             domain: command.domain,
             method: command.method,
-            targetID: nil,
+            targetID: semanticTargetID,
             promise: promise,
             hasBufferedProvisionalResponse: false
         ), commandID: commandID)
@@ -382,7 +427,27 @@ package actor TransportSession {
             return
         }
 
-        let targetID = targetIDForRootEvent(method: method, paramsData: parsed.paramsData)
+        let domain = ProtocolDomain(method: method)
+        let latestRootNetworkTargets: TransportNetworkRouting.EventTargets?
+        if protocolProfile.generation == .latest && domain == .network {
+            switch resolveLatestRootNetworkEventTargets(
+                method: method,
+                paramsData: parsed.paramsData
+            ) {
+            case let .deliver(targets):
+                latestRootNetworkTargets = targets
+            case .deferred:
+                return
+            }
+        } else {
+            latestRootNetworkTargets = nil
+        }
+        let targetID: ProtocolTarget.ID?
+        if let latestRootNetworkTargets {
+            targetID = latestRootNetworkTargets.routingTargetID
+        } else {
+            targetID = targetIDForRootEvent(method: method, paramsData: parsed.paramsData)
+        }
         let sourceTargetID = sourceTargetIDForRootEvent(method: method, targetID: targetID)
         let destroyedCurrentMainPageTarget = method == "Target.targetDestroyed"
             && targetID != nil
@@ -390,32 +455,52 @@ package actor TransportSession {
         let destroyedProvisionalTargetInCurrentPageHierarchy = method == "Target.targetDestroyed"
             && targetID.flatMap { targetRegistry.target(for: $0) }?.isProvisional == true
             && targetID.map { targetRegistry.isTargetInCurrentPageHierarchy($0) } == true
-        let pendingStyleSheetAddedEvents = await updateRegistryFromRootEvent(
-            method: method,
-            targetID: targetID,
-            sourceTargetID: sourceTargetID,
-            paramsData: parsed.paramsData
-        )
+        let detachedCurrentPageFrameTarget = method == "Page.frameDetached"
+            && targetID.map(targetRegistry.isFrameTargetInCurrentPage) == true
         let pageBindingTargetID = resolvePageBindingTargetID(
             method: method,
             deliveredTargetID: sourceTargetID ?? targetID,
             deliveredTargetIsExact: false,
             paramsData: parsed.paramsData
         )
+        let pendingStyleSheetAddedEvents: [ResolvedStyleSheetAddedEvent]
+        do {
+            pendingStyleSheetAddedEvents = try await updateRegistryFromRootEvent(
+                method: method,
+                targetID: targetID,
+                sourceTargetID: sourceTargetID,
+                paramsData: parsed.paramsData
+            )
+        } catch {
+            transportLogger.fault(
+                "Skipped invalid Target.targetCreated: \(String(describing: error), privacy: .public)"
+            )
+            return
+        }
         recordPageNavigationNetworkOrigin(
             method: method,
             targetID: pageBindingTargetID,
             paramsData: parsed.paramsData
         )
+        await emitResolvedDeferredRootNetworkEvents()
+        // ProxyingPageAgent is installed by the inspected page's
+        // WebPageInspectorController and registers IPC receivers for that
+        // page in each process. A provisional process is still part of the
+        // same semantic current page, not a second inspected page.
         await emit(
-            domain: ProtocolDomain(method: method),
+            domain: domain,
             method: method,
             targetID: targetID,
             sourceTargetID: sourceTargetID,
             pageBindingTargetID: pageBindingTargetID,
+            networkScopeTargetID: latestRootNetworkTargets?.stableScopeTargetID,
+            networkPageMembership: latestRootNetworkTargets?.pageMembership,
+            rootPageBelongedToCurrentPage: protocolProfile.pageTopologyMayArriveAtRoot
+                && domain == .page ? true : nil,
             paramsData: parsed.paramsData,
             destroyedCurrentMainPageTarget: destroyedCurrentMainPageTarget,
-            destroyedProvisionalTargetInCurrentPageHierarchy: destroyedProvisionalTargetInCurrentPageHierarchy
+            destroyedProvisionalTargetInCurrentPageHierarchy: destroyedProvisionalTargetInCurrentPageHierarchy,
+            detachedCurrentPageFrameTarget: detachedCurrentPageFrameTarget
         )
         await emitResolvedStyleSheetAddedEvents(pendingStyleSheetAddedEvents)
         await dispatchCommittedProvisionalTargetMessagesIfNeeded(method: method, paramsData: parsed.paramsData)
@@ -454,16 +539,18 @@ package actor TransportSession {
             deliveredTargetID: targetID,
             paramsData: parsed.paramsData
         )
-        updateRegistryFromTargetEvent(
-            method: method,
-            targetID: emittedTargetID,
-            sourceTargetID: targetID,
-            paramsData: parsed.paramsData
-        )
+        let detachedCurrentPageFrameTarget = method == "Page.frameDetached"
+            && targetRegistry.isFrameTargetInCurrentPage(emittedTargetID)
         let pageBindingTargetID = resolvePageBindingTargetID(
             method: method,
             deliveredTargetID: targetID,
             deliveredTargetIsExact: true,
+            paramsData: parsed.paramsData
+        )
+        updateRegistryFromTargetEvent(
+            method: method,
+            targetID: emittedTargetID,
+            sourceTargetID: targetID,
             paramsData: parsed.paramsData
         )
         recordPageNavigationNetworkOrigin(
@@ -471,14 +558,16 @@ package actor TransportSession {
             targetID: pageBindingTargetID,
             paramsData: parsed.paramsData
         )
+        await emitResolvedDeferredRootNetworkEvents()
         await emit(
             domain: ProtocolDomain(method: method),
             method: method,
             targetID: emittedTargetID,
             sourceTargetID: targetID,
             pageBindingTargetID: pageBindingTargetID,
+            networkOriginTargetID: ProtocolDomain(method: method) == .network ? targetID : nil,
             paramsData: parsed.paramsData,
-            networkOriginTargetID: ProtocolDomain(method: method) == .network ? targetID : nil
+            detachedCurrentPageFrameTarget: detachedCurrentPageFrameTarget
         )
     }
 
@@ -515,13 +604,13 @@ package actor TransportSession {
         targetID: ProtocolTarget.ID?,
         sourceTargetID: ProtocolTarget.ID?,
         paramsData: Data
-    ) async -> [ResolvedStyleSheetAddedEvent] {
+    ) async throws -> [ResolvedStyleSheetAddedEvent] {
         switch method {
         case "Target.targetCreated":
             guard let params = try? TransportMessageParser.decode(TargetCreatedParams.self, from: paramsData) else {
                 return []
             }
-            return applyTargetCreated(record(for: params.targetInfo))
+            return applyTargetCreated(try record(for: params.targetInfo))
         case "Target.targetDestroyed":
             guard let params = try? TransportMessageParser.decode(TargetDestroyedParams.self, from: paramsData) else {
                 return []
@@ -533,6 +622,17 @@ package actor TransportSession {
                 return []
             }
             return applyTargetCommitted(oldTargetID: params.oldTargetId, newTargetID: params.newTargetId)
+        case "Page.frameNavigated", "Page.frameDetached":
+            guard protocolProfile.pageTopologyMayArriveAtRoot else {
+                return []
+            }
+            updateRegistryFromTargetEvent(
+                method: method,
+                targetID: targetID,
+                sourceTargetID: sourceTargetID,
+                paramsData: paramsData
+            )
+            return []
         case "Runtime.executionContextCreated", "Runtime.executionContextDestroyed", "Runtime.executionContextsCleared":
             updateRegistryFromTargetEvent(
                 method: method,
@@ -555,6 +655,31 @@ package actor TransportSession {
         sourceTargetID: ProtocolTarget.ID? = nil,
         paramsData: Data
     ) {
+        if method == "Page.frameNavigated" {
+            guard let params = try? TransportMessageParser.decode(
+                PageFrameNavigatedParams.self,
+                from: paramsData
+            ) else {
+                return
+            }
+            targetRegistry.recordFrameNavigated(
+                deliveredTargetID: sourceTargetID ?? targetID,
+                frameID: params.frame.id,
+                parentFrameID: params.frame.parentId
+            )
+            return
+        }
+        if method == "Page.frameDetached" {
+            guard let params = try? TransportMessageParser.decode(
+                PageFrameDetachedParams.self,
+                from: paramsData
+            ) else {
+                return
+            }
+            networkRouting.removeFrame(params.frameId)
+            targetRegistry.recordFrameDetached(params.frameId)
+            return
+        }
         guard let targetID else {
             return
         }
@@ -604,26 +729,20 @@ package actor TransportSession {
         resolvePendingStyleSheets(for: targetRegistry.recordTargetCreated(record))
     }
 
-    private func record(for targetInfo: TargetInfoPayload) -> ProtocolTarget.Record {
-        let kind = targetRegistry.targetKind(
-            protocolType: targetInfo.type,
-            frameID: targetInfo.frameId,
-            parentFrameID: targetInfo.parentFrameId,
-            isProvisional: targetInfo.isProvisional
+    private func record(for targetInfo: TargetInfoPayload) throws -> ProtocolTarget.Record {
+        let kind = ProtocolTarget.Kind(protocolType: targetInfo.type)
+        let frameID = try protocolProfile.semanticFrameID(
+            for: targetInfo.targetId,
+            targetKind: kind
         )
         return ProtocolTarget.Record(
             id: targetInfo.targetId,
             kind: kind,
-            frameID: targetInfo.frameId,
-            parentFrameID: targetInfo.parentFrameId,
-            capabilities: capabilities(for: targetInfo, kind: kind),
+            frameID: frameID,
+            capabilities: protocolProfile.capabilities(for: kind),
             isProvisional: targetInfo.isProvisional ?? false,
             isPaused: targetInfo.isPaused ?? false
         )
-    }
-
-    private func capabilities(for targetInfo: TargetInfoPayload, kind: ProtocolTarget.Kind) -> ProtocolTarget.Capabilities {
-        ProtocolTarget.Capabilities.resolved(for: kind, domainNames: targetInfo.domains)
     }
 
     private func applyTargetDestroyed(_ targetID: ProtocolTarget.ID) async {
@@ -632,6 +751,7 @@ package actor TransportSession {
         provisionalTargetMessageStore.removeTarget(targetID)
         styleSheetRouting.removeTarget(targetID)
         runtimeContextRegistry.removeTarget(targetID)
+        networkRouting.removeTarget(targetID)
         let pendingReplies = replyStore.removeTargetReplies(for: targetID)
         for pending in pendingReplies {
             await pending.promise.fulfill(.failure(TransportSession.Error.missingTarget(targetID)))
@@ -652,6 +772,7 @@ package actor TransportSession {
             replyStore.retargetPendingReplies(from: oldTargetID, to: newTargetID)
             styleSheetRouting.retarget(from: oldTargetID, to: newTargetID)
             runtimeContextRegistry.retarget(oldTargetID: oldTargetID, newTargetID: newTargetID)
+            networkRouting.retarget(from: oldTargetID, to: newTargetID)
         }
 
         return resolvePendingStyleSheets(for: mutation.resolvedFrameTarget)
@@ -698,6 +819,38 @@ package actor TransportSession {
                 return targetRegistry.targetID(forFrameID: frameID) ?? targetRegistry.currentMainPageTargetID
             }
             return targetRegistry.currentMainPageTargetID
+        case "Page.frameNavigated":
+            guard protocolProfile.pageTopologyMayArriveAtRoot,
+                  let params = try? TransportMessageParser.decode(
+                    PageFrameNavigatedParams.self,
+                    from: paramsData
+                  ) else {
+                return nil
+            }
+            if let frameTargetID = targetRegistry.targetID(forFrameID: params.frame.id),
+               targetRegistry.target(for: frameTargetID)?.kind == .frame {
+                return frameTargetID
+            }
+            guard params.frame.parentId == nil else {
+                return nil
+            }
+            return targetRegistry.currentMainPageTargetID
+        case "Page.frameDetached":
+            guard protocolProfile.pageTopologyMayArriveAtRoot,
+                  let params = try? TransportMessageParser.decode(
+                    PageFrameDetachedParams.self,
+                    from: paramsData
+                  ) else {
+                return nil
+            }
+            if let frameTargetID = targetRegistry.targetID(forFrameID: params.frameId),
+               targetRegistry.target(for: frameTargetID)?.kind == .frame {
+                return frameTargetID
+            }
+            guard targetRegistry.currentMainFrameID == params.frameId else {
+                return nil
+            }
+            return targetRegistry.currentMainPageTargetID
         case "CSS.styleSheetAdded":
             return targetIDForCSSStyleSheetAdded(paramsData: paramsData)
         case "CSS.styleSheetChanged", "CSS.styleSheetRemoved":
@@ -710,6 +863,152 @@ package actor TransportSession {
                 return targetRegistry.currentMainPageTargetID
             default:
                 return nil
+            }
+        }
+    }
+
+    private func resolveLatestRootNetworkEventTargets(
+        method: String,
+        paramsData: Data
+    ) -> LatestRootNetworkEventResolution {
+        // Do not add WebSocket routing here. WebKit 625's root
+        // ProxyingNetworkAgent forwards only HTTP request lifecycle events;
+        // InspectorNetworkAgent emits WebSocket events through the page target.
+        guard let params = try? TransportMessageParser.decode(
+            NetworkRequestRoutingParams.self,
+            from: paramsData
+        ), let requestID = params.requestId else {
+            return .deliver(TransportNetworkRouting.EventTargets(
+                routingTargetID: targetRegistry.currentMainPageTargetID,
+                stableScopeTargetID: nil,
+                pageMembership: .currentPage
+            ))
+        }
+        let isTerminalEvent = method == "Network.loadingFinished"
+            || method == "Network.loadingFailed"
+
+        if networkRouting.hasDeferredRequest(requestID) {
+            networkRouting.deferEvent(
+                requestID: requestID,
+                frameID: params.frameId,
+                targetID: params.targetId,
+                method: method,
+                paramsData: paramsData
+            )
+            return .deferred
+        }
+
+        var requestTargets = networkRouting.requestTargets(for: requestID)
+        if method == "Network.requestWillBeSent", requestTargets == nil {
+            requestTargets = networkRequestTargets(
+                frameID: params.frameId,
+                targetID: params.targetId
+            )
+            if let requestTargets {
+                networkRouting.record(requestTargets, for: requestID)
+            } else {
+                networkRouting.deferEvent(
+                    requestID: requestID,
+                    frameID: params.frameId,
+                    targetID: params.targetId,
+                    method: method,
+                    paramsData: paramsData
+                )
+                return .deferred
+            }
+        } else if requestTargets == nil {
+            requestTargets = networkRequestTargets(
+                frameID: params.frameId,
+                targetID: params.targetId
+            )
+            guard let requestTargets else {
+                networkRouting.deferEvent(
+                    requestID: requestID,
+                    frameID: params.frameId,
+                    targetID: params.targetId,
+                    method: method,
+                    paramsData: paramsData
+                )
+                return .deferred
+            }
+            networkRouting.record(requestTargets, for: requestID)
+        }
+
+        if isTerminalEvent {
+            networkRouting.removeRequest(requestID)
+        }
+        return .deliver(TransportNetworkRouting.EventTargets(
+            routingTargetID: requestTargets?.routingTargetID,
+            stableScopeTargetID: requestTargets?.stableScopeTargetID,
+            pageMembership: requestTargets.map {
+                $0.belongedToCurrentPage ? .currentPage : .otherPage
+            } ?? .unresolved
+        ))
+    }
+
+    private func networkRequestTargets(
+        for targetID: ProtocolTarget.ID
+    ) -> TransportNetworkRouting.RequestTargets? {
+        guard let target = targetRegistry.target(for: targetID),
+              target.kind == .page || target.kind == .frame,
+              !target.isProvisional else {
+            return nil
+        }
+        let belongedToCurrentPage = target.kind == .frame
+            || targetID == targetRegistry.currentMainPageTargetID
+        return TransportNetworkRouting.RequestTargets(
+            stableScopeTargetID: target.kind == .page ? nil : targetID,
+            routingTargetID: targetID,
+            belongedToCurrentPage: belongedToCurrentPage
+        )
+    }
+
+    private func networkRequestTargets(
+        frameID: ProtocolFrame.ID?,
+        targetID: ProtocolTarget.ID?
+    ) -> TransportNetworkRouting.RequestTargets? {
+        if let frameID,
+           let resolvedTargetID = targetRegistry.targetID(forFrameID: frameID),
+           let targets = networkRequestTargets(for: resolvedTargetID) {
+            return targets
+        }
+        guard let targetID,
+              !targetID.rawValue.isEmpty else {
+            return nil
+        }
+        return networkRequestTargets(for: targetID)
+    }
+
+    private func emitResolvedDeferredRootNetworkEvents() async {
+        var targetsByRequestID: [
+            String: TransportNetworkRouting.RequestTargets
+        ] = [:]
+        for (requestID, identity) in networkRouting.deferredRequestIdentities {
+            if let targets = networkRequestTargets(
+                frameID: identity.frameID,
+                targetID: identity.targetID
+            ) {
+                targetsByRequestID[requestID] = targets
+            }
+        }
+
+        for event in networkRouting.resolveDeferredEvents(
+            targetsByRequestID: targetsByRequestID
+        ) {
+            await emit(
+                domain: .network,
+                method: event.method,
+                targetID: event.targets.routingTargetID,
+                sourceTargetID: event.targets.routingTargetID,
+                networkScopeTargetID: event.targets.stableScopeTargetID,
+                networkPageMembership: event.targets.belongedToCurrentPage
+                    ? .currentPage
+                    : .otherPage,
+                paramsData: event.paramsData
+            )
+            if event.method == "Network.loadingFinished"
+                || event.method == "Network.loadingFailed" {
+                networkRouting.removeRequest(event.requestID)
             }
         }
     }
@@ -848,10 +1147,14 @@ package actor TransportSession {
         targetID: ProtocolTarget.ID?,
         sourceTargetID: ProtocolTarget.ID? = nil,
         pageBindingTargetID: ProtocolTarget.ID? = nil,
-        paramsData: Data,
         networkOriginTargetID: ProtocolTarget.ID? = nil,
+        networkScopeTargetID: ProtocolTarget.ID? = nil,
+        networkPageMembership: ProtocolNetworkPageMembership? = nil,
+        rootPageBelongedToCurrentPage: Bool? = nil,
+        paramsData: Data,
         destroyedCurrentMainPageTarget: Bool = false,
-        destroyedProvisionalTargetInCurrentPageHierarchy: Bool = false
+        destroyedProvisionalTargetInCurrentPageHierarchy: Bool = false,
+        detachedCurrentPageFrameTarget: Bool = false
     ) async {
         let eventSequence = eventSequences.recordEvent(domain: domain)
         let resolvedNetworkOriginTargetID = resolveNetworkOriginTargetID(
@@ -871,10 +1174,14 @@ package actor TransportSession {
             sourceTargetID: sourceTargetID,
             pageBindingTargetID: pageBindingTargetID,
             networkOriginTargetID: resolvedNetworkOriginTargetID,
+            networkScopeTargetID: networkScopeTargetID,
+            networkPageMembership: networkPageMembership,
+            rootPageBelongedToCurrentPage: rootPageBelongedToCurrentPage,
             receivedDomainSequences: eventSequence.receivedDomainSequences,
             paramsData: paramsData,
             destroyedCurrentMainPageTarget: destroyedCurrentMainPageTarget,
-            destroyedProvisionalTargetInCurrentPageHierarchy: destroyedProvisionalTargetInCurrentPageHierarchy
+            destroyedProvisionalTargetInCurrentPageHierarchy: destroyedProvisionalTargetInCurrentPageHierarchy,
+            detachedCurrentPageFrameTarget: detachedCurrentPageFrameTarget
         )
         for continuation in eventSubscribers.continuations(for: domain) {
             continuation.yield(envelope)
@@ -902,6 +1209,16 @@ package actor TransportSession {
             loaderID: loaderID
         )
         let payloadTargetID = params.targetId.flatMap { $0.rawValue.isEmpty ? nil : $0 }
+        if exactTargetID == nil,
+           let payloadTargetID,
+           let payloadTarget = targetRegistry.target(for: payloadTargetID),
+           payloadTarget.kind == .page || payloadTarget.kind == .frame {
+            networkOriginRegistry.record(targetID: payloadTargetID, for: key)
+            if let requestID = params.requestId {
+                networkOriginRegistry.targetIDsByRequestID[requestID] = payloadTargetID
+            }
+            return payloadTargetID
+        }
         let deliveredTargetID = exactTargetID ?? payloadTargetID
         let usesRootRequestIdentity = exactTargetID == nil
         let establishesFreshRequest = method == "Network.requestWillBeSent"
@@ -929,6 +1246,8 @@ package actor TransportSession {
         if recordedTargetIDs.count == 1 {
             targetID = recordedTargetIDs.first
         } else if recordedTargetIDs.count > 1 {
+            targetID = nil
+        } else if targetRegistry.hasUnboundProvisionalPageTarget {
             targetID = nil
         } else {
             targetID = targetRegistry.soleTargetID(forFrameID: frameID)
@@ -991,6 +1310,10 @@ package actor TransportSession {
             return deliveredTargetID
         }
         let candidateCount = targetRegistry.targetCount(forFrameID: params.frame.id)
+        if targetRegistry.hasUnboundProvisionalPageTarget,
+           params.frame.id == targetRegistry.currentMainFrameID {
+            return nil
+        }
         if candidateCount == 1 {
             return targetRegistry.soleTargetID(forFrameID: params.frame.id)
         }
@@ -1089,6 +1412,199 @@ package actor TransportSession {
     }
 }
 
+private enum LatestRootNetworkEventResolution: Sendable {
+    case deliver(TransportNetworkRouting.EventTargets)
+    case deferred
+}
+
+private struct TransportNetworkRouting: Sendable {
+    struct RequestTargets: Equatable, Sendable {
+        let stableScopeTargetID: ProtocolTarget.ID?
+        var routingTargetID: ProtocolTarget.ID
+        let belongedToCurrentPage: Bool
+    }
+
+    struct EventTargets: Equatable, Sendable {
+        var routingTargetID: ProtocolTarget.ID?
+        var stableScopeTargetID: ProtocolTarget.ID?
+        var pageMembership: ProtocolNetworkPageMembership
+    }
+
+    struct DeferredRequestIdentity: Equatable, Sendable {
+        var frameID: ProtocolFrame.ID?
+        var targetID: ProtocolTarget.ID?
+    }
+
+    struct ResolvedDeferredEvent: Equatable, Sendable {
+        var requestID: String
+        var method: String
+        var paramsData: Data
+        var targets: RequestTargets
+    }
+
+    private struct DeferredEvent: Equatable, Sendable {
+        var requestID: String
+        var method: String
+        var paramsData: Data
+    }
+
+    // ProxyingNetworkAgent rewrites WebProcess resource identifiers through
+    // IdentifierRegistry.protocolRequestId(processIdentifier, resourceID)
+    // before emitting them. The raw protocol requestId is therefore already
+    // the canonical, process-qualified key across the root agent.
+    private var requestTargetsByRequestID: [String: RequestTargets] = [:]
+    private var deferredRequestIdentitiesByRequestID: [
+        String: DeferredRequestIdentity
+    ] = [:]
+    private var deferredEvents: [DeferredEvent] = []
+    private var committedTargetIDsByStableTargetID: [
+        ProtocolTarget.ID: ProtocolTarget.ID
+    ] = [:]
+
+    func requestTargets(for requestID: String) -> RequestTargets? {
+        requestTargetsByRequestID[requestID]
+    }
+
+    var deferredRequestIdentities: [String: DeferredRequestIdentity] {
+        deferredRequestIdentitiesByRequestID
+    }
+
+    func hasDeferredRequest(_ requestID: String) -> Bool {
+        deferredRequestIdentitiesByRequestID[requestID] != nil
+    }
+
+    func routingTargetID(
+        forStableTargetID targetID: ProtocolTarget.ID
+    ) -> ProtocolTarget.ID {
+        committedTargetIDsByStableTargetID[targetID] ?? targetID
+    }
+
+    mutating func record(_ targets: RequestTargets, for requestID: String) {
+        requestTargetsByRequestID[requestID] = targets
+    }
+
+    mutating func deferEvent(
+        requestID: String,
+        frameID: ProtocolFrame.ID?,
+        targetID: ProtocolTarget.ID?,
+        method: String,
+        paramsData: Data
+    ) {
+        var identity = deferredRequestIdentitiesByRequestID[requestID]
+            ?? DeferredRequestIdentity(frameID: nil, targetID: nil)
+        identity.frameID = identity.frameID ?? frameID
+        if identity.targetID == nil,
+           let targetID,
+           !targetID.rawValue.isEmpty {
+            identity.targetID = targetID
+        }
+        deferredRequestIdentitiesByRequestID[requestID] = identity
+        deferredEvents.append(DeferredEvent(
+            requestID: requestID,
+            method: method,
+            paramsData: paramsData
+        ))
+    }
+
+    mutating func resolveDeferredEvents(
+        targetsByRequestID: [String: RequestTargets]
+    ) -> [ResolvedDeferredEvent] {
+        guard !targetsByRequestID.isEmpty else {
+            return []
+        }
+        for (requestID, targets) in targetsByRequestID {
+            requestTargetsByRequestID[requestID] = targets
+            deferredRequestIdentitiesByRequestID.removeValue(
+                forKey: requestID
+            )
+        }
+        let resolvedRequestIDs = Set(targetsByRequestID.keys)
+        let resolvedEvents = deferredEvents.compactMap { event in
+            targetsByRequestID[event.requestID].map { targets in
+                ResolvedDeferredEvent(
+                    requestID: event.requestID,
+                    method: event.method,
+                    paramsData: event.paramsData,
+                    targets: targets
+                )
+            }
+        }
+        deferredEvents.removeAll {
+            resolvedRequestIDs.contains($0.requestID)
+        }
+        return resolvedEvents
+    }
+
+    mutating func removeRequest(_ requestID: String) {
+        requestTargetsByRequestID.removeValue(forKey: requestID)
+        deferredRequestIdentitiesByRequestID.removeValue(forKey: requestID)
+        deferredEvents.removeAll { $0.requestID == requestID }
+    }
+
+    mutating func removeTarget(_ targetID: ProtocolTarget.ID) {
+        let deferredRequestIDs = Set(
+            deferredRequestIdentitiesByRequestID.compactMap {
+                $0.value.targetID == targetID ? $0.key : nil
+            }
+        )
+        for requestID in deferredRequestIDs {
+            deferredRequestIdentitiesByRequestID.removeValue(forKey: requestID)
+        }
+        deferredEvents.removeAll {
+            deferredRequestIDs.contains($0.requestID)
+        }
+        committedTargetIDsByStableTargetID =
+            committedTargetIDsByStableTargetID.filter {
+                $0.value != targetID
+            }
+    }
+
+    mutating func removeFrame(_ frameID: ProtocolFrame.ID) {
+        let deferredRequestIDs = Set(
+            deferredRequestIdentitiesByRequestID.compactMap {
+                $0.value.frameID == frameID ? $0.key : nil
+            }
+        )
+        for requestID in deferredRequestIDs {
+            deferredRequestIdentitiesByRequestID.removeValue(forKey: requestID)
+        }
+        deferredEvents.removeAll {
+            deferredRequestIDs.contains($0.requestID)
+        }
+    }
+
+    mutating func retarget(
+        from oldTargetID: ProtocolTarget.ID,
+        to newTargetID: ProtocolTarget.ID
+    ) {
+        for requestID in requestTargetsByRequestID.keys where
+            requestTargetsByRequestID[requestID]?.routingTargetID == oldTargetID
+        {
+            requestTargetsByRequestID[requestID]?.routingTargetID = newTargetID
+        }
+        for requestID in deferredRequestIdentitiesByRequestID.keys where
+            deferredRequestIdentitiesByRequestID[requestID]?.targetID
+                == oldTargetID
+        {
+            deferredRequestIdentitiesByRequestID[requestID]?.targetID =
+                newTargetID
+        }
+        for stableTargetID in committedTargetIDsByStableTargetID.keys where
+            committedTargetIDsByStableTargetID[stableTargetID] == oldTargetID
+        {
+            committedTargetIDsByStableTargetID[stableTargetID] = newTargetID
+        }
+        committedTargetIDsByStableTargetID[oldTargetID] = newTargetID
+    }
+
+    mutating func removeAll() {
+        requestTargetsByRequestID.removeAll()
+        deferredRequestIdentitiesByRequestID.removeAll()
+        deferredEvents.removeAll()
+        committedTargetIDsByStableTargetID.removeAll()
+    }
+}
+
 private struct TargetDispatchParams: Decodable {
     var targetId: ProtocolTarget.ID
     var message: String
@@ -1101,12 +1617,8 @@ private struct TargetCreatedParams: Decodable {
 private struct TargetInfoPayload: Decodable {
     var targetId: ProtocolTarget.ID
     var type: String
-    var frameId: ProtocolFrame.ID?
-    var parentFrameId: ProtocolFrame.ID?
-    var domains: [String]?
     var isProvisional: Bool?
     var isPaused: Bool?
-
 }
 
 private struct TargetDestroyedParams: Decodable {
@@ -1129,6 +1641,26 @@ private struct RuntimeExecutionContextCreatedParams: Decodable {
     var context: Context
 }
 
+private struct PageFrameNavigatedParams: Decodable {
+    struct Frame: Decodable {
+        var id: ProtocolFrame.ID
+        var parentId: ProtocolFrame.ID?
+        var loaderId: String?
+    }
+
+    var frame: Frame
+}
+
+private struct PageFrameDetachedParams: Decodable {
+    var frameId: ProtocolFrame.ID
+}
+
+private struct NetworkRequestRoutingParams: Decodable {
+    var requestId: String?
+    var frameId: ProtocolFrame.ID?
+    var targetId: ProtocolTarget.ID?
+}
+
 private struct RuntimeExecutionContextDestroyedParams: Decodable {
     var executionContextId: RuntimeContext.ID
 }
@@ -1142,15 +1674,6 @@ private struct NetworkFrameParams: Decodable {
 
 private struct NetworkRequestIDParams: Decodable {
     var requestId: String
-}
-
-private struct PageFrameNavigatedParams: Decodable {
-    struct Frame: Decodable {
-        var id: ProtocolFrame.ID
-        var loaderId: String?
-    }
-
-    var frame: Frame
 }
 
 private struct TransportNetworkOriginRegistry: Sendable {

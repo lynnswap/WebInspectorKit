@@ -42,6 +42,7 @@ package enum NativeInspectorConnectionFactory {
         responseTimeout: Duration?,
         fatalFailureHandler: @escaping @Sendable (String) -> Void = { _ in }
     ) async throws -> NativeInspectorConnection {
+        let protocolProfile = try WebInspectorProtocolProfile.currentWebKit()
         let resolvedSymbols = try await NativeInspectorBackendFactory.resolvedSymbolsDetached()
         return try await attach(
             to: webView,
@@ -49,6 +50,7 @@ package enum NativeInspectorConnectionFactory {
             makeTransportSession: { backend in
                 TransportSession(
                     backend: backend,
+                    protocolProfile: protocolProfile,
                     responseTimeout: responseTimeout
                 )
             },

@@ -135,6 +135,12 @@ struct TransportReplyStore: Sendable {
         from oldTargetID: ProtocolTarget.ID,
         to newTargetID: ProtocolTarget.ID
     ) {
+        let rootCommandIDs = rootReplies.keys.filter {
+            rootReplies[$0]?.targetID == oldTargetID
+        }
+        for commandID in rootCommandIDs {
+            rootReplies[commandID]?.targetID = newTargetID
+        }
         let oldKeys = targetReplies.keys.filter { $0.targetID == oldTargetID }
         for oldKey in oldKeys {
             guard var record = targetReplies.removeValue(forKey: oldKey) else {

@@ -901,6 +901,10 @@ public actor WebInspectorProxy {
             return WebInspectorProxyError.commandFailed(domain: "Target", method: method, message: message)
         case let .missingTarget(targetID):
             return WebInspectorProxyError.disconnected("Target \(targetID.rawValue) disappeared during bootstrap.")
+        case let .unsupportedDomain(domain, targetID):
+            return WebInspectorProxyError.disconnected(
+                "Target \(targetID.rawValue) does not support \(domain.description) during bootstrap."
+            )
         case .malformedMessage:
             return WebInspectorProxyError.disconnected("Malformed target bootstrap message.")
         }
