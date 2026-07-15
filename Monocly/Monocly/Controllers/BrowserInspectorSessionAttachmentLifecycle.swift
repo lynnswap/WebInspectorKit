@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import OSLog
 import UIKit
 import WebKit
 import WebInspectorKit
@@ -61,7 +62,7 @@ final class BrowserInspectorSessionAttachmentLifecycle {
 
     private enum EffectResult {
         case succeeded
-        case failed
+        case failed(any Error)
     }
 
     private let browserWindow: BrowserWindow
@@ -182,7 +183,7 @@ final class BrowserInspectorSessionAttachmentLifecycle {
             guard attachedWebView !== webView else {
                 return
             }
-            phase = .attaching(webView, pending: nil)
+            phase = .detaching(pending: .attached)
         case let .attaching(currentWebView, _):
             phase = .attaching(currentWebView, pending: .attached)
         case .detaching:
@@ -247,7 +248,7 @@ final class BrowserInspectorSessionAttachmentLifecycle {
                 try await attachAction(webView)
                 return .succeeded
             } catch {
-                return .failed
+                return .failed(error)
             }
         case .detach:
             await detachAction()
@@ -258,6 +259,12 @@ final class BrowserInspectorSessionAttachmentLifecycle {
     private func commit(_ effect: Effect, result: EffectResult, id: UInt64) {
         guard activeEffectID == id else {
             return
+        }
+        if case let (.attach(webView), .failed(error)) = (effect, result) {
+            let webViewID = String(describing: ObjectIdentifier(webView))
+            Self.logger.error(
+                "Inspector session attachment failed for web view \(webViewID, privacy: .public): \(String(reflecting: error), privacy: .public)"
+            )
         }
         activeEffectID = nil
         lifecycleTask = nil
@@ -340,8 +347,13 @@ final class BrowserInspectorSessionAttachmentLifecycle {
         if latestWebView === completedWebView {
             phase = .attached
         } else {
-            phase = .attaching(latestWebView, pending: nil)
+            phase = .detaching(pending: .attached)
         }
     }
+
+    private static let logger = Logger(
+        subsystem: "Monocly",
+        category: "InspectorAttachment"
+    )
 }
 #endif

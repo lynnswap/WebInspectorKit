@@ -1050,7 +1050,35 @@ struct BrowserSessionRestoreTests {
         await lifecycle.waitForTransitions()
 
         #expect(actions.attachedWebViews == [fixture.firstWebView, fixture.secondWebView])
-        #expect(actions.detachCount == 0)
+        #expect(actions.events == [
+            .attach(ObjectIdentifier(fixture.firstWebView)),
+            .detach,
+            .attach(ObjectIdentifier(fixture.secondWebView))
+        ])
+    }
+
+    @Test
+    func attachmentLifecycleDetachesBeforeReplacingAttachedWebView() async throws {
+        let fixture = try makeAttachmentLifecycleFixture()
+        let actions = ControlledInspectorAttachmentActions()
+        let lifecycle = BrowserInspectorSessionAttachmentLifecycle(
+            browserWindow: fixture.browserWindow,
+            inspectorSession: WebInspectorSession(),
+            attachAction: actions.attach,
+            detachAction: actions.detach
+        )
+        lifecycle.setAttachedForTesting(to: fixture.firstWebView)
+
+        fixture.browserWindow.selectTab(id: fixture.secondTabID)
+        lifecycle.selectedWebViewDidChange(to: fixture.secondWebView)
+        await actions.waitUntilAttachStarted(count: 1)
+        actions.releaseAttach()
+        await lifecycle.waitForTransitions()
+
+        #expect(actions.events == [
+            .detach,
+            .attach(ObjectIdentifier(fixture.secondWebView))
+        ])
     }
 
     @Test
@@ -1436,9 +1464,15 @@ struct BrowserSessionRestoreTests {
 
     @MainActor
     private final class ControlledInspectorAttachmentActions {
+        enum Event: Equatable {
+            case attach(ObjectIdentifier)
+            case detach
+        }
+
         private(set) var attachedWebViews: [WKWebView] = []
         private(set) var attachCompletionCount = 0
         private(set) var detachCount = 0
+        private(set) var events: [Event] = []
         private var attachContinuation: CheckedContinuation<Void, Never>?
         private var attachResult: Result<Void, any Error> = .success(())
         private var attachStartedWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
@@ -1447,6 +1481,7 @@ struct BrowserSessionRestoreTests {
 
         func attach(_ webView: WKWebView) async throws {
             attachedWebViews.append(webView)
+            events.append(.attach(ObjectIdentifier(webView)))
             resumeAttachStartedWaiters()
             await withCheckedContinuation { continuation in
                 attachContinuation = continuation
@@ -1460,6 +1495,7 @@ struct BrowserSessionRestoreTests {
 
         func detach() async {
             detachCount += 1
+            events.append(.detach)
             resumeDetachWaiters()
         }
 
