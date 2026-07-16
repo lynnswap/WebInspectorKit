@@ -196,6 +196,10 @@ extension NetworkListCell {
     package var entryObservationForTesting: PortableObservationTracking.Token? {
         entryObservation
     }
+
+    package var observedEntryForTesting: NetworkListEntry? {
+        observedEntry
+    }
 }
 #endif
 #endif

@@ -151,21 +151,33 @@ package final class NetworkListEntry: Identifiable {
     }
 }
 
-package struct NetworkPanelListTransaction: Sendable {
+package struct NetworkPanelListVersion: Equatable, Sendable {
     package let revision: UInt64
+    package let entryIdentityGeneration: UInt64
 }
 
-private final class NetworkPanelListTransactionRelay: Sendable {
+package struct NetworkPanelListInvalidation: Equatable, Sendable {
+    package let version: NetworkPanelListVersion
+}
+
+package struct NetworkPanelListProjection: Equatable, Sendable {
+    package let version: NetworkPanelListVersion
+    package let entryIDs: [NetworkListEntry.ID]
+}
+
+private final class NetworkPanelListInvalidationRelay: Sendable {
     private struct State {
-        var continuations: [UUID: AsyncStream<NetworkPanelListTransaction>.Continuation] = [:]
+        var continuations: [UUID: AsyncStream<NetworkPanelListInvalidation>.Continuation] = [:]
         var isFinished = false
     }
 
     private let state = Mutex(State())
 
-    func makeStream() -> AsyncStream<NetworkPanelListTransaction> {
+    func makeStream() -> AsyncStream<NetworkPanelListInvalidation> {
         let id = UUID()
-        let pair = AsyncStream<NetworkPanelListTransaction>.makeStream(bufferingPolicy: .unbounded)
+        let pair = AsyncStream<NetworkPanelListInvalidation>.makeStream(
+            bufferingPolicy: .bufferingNewest(1)
+        )
         let shouldFinish = state.withLock { state in
             guard state.isFinished == false else {
                 return true
@@ -183,15 +195,15 @@ private final class NetworkPanelListTransactionRelay: Sendable {
         return pair.stream
     }
 
-    func yield(_ transaction: NetworkPanelListTransaction) {
+    func yield(_ invalidation: NetworkPanelListInvalidation) {
         let continuations = state.withLock { Array($0.continuations.values) }
         for continuation in continuations {
-            continuation.yield(transaction)
+            continuation.yield(invalidation)
         }
     }
 
     func finish() {
-        let continuations = state.withLock { state -> [AsyncStream<NetworkPanelListTransaction>.Continuation] in
+        let continuations = state.withLock { state -> [AsyncStream<NetworkPanelListInvalidation>.Continuation] in
             guard state.isFinished == false else {
                 return []
             }
@@ -234,7 +246,7 @@ package final class NetworkPanelModel {
     package private(set) var searchText = ""
     package private(set) var activeResourceFilters: Set<NetworkDisplay.ResourceFilter> = []
 
-    @ObservationIgnored private let listTransactionRelay = NetworkPanelListTransactionRelay()
+    @ObservationIgnored private let listInvalidationRelay = NetworkPanelListInvalidationRelay()
     @ObservationIgnored private var fetchedResultsTransactionTask: Task<Void, Never>?
     @ObservationIgnored private var entriesByID: [NetworkListEntry.ID: NetworkListEntry] = [:]
     @ObservationIgnored private var entryIDByRequestID: [NetworkRequest.ID: NetworkListEntry.ID] = [:]
@@ -246,6 +258,7 @@ package final class NetworkPanelModel {
     @ObservationIgnored private var visibleEntryIDSet: Set<NetworkListEntry.ID> = []
     @ObservationIgnored private var nextCreationSequence: UInt64 = 0
     @ObservationIgnored private var nextListTransactionRevision: UInt64 = 0
+    @ObservationIgnored private var listEntryIdentityGeneration: UInt64 = 0
     @ObservationIgnored private var selectedRequestAnchorID: NetworkRequest.ID?
 #if DEBUG
     private struct RawTransactionDeliveryWaiter {
@@ -261,7 +274,7 @@ package final class NetworkPanelModel {
     @ObservationIgnored private var memberTraversalCountStorageForTesting = 0
     @ObservationIgnored private var requestOrderComparisonCountStorageForTesting = 0
     @ObservationIgnored private var listTransactionPublicationCountStorageForTesting = 0
-    @ObservationIgnored private var lastListTransactionStorageForTesting: NetworkPanelListTransaction?
+    @ObservationIgnored private var lastListInvalidationStorageForTesting: NetworkPanelListInvalidation?
     @ObservationIgnored private var rawTransactionDeliveryWaitersForTesting: [RawTransactionDeliveryWaiter] = []
     @ObservationIgnored private var rawTransactionDeliveryWaiterIDStorageForTesting = 0
 #endif
@@ -278,14 +291,28 @@ package final class NetworkPanelModel {
 
     isolated deinit {
         fetchedResultsTransactionTask?.cancel()
-        listTransactionRelay.finish()
+        listInvalidationRelay.finish()
 #if DEBUG
         resolveRawTransactionDeliveryWaitersForTesting(result: false)
 #endif
     }
 
-    package var listTransactions: AsyncStream<NetworkPanelListTransaction> {
-        listTransactionRelay.makeStream()
+    package var listInvalidations: AsyncStream<NetworkPanelListInvalidation> {
+        listInvalidationRelay.makeStream()
+    }
+
+    package var listProjectionVersion: NetworkPanelListVersion {
+        NetworkPanelListVersion(
+            revision: nextListTransactionRevision,
+            entryIdentityGeneration: listEntryIdentityGeneration
+        )
+    }
+
+    package func captureListProjection() -> NetworkPanelListProjection {
+        NetworkPanelListProjection(
+            version: listProjectionVersion,
+            entryIDs: visibleEntryIDs
+        )
     }
 
     package var displayEntryIDs: [NetworkListEntry.ID] {
@@ -447,7 +474,7 @@ package final class NetworkPanelModel {
             }
             publishListTransaction(
                 topologyChangedEntryIDs: Set(visibleEntryIDs),
-                isReset: true
+                rebindsStableEntries: true
             )
             return
         }
@@ -493,7 +520,7 @@ package final class NetworkPanelModel {
 
         publishListTransaction(
             topologyChangedEntryIDs: topologyChangedEntryIDs,
-            isReset: false
+            rebindsStableEntries: false
         )
     }
 
@@ -747,6 +774,7 @@ package final class NetworkPanelModel {
     }
 
     private func reapplyDisplayCriteria() {
+        let previousVisibleEntryIDs = visibleEntryIDs
         let newVisibleEntryIDs = orderedEntryIDs.filter { entryID in
             guard let entry = entriesByID[entryID] else {
                 preconditionFailure("Network entry visibility referenced an unregistered entry.")
@@ -759,8 +787,9 @@ package final class NetworkPanelModel {
         visibleEntryIDs = newVisibleEntryIDs
         visibleEntryIDSet = Set(newVisibleEntryIDs)
         publishListTransaction(
-            topologyChangedEntryIDs: Set(newVisibleEntryIDs),
-            isReset: true
+            topologyChangedEntryIDs: Set(previousVisibleEntryIDs)
+                .symmetricDifference(newVisibleEntryIDs),
+            rebindsStableEntries: false
         )
     }
 
@@ -978,9 +1007,9 @@ package final class NetworkPanelModel {
 
     private func publishListTransaction(
         topologyChangedEntryIDs: Set<NetworkListEntry.ID>,
-        isReset: Bool
+        rebindsStableEntries: Bool
     ) {
-        guard isReset || topologyChangedEntryIDs.isEmpty == false else {
+        guard rebindsStableEntries || topologyChangedEntryIDs.isEmpty == false else {
             return
         }
         precondition(
@@ -988,21 +1017,34 @@ package final class NetworkPanelModel {
             "Network list transaction revision overflowed."
         )
         nextListTransactionRevision += 1
+        if rebindsStableEntries {
+            precondition(
+                listEntryIdentityGeneration < UInt64.max,
+                "Network list entry identity generation overflowed."
+            )
+            listEntryIdentityGeneration += 1
+        }
 #if DEBUG
         listTransactionPublicationCountStorageForTesting &+= 1
 #endif
-        let transaction = NetworkPanelListTransaction(
-            revision: nextListTransactionRevision
-        )
+        let invalidation = NetworkPanelListInvalidation(version: listProjectionVersion)
 #if DEBUG
-        lastListTransactionStorageForTesting = transaction
+        lastListInvalidationStorageForTesting = invalidation
 #endif
-        listTransactionRelay.yield(transaction)
+        listInvalidationRelay.yield(invalidation)
     }
 }
 
 #if DEBUG
 extension NetworkPanelModel {
+    package func rebuildEntriesForTesting() {
+        rebuildEntries(from: requests.items)
+        publishListTransaction(
+            topologyChangedEntryIDs: Set(visibleEntryIDs),
+            rebindsStableEntries: true
+        )
+    }
+
     package var rawTransactionDeliveryCountForTesting: Int {
         rawTransactionDeliveryCountStorageForTesting
     }
@@ -1027,8 +1069,8 @@ extension NetworkPanelModel {
         listTransactionPublicationCountStorageForTesting
     }
 
-    package var lastListTransactionForTesting: NetworkPanelListTransaction? {
-        lastListTransactionStorageForTesting
+    package var lastListInvalidationForTesting: NetworkPanelListInvalidation? {
+        lastListInvalidationStorageForTesting
     }
 
     package func waitForRawTransactionDeliveryForTesting(
