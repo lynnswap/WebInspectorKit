@@ -9,26 +9,13 @@ import UIKit
 package final class NetworkListViewController: UICollectionViewController, UISearchResultsUpdating {
     package typealias EntrySelectionAction = @MainActor (NetworkListEntry.ID?) -> Void
 
-    @MainActor
-    private final class ListProjectionDisplayLinkTarget: NSObject {
-        private let action: (CADisplayLink) -> Void
-
-        init(action: @escaping (CADisplayLink) -> Void) {
-            self.action = action
-        }
-
-        @objc func displayLinkDidFire(_ displayLink: CADisplayLink) {
-            action(displayLink)
-        }
-    }
-
     private enum SectionIdentifier: Hashable, Sendable {
         case main
     }
 
-    private struct PendingSnapshotUpdate {
-        var rows: NetworkListViewController.SnapshotRows
-        var snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkListEntry.ID>
+    private struct SnapshotArtifact: Sendable {
+        let rows: NetworkListViewController.SnapshotRows
+        let snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkListEntry.ID>
     }
 
     private struct PendingListProjection {
@@ -43,15 +30,161 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
     }
 
-    private struct PendingListSnapshotBuild {
-        var entryIDs: [NetworkListEntry.ID]
-        var revision: UInt64
+    @MainActor
+    private final class ListSnapshotBuildCoordinator {
+        struct Request: Equatable, Sendable {
+            let entryIDs: [NetworkListEntry.ID]
+            let revision: UInt64
+        }
+
+        typealias Completion = @MainActor (Request, SnapshotArtifact) -> Void
+
+        private struct Work {
+            var request: Request
+            var completion: Completion
+        }
+
+        private struct ActiveBuild {
+            var generation: UInt64
+            var task: Task<Void, Never>
+            var work: Work
+            var pendingWork: Work?
+            var shouldDeliver: Bool
+        }
+
+        private enum State {
+            case idle
+            case building(ActiveBuild)
+        }
+
+        private let executor: any NetworkListSnapshotBuildExecuting
+        private var state = State.idle
+        private var nextGeneration: UInt64 = 0
+        private var idleWaiters: [CheckedContinuation<Void, Never>] = []
+
+        init(executor: any NetworkListSnapshotBuildExecuting) {
+            self.executor = executor
+        }
+
+        var hasWorkInFlight: Bool {
+            if case .building = state {
+                return true
+            }
+            return false
+        }
+
+        func submit(
+            _ request: Request,
+            completion: @escaping Completion
+        ) {
+            let work = Work(request: request, completion: completion)
+            switch state {
+            case .idle:
+                start(work)
+            case .building(var activeBuild):
+                if activeBuild.pendingWork == nil,
+                   activeBuild.shouldDeliver,
+                   activeBuild.work.request == request {
+                    return
+                }
+                if activeBuild.pendingWork?.request == request {
+                    return
+                }
+                activeBuild.pendingWork = work
+                state = .building(activeBuild)
+            }
+        }
+
+        @discardableResult
+        func cancel() -> Bool {
+            guard case .building(var activeBuild) = state else {
+                return false
+            }
+            activeBuild.task.cancel()
+            activeBuild.pendingWork = nil
+            activeBuild.shouldDeliver = false
+            state = .building(activeBuild)
+            return true
+        }
+
+        func waitUntilIdle() async {
+            guard case .building = state else {
+                return
+            }
+            await withCheckedContinuation { continuation in
+                idleWaiters.append(continuation)
+            }
+        }
+
+        private func start(_ work: Work) {
+            guard case .idle = state else {
+                preconditionFailure("A Network list snapshot build must be serialized.")
+            }
+            let generation = takeNextGeneration()
+            let executor = self.executor
+            let request = work.request
+            let task = Task { @MainActor [weak self] in
+                let artifact = await executor.execute {
+                    NetworkListViewController.makeSnapshotArtifact(entryIDs: request.entryIDs)
+                }
+                self?.buildDidFinish(
+                    generation: generation,
+                    artifact: artifact
+                )
+            }
+            state = .building(
+                ActiveBuild(
+                    generation: generation,
+                    task: task,
+                    work: work,
+                    pendingWork: nil,
+                    shouldDeliver: true
+                )
+            )
+        }
+
+        private func buildDidFinish(
+            generation: UInt64,
+            artifact: SnapshotArtifact
+        ) {
+            guard case .building(let activeBuild) = state,
+                  activeBuild.generation == generation else {
+                return
+            }
+            state = .idle
+            if activeBuild.shouldDeliver,
+               activeBuild.pendingWork == nil {
+                activeBuild.work.completion(activeBuild.work.request, artifact)
+            }
+            if let pendingWork = activeBuild.pendingWork {
+                start(pendingWork)
+            } else {
+                resumeIdleWaiters()
+            }
+        }
+
+        private func takeNextGeneration() -> UInt64 {
+            precondition(
+                nextGeneration < UInt64.max,
+                "Network list snapshot build generation overflowed."
+            )
+            nextGeneration += 1
+            return nextGeneration
+        }
+
+        private func resumeIdleWaiters() {
+            let waiters = idleWaiters
+            idleWaiters.removeAll(keepingCapacity: true)
+            for waiter in waiters {
+                waiter.resume()
+            }
+        }
     }
 
     private struct SnapshotCoordinator {
         var isRenderingActive = false
         var needsReloadOnNextAppearance = true
-        var pendingUpdate: PendingSnapshotUpdate?
+        var pendingUpdate: SnapshotArtifact?
         var state = NetworkListViewController.SnapshotState()
 
         mutating func resumeRendering() {
@@ -84,16 +217,9 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private var snapshotCoordinator = SnapshotCoordinator()
     private var pendingListProjection: PendingListProjection?
-    private lazy var listProjectionDisplayLinkTarget = ListProjectionDisplayLinkTarget { [weak self] displayLink in
-        displayLink.isPaused = true
-        self?.flushPendingListProjectionIfNeeded()
-    }
-    private var listProjectionDisplayLink: CADisplayLink?
-    private var isListProjectionFlushScheduled = false
+    private let listProjectionFrameScheduler: any NetworkListProjectionFrameScheduling
+    private let listSnapshotBuildCoordinator: ListSnapshotBuildCoordinator
     private var latestListTransactionRevision: UInt64 = 0
-    private var listSnapshotBuildGeneration: UInt64 = 0
-    private var listSnapshotBuildTask: Task<Void, Never>?
-    private var pendingListSnapshotBuild: PendingListSnapshotBuild?
     private var isApplyingSearchPresentation = false
     private var activeSearchController: UISearchController?
 #if DEBUG
@@ -131,8 +257,36 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }()
     private lazy var dataSource = makeDataSource()
 
-    package init(model: NetworkPanelModel) {
+    package convenience init(model: NetworkPanelModel) {
+        self.init(
+            model: model,
+            listProjectionFrameScheduler: NetworkListDisplayLinkFrameScheduler(),
+            listSnapshotBuildExecutor: NetworkListDetachedSnapshotBuildExecutor()
+        )
+    }
+
+    package convenience init(
+        model: NetworkPanelModel,
+        listProjectionFrameScheduler: any NetworkListProjectionFrameScheduling,
+        listSnapshotBuildExecutor: any NetworkListSnapshotBuildExecuting
+    ) {
+        self.init(
+            model: model,
+            frameScheduler: listProjectionFrameScheduler,
+            snapshotBuildExecutor: listSnapshotBuildExecutor
+        )
+    }
+
+    private init(
+        model: NetworkPanelModel,
+        frameScheduler: any NetworkListProjectionFrameScheduling,
+        snapshotBuildExecutor: any NetworkListSnapshotBuildExecuting
+    ) {
         self.model = model
+        listProjectionFrameScheduler = frameScheduler
+        listSnapshotBuildCoordinator = ListSnapshotBuildCoordinator(
+            executor: snapshotBuildExecutor
+        )
         entrySelectionAction = { [model] entryID in
             model.selectEntry(entryID)
         }
@@ -146,8 +300,8 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     isolated deinit {
-        listProjectionDisplayLink?.invalidate()
-        listSnapshotBuildTask?.cancel()
+        listProjectionFrameScheduler.invalidate()
+        listSnapshotBuildCoordinator.cancel()
         listTransactionTask?.cancel()
         searchTextObservation?.cancel()
         resourceFilterObservation?.cancel()
@@ -271,8 +425,8 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         guard snapshotCoordinator.isRenderingActive else {
             return
         }
-        invalidateListProjectionDisplayLink()
-        let discardedSnapshotBuild = cancelListSnapshotBuild()
+        listProjectionFrameScheduler.cancel()
+        let discardedSnapshotBuild = listSnapshotBuildCoordinator.cancel()
         if pendingListProjection != nil || discardedSnapshotBuild {
             snapshotCoordinator.markNeedsReloadOnNextAppearance()
             pendingListProjection = nil
@@ -426,9 +580,9 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
     }
 
-    nonisolated private static func makeSnapshot(
+    nonisolated private static func makeSnapshotArtifact(
         entryIDs: [NetworkListEntry.ID]
-    ) -> NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkListEntry.ID> {
+    ) -> SnapshotArtifact {
         precondition(
             entryIDs.count == Set(entryIDs).count,
             "Duplicate row IDs detected in NetworkListViewController"
@@ -437,55 +591,44 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         var snapshot = NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkListEntry.ID>()
         snapshot.appendSections([.main])
         snapshot.appendItems(entryIDs, toSection: .main)
-        return snapshot
+        return SnapshotArtifact(
+            rows: NetworkListViewController.SnapshotRows(entryIDs: entryIDs),
+            snapshot: snapshot
+        )
     }
 
     private var isCollectionViewVisible: Bool {
         snapshotCoordinator.isRenderingActive && isViewLoaded
     }
 
-    private func requestSnapshotUpdate(entryIDs: [NetworkListEntry.ID]) {
-        let rows = NetworkListViewController.SnapshotRows(entryIDs: entryIDs)
-        requestSnapshotUpdate(snapshot: Self.makeSnapshot(entryIDs: entryIDs), rows: rows)
-    }
-
-    private func requestSnapshotUpdate(
-        snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkListEntry.ID>,
-        rows: NetworkListViewController.SnapshotRows
-    ) {
+    private func requestSnapshotUpdate(_ artifact: SnapshotArtifact) {
         guard isCollectionViewVisible else {
             snapshotCoordinator.markNeedsReloadOnNextAppearance()
             return
         }
         snapshotCoordinator.needsReloadOnNextAppearance = false
         if let applyingRows = snapshotCoordinator.state.applyingRows {
-            if applyingRows.entryIDs == rows.entryIDs {
+            if applyingRows.entryIDs == artifact.rows.entryIDs {
                 snapshotCoordinator.pendingUpdate = nil
                 return
             }
-        } else if dataSource.snapshot().itemIdentifiers == rows.entryIDs {
+        } else if dataSource.snapshot().itemIdentifiers == artifact.rows.entryIDs {
             snapshotCoordinator.pendingUpdate = nil
             return
         }
-        enqueueSnapshotUpdate(snapshot: snapshot, rows: rows)
+        enqueueSnapshotUpdate(artifact)
     }
 
-    private func enqueueSnapshotUpdate(
-        snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkListEntry.ID>,
-        rows: NetworkListViewController.SnapshotRows
-    ) {
+    private func enqueueSnapshotUpdate(_ artifact: SnapshotArtifact) {
         if let pendingSnapshotUpdate = snapshotCoordinator.pendingUpdate,
-           pendingSnapshotUpdate.rows.entryIDs == rows.entryIDs {
+           pendingSnapshotUpdate.rows.entryIDs == artifact.rows.entryIDs {
             return
         }
         guard snapshotCoordinator.state.isApplying
-            || dataSource.snapshot().itemIdentifiers != rows.entryIDs else {
+            || dataSource.snapshot().itemIdentifiers != artifact.rows.entryIDs else {
             return
         }
-        snapshotCoordinator.pendingUpdate = PendingSnapshotUpdate(
-            rows: rows,
-            snapshot: snapshot
-        )
+        snapshotCoordinator.pendingUpdate = artifact
         applyPendingSnapshotUpdateIfNeeded()
     }
 
@@ -558,39 +701,15 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func scheduleListProjectionFlushIfNeeded() {
-        guard isListProjectionFlushScheduled == false,
-              pendingListProjection != nil else {
+        guard pendingListProjection != nil else {
             return
         }
-        isListProjectionFlushScheduled = true
-        let displayLink: CADisplayLink
-        if let listProjectionDisplayLink {
-            displayLink = listProjectionDisplayLink
-        } else {
-            displayLink = CADisplayLink(
-                target: listProjectionDisplayLinkTarget,
-                selector: #selector(ListProjectionDisplayLinkTarget.displayLinkDidFire(_:))
-            )
-            displayLink.isPaused = true
-            displayLink.add(to: .main, forMode: .common)
-            listProjectionDisplayLink = displayLink
+        listProjectionFrameScheduler.schedule { [weak self] in
+            self?.flushPendingListProjectionIfNeeded()
         }
-        displayLink.isPaused = false
-    }
-
-    private func cancelScheduledListProjectionFlush() {
-        isListProjectionFlushScheduled = false
-        listProjectionDisplayLink?.isPaused = true
-    }
-
-    private func invalidateListProjectionDisplayLink() {
-        cancelScheduledListProjectionFlush()
-        listProjectionDisplayLink?.invalidate()
-        listProjectionDisplayLink = nil
     }
 
     private func flushPendingListProjectionIfNeeded() {
-        cancelScheduledListProjectionFlush()
         guard snapshotCoordinator.isRenderingActive else {
             if pendingListProjection != nil {
                 pendingListProjection = nil
@@ -620,82 +739,25 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         entryIDs: [NetworkListEntry.ID],
         revision: UInt64
     ) {
-        pendingListSnapshotBuild = PendingListSnapshotBuild(
+        let request = ListSnapshotBuildCoordinator.Request(
             entryIDs: entryIDs,
             revision: revision
         )
-        startNextListSnapshotBuildIfNeeded()
-    }
-
-    private func startNextListSnapshotBuildIfNeeded() {
-        guard snapshotCoordinator.isRenderingActive,
-              listSnapshotBuildTask == nil,
-              let build = pendingListSnapshotBuild else {
-            return
-        }
-        pendingListSnapshotBuild = nil
-        guard build.revision == latestListTransactionRevision else {
-            return
-        }
-        let generation = takeNextListSnapshotBuildGeneration()
-        listSnapshotBuildTask = Task.detached(priority: .userInitiated) { [weak self] in
-            let snapshot = Self.makeSnapshot(entryIDs: build.entryIDs)
-            guard Task.isCancelled == false else {
-                return
-            }
-            await self?.listSnapshotDidBuild(
-                snapshot,
-                entryIDs: build.entryIDs,
-                revision: build.revision,
-                generation: generation
-            )
+        listSnapshotBuildCoordinator.submit(request) { [weak self] request, artifact in
+            self?.listSnapshotDidBuild(request: request, artifact: artifact)
         }
     }
 
     private func listSnapshotDidBuild(
-        _ snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkListEntry.ID>,
-        entryIDs: [NetworkListEntry.ID],
-        revision: UInt64,
-        generation: UInt64
+        request: ListSnapshotBuildCoordinator.Request,
+        artifact: SnapshotArtifact
     ) {
-        guard generation == listSnapshotBuildGeneration else {
-            return
-        }
-        listSnapshotBuildTask = nil
-        defer {
-            startNextListSnapshotBuildIfNeeded()
-        }
         guard snapshotCoordinator.isRenderingActive,
-              revision == latestListTransactionRevision,
-              entryIDs == model.displayEntryIDs else {
+              request.revision == latestListTransactionRevision,
+              artifact.rows.entryIDs == model.displayEntryIDs else {
             return
         }
-        requestSnapshotUpdate(
-            snapshot: snapshot,
-            rows: NetworkListViewController.SnapshotRows(entryIDs: entryIDs)
-        )
-    }
-
-    @discardableResult
-    private func cancelListSnapshotBuild() -> Bool {
-        let discardedBuild = listSnapshotBuildTask != nil || pendingListSnapshotBuild != nil
-        pendingListSnapshotBuild = nil
-        guard let task = listSnapshotBuildTask else {
-            return discardedBuild
-        }
-        task.cancel()
-        listSnapshotBuildTask = nil
-        _ = takeNextListSnapshotBuildGeneration()
-        return true
-    }
-
-    private func takeNextListSnapshotBuildGeneration() -> UInt64 {
-        precondition(
-            listSnapshotBuildGeneration < UInt64.max,
-            "Network list snapshot build generation overflowed."
-        )
-        listSnapshotBuildGeneration += 1
-        return listSnapshotBuildGeneration
+        requestSnapshotUpdate(artifact)
     }
 
     private func reloadDataFromModel() {
@@ -704,8 +766,11 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             return
         }
         let entryIDs = displayEntryIDsFromModel()
-        requestSnapshotUpdate(entryIDs: entryIDs)
         renderEmptyState(isEmpty: entryIDs.isEmpty)
+        requestListSnapshotBuild(
+            entryIDs: entryIDs,
+            revision: latestListTransactionRevision
+        )
     }
 
     private func renderInitialEmptyStateIfNeeded() {
@@ -837,7 +902,7 @@ extension NetworkListViewController {
     }
 
     package var hasActiveListSnapshotBuildForTesting: Bool {
-        listSnapshotBuildTask != nil
+        listSnapshotBuildCoordinator.hasWorkInFlight
     }
 
     package func beginSnapshotApplyForTesting(requestIDs: [NetworkRequest.ID]) {
@@ -846,8 +911,15 @@ extension NetworkListViewController {
         )
     }
 
-    package func queueSnapshotUpdateForTesting(requestIDs: [NetworkRequest.ID]) {
-        requestSnapshotUpdate(entryIDs: entryIDsForTesting(requestIDs: requestIDs))
+    package func queueSnapshotUpdateForTesting(requestIDs: [NetworkRequest.ID]) async {
+        let request = ListSnapshotBuildCoordinator.Request(
+            entryIDs: entryIDsForTesting(requestIDs: requestIDs),
+            revision: latestListTransactionRevision
+        )
+        listSnapshotBuildCoordinator.submit(request) { [weak self] _, artifact in
+            self?.requestSnapshotUpdate(artifact)
+        }
+        await listSnapshotBuildCoordinator.waitUntilIdle()
     }
 
     package func finishSnapshotApplyForTesting(requestIDs: [NetworkRequest.ID]) {
@@ -871,22 +943,27 @@ extension NetworkListViewController {
     }
 
     package func flushPendingSnapshotUpdateForTesting() async {
+        listProjectionFrameScheduler.cancel()
+        flushPendingListProjectionIfNeeded()
         while true {
-            flushPendingListProjectionIfNeeded()
-            startNextListSnapshotBuildIfNeeded()
-            guard let snapshotBuildTask = listSnapshotBuildTask else {
+            await listSnapshotBuildCoordinator.waitUntilIdle()
+            guard snapshotCoordinator.needsReloadForActiveRendering else {
                 break
             }
-            await snapshotBuildTask.value
-        }
-        if snapshotCoordinator.needsReloadForActiveRendering {
             reloadDataFromModel()
         }
         applyPendingSnapshotUpdateIfNeeded()
         await waitForSnapshotUpdateCompletionForTesting()
     }
 
+    package func waitForSnapshotPipelineQuiescenceForTesting() async {
+        await listSnapshotBuildCoordinator.waitUntilIdle()
+        applyPendingSnapshotUpdateIfNeeded()
+        await waitForSnapshotUpdateCompletionForTesting()
+    }
+
     package func flushPendingListProjectionForTesting() {
+        listProjectionFrameScheduler.cancel()
         flushPendingListProjectionIfNeeded()
     }
 

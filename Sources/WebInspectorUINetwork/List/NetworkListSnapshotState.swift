@@ -3,15 +3,10 @@ import WebInspectorUIBase
 import WebInspectorDataKit
 
 extension NetworkListViewController {
-    @MainActor
-    struct SnapshotRows: Equatable {
+    struct SnapshotRows: Equatable, Sendable {
         let entryIDs: [NetworkListEntry.ID]
 
         init(entryIDs: [NetworkListEntry.ID]) {
-            precondition(
-                entryIDs.count == Set(entryIDs).count,
-                "Duplicate row IDs detected in NetworkListViewController"
-            )
             self.entryIDs = entryIDs
         }
     }
