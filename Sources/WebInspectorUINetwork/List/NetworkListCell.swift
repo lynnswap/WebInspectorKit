@@ -6,8 +6,17 @@ import UIKit
 
 @MainActor
 package final class NetworkListCell: UICollectionViewListCell {
+    package enum ListPosition: Equatable {
+        case single
+        case first
+        case middle
+        case last
+    }
+
     private let statusIndicatorView = UIView(frame: CGRect(origin: .zero, size: CGSize(width: 8, height: 8)))
     private let fileTypeLabel = UILabel()
+    private let separatorView = UIView()
+    private var listPosition: ListPosition = .middle
     private var entryObservation: PortableObservationTracking.Token?
     private weak var observedEntry: NetworkListEntry?
     private var isRenderingActive = true
@@ -29,6 +38,16 @@ package final class NetworkListCell: UICollectionViewListCell {
     override package func prepareForReuse() {
         super.prepareForReuse()
         unbind()
+    }
+
+    override package func updateConfiguration(using state: UICellConfigurationState) {
+        super.updateConfiguration(using: state)
+        updateBackgroundShape()
+    }
+
+    override package func layoutSubviews() {
+        super.layoutSubviews()
+        updateBackgroundShape()
     }
 
     package func bind(entry: NetworkListEntry, renderingActive: Bool) {
@@ -61,6 +80,36 @@ package final class NetworkListCell: UICollectionViewListCell {
         cancelEntryObservation()
         observedEntry = nil
         render(displayName: "", statusSeverity: .neutral, fileTypeLabel: "")
+    }
+
+    package func setListPosition(_ position: ListPosition) {
+        guard listPosition != position else {
+            return
+        }
+        listPosition = position
+        separatorView.isHidden = position == .single || position == .last
+        var background = UIBackgroundConfiguration.listCell()
+        background.cornerRadius = position == .middle ? 0 : 10
+        backgroundConfiguration = background
+        updateBackgroundShape()
+    }
+
+    private func updateBackgroundShape() {
+        guard let backgroundView else {
+            return
+        }
+        backgroundView.layer.cornerCurve = .continuous
+        backgroundView.layer.maskedCorners = switch listPosition {
+        case .single:
+            [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        case .first:
+            [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+        case .middle:
+            []
+        case .last:
+            [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        }
+        backgroundView.layer.masksToBounds = listPosition != .middle
     }
 
     private func startRequestObservationIfNeeded() {
@@ -96,6 +145,9 @@ package final class NetworkListCell: UICollectionViewListCell {
         fileTypeLabel.adjustsFontForContentSizeCategory = true
 
         contentConfiguration = Self.makeContentConfiguration()
+        var background = UIBackgroundConfiguration.listCell()
+        background.cornerRadius = 0
+        backgroundConfiguration = background
         accessories = [
             .customView(
                 configuration: .init(
@@ -115,6 +167,19 @@ package final class NetworkListCell: UICollectionViewListCell {
             ),
             .disclosureIndicator(),
         ]
+
+        separatorView.translatesAutoresizingMaskIntoConstraints = false
+        separatorView.accessibilityIdentifier = "WebInspector.Network.List.Separator"
+        separatorView.backgroundColor = .separator
+        separatorView.isUserInteractionEnabled = false
+        addSubview(separatorView)
+        NSLayoutConstraint.activate([
+            separatorView.leadingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.leadingAnchor),
+            separatorView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            separatorView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            separatorView.heightAnchor.constraint(equalToConstant: 1 / traitCollection.displayScale),
+        ])
+        setListPosition(.single)
     }
 
     private func render(
@@ -169,13 +234,41 @@ package final class NetworkListCell: UICollectionViewListCell {
         content.secondaryText = nil
         content.textProperties.numberOfLines = 2
         content.textProperties.lineBreakMode = .byTruncatingMiddle
-        content.textProperties.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(
-            for: .systemFont(
-                ofSize: UIFont.preferredFont(forTextStyle: .subheadline).pointSize,
-                weight: .semibold
-            )
-        )
+        content.textProperties.font = preferredDisplayNameFont(compatibleWith: nil)
+        content.textProperties.adjustsFontForContentSizeCategory = true
         return content
+    }
+
+    package static func rowHeight(compatibleWith traitCollection: UITraitCollection) -> CGFloat {
+        let content = makeContentConfiguration()
+        let displayNameHeight = preferredDisplayNameFont(
+            compatibleWith: traitCollection
+        ).lineHeight * CGFloat(content.textProperties.numberOfLines)
+        let accessoryHeight = max(
+            UIFont.preferredFont(
+                forTextStyle: .footnote,
+                compatibleWith: traitCollection
+            ).lineHeight,
+            20
+        )
+        return ceil(max(
+            44,
+            content.directionalLayoutMargins.top
+                + max(displayNameHeight, accessoryHeight)
+                + content.directionalLayoutMargins.bottom
+        ))
+    }
+
+    private static func preferredDisplayNameFont(
+        compatibleWith traitCollection: UITraitCollection?
+    ) -> UIFont {
+        let descriptor = UIFontDescriptor.preferredFontDescriptor(
+            withTextStyle: .subheadline,
+            compatibleWith: traitCollection
+        ).addingAttributes([
+            .traits: [UIFontDescriptor.TraitKey.weight: UIFont.Weight.semibold],
+        ])
+        return UIFont(descriptor: descriptor, size: 0)
     }
 }
 
@@ -199,6 +292,22 @@ extension NetworkListCell {
 
     package var observedEntryForTesting: NetworkListEntry? {
         observedEntry
+    }
+
+    package var contentNumberOfLinesForTesting: Int? {
+        (contentConfiguration as? UIListContentConfiguration)?.textProperties.numberOfLines
+    }
+
+    package var separatorViewForTesting: UIView {
+        separatorView
+    }
+
+    package var listPositionForTesting: ListPosition {
+        listPosition
+    }
+
+    package var backgroundCornerRadiusForTesting: CGFloat? {
+        backgroundConfiguration?.cornerRadius
     }
 }
 #endif

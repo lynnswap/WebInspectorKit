@@ -41,6 +41,137 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func listUsesFixedMetricFlowLayoutInsteadOfWholeListCompositionalSolving() throws {
+        let model = NetworkPanelModel(context: makeContext())
+        let viewController = NetworkListViewController(model: model)
+        let window = showInWindow(viewController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        let layout = try #require(
+            viewController.collectionViewForTesting.collectionViewLayout
+                as? UICollectionViewFlowLayout
+        )
+
+        #expect(layout.scrollDirection == .vertical)
+        #expect(layout.estimatedItemSize == .zero)
+        #expect(layout.minimumLineSpacing == 0)
+        #expect(layout.minimumInteritemSpacing == 0)
+        #expect(layout.itemSize.width > 0)
+        #expect(layout.itemSize.height >= 44)
+    }
+
+    @Test
+    func fixedFlowLayoutPreservesInsetGroupedRowContentAccessoriesAndSelection() async throws {
+        let context = makeContext()
+        _ = context.seedNetworkRequest(
+            requestID: "fixed-layout-first",
+            url: "https://example.test/first.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 0
+        )
+        let selectedRequestID = context.seedNetworkRequest(
+            requestID: "fixed-layout-selected",
+            url: "https://example.test/a-long-network-resource-name-that-can-use-two-lines.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 1
+        )
+        _ = context.seedNetworkRequest(
+            requestID: "fixed-layout-last",
+            url: "https://example.test/last.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 2
+        )
+        let request = try #require(context.registeredRequest(for: selectedRequestID))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(request)
+        let viewController = NetworkListViewController(model: model)
+        let window = showInWindow(viewController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        await viewController.flushPendingSnapshotUpdateForTesting()
+        viewController.view.layoutIfNeeded()
+        viewController.collectionViewForTesting.layoutIfNeeded()
+
+        let layout = try #require(
+            viewController.collectionViewForTesting.collectionViewLayout
+                as? UICollectionViewFlowLayout
+        )
+        let firstCell = try #require(viewController.networkListCellForTesting(
+            at: IndexPath(item: 0, section: 0)
+        ))
+        let selectedCell = try #require(viewController.networkListCellForTesting(
+            at: IndexPath(item: 1, section: 0)
+        ))
+        let lastCell = try #require(viewController.networkListCellForTesting(
+            at: IndexPath(item: 2, section: 0)
+        ))
+        let expectedWidth = viewController.collectionViewForTesting.bounds.width
+            - viewController.collectionViewForTesting.adjustedContentInset.left
+            - viewController.collectionViewForTesting.adjustedContentInset.right
+            - layout.sectionInset.left
+            - layout.sectionInset.right
+
+        #expect(layout.sectionInset.left == NetworkListViewController.horizontalSectionInset)
+        #expect(layout.sectionInset.right == NetworkListViewController.horizontalSectionInset)
+        #expect(layout.sectionInset.bottom == NetworkListViewController.bottomSectionInset)
+        #expect(layout.itemSize.width == expectedWidth)
+        #expect(layout.itemSize.height == NetworkListCell.rowHeight(
+            compatibleWith: viewController.traitCollection
+        ))
+        #expect(selectedCell.contentNumberOfLinesForTesting == 2)
+        #expect(selectedCell.accessories.count == 3)
+        #expect(selectedCell.separatorViewForTesting.superview === selectedCell)
+        #expect(firstCell.listPositionForTesting == .first)
+        #expect(firstCell.separatorViewForTesting.isHidden == false)
+        #expect(firstCell.backgroundCornerRadiusForTesting ?? 0 > 0)
+        #expect(firstCell.layer.masksToBounds == false)
+        #expect(selectedCell.listPositionForTesting == .middle)
+        #expect(selectedCell.separatorViewForTesting.isHidden == false)
+        #expect(selectedCell.backgroundCornerRadiusForTesting == 0)
+        #expect(selectedCell.layer.masksToBounds == false)
+        #expect(lastCell.listPositionForTesting == .last)
+        #expect(lastCell.separatorViewForTesting.isHidden)
+        #expect(lastCell.backgroundCornerRadiusForTesting ?? 0 > 0)
+        #expect(lastCell.layer.masksToBounds == false)
+        #expect(
+            viewController.collectionViewForTesting.indexPathsForSelectedItems
+                == [IndexPath(item: 1, section: 0)]
+        )
+    }
+
+    @Test
+    func fixedFlowLayoutRecomputesRowMetricForContentSizeCategoryChanges() throws {
+        let model = NetworkPanelModel(context: makeContext())
+        let viewController = NetworkListViewController(model: model)
+        let window = showInWindow(viewController, makeVisible: true)
+        defer { window.isHidden = true }
+        let layout = try #require(
+            viewController.collectionViewForTesting.collectionViewLayout
+                as? UICollectionViewFlowLayout
+        )
+        let regularHeight = layout.itemSize.height
+
+        viewController.traitOverrides.preferredContentSizeCategory =
+            .accessibilityExtraExtraExtraLarge
+        viewController.view.layoutIfNeeded()
+
+        #expect(layout.estimatedItemSize == .zero)
+        #expect(layout.itemSize.height > regularHeight)
+        #expect(layout.itemSize.height == NetworkListCell.rowHeight(
+            compatibleWith: viewController.traitCollection
+        ))
+    }
+
+    @Test
     func detailShowsEmptyStateWithoutSelection() {
         let model = NetworkPanelModel(context: makeContext())
         let viewController = makeNetworkDetailViewController(model: model)
