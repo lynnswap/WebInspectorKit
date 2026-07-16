@@ -862,6 +862,41 @@ struct ParentContainerTests {
     }
 
     @Test
+    func elementPickerActivationDismissesPresentationWithoutStoppingPickerOrDetaching() async throws {
+        let fixture = try await makeLiveSession()
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
+        try await fixture.context.setElementPickerEnabled(true)
+        #expect(fixture.context.isElementPickerEnabled)
+
+        let presenter = UIViewController()
+        let viewController = WebInspectorViewController(session: fixture.session)
+        let window = showInWindow(presenter)
+        defer { window.isHidden = true }
+
+        presenter.present(viewController, animated: false)
+        #expect(presenter.presentedViewController === viewController)
+
+        let retirementBaseline = viewController.rootPresentationRetirementTaskCompletionCountForTesting
+        viewController.presentationContentStoreForTesting.elementPickerDidActivate()
+        #expect(
+            await viewController.waitForRootPresentationRetirementTaskCompletionForTesting(
+                after: retirementBaseline
+            )
+        )
+
+        #expect(presenter.presentedViewController == nil)
+        #expect(fixture.session.detachCountForTesting == 0)
+        #expect(fixture.context.isElementPickerEnabled)
+        let commands = await fixture.runtime.backend.recordedCommands()
+        #expect(commands.filter {
+            $0.domain == "DOM" && $0.method == "setInspectModeEnabled"
+        }.compactMap {
+            $0.payload.cast(as: DOM.SetInspectModeEnabledPayload.self)?.enabled
+        } == [true])
+        #expect(commands.contains { $0.domain == "DOM" && $0.method == "hideHighlight" } == false)
+    }
+
+    @Test
     func rootPresentationFallbacksDetachOnlyOnce() async throws {
         let session = makeSessionWithNoOpAttachment()
         let viewController = WebInspectorViewController(session: session)

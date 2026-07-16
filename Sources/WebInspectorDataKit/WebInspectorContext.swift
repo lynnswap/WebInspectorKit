@@ -426,6 +426,19 @@ public final class WebInspectorContext {
         let resolution: Resolution
     }
 
+    private struct PageHighlightState {
+        enum Phase {
+            case sending(Task<Void, any Error>)
+            case applied
+        }
+
+        let operationID: UInt64
+        let pageGeneration: Int
+        let documentGeneration: Int
+        let nodeID: DOMNode.ID
+        var phase: Phase
+    }
+
     private struct StyleTrackingKey: Hashable {
         var targetID: WebInspectorTarget.ID
         var pageBindingID: String?
@@ -576,7 +589,8 @@ public final class WebInspectorContext {
     private var targetRevisionsByID: [WebInspectorTarget.ID: UInt64]
     private var runtimeTargetRevisionsByID: [WebInspectorTarget.ID: UInt64]
     private var pendingInspectedNodeID: DOMNode.ID?
-    private var pageHighlightDocumentGeneration: Int?
+    private var pageHighlightState: PageHighlightState?
+    private var nextPageHighlightOperationID: UInt64
 
     /// Creates a context owned by the supplied actor.
     public init(_ container: WebInspectorContainer, isolation: isolated (any Actor)) {
@@ -666,7 +680,8 @@ public final class WebInspectorContext {
         targetRevisionsByID = [:]
         runtimeTargetRevisionsByID = [:]
         pendingInspectedNodeID = nil
-        pageHighlightDocumentGeneration = nil
+        pageHighlightState = nil
+        nextPageHighlightOperationID = 0
         WebInspectorDataKitLog.debug("context state=\(state.logDescription)")
     }
 
@@ -1103,10 +1118,65 @@ public final class WebInspectorContext {
         requireOwner(isolation)
         try registeredNode(node)
         let page = try currentPageOrThrow()
-        if node.id.proxyID.targetScopeRawValue == nil {
-            recordPageHighlight(documentGeneration: domDocumentGeneration, isolation: isolation)
+        guard node.id.proxyID.targetScopeRawValue == nil else {
+            try await page.dom.highlightNode(node.id.proxyID)
+            return
         }
-        try await page.dom.highlightNode(node.id.proxyID)
+
+        if let state = pageHighlightState,
+           state.pageGeneration == currentPageGeneration,
+           state.documentGeneration == domDocumentGeneration,
+           state.nodeID == node.id {
+            switch state.phase {
+            case let .sending(command):
+                try await command.value
+            case .applied:
+                break
+            }
+            return
+        }
+
+        let pageGeneration = currentPageGeneration
+        let documentGeneration = domDocumentGeneration
+        let operationID = nextPageHighlightID()
+        let proxyNodeID = node.id.proxyID
+        let command = Task {
+            try await page.dom.highlightNode(proxyNodeID)
+        }
+        pageHighlightState = PageHighlightState(
+            operationID: operationID,
+            pageGeneration: pageGeneration,
+            documentGeneration: documentGeneration,
+            nodeID: node.id,
+            phase: .sending(command)
+        )
+        do {
+            try await command.value
+        } catch {
+            if pageHighlightState?.operationID == operationID,
+               pageHighlightState?.pageGeneration == pageGeneration,
+               pageHighlightState?.documentGeneration == documentGeneration,
+               pageHighlightState?.nodeID == node.id {
+                pageHighlightState = nil
+            }
+            throw error
+        }
+        guard pageHighlightState?.operationID == operationID,
+              pageHighlightState?.pageGeneration == pageGeneration,
+              pageHighlightState?.documentGeneration == documentGeneration,
+              pageHighlightState?.nodeID == node.id else {
+            return
+        }
+        pageHighlightState?.phase = .applied
+    }
+
+    private func nextPageHighlightID() -> UInt64 {
+        precondition(
+            nextPageHighlightOperationID < UInt64.max,
+            "WebInspectorContext exhausted page highlight operation identifiers."
+        )
+        nextPageHighlightOperationID += 1
+        return nextPageHighlightOperationID
     }
 
     package func highlightNode(for id: DOMNode.ID, isolation: isolated (any Actor) = #isolation) async throws {
@@ -1117,8 +1187,8 @@ public final class WebInspectorContext {
     public func hideHighlight(isolation: isolated (any Actor) = #isolation) async throws {
         requireOwner(isolation)
         let page = try currentPageOrThrow()
+        pageHighlightState = nil
         try await page.dom.hideHighlight()
-        pageHighlightDocumentGeneration = nil
     }
 
     package func domUndoRedoCommands(isolation: isolated (any Actor) = #isolation) throws -> DOMUndoRedoCommands {
@@ -1338,6 +1408,9 @@ public final class WebInspectorContext {
                 resolution = .commandFailure(error)
             case .success:
                 isElementPickerEnabled = operation.requestedEnabled
+                if operation.requestedEnabled {
+                    pageHighlightState = nil
+                }
                 notifyStatusChanged()
                 WebInspectorDataKitLog.debug(
                     "DOM picker setInspectMode finished enabled=\(operation.requestedEnabled) target=\(page.id.rawValue)"
@@ -3955,6 +4028,7 @@ extension WebInspectorContext {
             }
             setElementPickerSystemDesiredState(false, sourceRequestID: nil)
             isElementPickerEnabled = false
+            pageHighlightState = nil
             notifyStatusChanged()
             let inspectedNodeID = DOMNode.ID(id)
             guard let node = nodesByID[inspectedNodeID] else {
@@ -4084,22 +4158,14 @@ extension WebInspectorContext {
         notifyStatusChanged()
     }
 
-    private func recordPageHighlight(
-        documentGeneration: Int,
-        isolation: isolated (any Actor)
-    ) {
-        _ = isolation
-        pageHighlightDocumentGeneration = documentGeneration
-    }
-
     private func clearPageHighlightForDOMReset(isolation: isolated (any Actor)) {
+        guard pageHighlightState != nil else {
+            return
+        }
+        pageHighlightState = nil
         guard let currentPage else {
             return
         }
-        guard pageHighlightDocumentGeneration != nil else {
-            return
-        }
-        pageHighlightDocumentGeneration = nil
         pageHighlightMaintenanceTask = Task { [weak self, currentPage] in
             _ = isolation
             do {
@@ -4123,7 +4189,7 @@ extension WebInspectorContext {
         isolation: isolated (any Actor)
     ) -> Bool {
         _ = isolation
-        return pageHighlightDocumentGeneration == nil
+        return pageHighlightState == nil
     }
 
     private func applySetChildNodes(
@@ -4735,6 +4801,27 @@ extension WebInspectorContext {
     private func selectInspectedNode(_ node: DOMNode, isolation: isolated (any Actor)) {
         WebInspectorDataKitLog.debug("DOM.inspect selecting resolved nodeID=\(String(describing: node.id))")
         select(node, isolation: isolation)
+        let pageGeneration = currentPageGeneration
+        let documentGeneration = domDocumentGeneration
+        let nodeID = node.id
+        pageHighlightMaintenanceTask = Task { [weak self] in
+            _ = isolation
+            guard Task.isCancelled == false,
+                  let self,
+                  self.isCurrentPageGeneration(pageGeneration, isolation: isolation),
+                  self.isDOMDocumentGeneration(documentGeneration, isolation: isolation),
+                  self.selectedNode?.id == nodeID,
+                  let selectedNode = self.nodesByID[nodeID] else {
+                return
+            }
+            do {
+                try await self.highlight(selectedNode, isolation: isolation)
+            } catch is CancellationError {
+                return
+            } catch {
+                self.failIfTerminal(error, operation: "DOM.highlightNode after DOM.inspect")
+            }
+        }
     }
 }
 

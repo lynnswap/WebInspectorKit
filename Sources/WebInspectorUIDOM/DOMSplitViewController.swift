@@ -8,6 +8,7 @@ package final class DOMSplitViewController: UISplitViewController {
     private let treeViewController: DOMTreeViewController
     private let elementViewController: DOMElementViewController
     private let context: WebInspectorContext?
+    private let onElementPickerActivated: @MainActor () -> Void
     private var domNavigationItems: DOMNavigationItems?
     private lazy var treeNavigationController = RegularSplitColumnNavigationController(
         rootViewController: treeViewController
@@ -16,22 +17,28 @@ package final class DOMSplitViewController: UISplitViewController {
         rootViewController: elementViewController
     )
 
-    package convenience init(context: WebInspectorContext) {
+    package convenience init(
+        context: WebInspectorContext,
+        onElementPickerActivated: @escaping @MainActor () -> Void = {}
+    ) {
         self.init(
             treeViewController: DOMTreeViewController(context: context),
             elementViewController: DOMElementViewController(context: context),
-            context: context
+            context: context,
+            onElementPickerActivated: onElementPickerActivated
         )
     }
 
     package init(
         treeViewController: DOMTreeViewController,
         elementViewController: DOMElementViewController,
-        context: WebInspectorContext? = nil
+        context: WebInspectorContext? = nil,
+        onElementPickerActivated: @escaping @MainActor () -> Void = {}
     ) {
         self.treeViewController = treeViewController
         self.elementViewController = elementViewController
         self.context = context
+        self.onElementPickerActivated = onElementPickerActivated
         super.init(style: .doubleColumn)
     }
 
@@ -97,7 +104,10 @@ package final class DOMSplitViewController: UISplitViewController {
         guard let context else {
             return
         }
-        let navigationItems = DOMNavigationItems(context: context)
+        let navigationItems = DOMNavigationItems(
+            context: context,
+            onElementPickerActivated: onElementPickerActivated
+        )
         navigationItems.install(on: navigationItem) { [weak self] in
             self?.treeViewController.domTreeUndoManager ?? self?.undoManager
         }

@@ -17,7 +17,8 @@ package final class DOMCompactNavigationController: UINavigationController {
 
     package init(
         rootViewController: UIViewController,
-        context: WebInspectorContext
+        context: WebInspectorContext,
+        onElementPickerActivated: @escaping @MainActor () -> Void = {}
     ) {
         rootViewController.webInspectorDetachFromContainerForReuse()
         super.init(rootViewController: rootViewController)
@@ -25,7 +26,10 @@ package final class DOMCompactNavigationController: UINavigationController {
         webInspectorApplyNavigationControllerBackground(to: self)
         rootViewController.navigationItem.style = .browser
         let treeViewController = rootViewController as? DOMTreeViewController
-        let navigationItems = DOMNavigationItems(context: context)
+        let navigationItems = DOMNavigationItems(
+            context: context,
+            onElementPickerActivated: onElementPickerActivated
+        )
         navigationItems.install(on: rootViewController.navigationItem) { [weak self, weak treeViewController] in
             treeViewController?.domTreeUndoManager ?? self?.undoManager
         }

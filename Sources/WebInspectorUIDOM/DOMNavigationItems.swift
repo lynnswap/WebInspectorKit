@@ -8,6 +8,7 @@ package final class DOMNavigationItems: NSObject {
     private typealias UndoManagerProvider = @MainActor () -> UndoManager?
 
     private let context: WebInspectorContext
+    private let onElementPickerActivated: @MainActor () -> Void
     private var statusTask: Task<Void, Never>?
     private var undoManagerProvider: UndoManagerProvider = { nil }
 
@@ -44,8 +45,12 @@ package final class DOMNavigationItems: NSObject {
         return item
     }()
 
-    package init(context: WebInspectorContext) {
+    package init(
+        context: WebInspectorContext,
+        onElementPickerActivated: @escaping @MainActor () -> Void = {}
+    ) {
         self.context = context
+        self.onElementPickerActivated = onElementPickerActivated
         super.init()
         startObservingInspection()
     }
@@ -257,20 +262,24 @@ package final class DOMNavigationItems: NSObject {
     }
 
     package func performToggleElementPickerCommand() {
-        toggleElementPicker()
+        Task { @MainActor [weak self] in
+            await self?.toggleElementPickerState()
+        }
     }
 
     @objc
     private func toggleElementPicker() {
-        Task { @MainActor [weak context] in
-            guard let context else {
-                return
+        performToggleElementPickerCommand()
+    }
+
+    private func toggleElementPickerState() async {
+        do {
+            try await context.dom.toggleInspectMode()
+            if context.isElementPickerEnabled {
+                onElementPickerActivated()
             }
-            do {
-                try await context.dom.toggleInspectMode()
-            } catch {
-                WebInspectorUIDOMLog.debug("DOM picker toggle failed: \(String(describing: error))")
-            }
+        } catch {
+            WebInspectorUIDOMLog.debug("DOM picker toggle failed: \(String(describing: error))")
         }
     }
 
@@ -318,6 +327,10 @@ extension DOMNavigationItems {
 
     func redoForTesting(undoManager: UndoManager?) {
         performRedo(undoManager: undoManager)
+    }
+
+    func toggleElementPickerForTesting() async {
+        await toggleElementPickerState()
     }
 }
 #endif

@@ -891,6 +891,30 @@ struct DOMContainerTests {
     }
 
     @Test
+    func elementPickerActivationRequestsPresentationYieldOnlyAfterEnableSucceeds() async throws {
+        let fixture = try await makeLiveDOMContext()
+        var presentationYieldCount = 0
+        let navigationItems = DOMNavigationItems(
+            context: fixture.context,
+            onElementPickerActivated: {
+                presentationYieldCount += 1
+            }
+        )
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
+        await navigationItems.toggleElementPickerForTesting()
+
+        #expect(fixture.context.isElementPickerEnabled)
+        #expect(presentationYieldCount == 1)
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
+        await navigationItems.toggleElementPickerForTesting()
+
+        #expect(fixture.context.isElementPickerEnabled == false)
+        #expect(presentationYieldCount == 1)
+    }
+
+    @Test
     func navigationDeleteRegistersDOMUndoRedoAfterSuccessfulBackendDelete() async throws {
         let fixture = try await makeLiveDOMContext()
         let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))

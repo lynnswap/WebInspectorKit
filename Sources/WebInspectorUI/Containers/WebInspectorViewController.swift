@@ -134,8 +134,13 @@ public final class WebInspectorViewController: UIViewController {
 
     /// The inspection session backing the view controller.
     public let session: WebInspectorSession
-    private let presentationContentStore: PresentationContentStore
+    private lazy var presentationContentStore = PresentationContentStore(
+        onElementPickerActivated: { [weak self] in
+            self?.yieldPresentationToElementPicker()
+        }
+    )
     private let rootPresentationID = UUID()
+    private var presentationEndBehaviorOverride: WebInspectorSession.RootPresentationEndBehavior?
 
     /// A Boolean value indicating whether the controller detaches its session
     /// after the root presentation ends.
@@ -172,7 +177,6 @@ public final class WebInspectorViewController: UIViewController {
     /// Creates a view controller backed by an inspection session.
     public init(session: WebInspectorSession = WebInspectorSession()) {
         self.session = session
-        self.presentationContentStore = PresentationContentStore()
         super.init(nibName: nil, bundle: nil)
         webInspectorSetDrawsBackgroundTraitOverride(drawsBackgroundStorage)
     }
@@ -190,7 +194,8 @@ public final class WebInspectorViewController: UIViewController {
     isolated deinit {
         session.abandonRootPresentation(
             id: rootPresentationID,
-            detach: automaticallyDetachesOnDismiss
+            behavior: presentationEndBehaviorOverride
+                ?? .configured(automaticallyDetaches: automaticallyDetachesOnDismiss)
         )
     }
 
@@ -212,6 +217,7 @@ public final class WebInspectorViewController: UIViewController {
     /// Starts presentation lifecycle tracking before the view appears.
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        presentationEndBehaviorOverride = nil
         presentationLifecycleCoordinator.beginPresentation()
         session.beginRootPresentation(id: rootPresentationID)
         rebuildLayout(forceHostReplacement: activeHost == nil)
@@ -299,11 +305,13 @@ public final class WebInspectorViewController: UIViewController {
     }
 
     private func finishRootPresentationLifecycle() {
+        let presentationEndBehavior = presentationEndBehaviorOverride
+            ?? .configured(automaticallyDetaches: automaticallyDetachesOnDismiss)
         presentationLifecycleCoordinator.finishIfNeeded { [
             session,
             presentationContentStore,
             rootPresentationID,
-            automaticallyDetachesOnDismiss,
+            presentationEndBehavior,
             presentationLifecycleCoordinator,
         ] generation in
             removeActiveHost()
@@ -322,10 +330,18 @@ public final class WebInspectorViewController: UIViewController {
                 presentationContentStore.clear()
                 await session.retireRootPresentation(
                     id: rootPresentationID,
-                    detach: automaticallyDetachesOnDismiss
+                    behavior: presentationEndBehavior
                 )
             }
         }
+    }
+
+    private func yieldPresentationToElementPicker() {
+        guard isRootPresentationActive else {
+            return
+        }
+        presentationEndBehaviorOverride = .preserveBackendInteraction
+        dismiss(animated: true)
     }
 
     private func installPresentationHostWindowObserverIfNeeded() {

@@ -2407,7 +2407,7 @@ func transportBackedStartupCapturesRuntimeAndConsoleReplayBeforeEnableReplies() 
 
 @MainActor
 @Test
-func transportBackedInspectorInspectMaterializesSelectionWithoutOwningPresentationHighlight() async throws {
+func transportBackedInspectorInspectMaterializesSelectionAndRestoresPersistentHighlight() async throws {
     let targetID = ProtocolTarget.ID("page-main")
     let inspectedID = DOM.Node.ID("42")
     let (backend, transport, context) = try await startTransportBackedContext(
@@ -2463,10 +2463,23 @@ func transportBackedInspectorInspectMaterializesSelectionWithoutOwningPresentati
 
     try await waitUntil { context.selectedNode?.id == DOMNode.ID(inspectedID) }
     #expect(context.isElementPickerEnabled == false)
-    let sentMethods = try await backend.sentTargetMessages().map { message in
-        try transportTargetMessageMethod(message.message)
-    }
-    #expect(sentMethods.contains("DOM.highlightNode") == false)
+
+    let persistentHighlight = try await waitForTransportTargetMessage(
+        backend,
+        method: "DOM.highlightNode",
+        after: startupMessageCount
+    )
+    #expect(persistentHighlight.targetIdentifier == targetID)
+    #expect(
+        (try transportTargetMessageParameters(persistentHighlight.message)["nodeId"] as? NSNumber)?.intValue
+            == 42
+    )
+    await receiveTransportTargetReply(
+        transport,
+        targetID: persistentHighlight.targetIdentifier,
+        messageID: try transportMessageID(persistentHighlight.message),
+        result: "{}"
+    )
 
     let cssEnable = try await waitForTransportTargetMessage(
         backend,
