@@ -48,7 +48,7 @@ defaults to `/a?visit=a1` and must remain a loopback-relative path.
 | JavaScript dialogs | Tap **Show alert**, **Show confirm**, and **Show prompt**; complete each UIKit dialog and confirm the status output records the result. | sim-use / manual. |
 | `target=_blank` routing | Tap **Open page B in target blank** and confirm Monocly loads page B in the current browser view. | sim-use / manual. |
 | POST request and response bodies | Tap **Send local JSON POST**, select `/api/echo` in Network, and inspect both **Request** and **Response** preview roles. | sim-use / manual. |
-| Large Network list throughput | Run **Send 2305 local requests**, then **Send 10000 local requests**. Every URL carries `visit`, `run`, and `request` identities. | sim-use / manual: confirm the final list contains every request in logical request order, stays responsive, and preserves selection. |
+| Large Network list throughput | Run **Send 2305 local requests**, then **Send 10000 local requests**. Every URL carries `visit`, `run`, and `request` identities. | sim-use / manual: confirm the final list contains every request in logical request order, stays responsive, and preserves selection. Query `/metrics/network-burst?visit=<visit>&run=<run>` to distinguish fixture delivery from inspector ingestion/rendering. |
 | Network list and previews | Page A issues visit-marked JSON, redirect, SVG image, and intentionally disconnected requests. Inspect headers, JSON body, image preview, redirect chain, and failure state. | sim-use / manual. |
 | Movie/HLS preview | Tap **Load local HLS movie**, select `/media/fixture.m3u8` in Network, and confirm the finite local movie renders in Preview. Select its `/media/fixture.ts` request and confirm the 206 response has `Content-Range` / `Accept-Ranges` headers and plays from the original URL without fetching a response body into WebInspectorKit. | sim-use / manual. |
 | Idle behavior | After the one-shot requests settle, do nothing and sample the main thread. The fixture has no interval, animation loop, or periodic mutation. | Instruments or an equivalent process-level sample; the server regression test only proves that the authored JavaScript contains no periodic API. |
@@ -74,7 +74,10 @@ their wire identities.
 The values `2,305` and `10,000` are deterministic fixture inputs. They are not
 product limits and are never read by WebInspectorKit. The burst endpoint accepts
 any non-negative request identity; only the authored buttons choose these two
-workloads.
+workloads. The loopback server records every received `(visit, run, request)`
+identity and exposes total, unique, duplicate, minimum, maximum, and contiguous
+counts through `/metrics/network-burst`; the ledger is diagnostic input evidence,
+not a product-side request limit or source of Network state.
 
 ## Regression test
 
@@ -86,7 +89,8 @@ The test boots the server on an ephemeral port and verifies the visit-marked
 committed-navigation payloads, reload/back/forward controls, connection-level
 top-level and subframe failures, subframe lifecycle controls, parameterized
 large Network request identities without a 2,305/10,000 server cap, dialog and
-picker targets, used/unused CSS variables, distinct POST request/response
+picker targets, burst-ledger conservation metrics, used/unused CSS variables,
+distinct POST request/response
 bodies, finite local HLS media with byte-range responses, local-only assets,
 redirects, JSON/image responses, and one-shot JavaScript without periodic
 timers. It does not claim to verify inspector UI state; the matrix above marks

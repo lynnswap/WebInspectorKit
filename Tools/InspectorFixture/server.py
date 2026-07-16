@@ -7,6 +7,7 @@ import argparse
 import json
 import re
 import socket
+import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -39,6 +40,51 @@ def _fixture_marker(query: str, name: str, default: str) -> str:
     if len(values) != 1 or FIXTURE_MARKER.fullmatch(values[0]) is None:
         return default
     return values[0]
+
+
+def _network_burst_identity(
+    query: str,
+    *,
+    requires_request: bool,
+) -> tuple[str, str, int | None] | None:
+    try:
+        query_values = (
+            parse_qs(query, keep_blank_values=True, strict_parsing=True)
+            if query
+            else {}
+        )
+    except ValueError:
+        return None
+
+    expected_names = {"run", "visit"}
+    if requires_request:
+        expected_names.add("request")
+    if set(query_values) != expected_names:
+        return None
+
+    run_values = query_values.get("run", [])
+    visit_values = query_values.get("visit", [])
+    if (
+        len(run_values) != 1
+        or len(visit_values) != 1
+        or FIXTURE_MARKER.fullmatch(run_values[0]) is None
+        or FIXTURE_MARKER.fullmatch(visit_values[0]) is None
+    ):
+        return None
+
+    if requires_request is False:
+        return visit_values[0], run_values[0], None
+
+    request_values = query_values.get("request", [])
+    if len(request_values) != 1:
+        return None
+    try:
+        request = int(request_values[0])
+    except ValueError:
+        return None
+    if request < 0:
+        return None
+    return visit_values[0], run_values[0], request
 
 
 def _parse_single_byte_range(value: str, length: int) -> tuple[int, int] | None:
@@ -530,6 +576,42 @@ JSON_DATA: Final = json.dumps(
 ).encode("utf-8")
 
 
+class NetworkBurstLedger:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._request_counts: dict[tuple[str, str], dict[int, int]] = {}
+
+    def record(self, visit: str, run: str, request: int) -> None:
+        with self._lock:
+            counts = self._request_counts.setdefault((visit, run), {})
+            counts[request] = counts.get(request, 0) + 1
+
+    def snapshot(self, visit: str, run: str) -> dict[str, object]:
+        with self._lock:
+            counts = dict(self._request_counts.get((visit, run), {}))
+
+        contiguous_request_count = 0
+        while contiguous_request_count in counts:
+            contiguous_request_count += 1
+        received_count = sum(counts.values())
+        return {
+            "contiguousRequestCount": contiguous_request_count,
+            "duplicateCount": received_count - len(counts),
+            "maximumRequest": max(counts) if counts else None,
+            "minimumRequest": min(counts) if counts else None,
+            "receivedCount": received_count,
+            "run": run,
+            "uniqueRequestCount": len(counts),
+            "visit": visit,
+        }
+
+
+class InspectorFixtureServer(ThreadingHTTPServer):
+    def __init__(self, server_address: tuple[str, int]) -> None:
+        super().__init__(server_address, InspectorFixtureHandler)
+        self.network_burst_ledger = NetworkBurstLedger()
+
+
 class InspectorFixtureHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -579,6 +661,8 @@ class InspectorFixtureHandler(BaseHTTPRequestHandler):
             )
         elif path == "/api/burst":
             self._send_network_burst(request_url.query)
+        elif path == "/metrics/network-burst":
+            self._send_network_burst_metrics(request_url.query)
         elif path == "/redirect":
             visit = _fixture_marker(request_url.query, "visit", "a1")
             self._redirect(f"/api/data?visit={visit}")
@@ -669,45 +753,21 @@ class InspectorFixtureHandler(BaseHTTPRequestHandler):
         )
 
     def _send_network_burst(self, query: str) -> None:
-        try:
-            query_values = (
-                parse_qs(query, keep_blank_values=True, strict_parsing=True)
-                if query
-                else {}
-            )
-        except ValueError:
-            query_values = {}
-        request_values = query_values.get("request", [])
-        run_values = query_values.get("run", [])
-        visit_values = query_values.get("visit", [])
-        if (
-            set(query_values) != {"request", "run", "visit"}
-            or len(request_values) != 1
-            or len(run_values) != 1
-            or len(visit_values) != 1
-            or FIXTURE_MARKER.fullmatch(run_values[0]) is None
-            or FIXTURE_MARKER.fullmatch(visit_values[0]) is None
-        ):
+        identity = _network_burst_identity(query, requires_request=True)
+        if identity is None:
             self._send(
                 HTTPStatus.BAD_REQUEST,
                 "text/plain; charset=utf-8",
                 b"one visit, run, and request identity required\n",
             )
             return
-        try:
-            request = int(request_values[0])
-        except ValueError:
-            request = -1
-        if request < 0:
-            self._send(
-                HTTPStatus.BAD_REQUEST,
-                "text/plain; charset=utf-8",
-                b"invalid request identity\n",
-            )
-            return
-
-        run = run_values[0]
-        visit = visit_values[0]
+        visit, run, request = identity
+        if request is None:
+            raise AssertionError("A validated burst request must carry its identity.")
+        server = self.server
+        if not isinstance(server, InspectorFixtureServer):
+            raise AssertionError("InspectorFixtureHandler requires InspectorFixtureServer.")
+        server.network_burst_ledger.record(visit, run, request)
         response = json.dumps(
             {
                 "fixture": "network-burst",
@@ -728,6 +788,28 @@ class InspectorFixtureHandler(BaseHTTPRequestHandler):
                 "X-Inspector-Fixture-Visit": visit,
             },
         )
+
+    def _send_network_burst_metrics(self, query: str) -> None:
+        identity = _network_burst_identity(query, requires_request=False)
+        if identity is None:
+            self._send(
+                HTTPStatus.BAD_REQUEST,
+                "text/plain; charset=utf-8",
+                b"one visit and run identity required\n",
+            )
+            return
+        visit, run, request = identity
+        if request is not None:
+            raise AssertionError("A burst metrics identity must not carry a request.")
+        server = self.server
+        if not isinstance(server, InspectorFixtureServer):
+            raise AssertionError("InspectorFixtureHandler requires InspectorFixtureServer.")
+        response = json.dumps(
+            server.network_burst_ledger.snapshot(visit, run),
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        self._send(HTTPStatus.OK, "application/json", response)
 
     def _send(
         self,
@@ -769,8 +851,8 @@ class InspectorFixtureHandler(BaseHTTPRequestHandler):
         print(f"[InspectorFixture] {self.address_string()} {format % args}")
 
 
-def make_server(host: str, port: int) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), InspectorFixtureHandler)
+def make_server(host: str, port: int) -> InspectorFixtureServer:
+    return InspectorFixtureServer((host, port))
 
 
 def main() -> None:

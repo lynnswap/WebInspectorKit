@@ -254,6 +254,49 @@ class InspectorFixtureTests(unittest.TestCase):
 
                 self.assertEqual(request_error.exception.code, 400)
 
+    def test_network_burst_metrics_preserve_total_unique_and_contiguous_counts(self) -> None:
+        visit = "metrics-visit"
+        run = "metrics-run"
+        for request in (0, 2, 2):
+            status, _, _ = self.read(
+                f"/api/burst?visit={visit}&run={run}&request={request}"
+            )
+            self.assertEqual(status, 200)
+
+        status, headers, body = self.read(
+            f"/metrics/network-burst?visit={visit}&run={run}"
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "application/json")
+        self.assertEqual(headers["X-Inspector-Fixture"], "self-authored")
+        self.assertEqual(
+            json.loads(body),
+            {
+                "contiguousRequestCount": 1,
+                "duplicateCount": 1,
+                "maximumRequest": 2,
+                "minimumRequest": 0,
+                "receivedCount": 3,
+                "run": run,
+                "uniqueRequestCount": 2,
+                "visit": visit,
+            },
+        )
+
+    def test_network_burst_metrics_reject_ambiguous_identity(self) -> None:
+        for path in (
+            "/metrics/network-burst",
+            "/metrics/network-burst?visit=a1",
+            "/metrics/network-burst?visit=a1&run=bad%20marker",
+            "/metrics/network-burst?visit=a1&run=valid&request=0",
+        ):
+            with self.subTest(path=path):
+                with self.assertRaises(urllib.error.HTTPError) as request_error:
+                    self.read(path)
+
+                self.assertEqual(request_error.exception.code, 400)
+
     def test_local_hls_is_a_finite_self_contained_movie(self) -> None:
         playlist_status, playlist_headers, playlist_body = self.read(
             "/media/fixture.m3u8"
