@@ -14,6 +14,13 @@ markup from the production pages used during manual investigation.
 DEVICE_UDID=<booted-simulator-udid> Scripts/run-monocly-fixture.sh
 ```
 
+The launcher passes the fixture URL through the single process environment key
+`MONOCLY_INSPECTOR_FIXTURE_URL`. Its presence selects one atomic diagnostic
+configuration: the exact loopback fixture URL, automatic inspector presentation,
+and ephemeral session persistence. A normal Monocly launch leaves the key unset
+and uses the standard Google start page, persistent session storage, and no
+automatic inspector presentation.
+
 If `DEVICE_UDID` is omitted, the script prefers a booted `SIMULATOR_NAME`
 (`iPhone 17` by default), otherwise uses another booted simulator or boots an
 available device with that name. It builds and installs Monocly, opens the

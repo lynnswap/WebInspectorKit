@@ -132,9 +132,19 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
+    func standardLaunchConfigurationUsesGoogleAndPersistentSessionWithoutOpeningInspector() throws {
+        let configuration = try BrowserLaunchConfiguration.resolve(environment: [:])
+
+        #expect(configuration.initialURL == URL(string: "https://www.google.com"))
+        #expect(configuration.sessionPersistenceMode == .persistent)
+        #expect(configuration.shouldAutoOpenInspector == false)
+    }
+
+    @Test
     func launchConfigurationUsesEphemeralSessionPersistenceForXCTestAndPreviews() throws {
         let testConfiguration = BrowserLaunchConfiguration.current(environment: [
-            "XCTestConfigurationFilePath": "/tmp/Monocly.xctestconfiguration"
+            "XCTestConfigurationFilePath": "/tmp/Monocly.xctestconfiguration",
+            BrowserLaunchConfiguration.inspectorFixtureURLEnvironmentKey: "http://127.0.0.1:8765/a",
         ])
         let previewConfiguration = BrowserLaunchConfiguration.current(environment: [
             "XCODE_RUNNING_FOR_PREVIEWS": "1"
@@ -142,32 +152,61 @@ struct BrowserSessionRestoreTests {
 
         #expect(testConfiguration.initialURL == URL(string: "about:blank"))
         #expect(testConfiguration.sessionPersistenceMode == .ephemeral)
+        #expect(testConfiguration.shouldAutoOpenInspector == false)
         #expect(previewConfiguration.initialURL == URL(string: "about:blank"))
         #expect(previewConfiguration.sessionPersistenceMode == .ephemeral)
+        #expect(previewConfiguration.shouldAutoOpenInspector == false)
     }
 
     @Test
-    func xctestLaunchConfigurationKeepsEnvironmentInitialURLButUsesEphemeralPersistence() throws {
-        let diagnosticURL = try #require(URL(string: "data:text/html;charset=utf-8,%3Chtml%3Etest%3C/html%3E"))
-        let configuration = BrowserLaunchConfiguration.current(environment: [
-            "XCTestConfigurationFilePath": "/tmp/Monocly.xctestconfiguration",
-            "WEBSPECTOR_INITIAL_URL": diagnosticURL.absoluteString
-        ])
+    func xcodeTestOrPreviewConfigurationAllowsExplicitInitialURLWithoutChangingRuntimePolicy() throws {
+        let initialURL = try #require(URL(string: "https://test.example/initial"))
+        let configuration = BrowserLaunchConfiguration.xcodeTestOrPreview(initialURL: initialURL)
 
-        #expect(configuration.initialURL == diagnosticURL)
+        #expect(configuration.initialURL == initialURL)
         #expect(configuration.sessionPersistenceMode == .ephemeral)
+        #expect(configuration.shouldAutoOpenInspector == false)
     }
 
     @Test
-    func diagnosticLaunchCanUseItsInitialURLWithoutReadingOrWritingTheSavedSession() throws {
-        let diagnosticURL = try #require(URL(string: "http://127.0.0.1:8765/a"))
-        let configuration = BrowserLaunchConfiguration.current(environment: [
-            "WEBSPECTOR_EPHEMERAL_SESSION": "1",
-            "WEBSPECTOR_INITIAL_URL": diagnosticURL.absoluteString,
+    func inspectorFixtureLaunchConfigurationKeepsItsThreeRuntimeValuesAtomic() throws {
+        let fixtureURL = try #require(URL(string: "http://127.0.0.1:8765/a?visit=a1"))
+        let configuration = try BrowserLaunchConfiguration.resolve(environment: [
+            BrowserLaunchConfiguration.inspectorFixtureURLEnvironmentKey: fixtureURL.absoluteString
         ])
 
-        #expect(configuration.initialURL == diagnosticURL)
+        #expect(configuration.initialURL == fixtureURL)
         #expect(configuration.sessionPersistenceMode == .ephemeral)
+        #expect(configuration.shouldAutoOpenInspector)
+    }
+
+    @Test
+    func inspectorFixtureLaunchConfigurationAcceptsLocalhost() throws {
+        let fixtureURL = try #require(URL(string: "http://localhost:8765/a"))
+        let configuration = try BrowserLaunchConfiguration.resolve(environment: [
+            BrowserLaunchConfiguration.inspectorFixtureURLEnvironmentKey: fixtureURL.absoluteString
+        ])
+
+        #expect(configuration.initialURL == fixtureURL)
+    }
+
+    @Test
+    func inspectorFixtureLaunchConfigurationRejectsNonHTTPAndNonLoopbackURLs() {
+        #expect(throws: BrowserLaunchConfiguration.InspectorFixtureURLValidationError.requiresAbsoluteHTTPURL) {
+            try BrowserLaunchConfiguration.resolve(environment: [
+                BrowserLaunchConfiguration.inspectorFixtureURLEnvironmentKey: "https://127.0.0.1:8765/a"
+            ])
+        }
+        #expect(throws: BrowserLaunchConfiguration.InspectorFixtureURLValidationError.requiresAbsoluteHTTPURL) {
+            try BrowserLaunchConfiguration.resolve(environment: [
+                BrowserLaunchConfiguration.inspectorFixtureURLEnvironmentKey: "/a"
+            ])
+        }
+        #expect(throws: BrowserLaunchConfiguration.InspectorFixtureURLValidationError.requiresLoopbackHost) {
+            try BrowserLaunchConfiguration.resolve(environment: [
+                BrowserLaunchConfiguration.inspectorFixtureURLEnvironmentKey: "http://example.com/a"
+            ])
+        }
     }
 
     @Test
@@ -828,7 +867,7 @@ struct BrowserSessionRestoreTests {
         )
         let rootViewController = BrowserRootViewController(
             browserWindow: store,
-            launchConfiguration: BrowserLaunchConfiguration(initialURL: try #require(URL(string: "about:blank")))
+            launchConfiguration: .xcodeTestOrPreview()
         )
         rootViewController.loadViewIfNeeded()
         rootViewController.viewControllers.first?.loadViewIfNeeded()
@@ -864,7 +903,7 @@ struct BrowserSessionRestoreTests {
         let pageViewController = BrowserPageViewController(
             browserWindow: store,
             inspectorSession: WebInspectorSession(),
-            launchConfiguration: BrowserLaunchConfiguration(initialURL: initialURL),
+            launchConfiguration: .xcodeTestOrPreview(initialURL: initialURL),
             progressHideScheduler: scheduler
         )
 
@@ -906,7 +945,7 @@ struct BrowserSessionRestoreTests {
         let pageViewController = BrowserPageViewController(
             browserWindow: store,
             inspectorSession: WebInspectorSession(),
-            launchConfiguration: BrowserLaunchConfiguration(initialURL: initialURL),
+            launchConfiguration: .xcodeTestOrPreview(initialURL: initialURL),
             progressHideScheduler: ManualDelayScheduler()
         )
 
@@ -933,7 +972,7 @@ struct BrowserSessionRestoreTests {
         let pageViewController = BrowserPageViewController(
             browserWindow: store,
             inspectorSession: WebInspectorSession(),
-            launchConfiguration: BrowserLaunchConfiguration(initialURL: initialURL),
+            launchConfiguration: .xcodeTestOrPreview(initialURL: initialURL),
             progressHideScheduler: ManualDelayScheduler()
         )
 
@@ -973,7 +1012,7 @@ struct BrowserSessionRestoreTests {
         let pageViewController = BrowserPageViewController(
             browserWindow: store,
             inspectorSession: WebInspectorSession(),
-            launchConfiguration: BrowserLaunchConfiguration(initialURL: initialURL),
+            launchConfiguration: .xcodeTestOrPreview(initialURL: initialURL),
             progressHideScheduler: ManualDelayScheduler()
         )
         let navigationController = UINavigationController(rootViewController: pageViewController)
@@ -1075,7 +1114,7 @@ struct BrowserSessionRestoreTests {
         let pageViewController = BrowserPageViewController(
             browserWindow: fixture.browserWindow,
             inspectorSession: WebInspectorSession(),
-            launchConfiguration: BrowserLaunchConfiguration(initialURL: try #require(URL(string: "about:blank"))),
+            launchConfiguration: .xcodeTestOrPreview(),
             progressHideScheduler: ManualDelayScheduler()
         )
         var installedWebViewIDs: [ObjectIdentifier] = []
@@ -1286,7 +1325,7 @@ struct BrowserSessionRestoreTests {
             let windowScene = try makeWindowScene()
             let selectedTabID = UUID()
             let restoredURL = try #require(URL(string: "https://example.com/restored"))
-            let launchConfiguration = BrowserLaunchConfiguration(
+            let launchConfiguration = BrowserLaunchConfiguration.xcodeTestOrPreview(
                 initialURL: try #require(URL(string: "https://fallback.example/"))
             )
             let snapshot = BrowserSession.Snapshot(
@@ -1323,7 +1362,7 @@ struct BrowserSessionRestoreTests {
     func mainSceneDelegateForcesSaveWhenSceneResignsActive() throws {
         try withTemporarySessionStore { sessionStore, _ in
             let windowScene = try makeWindowScene()
-            let launchConfiguration = BrowserLaunchConfiguration(
+            let launchConfiguration = BrowserLaunchConfiguration.xcodeTestOrPreview(
                 initialURL: try #require(URL(string: "https://initial.example/"))
             )
             let sceneDelegate = MonoclyMainSceneDelegate()
@@ -1352,7 +1391,7 @@ struct BrowserSessionRestoreTests {
     func mainSceneDelegateForcesSaveWhenSceneDisconnects() throws {
         try withTemporarySessionStore { sessionStore, _ in
             let windowScene = try makeWindowScene()
-            let launchConfiguration = BrowserLaunchConfiguration(
+            let launchConfiguration = BrowserLaunchConfiguration.xcodeTestOrPreview(
                 initialURL: try #require(URL(string: "https://initial.example/"))
             )
             let sceneDelegate = MonoclyMainSceneDelegate()

@@ -9,6 +9,8 @@ DERIVED_DATA_PATH=${DERIVED_DATA_PATH:-/tmp/WebInspectorKit-Monocly-Fixture-Deri
 SIMULATOR_NAME=${SIMULATOR_NAME:-iPhone 17}
 DEVICE_UDID=${DEVICE_UDID:-}
 SERVER_PID=
+APP_BUNDLE_IDENTIFIER=lynnpd.Monocly
+APP_LAUNCHED=0
 
 case "$FIXTURE_INITIAL_PATH" in
     /*) ;;
@@ -25,9 +27,14 @@ case "$FIXTURE_INITIAL_PATH" in
 esac
 
 cleanup() {
+    if [ "$APP_LAUNCHED" -eq 1 ]; then
+        xcrun simctl terminate "$DEVICE_UDID" "$APP_BUNDLE_IDENTIFIER" 2>/dev/null || true
+        APP_LAUNCHED=0
+    fi
     if [ -n "$SERVER_PID" ]; then
         kill "$SERVER_PID" 2>/dev/null || true
         wait "$SERVER_PID" 2>/dev/null || true
+        SERVER_PID=
     fi
 }
 trap cleanup EXIT INT TERM
@@ -107,14 +114,12 @@ xcodebuild build \
     -destination "platform=iOS Simulator,id=$DEVICE_UDID" \
     -derivedDataPath "$DERIVED_DATA_PATH"
 
-xcrun simctl terminate "$DEVICE_UDID" lynnpd.Monocly 2>/dev/null || true
 xcrun simctl install "$DEVICE_UDID" "$DERIVED_DATA_PATH/Build/Products/Debug-iphonesimulator/Monocly.app"
 
-SIMCTL_CHILD_WEBSPECTOR_INITIAL_URL="http://127.0.0.1:$FIXTURE_PORT$FIXTURE_INITIAL_PATH" \
-SIMCTL_CHILD_WEBSPECTOR_AUTO_OPEN_INSPECTOR=1 \
-SIMCTL_CHILD_WEBSPECTOR_EPHEMERAL_SESSION=1 \
-xcrun simctl launch --terminate-running-process "$DEVICE_UDID" lynnpd.Monocly
+SIMCTL_CHILD_MONOCLY_INSPECTOR_FIXTURE_URL="http://127.0.0.1:$FIXTURE_PORT$FIXTURE_INITIAL_PATH" \
+xcrun simctl launch --terminate-running-process "$DEVICE_UDID" "$APP_BUNDLE_IDENTIFIER"
+APP_LAUNCHED=1
 
 echo "Inspector fixture is running at http://127.0.0.1:$FIXTURE_PORT$FIXTURE_INITIAL_PATH"
-echo "Monocly launched on $DEVICE_UDID; press Control-C to stop the server."
+echo "Monocly launched on $DEVICE_UDID; press Control-C to stop the app and server."
 wait "$SERVER_PID"

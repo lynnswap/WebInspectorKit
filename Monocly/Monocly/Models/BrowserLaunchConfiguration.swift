@@ -2,18 +2,69 @@ import Foundation
 import WebInspectorKit
 
 struct BrowserLaunchConfiguration {
-    let initialURL: URL
-    let shouldAutoOpenInspector: Bool
-    let sessionPersistenceMode: BrowserSession.PersistenceMode
+    enum InspectorFixtureURLValidationError: Error, Equatable, CustomStringConvertible {
+        case requiresAbsoluteHTTPURL
+        case requiresLoopbackHost
 
-    init(
-        initialURL: URL,
-        shouldAutoOpenInspector: Bool = false,
-        sessionPersistenceMode: BrowserSession.PersistenceMode = .persistent
-    ) {
-        self.initialURL = initialURL
-        self.shouldAutoOpenInspector = shouldAutoOpenInspector
-        self.sessionPersistenceMode = sessionPersistenceMode
+        var description: String {
+            switch self {
+            case .requiresAbsoluteHTTPURL:
+                "The inspector fixture URL must be an absolute HTTP URL."
+            case .requiresLoopbackHost:
+                "The inspector fixture URL must use 127.0.0.1 or localhost."
+            }
+        }
+    }
+
+    private enum Runtime {
+        case standard
+        case inspectorFixture(URL)
+        case xcodeTestOrPreview(URL)
+    }
+
+    static let inspectorFixtureURLEnvironmentKey = "MONOCLY_INSPECTOR_FIXTURE_URL"
+
+    static let standard = BrowserLaunchConfiguration(runtime: .standard)
+
+    static func xcodeTestOrPreview(
+        initialURL: URL = URL(string: "about:blank")!
+    ) -> BrowserLaunchConfiguration {
+        BrowserLaunchConfiguration(runtime: .xcodeTestOrPreview(initialURL))
+    }
+
+    private let runtime: Runtime
+
+    var initialURL: URL {
+        switch runtime {
+        case .standard:
+            URL(string: "https://www.google.com")!
+        case .inspectorFixture(let url):
+            url
+        case .xcodeTestOrPreview(let url):
+            url
+        }
+    }
+
+    var shouldAutoOpenInspector: Bool {
+        switch runtime {
+        case .inspectorFixture:
+            true
+        case .standard, .xcodeTestOrPreview:
+            false
+        }
+    }
+
+    var sessionPersistenceMode: BrowserSession.PersistenceMode {
+        switch runtime {
+        case .standard:
+            .persistent
+        case .inspectorFixture, .xcodeTestOrPreview:
+            .ephemeral
+        }
+    }
+
+    private init(runtime: Runtime) {
+        self.runtime = runtime
     }
 
     static func current(processInfo: ProcessInfo = .processInfo) -> BrowserLaunchConfiguration {
@@ -21,45 +72,36 @@ struct BrowserLaunchConfiguration {
     }
 
     static func current(environment: [String: String]) -> BrowserLaunchConfiguration {
-        return BrowserLaunchConfiguration(
-            initialURL: resolveInitialURL(from: environment),
-            shouldAutoOpenInspector: environment["WEBSPECTOR_AUTO_OPEN_INSPECTOR"] == "1",
-            sessionPersistenceMode: resolveSessionPersistenceMode(from: environment)
-        )
+        do {
+            return try resolve(environment: environment)
+        } catch {
+            preconditionFailure(
+                "Invalid \(inspectorFixtureURLEnvironmentKey): \(error)"
+            )
+        }
     }
 
-    private static func resolveInitialURL(from environment: [String: String]) -> URL {
-        if let rawInitialURL = environment["WEBSPECTOR_INITIAL_URL"],
-           let initialURL = URL(string: rawInitialURL) {
-            return initialURL
+    static func resolve(environment: [String: String]) throws -> BrowserLaunchConfiguration {
+        if environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+            || environment["XCTestConfigurationFilePath"] != nil {
+            return .xcodeTestOrPreview()
         }
 
-        if environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1" {
-            return URL(string: "about:blank")!
+        guard let rawFixtureURL = environment[inspectorFixtureURLEnvironmentKey] else {
+            return .standard
         }
 
-        if environment["XCTestConfigurationFilePath"] != nil {
-            return URL(string: "about:blank")!
+        guard let fixtureURL = URL(string: rawFixtureURL),
+              fixtureURL.scheme?.lowercased() == "http",
+              fixtureURL.host != nil else {
+            throw InspectorFixtureURLValidationError.requiresAbsoluteHTTPURL
         }
 
-        return URL(string: "https://www.google.com")!
-    }
-
-    private static func resolveSessionPersistenceMode(
-        from environment: [String: String]
-    ) -> BrowserSession.PersistenceMode {
-        if environment["WEBSPECTOR_EPHEMERAL_SESSION"] == "1" {
-            return .ephemeral
+        guard let host = fixtureURL.host?.lowercased(),
+              host == "127.0.0.1" || host == "localhost" else {
+            throw InspectorFixtureURLValidationError.requiresLoopbackHost
         }
 
-        if environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1" {
-            return .ephemeral
-        }
-
-        if environment["XCTestConfigurationFilePath"] != nil {
-            return .ephemeral
-        }
-
-        return .persistent
+        return BrowserLaunchConfiguration(runtime: .inspectorFixture(fixtureURL))
     }
 }

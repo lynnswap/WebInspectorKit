@@ -257,7 +257,7 @@ struct MonoclyLifecycleTests {
         try await withCleanState { context in
             let sceneDelegate = MonoclyMainSceneDelegate()
             let windowScene = try makeWindowScene()
-            let launchConfiguration = BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
+            let launchConfiguration = BrowserLaunchConfiguration.xcodeTestOrPreview()
 
             sceneDelegate.connect(
                 windowScene: windowScene,
@@ -289,7 +289,7 @@ struct MonoclyLifecycleTests {
         try await withCleanState { context in
             let sceneDelegate = MonoclyMainSceneDelegate()
             let windowScene = try makeWindowScene()
-            let launchConfiguration = BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
+            let launchConfiguration = BrowserLaunchConfiguration.xcodeTestOrPreview()
 
             sceneDelegate.connect(
                 windowScene: windowScene,
@@ -316,7 +316,7 @@ struct MonoclyLifecycleTests {
             let inspectorSceneDelegate = MonoclyInspectorSceneDelegate()
             let coordinator = BrowserInspectorCoordinator()
             let windowScene = try makeWindowScene()
-            let launchConfiguration = BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
+            let launchConfiguration = BrowserLaunchConfiguration.xcodeTestOrPreview()
 
             coordinator.setSupportsMultipleScenesProviderForTesting { true }
             coordinator.setSceneActivationRequesterForTesting(
@@ -367,7 +367,7 @@ struct MonoclyLifecycleTests {
             let inspectorSceneDelegate = MonoclyInspectorSceneDelegate()
             let coordinator = BrowserInspectorCoordinator()
             let windowScene = try makeWindowScene()
-            let launchConfiguration = BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
+            let launchConfiguration = BrowserLaunchConfiguration.xcodeTestOrPreview()
 
             coordinator.setSupportsMultipleScenesProviderForTesting { true }
             coordinator.setSceneActivationRequesterForTesting(
@@ -733,7 +733,7 @@ private extension MonoclyLifecycleTests {
 
     func makeHostedRootViewController(context: TestContext) throws -> HostedRootFixture {
         let windowScene = try makeWindowScene()
-        let launchConfiguration = BrowserLaunchConfiguration(initialURL: URL(string: "about:blank")!)
+        let launchConfiguration = BrowserLaunchConfiguration.xcodeTestOrPreview()
         let store = BrowserWindow(
             initialState: .fresh(
                 url: launchConfiguration.initialURL,
