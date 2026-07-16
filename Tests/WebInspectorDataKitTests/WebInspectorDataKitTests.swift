@@ -3904,6 +3904,61 @@ func networkEventWithoutFrameMembershipHasNoNavigationVisit() async throws {
 
 @MainActor
 @Test
+func latestRootNetworkBurstIsConservedThroughDataKitInFIFOOrder() async throws {
+    let eventCount = 2_305
+    let targetID = ProtocolTarget.ID("page-main")
+    let (_, transport, context) = try await startTransportBackedContext(
+        targetID: targetID,
+        documentID: "latest-root-network-burst",
+        protocolProfile: .latest
+    )
+    let controller: WebInspectorFetchedResultsController<NetworkRequest> =
+        context.network.fetchedResultsController()
+    let transactionCounter = FetchedResultsTransactionCounter(
+        stream: controller.transactions
+    )
+    defer { transactionCounter.cancel() }
+    try await transactionCounter.waitUntilStarted()
+
+    let expectedRequestIDs = (0..<eventCount).map { index in
+        "request-42.\(index + 1)"
+    }
+    for index in 0..<eventCount {
+        let requestID = expectedRequestIDs[index]
+        let timestamp = Double(index) + 0.25
+        let message = """
+        {"method":"Network.requestWillBeSent","params":{"requestId":"\(requestID)","frameId":"frame-42.1","loaderId":"loader-42.1","targetId":"","request":{"url":"https://example.test/resource/\(index)","method":"GET"},"initiator":{"type":"other"},"timestamp":\(timestamp),"type":"Image"}}
+        """
+        await transport.receiveRootMessage(message)
+    }
+
+    try await transactionCounter.waitForTransactionCount(
+        eventCount,
+        timeout: .seconds(30)
+    )
+
+    let requests = controller.items
+    let actualRequestIDs = requests.map(\.id.proxyID)
+    let expectedProxyIDs = expectedRequestIDs.map(Network.Request.ID.init)
+    #expect(transactionCounter.transactionCount == eventCount)
+    #expect(context.networkRequestsCollectionState.requestCount == eventCount)
+    #expect(requests.count == eventCount)
+    #expect(Set(actualRequestIDs).count == eventCount)
+    #expect(actualRequestIDs == expectedProxyIDs)
+    #expect(actualRequestIDs.allSatisfy { $0.targetScopeRawValue == nil })
+    #expect(requests.map(\.url) == (0..<eventCount).map {
+        "https://example.test/resource/\($0)"
+    })
+    #expect(requests.map(\.requestSentTimestamp) == (0..<eventCount).map {
+        Double($0) + 0.25
+    })
+    #expect(requests.allSatisfy { request in
+        context.registeredRequest(for: request.id) === request
+    })
+}
+
+@MainActor
+@Test
 func delayedNetworkConsumerUsesEventTimeTargetAfterFrameRetarget() async throws {
     let transport = TransportSession(backend: FakeTransportBackend(), responseTimeout: .milliseconds(750))
     await installTransportPageTarget(
@@ -12744,6 +12799,45 @@ private final class FetchedResultsTransactionRecorder<Model: WebInspectorFetchab
 
     func waitForTransactionCount(_ count: Int) async throws {
         try await waitUntil { self.transactions.count >= count }
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
+    }
+
+    deinit {
+        task?.cancel()
+    }
+}
+
+@MainActor
+private final class FetchedResultsTransactionCounter<Model: WebInspectorFetchableModel> {
+    private(set) var transactionCount = 0
+
+    private var task: Task<Void, Never>?
+    private var hasStarted = false
+
+    init(stream: AsyncStream<WebInspectorFetchedResultsTransaction<Model>>) {
+        task = Task { @MainActor [weak self] in
+            self?.hasStarted = true
+            for await _ in stream {
+                self?.transactionCount += 1
+            }
+        }
+    }
+
+    func waitUntilStarted() async throws {
+        try await waitUntil { self.hasStarted }
+    }
+
+    func waitForTransactionCount(
+        _ count: Int,
+        timeout: Duration = .seconds(1)
+    ) async throws {
+        try await waitUntil(timeout: timeout) {
+            self.transactionCount >= count
+        }
     }
 
     func cancel() {
