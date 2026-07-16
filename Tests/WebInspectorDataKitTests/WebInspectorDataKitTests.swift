@@ -6451,6 +6451,372 @@ func cssInspectorBaselineDoesNotCrossDocumentOrTargetLifetime() throws {
 
 @MainActor
 @Test
+func changingSelectionCancelsCSSLoadWithoutLeavingPriorResourceLoading() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let firstID = DOM.Node.ID("cancelled-style-first")
+    let secondID = DOM.Node.ID("cancelled-style-second")
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: firstID, nodeType: 1, nodeName: "DIV", localName: "div"),
+            DOM.Node(id: secondID, nodeType: 1, nodeName: "DIV", localName: "div"),
+        ]),
+        target: target
+    )
+    try await waitUntil {
+        context.node(for: DOMNode.ID(firstID)) != nil
+            && context.node(for: DOMNode.ID(secondID)) != nil
+    }
+    let first = try #require(context.node(for: DOMNode.ID(firstID)))
+    let second = try #require(context.node(for: DOMNode.ID(secondID)))
+    let matchedGate = WebInspectorTestGate()
+    await runtime.backend.hold(
+        domain: "CSS",
+        method: "getMatchedStylesForNode",
+        gate: matchedGate
+    )
+    await enqueueCSSStyleReplies(on: runtime.backend)
+    await enqueueCSSStyleReplies(on: runtime.backend)
+
+    context.select(first)
+    let firstStyles = try #require(first.elementStyles)
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "CSS",
+        method: "getMatchedStylesForNode",
+        count: 1
+    )
+
+    context.select(second)
+    let secondStyles = try #require(second.elementStyles)
+    await matchedGate.open()
+
+    try await waitUntil { secondStyles.phase == .loaded }
+    #expect(firstStyles.phase == .unavailable)
+}
+
+@MainActor
+@Test
+func cancellingCSSMutationDoesNotWaitForBlockedStyleRefresh() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let elementID = DOM.Node.ID("cancelled-style-mutation")
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+        ]),
+        target: target
+    )
+    let element = try await waitForChild(in: context)
+    await enqueueCSSStyleReplies(
+        cssToggleStyle(margin: "0", paddingStatus: .active),
+        on: runtime.backend
+    )
+    context.select(element)
+    let styles = try #require(element.elementStyles)
+    try await waitUntil { styles.phase == .loaded }
+    let paddingID = try #require(
+        styles.sections.first?.style.properties.first { $0.name == "padding" }?.id
+    )
+
+    let matchedGate = WebInspectorTestGate()
+    await runtime.backend.hold(
+        domain: "CSS",
+        method: "getMatchedStylesForNode",
+        gate: matchedGate
+    )
+    await enqueueCSSStyleReplies(
+        cssToggleStyle(margin: "0", paddingStatus: .active),
+        on: runtime.backend
+    )
+    try context.css.refreshStyles(for: element.id)
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "CSS",
+        method: "getMatchedStylesForNode",
+        count: 2
+    )
+
+    var mutationFinished = false
+    let mutationTask = Task { @MainActor in
+        defer {
+            mutationFinished = true
+        }
+        try await context.css.setProperty(
+            paddingID,
+            enabled: false,
+            options: WebInspectorMutationOptions(undo: .disabled)
+        )
+    }
+    await Task.yield()
+    mutationTask.cancel()
+    try await waitUntil { mutationFinished }
+    await #expect(throws: CancellationError.self) {
+        try await mutationTask.value
+    }
+
+    await matchedGate.open()
+}
+
+@MainActor
+@Test
+func cssToggleQueuedBehindRefreshUsesRefreshedStyleText() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let elementID = DOM.Node.ID("queued-style-mutation")
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+        ]),
+        target: target
+    )
+    let element = try await waitForChild(in: context)
+    let initialStyle = cssToggleStyle(margin: "0", paddingStatus: .active)
+    await enqueueCSSStyleReplies(initialStyle, on: runtime.backend)
+    context.select(element)
+    let styles = try #require(element.elementStyles)
+    try await waitUntil { styles.phase == .loaded }
+    let paddingID = try #require(
+        styles.sections.first?.style.properties.first { $0.name == "padding" }?.id
+    )
+
+    let refreshedStyle = cssToggleStyle(margin: "4px", paddingStatus: .active)
+    let matchedGate = WebInspectorTestGate()
+    await runtime.backend.hold(
+        domain: "CSS",
+        method: "getMatchedStylesForNode",
+        gate: matchedGate
+    )
+    await enqueueCSSStyleReplies(refreshedStyle, on: runtime.backend)
+    let disabledStyle = cssToggleStyle(margin: "4px", paddingStatus: .disabled)
+    await runtime.backend.enqueue(disabledStyle, for: "CSS", method: "setStyleText")
+
+    try context.css.refreshStyles(for: element.id)
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "CSS",
+        method: "getMatchedStylesForNode",
+        count: 2
+    )
+
+    let accepted = context.css.requestSetProperty(
+        paddingID,
+        enabled: false,
+        options: WebInspectorMutationOptions(undo: .disabled)
+    )
+    #expect(accepted)
+    guard accepted else {
+        await matchedGate.open()
+        return
+    }
+
+    await matchedGate.open()
+    let setStyleCommands = await runtime.backend.waitForRecordedCommands(
+        domain: "CSS",
+        method: "setStyleText",
+        count: 1
+    )
+    let payload = try #require(setStyleCommands.last?.payload.cast(as: CSS.SetStyleTextPayload.self))
+    #expect(payload.text == "margin: 4px;\n/* padding: 8px; */")
+    _ = await runtime.backend.waitForCompletedCommands(
+        domain: "CSS",
+        method: "setStyleText",
+        count: 1
+    )
+}
+
+@MainActor
+@Test
+func concurrentCSSMutationsSerializeAndRefreshBeforeRewriting() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let elementID = DOM.Node.ID("serialized-style-mutation")
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+        ]),
+        target: target
+    )
+    let element = try await waitForChild(in: context)
+    let initialStyle = cssToggleStyle(margin: "0", paddingStatus: .active)
+    await enqueueCSSStyleReplies(initialStyle, on: runtime.backend)
+    context.select(element)
+    let styles = try #require(element.elementStyles)
+    try await waitUntil { styles.phase == .loaded }
+    let marginID = try #require(
+        styles.sections.first?.style.properties.first { $0.name == "margin" }?.id
+    )
+    let paddingID = try #require(
+        styles.sections.first?.style.properties.first { $0.name == "padding" }?.id
+    )
+
+    let firstMutationGate = WebInspectorTestGate()
+    await runtime.backend.hold(domain: "CSS", method: "setStyleText", gate: firstMutationGate)
+    let marginDisabled = cssToggleStyle(
+        margin: "0",
+        marginStatus: .disabled,
+        paddingStatus: .active
+    )
+    let bothDisabled = cssToggleStyle(
+        margin: "0",
+        marginStatus: .disabled,
+        paddingStatus: .disabled
+    )
+    await runtime.backend.enqueue(marginDisabled, for: "CSS", method: "setStyleText")
+    await enqueueCSSStyleReplies(marginDisabled, on: runtime.backend)
+    await runtime.backend.enqueue(bothDisabled, for: "CSS", method: "setStyleText")
+
+    let firstMutation = Task { @MainActor in
+        try await context.css.setProperty(
+            marginID,
+            enabled: false,
+            options: WebInspectorMutationOptions(undo: .disabled)
+        )
+    }
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "CSS",
+        method: "setStyleText",
+        count: 1
+    )
+    let secondMutation = Task { @MainActor in
+        try await context.css.setProperty(
+            paddingID,
+            enabled: false,
+            options: WebInspectorMutationOptions(undo: .disabled)
+        )
+    }
+    await Task.yield()
+    #expect(await runtime.backend.recordedCommands().filter {
+        $0.domain == "CSS" && $0.method == "setStyleText"
+    }.count == 1)
+
+    await firstMutationGate.open()
+    try await firstMutation.value
+    try await secondMutation.value
+
+    let setStyleCommands = await runtime.backend.recordedCommands().filter {
+        $0.domain == "CSS" && $0.method == "setStyleText"
+    }
+    #expect(setStyleCommands.count == 2)
+    let secondPayload = try #require(
+        setStyleCommands.last?.payload.cast(as: CSS.SetStyleTextPayload.self)
+    )
+    #expect(secondPayload.text == "/* margin: 0; */\n/* padding: 8px; */")
+}
+
+@MainActor
+@Test
+func cssMutationRejectsReusedPositionalPropertyIDAfterTopologyChange() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let elementID = DOM.Node.ID("shifted-style-mutation")
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+        ]),
+        target: target
+    )
+    let element = try await waitForChild(in: context)
+    await enqueueCSSStyleReplies(
+        cssToggleStyle(margin: "0", paddingStatus: .active),
+        on: runtime.backend
+    )
+    context.select(element)
+    let styles = try #require(element.elementStyles)
+    try await waitUntil { styles.phase == .loaded }
+    let paddingID = try #require(
+        styles.sections.first?.style.properties.first { $0.name == "padding" }?.id
+    )
+
+    await runtime.backend.emit(.styleSheetChanged(CSS.StyleSheet.ID("queued-toggle-style")), target: target)
+    try await waitUntil { styles.phase == .needsRefresh }
+    let shiftedStyle = cssToggleStyleWithLeadingColor()
+    await enqueueCSSStyleReplies(shiftedStyle, on: runtime.backend)
+    await runtime.backend.enqueue(shiftedStyle, for: "CSS", method: "setStyleText")
+
+    await #expect(throws: WebInspectorProxyError.commandFailed(
+        domain: "CSS",
+        method: "setStyleText",
+        message: "CSS declaration changed before the queued mutation could run."
+    )) {
+        try await context.css.setProperty(
+            paddingID,
+            enabled: false,
+            options: WebInspectorMutationOptions(undo: .disabled)
+        )
+    }
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "setStyleText")) == false)
+}
+
+@MainActor
+@Test
+func cssMutationRejectsReusedStyleIDAfterRuleInsertion() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let elementID = DOM.Node.ID("shifted-rule-mutation")
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+        ]),
+        target: target
+    )
+    let element = try await waitForChild(in: context)
+    let submittedStyle = cssSinglePropertyStyle(
+        id: CSS.Style.ID("rule-sheet\u{1F}0"),
+        name: "color",
+        value: "red"
+    )
+    await enqueueCSSStyleReplies(
+        CSS.MatchedStyles(matchedRules: [cssRule(selector: ".original", style: submittedStyle)]),
+        on: runtime.backend
+    )
+    context.select(element)
+    let styles = try #require(element.elementStyles)
+    try await waitUntil { styles.phase == .loaded }
+    let colorID = try #require(styles.sections.first?.style.properties.first?.id)
+
+    await runtime.backend.emit(.styleSheetChanged(CSS.StyleSheet.ID("rule-sheet")), target: target)
+    try await waitUntil { styles.phase == .needsRefresh }
+    let insertedStyle = cssSinglePropertyStyle(
+        id: CSS.Style.ID("rule-sheet\u{1F}0"),
+        name: "color",
+        value: "red"
+    )
+    let shiftedOriginalStyle = cssSinglePropertyStyle(
+        id: CSS.Style.ID("rule-sheet\u{1F}1"),
+        name: "color",
+        value: "red"
+    )
+    await enqueueCSSStyleReplies(
+        CSS.MatchedStyles(matchedRules: [
+            cssRule(selector: ".inserted", style: insertedStyle),
+            cssRule(selector: ".original", style: shiftedOriginalStyle),
+        ]),
+        on: runtime.backend
+    )
+    await runtime.backend.enqueue(insertedStyle, for: "CSS", method: "setStyleText")
+
+    await #expect(throws: WebInspectorProxyError.commandFailed(
+        domain: "CSS",
+        method: "setStyleText",
+        message: "CSS declaration changed before the queued mutation could run."
+    )) {
+        try await context.css.setProperty(
+            colorID,
+            enabled: false,
+            options: WebInspectorMutationOptions(undo: .disabled)
+        )
+    }
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "setStyleText")) == false)
+}
+
+@MainActor
+@Test
 func selectingDOMNodeLoadsInlineAndAttributesStyleSections() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
@@ -6754,7 +7120,7 @@ func cssRuleSelectorEditsMarkUndoableStateOnOwningTarget() async throws {
 
 @MainActor
 @Test
-func requestSetCSSPropertyRefusesStaleAndNonEditableProperties() async throws {
+func requestSetCSSPropertyRefusesNonEditableAndRefreshesStaleProperties() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let document = try #require(context.rootNode)
@@ -6830,10 +7196,39 @@ func requestSetCSSPropertyRefusesStaleAndNonEditableProperties() async throws {
 
     await runtime.backend.emit(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
     try await waitUntil { styles.phase == .needsRefresh }
-    #expect(context.css.requestSetProperty(editablePropertyID, enabled: false) == false)
+    await enqueueCSSStyleReplies(on: runtime.backend)
+    await runtime.backend.enqueue(
+        CSS.Style(
+            id: CSS.Style.ID("style-1"),
+            properties: [
+                CSS.Property(
+                    id: CSS.Property.ID("property-1"),
+                    name: "display",
+                    value: "grid",
+                    text: "/* display: grid; */",
+                    status: .disabled,
+                    isEditable: true
+                )
+            ],
+            cssText: "/* display: grid; */",
+            isEditable: true
+        ),
+        for: "CSS",
+        method: "setStyleText"
+    )
+    #expect(context.css.requestSetProperty(
+        editablePropertyID,
+        enabled: false,
+        options: WebInspectorMutationOptions(undo: .disabled)
+    ))
+    _ = await runtime.backend.waitForCompletedCommands(
+        domain: "CSS",
+        method: "setStyleText",
+        count: 1
+    )
 
     let commands = await runtime.backend.recordedCommands()
-    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "setStyleText")) == false)
+    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "setStyleText")))
 }
 
 @MainActor
@@ -7184,6 +7579,11 @@ func removedAndReusedStyleSheetIDRejectsPriorMutationReply() async throws {
         "reused-sheet",
         scopedToTargetRawValue: frameTargetID.rawValue
     )
+    let ruleProxyID = CSS.Rule.ID(
+        "reused-sheet\u{1F}1",
+        scopedToTargetRawValue: frameTargetID.rawValue
+    )
+    let ruleID = CSSStyleRule.ID(ruleProxyID)
 
     let firstHeaderBaseline = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(
@@ -7199,6 +7599,20 @@ func removedAndReusedStyleSheetIDRejectsPriorMutationReply() async throws {
     let priorMutationGate = WebInspectorTestGate()
     await runtime.backend.hold(domain: "CSS", method: "setStyleSheetText", gate: priorMutationGate)
     await runtime.backend.enqueue((), for: "CSS", method: "setStyleSheetText")
+    await runtime.backend.enqueue((), for: "CSS", method: "setStyleSheetText")
+    await runtime.backend.enqueue(
+        CSS.Rule(
+            id: ruleProxyID,
+            selectorList: CSS.Rule.SelectorList(selectors: [".updated"], text: ".updated"),
+            origin: CSS.Origin(rawValue: "regular"),
+            style: CSS.Style(id: CSS.Style.ID(
+                "reused-sheet\u{1F}1",
+                scopedToTargetRawValue: frameTargetID.rawValue
+            ))
+        ),
+        for: "CSS",
+        method: "setRuleSelector"
+    )
     await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
     let priorMutationTask = Task { @MainActor in
         try await context.css.setStyleSheetText("body { color: red; }", for: styleSheetID)
@@ -7208,6 +7622,23 @@ func removedAndReusedStyleSheetIDRejectsPriorMutationReply() async throws {
         method: "setStyleSheetText",
         count: 1
     )
+
+    let queuedStyleSheetTask = Task { @MainActor in
+        try await context.css.setStyleSheetText(
+            "body { color: orange; }",
+            for: styleSheetID,
+            options: WebInspectorMutationOptions(undo: .disabled)
+        )
+    }
+    await Task.yield()
+    let queuedRuleTask = Task { @MainActor in
+        try await context.css.setRuleSelector(
+            ".updated",
+            for: ruleID,
+            options: WebInspectorMutationOptions(undo: .disabled)
+        )
+    }
+    await Task.yield()
 
     let removalBaseline = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(.styleSheetRemoved(styleSheetID), target: pageTarget)
@@ -7228,7 +7659,17 @@ func removedAndReusedStyleSheetIDRejectsPriorMutationReply() async throws {
     await #expect(throws: WebInspectorProxyError.disconnected("CSS mutation no longer belongs to the current document.")) {
         try await priorMutationTask.value
     }
+    await #expect(throws: WebInspectorProxyError.disconnected("CSS mutation no longer belongs to the current document.")) {
+        try await queuedStyleSheetTask.value
+    }
+    await #expect(throws: WebInspectorProxyError.disconnected("CSS mutation no longer belongs to the current document.")) {
+        try await queuedRuleTask.value
+    }
     var commands = await runtime.backend.recordedCommands()
+    #expect(commands.filter {
+        $0.domain == "CSS" && $0.method == "setStyleSheetText"
+    }.count == 1)
+    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "setRuleSelector")) == false)
     #expect(commands.contains(RecordedCommand(domain: "DOM", method: "markUndoableState")) == false)
 
     await runtime.backend.enqueue((), for: "CSS", method: "setStyleSheetText")
@@ -7241,6 +7682,170 @@ func removedAndReusedStyleSheetIDRejectsPriorMutationReply() async throws {
     }
     #expect(undoCommands.count == 1)
     #expect(undoCommands.first?.targetID == frameTargetID)
+}
+
+@MainActor
+@Test
+func queuedRuleSelectorRejectsPositionalIDAfterStyleSheetReplacement() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (_, context) = try await startContext(runtime: runtime)
+    let styleSheetID = CSS.StyleSheet.ID("queued-rule-sheet")
+    let ruleProxyID = CSS.Rule.ID("queued-rule-sheet\u{1F}0")
+    let ruleID = CSSStyleRule.ID(ruleProxyID)
+    let mutationGate = WebInspectorTestGate()
+
+    await runtime.backend.hold(domain: "CSS", method: "setStyleSheetText", gate: mutationGate)
+    await runtime.backend.enqueue((), for: "CSS", method: "setStyleSheetText")
+    await runtime.backend.enqueue(
+        CSS.Rule(
+            id: ruleProxyID,
+            selectorList: CSS.Rule.SelectorList(selectors: [".updated"], text: ".updated"),
+            origin: CSS.Origin(rawValue: "author"),
+            style: CSS.Style(id: CSS.Style.ID("queued-rule-sheet\u{1F}0"))
+        ),
+        for: "CSS",
+        method: "setRuleSelector"
+    )
+    let styleSheetTask = Task { @MainActor in
+        try await context.css.setStyleSheetText(
+            ".inserted {} .original {}",
+            for: styleSheetID,
+            options: WebInspectorMutationOptions(undo: .disabled)
+        )
+    }
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "CSS",
+        method: "setStyleSheetText",
+        count: 1
+    )
+
+    let selectorTask = Task { @MainActor in
+        try await context.css.setRuleSelector(
+            ".updated",
+            for: ruleID,
+            options: WebInspectorMutationOptions(undo: .disabled)
+        )
+    }
+    await Task.yield()
+    await mutationGate.open()
+
+    try await styleSheetTask.value
+    await #expect(throws: WebInspectorProxyError.disconnected(
+        "CSS mutation no longer belongs to the current document."
+    )) {
+        try await selectorTask.value
+    }
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "setRuleSelector")) == false)
+}
+
+@MainActor
+@Test
+func ruleSelectorAcceptsItsOwnStyleSheetChangedEventBeforeReply() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let styleSheetID = CSS.StyleSheet.ID("selector-own-event-sheet")
+    let ruleProxyID = CSS.Rule.ID("selector-own-event-sheet\u{1F}0")
+    let ruleID = CSSStyleRule.ID(ruleProxyID)
+    let mutationGate = WebInspectorTestGate()
+
+    await runtime.backend.hold(domain: "CSS", method: "setRuleSelector", gate: mutationGate)
+    await runtime.backend.enqueue(
+        CSS.Rule(
+            id: ruleProxyID,
+            selectorList: CSS.Rule.SelectorList(selectors: [".updated"], text: ".updated"),
+            origin: CSS.Origin(rawValue: "author"),
+            style: CSS.Style(id: CSS.Style.ID("selector-own-event-sheet\u{1F}0"))
+        ),
+        for: "CSS",
+        method: "setRuleSelector"
+    )
+    await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
+    let selectorTask = Task { @MainActor in
+        try await context.css.setRuleSelector(".updated", for: ruleID)
+    }
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "CSS",
+        method: "setRuleSelector",
+        count: 1
+    )
+    let eventBaseline = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(.styleSheetChanged(styleSheetID), target: target)
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: eventBaseline))
+    await mutationGate.open()
+
+    try await selectorTask.value
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands.contains(RecordedCommand(domain: "DOM", method: "markUndoableState")))
+}
+
+@MainActor
+@Test
+func queuedDeclarationRefreshesAfterStyleSheetReplacement() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let document = try #require(context.rootNode)
+    let elementID = DOM.Node.ID("queued-after-sheet-replacement")
+    await runtime.backend.emit(
+        .setChildNodes(parent: document.id.proxyID, nodes: [
+            DOM.Node(id: elementID, nodeType: 1, nodeName: "DIV", localName: "div")
+        ]),
+        target: target
+    )
+    let element = try await waitForChild(in: context)
+    await enqueueCSSStyleReplies(
+        cssToggleStyle(margin: "0", paddingStatus: .active),
+        on: runtime.backend
+    )
+    context.select(element)
+    let styles = try #require(element.elementStyles)
+    try await waitUntil { styles.phase == .loaded }
+    let paddingID = try #require(
+        styles.sections.first?.style.properties.first { $0.name == "padding" }?.id
+    )
+
+    let mutationGate = WebInspectorTestGate()
+    await runtime.backend.hold(domain: "CSS", method: "setStyleSheetText", gate: mutationGate)
+    await runtime.backend.enqueue((), for: "CSS", method: "setStyleSheetText")
+    let styleSheetTask = Task { @MainActor in
+        try await context.css.setStyleSheetText(
+            "color: red; margin: 0; padding: 8px;",
+            for: CSS.StyleSheet.ID("queued-toggle-style"),
+            options: WebInspectorMutationOptions(undo: .disabled)
+        )
+    }
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "CSS",
+        method: "setStyleSheetText",
+        count: 1
+    )
+
+    await enqueueCSSStyleReplies(cssToggleStyleWithLeadingColor(), on: runtime.backend)
+    await runtime.backend.enqueue(
+        cssToggleStyleWithLeadingColor(),
+        for: "CSS",
+        method: "setStyleText"
+    )
+    let declarationTask = Task { @MainActor in
+        try await context.css.setProperty(
+            paddingID,
+            enabled: false,
+            options: WebInspectorMutationOptions(undo: .disabled)
+        )
+    }
+    await Task.yield()
+    await mutationGate.open()
+
+    try await styleSheetTask.value
+    await #expect(throws: WebInspectorProxyError.commandFailed(
+        domain: "CSS",
+        method: "setStyleText",
+        message: "CSS declaration changed before the queued mutation could run."
+    )) {
+        try await declarationTask.value
+    }
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands.contains(RecordedCommand(domain: "CSS", method: "setStyleText")) == false)
 }
 
 @MainActor
@@ -10595,6 +11200,64 @@ private func enqueueCSSStyleReplies(on backend: WebInspectorTestBackend) async {
     )
 }
 
+private func enqueueCSSStyleReplies(
+    _ style: CSS.Style,
+    on backend: WebInspectorTestBackend
+) async {
+    await enqueueCSSStyleReplies(cssMatchedStyles([style]), on: backend)
+}
+
+private func enqueueCSSStyleReplies(
+    _ matchedStyles: CSS.MatchedStyles,
+    on backend: WebInspectorTestBackend
+) async {
+    await backend.enqueue(
+        matchedStyles,
+        for: "CSS",
+        method: "getMatchedStylesForNode"
+    )
+    await backend.enqueue(
+        CSS.InlineStyles(),
+        for: "CSS",
+        method: "getInlineStylesForNode"
+    )
+    await backend.enqueue(
+        [CSS.ComputedProperty(name: "display", value: "grid")],
+        for: "CSS",
+        method: "getComputedStyleForNode"
+    )
+}
+
+private func cssRule(selector: String, style: CSS.Style) -> CSS.Rule {
+    CSS.Rule(
+        id: CSS.Rule.ID(style.id.rawValue),
+        selectorList: CSS.Rule.SelectorList(selectors: [selector], text: selector),
+        origin: CSS.Origin(rawValue: "author"),
+        style: style
+    )
+}
+
+private func cssSinglePropertyStyle(
+    id: CSS.Style.ID,
+    name: String,
+    value: String
+) -> CSS.Style {
+    CSS.Style(
+        id: id,
+        properties: [
+            CSS.Property(
+                id: CSS.Property.ID("\(id.rawValue)\u{1F}0"),
+                name: name,
+                value: value,
+                text: "\(name): \(value);",
+                isEditable: true
+            )
+        ],
+        cssText: "\(name): \(value);",
+        isEditable: true
+    )
+}
+
 private func cssMatchedStyles(_ styles: [CSS.Style]) -> CSS.MatchedStyles {
     CSS.MatchedStyles(
         matchedRules: styles.enumerated().map { index, style in
@@ -10630,6 +11293,75 @@ private func cssBaselineStyle(
         cssText: properties
             .map { "\($0.name): \($0.value);" }
             .joined(separator: "\n"),
+        isEditable: true
+    )
+}
+
+private func cssToggleStyle(
+    margin: String,
+    marginStatus: CSS.Status = .active,
+    paddingStatus: CSS.Status
+) -> CSS.Style {
+    let styleID = CSS.Style.ID("queued-toggle-style\u{1F}0")
+    let marginText = marginStatus == .disabled
+        ? "/* margin: \(margin); */"
+        : "margin: \(margin);"
+    let paddingText = paddingStatus == .disabled
+        ? "/* padding: 8px; */"
+        : "padding: 8px;"
+    return CSS.Style(
+        id: styleID,
+        properties: [
+            CSS.Property(
+                id: CSS.Property.ID("\(styleID.rawValue)\u{1F}0"),
+                name: "margin",
+                value: margin,
+                text: marginText,
+                status: marginStatus,
+                isEditable: true
+            ),
+            CSS.Property(
+                id: CSS.Property.ID("\(styleID.rawValue)\u{1F}1"),
+                name: "padding",
+                value: "8px",
+                text: paddingText,
+                status: paddingStatus,
+                isEditable: true
+            ),
+        ],
+        cssText: "\(marginText)\n\(paddingText)",
+        isEditable: true
+    )
+}
+
+private func cssToggleStyleWithLeadingColor() -> CSS.Style {
+    let styleID = CSS.Style.ID("queued-toggle-style\u{1F}0")
+    return CSS.Style(
+        id: styleID,
+        properties: [
+            CSS.Property(
+                id: CSS.Property.ID("\(styleID.rawValue)\u{1F}0"),
+                name: "color",
+                value: "red",
+                text: "color: red;",
+                isEditable: true
+            ),
+            CSS.Property(
+                id: CSS.Property.ID("\(styleID.rawValue)\u{1F}1"),
+                name: "margin",
+                value: "0",
+                text: "margin: 0;",
+                isEditable: true
+            ),
+            CSS.Property(
+                id: CSS.Property.ID("\(styleID.rawValue)\u{1F}2"),
+                name: "padding",
+                value: "8px",
+                text: "padding: 8px;",
+                isEditable: true
+            ),
+        ],
+        cssText: "color: red;\nmargin: 0;\npadding: 8px;",
         isEditable: true
     )
 }

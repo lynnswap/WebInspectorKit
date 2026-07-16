@@ -28,6 +28,63 @@ private struct CSSInspectorBaselineName: Hashable {
     var propertyName: String
 }
 
+private struct CSSDeclarationSnapshot: Equatable {
+    var name: String
+    var value: String
+    var priority: String?
+    var text: String?
+    var parsedOk: Bool
+    var status: CSSStyleProperty.Status
+    var implicit: Bool
+    var range: CSSStyle.SourceRange?
+    var isEditable: Bool
+    var isModifiedByInspector: Bool
+
+    init(_ property: CSS.Property) {
+        name = property.name
+        value = property.value
+        priority = property.priority
+        text = property.text
+        parsedOk = property.parsedOk
+        status = CSSStyleProperty.Status(property.status)
+        implicit = property.implicit
+        range = property.range.map(CSSStyle.SourceRange.init)
+        isEditable = property.isEditable
+        isModifiedByInspector = property.isModifiedByInspector
+    }
+}
+
+private struct CSSDeclarationOwnerKey: Equatable {
+    var kind: CSSStyleSection.Kind
+    var selectorText: String?
+    var sourceURL: String?
+    var origin: String?
+    var groupings: [String]
+    var isImplicitlyNested: Bool?
+
+    init(_ section: CSSStyleSection) {
+        kind = section.kind
+        selectorText = section.proxyRule?.selectorList.text
+        sourceURL = section.proxyRule?.sourceURL
+        origin = section.proxyRule?.origin.rawValue
+        groupings = section.proxyRule?.groupings.map(\.text) ?? []
+        isImplicitlyNested = section.proxyRule?.isImplicitlyNested
+    }
+}
+
+/// Value identity captured before a queued mutation suspends. WebKit's raw
+/// property IDs are positional, so they prove continuity only while the
+/// declaration-name topology remains unchanged.
+struct CSSDeclarationIdentity {
+    let styleID: CSS.Style.ID
+    let propertyID: CSSStyleProperty.ID
+    let propertyNames: [String]
+    let propertyNameIsUnique: Bool
+    fileprivate let ownerKey: CSSDeclarationOwnerKey
+    let ownerKeyCount: Int
+    fileprivate let snapshot: CSSDeclarationSnapshot
+}
+
 /// Context-owned edit history for backend style declarations. Stylesheet
 /// rules are shared by every DOM node they match, so a node-owned `CSSStyles`
 /// resource cannot own this state. `CSS.Style.ID` carries ProxyKit's target
@@ -212,6 +269,8 @@ public final class CSSStyles: WebInspectorPersistentModel {
 
     @ObservationIgnored weak var modelContext: WebInspectorContext?
     @ObservationIgnored private let inspectorBaselineStore: CSSInspectorBaselineStore
+    @ObservationIgnored private var activeLoadGeneration: Int?
+    @ObservationIgnored private var hasCompletedLoad: Bool
 
     init(nodeID: DOMNode.ID, modelContext: WebInspectorContext) {
         id = ID(nodeID: nodeID)
@@ -219,18 +278,32 @@ public final class CSSStyles: WebInspectorPersistentModel {
         sections = []
         computedProperties = []
         inspectorBaselineStore = modelContext.cssInspectorBaselineStore
+        activeLoadGeneration = nil
+        hasCompletedLoad = false
         self.modelContext = modelContext
     }
 
     func markLoading() {
+        activeLoadGeneration = nil
+        phase = .loading
+    }
+
+    func markLoading(generation: Int) {
+        activeLoadGeneration = generation
         phase = .loading
     }
 
     func load(
         matchedStyles: CSS.MatchedStyles,
         inlineStyles: CSS.InlineStyles,
-        computedProperties: [CSS.ComputedProperty]
+        computedProperties: [CSS.ComputedProperty],
+        generation: Int? = nil
     ) {
+        if let generation {
+            guard activeLoadGeneration == generation else {
+                return
+            }
+        }
         sections = CSSStyleSectionBuilder.makeSections(matched: matchedStyles, inline: inlineStyles)
             .map {
                 section(
@@ -239,32 +312,64 @@ public final class CSSStyles: WebInspectorPersistentModel {
                 )
             }
         self.computedProperties = computedProperties.map(CSSComputedProperty.init)
+        activeLoadGeneration = nil
+        hasCompletedLoad = true
         phase = .loaded
     }
 
     func markNeedsRefresh() {
+        activeLoadGeneration = nil
         phase = .needsRefresh
     }
 
     func markUnavailable() {
         sections = []
         computedProperties = []
+        activeLoadGeneration = nil
+        hasCompletedLoad = false
         phase = .unavailable
+    }
+
+    func markUnavailable(generation: Int) {
+        guard activeLoadGeneration == generation else {
+            return
+        }
+        markUnavailable()
     }
 
     func fail(_ error: WebInspectorProxyError) {
         sections = []
         computedProperties = []
+        activeLoadGeneration = nil
+        hasCompletedLoad = false
         phase = .failed(error)
+    }
+
+    func fail(_ error: WebInspectorProxyError, generation: Int) {
+        guard activeLoadGeneration == generation else {
+            return
+        }
+        fail(error)
+    }
+
+    func cancelLoading(generation: Int) {
+        guard activeLoadGeneration == generation else {
+            return
+        }
+        activeLoadGeneration = nil
+        phase = hasCompletedLoad ? .needsRefresh : .unavailable
     }
 
     /// Synchronous validation for a property toggle: returns the backend
     /// command inputs when the property is currently editable, or nil to
     /// refuse the toggle (stale phase, non-editable section/style/property,
     /// no-op toggle, or unrewritable style text).
-    func setStyleTextIntent(for propertyID: CSSStyleProperty.ID, enabled: Bool) -> SetStyleTextIntent? {
+    func setStyleTextIntent(
+        for identity: CSSDeclarationIdentity,
+        enabled: Bool
+    ) -> SetStyleTextIntent? {
         guard phase == .loaded,
-              let (sectionIndex, propertyIndex) = locateProperty(propertyID) else {
+              let (sectionIndex, propertyIndex) = locateProperty(identity) else {
             return nil
         }
         let section = sections[sectionIndex]
@@ -288,9 +393,70 @@ public final class CSSStyles: WebInspectorPersistentModel {
         return SetStyleTextIntent(styleID: style.id, text: text)
     }
 
-    func setDeclarationTextIntent(for propertyID: CSSStyleProperty.ID, text replacementText: String) -> SetStyleTextIntent? {
+    /// Validates a submission against the last materialized declaration. A
+    /// queued operation rebuilds its command intent after any in-flight or
+    /// stale refresh completes, so `.loading` is not itself a rejection.
+    func canSubmitSetStyleText(
+        for propertyID: CSSStyleProperty.ID,
+        enabled: Bool
+    ) -> CSSDeclarationIdentity? {
+        guard let (sectionIndex, propertyIndex) = locateProperty(propertyID) else {
+            return nil
+        }
+        let section = sections[sectionIndex]
+        let style = section.proxyStyle
+        let property = style.properties[propertyIndex]
+        guard section.isEditable,
+              style.isEditable,
+              property.isEditable,
+              (property.status != .disabled) != enabled,
+              CSSStyleTextRewriter.rewrittenStyleText(
+                  style: style,
+                  propertyIndex: propertyIndex,
+                  enabled: enabled
+              ) != nil else {
+            return nil
+        }
+        return declarationIdentity(
+            section: section,
+            propertyID: propertyID,
+            propertyIndex: propertyIndex
+        )
+    }
+
+    func canSubmitSetDeclarationText(
+        for propertyID: CSSStyleProperty.ID,
+        text replacementText: String
+    ) -> CSSDeclarationIdentity? {
+        guard let (sectionIndex, propertyIndex) = locateProperty(propertyID) else {
+            return nil
+        }
+        let section = sections[sectionIndex]
+        let style = section.proxyStyle
+        let property = style.properties[propertyIndex]
+        guard section.isEditable,
+              style.isEditable,
+              property.isEditable,
+              CSSStyleTextRewriter.rewrittenStyleText(
+                  style: style,
+                  propertyIndex: propertyIndex,
+                  replacementText: replacementText
+              ) != nil else {
+            return nil
+        }
+        return declarationIdentity(
+            section: section,
+            propertyID: propertyID,
+            propertyIndex: propertyIndex
+        )
+    }
+
+    func setDeclarationTextIntent(
+        for identity: CSSDeclarationIdentity,
+        text replacementText: String
+    ) -> SetStyleTextIntent? {
         guard phase == .loaded,
-              let (sectionIndex, propertyIndex) = locateProperty(propertyID) else {
+              let (sectionIndex, propertyIndex) = locateProperty(identity) else {
             return nil
         }
         let section = sections[sectionIndex]
@@ -366,6 +532,52 @@ public final class CSSStyles: WebInspectorPersistentModel {
             return (sectionIndex, propertyIndex)
         }
         return nil
+    }
+
+    private func locateProperty(
+        _ identity: CSSDeclarationIdentity
+    ) -> (sectionIndex: Int, propertyIndex: Int)? {
+        guard let location = locateProperty(identity.propertyID) else {
+            return nil
+        }
+        let style = sections[location.sectionIndex].proxyStyle
+        let property = style.properties[location.propertyIndex]
+        let ownerKey = CSSDeclarationOwnerKey(sections[location.sectionIndex])
+        guard style.id == identity.styleID,
+              style.properties.map(\.name) == identity.propertyNames,
+              property.name == identity.snapshot.name,
+              ownerKey == identity.ownerKey,
+              sections.lazy.map(CSSDeclarationOwnerKey.init).filter({ $0 == ownerKey }).count
+                  == identity.ownerKeyCount else {
+            return nil
+        }
+        guard (identity.propertyNameIsUnique && identity.ownerKeyCount == 1)
+                || CSSDeclarationSnapshot(property) == identity.snapshot else {
+            return nil
+        }
+        return location
+    }
+
+    private func declarationIdentity(
+        section: CSSStyleSection,
+        propertyID: CSSStyleProperty.ID,
+        propertyIndex: Int
+    ) -> CSSDeclarationIdentity {
+        let style = section.proxyStyle
+        let property = style.properties[propertyIndex]
+        let propertyNames = style.properties.map(\.name)
+        let ownerKey = CSSDeclarationOwnerKey(section)
+        return CSSDeclarationIdentity(
+            styleID: style.id,
+            propertyID: propertyID,
+            propertyNames: propertyNames,
+            propertyNameIsUnique: propertyNames.filter { $0 == property.name }.count == 1,
+            ownerKey: ownerKey,
+            ownerKeyCount: sections.lazy.map(CSSDeclarationOwnerKey.init).filter {
+                $0 == ownerKey
+            }.count,
+            snapshot: CSSDeclarationSnapshot(property)
+        )
     }
 
     private func section(_ section: CSSStyleSection, replacingStyleWith style: CSS.Style) -> CSSStyleSection {
