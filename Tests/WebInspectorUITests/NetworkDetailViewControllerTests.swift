@@ -2585,6 +2585,112 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func visibleListCoalescesContinuousTopologyTransactionsAtDisplayUpdateBoundary() async throws {
+        let context = makeContext()
+        let selectedRequestID = context.seedNetworkRequest(
+            requestID: "selected-request",
+            url: "https://example.test/selected.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: -1
+        )
+        let model = NetworkPanelModel(context: context)
+        let selectedRequest = try #require(context.registeredRequest(for: selectedRequestID))
+        model.selectRequest(selectedRequest)
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(listViewController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        #expect(listViewController.displayedRequestIDsForTesting == [selectedRequest.id])
+        let snapshotApplyBaseline = listViewController.snapshotApplyCountForTesting
+        let projectionFlushBaseline = listViewController.listProjectionFlushCountForTesting
+        let insertedRequestCount = 2_305
+        let transactionDeliveryTarget = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+            + insertedRequestCount
+        for index in 0..<insertedRequestCount {
+            context.seedNetworkRequest(
+                requestID: "request-\(index)",
+                url: "https://example.test/\(index).json",
+                resourceTypeRawValue: "Fetch",
+                responseMIMEType: "application/json",
+                responseStatus: 200,
+                responseStatusText: "OK",
+                timestamp: Double(index)
+            )
+        }
+
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryCountForTesting(
+            transactionDeliveryTarget
+        ))
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+
+        let finalEntryIDs = model.displayEntryIDs
+        #expect(listViewController.displayedEntryIDsForTesting == finalEntryIDs)
+        #expect(finalEntryIDs.count == insertedRequestCount + 1)
+        let snapshotApplyCount = listViewController.snapshotApplyCountForTesting - snapshotApplyBaseline
+        let projectionFlushCount = listViewController.listProjectionFlushCountForTesting - projectionFlushBaseline
+        #expect(snapshotApplyCount > 0)
+        #expect(snapshotApplyCount <= projectionFlushCount)
+        #expect(projectionFlushCount < insertedRequestCount)
+        #expect(model.selectedRequest === selectedRequest)
+        let selectedEntryID = try #require(model.selectedEntryID)
+        #expect(
+            listViewController.collectionViewForTesting.indexPathsForSelectedItems
+                == [IndexPath(
+                    item: try #require(finalEntryIDs.firstIndex(of: selectedEntryID)),
+                    section: 0
+                )]
+        )
+    }
+
+    @Test
+    func visibleListContentUpdateSkipsSnapshotAndRendersObservedCell() async throws {
+        let context = makeContext()
+        let request = try #require(await applyRequestWithoutResponse(
+            to: context,
+            requestID: "content-update",
+            url: "https://example.test/content-update"
+        ))
+        let model = NetworkPanelModel(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(listViewController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        listViewController.collectionViewForTesting.layoutIfNeeded()
+        let cell = try #require(listViewController.networkListCellForTesting(
+            at: IndexPath(item: 0, section: 0)
+        ))
+        let entryObservation = try #require(cell.entryObservationForTesting)
+        let renderedFileType = await entryObservation.values {
+            cell.fileTypeLabelForTesting
+        }
+        defer { renderedFileType.cancel() }
+        let snapshotApplyBaseline = listViewController.snapshotApplyCountForTesting
+        let transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+
+        await applyResponseReceived(
+            to: context,
+            requestID: "content-update",
+            url: request.url,
+            responseHeaders: ["content-type": "text/css"],
+            responseMimeType: "text/css",
+            timestamp: 4
+        )
+
+        #expect(await renderedFileType.waitUntilValue("css"))
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyBaseline)
+        #expect(
+            listViewController.fetchedResultsTransactionDeliveryCountForTesting
+                == transactionDeliveryBaseline
+        )
+        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+    }
+
+    @Test
     func visibleListAppliesDescriptorResetThroughFetchedResultsTransactions() async throws {
         let context = makeContext()
         _ = try #require(await applyRequest(
@@ -2655,6 +2761,51 @@ struct NetworkDetailViewControllerTests {
         await listViewController.flushPendingSnapshotUpdateForTesting()
         #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
+    }
+
+    @Test
+    func hiddenListReloadsAfterCancellingInFlightSnapshotBuild() async throws {
+        let context = makeContext()
+        let firstRequestID = context.seedNetworkRequest(
+            requestID: "first",
+            url: "https://example.test/first.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 0
+        )
+        let model = NetworkPanelModel(context: context)
+        let firstRequest = try #require(context.registeredRequest(for: firstRequestID))
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(listViewController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        #expect(listViewController.displayedRequestIDsForTesting == [firstRequest.id])
+        let transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        let secondRequestID = context.seedNetworkRequest(
+            requestID: "second",
+            url: "https://example.test/second.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 1
+        )
+        let secondRequest = try #require(context.registeredRequest(for: secondRequestID))
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: transactionDeliveryBaseline
+        ))
+
+        listViewController.flushPendingListProjectionForTesting()
+        #expect(listViewController.hasActiveListSnapshotBuildForTesting)
+        listViewController.suspendRenderingForTesting()
+        #expect(listViewController.hasActiveListSnapshotBuildForTesting == false)
+
+        listViewController.resumeRenderingForTesting()
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        #expect(listViewController.displayedRequestIDsForTesting == [secondRequest.id, firstRequest.id])
     }
 
     @Test

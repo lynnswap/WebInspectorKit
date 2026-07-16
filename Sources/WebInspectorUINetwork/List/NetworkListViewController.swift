@@ -9,13 +9,43 @@ import UIKit
 package final class NetworkListViewController: UICollectionViewController, UISearchResultsUpdating {
     package typealias EntrySelectionAction = @MainActor (NetworkListEntry.ID?) -> Void
 
-    private enum SectionIdentifier: Hashable {
+    @MainActor
+    private final class ListProjectionDisplayLinkTarget: NSObject {
+        private let action: (CADisplayLink) -> Void
+
+        init(action: @escaping (CADisplayLink) -> Void) {
+            self.action = action
+        }
+
+        @objc func displayLinkDidFire(_ displayLink: CADisplayLink) {
+            action(displayLink)
+        }
+    }
+
+    private enum SectionIdentifier: Hashable, Sendable {
         case main
     }
 
     private struct PendingSnapshotUpdate {
         var rows: NetworkListViewController.SnapshotRows
         var snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkListEntry.ID>
+    }
+
+    private struct PendingListProjection {
+        var latestRevision: UInt64
+
+        mutating func merge(_ transaction: NetworkPanelListTransaction) {
+            precondition(
+                transaction.revision > latestRevision,
+                "Network list transactions must be delivered in revision order."
+            )
+            latestRevision = transaction.revision
+        }
+    }
+
+    private struct PendingListSnapshotBuild {
+        var entryIDs: [NetworkListEntry.ID]
+        var revision: UInt64
     }
 
     private struct SnapshotCoordinator {
@@ -53,12 +83,23 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private var selectedEntryObservation: PortableObservationTracking.Token?
 
     private var snapshotCoordinator = SnapshotCoordinator()
+    private var pendingListProjection: PendingListProjection?
+    private lazy var listProjectionDisplayLinkTarget = ListProjectionDisplayLinkTarget { [weak self] displayLink in
+        displayLink.isPaused = true
+        self?.flushPendingListProjectionIfNeeded()
+    }
+    private var listProjectionDisplayLink: CADisplayLink?
+    private var isListProjectionFlushScheduled = false
+    private var latestListTransactionRevision: UInt64 = 0
+    private var listSnapshotBuildGeneration: UInt64 = 0
+    private var listSnapshotBuildTask: Task<Void, Never>?
+    private var pendingListSnapshotBuild: PendingListSnapshotBuild?
     private var isApplyingSearchPresentation = false
     private var activeSearchController: UISearchController?
 #if DEBUG
     private struct FetchedResultsTransactionDeliveryWaiter {
         var id: Int
-        var baselineCount: Int
+        var targetCount: Int
         var continuation: CheckedContinuation<Bool, Never>
         var timeoutTask: Task<Void, Never>
     }
@@ -70,6 +111,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private var fetchedResultsTransactionDeliveryCountStorageForTesting = 0
     private var displayRequestIDsEvaluationCountStorageForTesting = 0
     private var snapshotApplyCountStorageForTesting = 0
+    private var listProjectionFlushCountStorageForTesting = 0
     private var filterMenuBuildCountStorageForTesting = 0
 #endif
     private lazy var filterHostingMenu = UIHostingMenu(
@@ -104,6 +146,8 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     isolated deinit {
+        listProjectionDisplayLink?.invalidate()
+        listSnapshotBuildTask?.cancel()
         listTransactionTask?.cancel()
         searchTextObservation?.cancel()
         resourceFilterObservation?.cancel()
@@ -226,6 +270,12 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private func suspendRendering() {
         guard snapshotCoordinator.isRenderingActive else {
             return
+        }
+        invalidateListProjectionDisplayLink()
+        let discardedSnapshotBuild = cancelListSnapshotBuild()
+        if pendingListProjection != nil || discardedSnapshotBuild {
+            snapshotCoordinator.markNeedsReloadOnNextAppearance()
+            pendingListProjection = nil
         }
         snapshotCoordinator.suspendRendering()
         setVisibleCellRenderingActive(false)
@@ -376,7 +426,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
     }
 
-    private func makeSnapshot(
+    nonisolated private static func makeSnapshot(
         entryIDs: [NetworkListEntry.ID]
     ) -> NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkListEntry.ID> {
         precondition(
@@ -396,7 +446,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private func requestSnapshotUpdate(entryIDs: [NetworkListEntry.ID]) {
         let rows = NetworkListViewController.SnapshotRows(entryIDs: entryIDs)
-        requestSnapshotUpdate(snapshot: makeSnapshot(entryIDs: entryIDs), rows: rows)
+        requestSnapshotUpdate(snapshot: Self.makeSnapshot(entryIDs: entryIDs), rows: rows)
     }
 
     private func requestSnapshotUpdate(
@@ -487,96 +537,165 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 #if DEBUG
         recordFetchedResultsTransactionDeliveryForTesting()
 #endif
+        precondition(
+            transaction.revision > latestListTransactionRevision,
+            "Network list transactions must be delivered in revision order."
+        )
+        latestListTransactionRevision = transaction.revision
         guard snapshotCoordinator.isRenderingActive else {
-            if transaction.isReset || transaction.topologyChangedEntryIDs.isEmpty == false {
+            snapshotCoordinator.markNeedsReloadOnNextAppearance()
+            return
+        }
+        if var pendingListProjection {
+            pendingListProjection.merge(transaction)
+            self.pendingListProjection = pendingListProjection
+        } else {
+            pendingListProjection = PendingListProjection(
+                latestRevision: transaction.revision
+            )
+        }
+        scheduleListProjectionFlushIfNeeded()
+    }
+
+    private func scheduleListProjectionFlushIfNeeded() {
+        guard isListProjectionFlushScheduled == false,
+              pendingListProjection != nil else {
+            return
+        }
+        isListProjectionFlushScheduled = true
+        let displayLink: CADisplayLink
+        if let listProjectionDisplayLink {
+            displayLink = listProjectionDisplayLink
+        } else {
+            displayLink = CADisplayLink(
+                target: listProjectionDisplayLinkTarget,
+                selector: #selector(ListProjectionDisplayLinkTarget.displayLinkDidFire(_:))
+            )
+            displayLink.isPaused = true
+            displayLink.add(to: .main, forMode: .common)
+            listProjectionDisplayLink = displayLink
+        }
+        displayLink.isPaused = false
+    }
+
+    private func cancelScheduledListProjectionFlush() {
+        isListProjectionFlushScheduled = false
+        listProjectionDisplayLink?.isPaused = true
+    }
+
+    private func invalidateListProjectionDisplayLink() {
+        cancelScheduledListProjectionFlush()
+        listProjectionDisplayLink?.invalidate()
+        listProjectionDisplayLink = nil
+    }
+
+    private func flushPendingListProjectionIfNeeded() {
+        cancelScheduledListProjectionFlush()
+        guard snapshotCoordinator.isRenderingActive else {
+            if pendingListProjection != nil {
+                pendingListProjection = nil
                 snapshotCoordinator.markNeedsReloadOnNextAppearance()
             }
             return
         }
-        applyListTransaction(transaction)
+        guard let projection = pendingListProjection else {
+            return
+        }
+        pendingListProjection = nil
+#if DEBUG
+        listProjectionFlushCountStorageForTesting += 1
+#endif
+        applyListProjection(projection, entryIDs: model.displayEntryIDs)
     }
 
-    private func applyListTransaction(_ transaction: NetworkPanelListTransaction) {
-        let entryIDs = transaction.newEntryIDs
-        guard transaction.isReset == false else {
-            requestSnapshotUpdate(entryIDs: entryIDs)
-            renderEmptyState(isEmpty: entryIDs.isEmpty)
+    private func applyListProjection(
+        _ projection: PendingListProjection,
+        entryIDs: [NetworkListEntry.ID]
+    ) {
+        renderEmptyState(isEmpty: entryIDs.isEmpty)
+        requestListSnapshotBuild(entryIDs: entryIDs, revision: projection.latestRevision)
+    }
+
+    private func requestListSnapshotBuild(
+        entryIDs: [NetworkListEntry.ID],
+        revision: UInt64
+    ) {
+        pendingListSnapshotBuild = PendingListSnapshotBuild(
+            entryIDs: entryIDs,
+            revision: revision
+        )
+        startNextListSnapshotBuildIfNeeded()
+    }
+
+    private func startNextListSnapshotBuildIfNeeded() {
+        guard snapshotCoordinator.isRenderingActive,
+              listSnapshotBuildTask == nil,
+              let build = pendingListSnapshotBuild else {
             return
         }
-
-        if snapshotCoordinator.state.isApplying {
-            requestSnapshotUpdate(entryIDs: entryIDs)
-            renderEmptyState(isEmpty: entryIDs.isEmpty)
+        pendingListSnapshotBuild = nil
+        guard build.revision == latestListTransactionRevision else {
             return
         }
+        let generation = takeNextListSnapshotBuildGeneration()
+        listSnapshotBuildTask = Task.detached(priority: .userInitiated) { [weak self] in
+            let snapshot = Self.makeSnapshot(entryIDs: build.entryIDs)
+            guard Task.isCancelled == false else {
+                return
+            }
+            await self?.listSnapshotDidBuild(
+                snapshot,
+                entryIDs: build.entryIDs,
+                revision: build.revision,
+                generation: generation
+            )
+        }
+    }
 
-        var snapshot = dataSource.snapshot()
-        guard applyIncrementalEntryChanges(
-            transaction.topologyChangedEntryIDs,
-            to: &snapshot,
-            targetEntryIDs: entryIDs
-        ) else {
-            requestSnapshotUpdate(entryIDs: entryIDs)
-            renderEmptyState(isEmpty: entryIDs.isEmpty)
+    private func listSnapshotDidBuild(
+        _ snapshot: NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkListEntry.ID>,
+        entryIDs: [NetworkListEntry.ID],
+        revision: UInt64,
+        generation: UInt64
+    ) {
+        guard generation == listSnapshotBuildGeneration else {
+            return
+        }
+        listSnapshotBuildTask = nil
+        defer {
+            startNextListSnapshotBuildIfNeeded()
+        }
+        guard snapshotCoordinator.isRenderingActive,
+              revision == latestListTransactionRevision,
+              entryIDs == model.displayEntryIDs else {
             return
         }
         requestSnapshotUpdate(
             snapshot: snapshot,
             rows: NetworkListViewController.SnapshotRows(entryIDs: entryIDs)
         )
-        renderEmptyState(isEmpty: entryIDs.isEmpty)
     }
 
-    private func applyIncrementalEntryChanges(
-        _ changedEntryIDs: Set<NetworkListEntry.ID>,
-        to snapshot: inout NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkListEntry.ID>,
-        targetEntryIDs: [NetworkListEntry.ID]
-    ) -> Bool {
-        if snapshot.sectionIdentifiers.contains(.main) == false {
-            snapshot.appendSections([.main])
+    @discardableResult
+    private func cancelListSnapshotBuild() -> Bool {
+        let discardedBuild = listSnapshotBuildTask != nil || pendingListSnapshotBuild != nil
+        pendingListSnapshotBuild = nil
+        guard let task = listSnapshotBuildTask else {
+            return discardedBuild
         }
-        let targetEntryIDSet = Set(targetEntryIDs)
-        for entryID in changedEntryIDs where targetEntryIDSet.contains(entryID) == false {
-            if snapshot.indexOfItem(entryID) != nil {
-                snapshot.deleteItems([entryID])
-            }
-        }
-        for entryID in targetEntryIDs where changedEntryIDs.contains(entryID) {
-            guard snapshot.indexOfItem(entryID) == nil else {
-                continue
-            }
-            insertItem(
-                entryID,
-                atTargetIndex: targetEntryIDs.firstIndex(of: entryID)!,
-                targetItemIDs: targetEntryIDs,
-                into: &snapshot
-            )
-        }
-        return snapshot.itemIdentifiers == targetEntryIDs
+        task.cancel()
+        listSnapshotBuildTask = nil
+        _ = takeNextListSnapshotBuildGeneration()
+        return true
     }
 
-    private func insertItem(
-        _ itemID: NetworkListEntry.ID,
-        atTargetIndex targetIndex: Int,
-        targetItemIDs: [NetworkListEntry.ID],
-        into snapshot: inout NSDiffableDataSourceSnapshot<SectionIdentifier, NetworkListEntry.ID>
-    ) {
-        if targetIndex > 0 {
-            let previousItemID = targetItemIDs[targetIndex - 1]
-            if snapshot.indexOfItem(previousItemID) != nil {
-                snapshot.insertItems([itemID], afterItem: previousItemID)
-                return
-            }
-        }
-        let nextIndex = targetIndex + 1
-        if nextIndex < targetItemIDs.count {
-            let nextItemID = targetItemIDs[nextIndex]
-            if snapshot.indexOfItem(nextItemID) != nil {
-                snapshot.insertItems([itemID], beforeItem: nextItemID)
-                return
-            }
-        }
-        snapshot.appendItems([itemID], toSection: .main)
+    private func takeNextListSnapshotBuildGeneration() -> UInt64 {
+        precondition(
+            listSnapshotBuildGeneration < UInt64.max,
+            "Network list snapshot build generation overflowed."
+        )
+        listSnapshotBuildGeneration += 1
+        return listSnapshotBuildGeneration
     }
 
     private func reloadDataFromModel() {
@@ -687,6 +806,10 @@ extension NetworkListViewController {
         snapshotApplyCountStorageForTesting
     }
 
+    package var listProjectionFlushCountForTesting: Int {
+        listProjectionFlushCountStorageForTesting
+    }
+
     package var fetchedResultsTransactionDeliveryCountForTesting: Int {
         fetchedResultsTransactionDeliveryCountStorageForTesting
     }
@@ -711,6 +834,10 @@ extension NetworkListViewController {
 
     package var hasPendingSnapshotUpdateForTesting: Bool {
         snapshotCoordinator.pendingUpdate != nil
+    }
+
+    package var hasActiveListSnapshotBuildForTesting: Bool {
+        listSnapshotBuildTask != nil
     }
 
     package func beginSnapshotApplyForTesting(requestIDs: [NetworkRequest.ID]) {
@@ -744,6 +871,14 @@ extension NetworkListViewController {
     }
 
     package func flushPendingSnapshotUpdateForTesting() async {
+        while true {
+            flushPendingListProjectionIfNeeded()
+            startNextListSnapshotBuildIfNeeded()
+            guard let snapshotBuildTask = listSnapshotBuildTask else {
+                break
+            }
+            await snapshotBuildTask.value
+        }
         if snapshotCoordinator.needsReloadForActiveRendering {
             reloadDataFromModel()
         }
@@ -751,11 +886,26 @@ extension NetworkListViewController {
         await waitForSnapshotUpdateCompletionForTesting()
     }
 
+    package func flushPendingListProjectionForTesting() {
+        flushPendingListProjectionIfNeeded()
+    }
+
     package func waitForFetchedResultsTransactionDeliveryForTesting(
         after baselineCount: Int,
         timeout: Duration = .seconds(1)
     ) async -> Bool {
-        guard fetchedResultsTransactionDeliveryCountStorageForTesting <= baselineCount else {
+        precondition(baselineCount < Int.max, "Network list transaction delivery count overflowed.")
+        return await waitForFetchedResultsTransactionDeliveryCountForTesting(
+            baselineCount + 1,
+            timeout: timeout
+        )
+    }
+
+    package func waitForFetchedResultsTransactionDeliveryCountForTesting(
+        _ targetCount: Int,
+        timeout: Duration = .seconds(10)
+    ) async -> Bool {
+        guard fetchedResultsTransactionDeliveryCountStorageForTesting < targetCount else {
             return true
         }
         return await withCheckedContinuation { continuation in
@@ -771,7 +921,7 @@ extension NetworkListViewController {
             fetchedResultsTransactionDeliveryWaitersForTesting.append(
                 FetchedResultsTransactionDeliveryWaiter(
                     id: waiterID,
-                    baselineCount: baselineCount,
+                    targetCount: targetCount,
                     continuation: continuation,
                     timeoutTask: timeoutTask
                 )
@@ -807,7 +957,7 @@ extension NetworkListViewController {
 
     private func resolveFetchedResultsTransactionDeliveryWaitersForTesting(result: Bool) {
         let waiterIDs = fetchedResultsTransactionDeliveryWaitersForTesting.compactMap { waiter in
-            if result == false || fetchedResultsTransactionDeliveryCountStorageForTesting > waiter.baselineCount {
+            if result == false || fetchedResultsTransactionDeliveryCountStorageForTesting >= waiter.targetCount {
                 return waiter.id
             }
             return nil

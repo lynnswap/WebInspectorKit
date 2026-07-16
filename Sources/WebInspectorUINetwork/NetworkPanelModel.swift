@@ -152,9 +152,7 @@ package final class NetworkListEntry: Identifiable {
 }
 
 package struct NetworkPanelListTransaction: Sendable {
-    package let newEntryIDs: [NetworkListEntry.ID]
-    package let topologyChangedEntryIDs: Set<NetworkListEntry.ID>
-    package let isReset: Bool
+    package let revision: UInt64
 }
 
 private final class NetworkPanelListTransactionRelay: Sendable {
@@ -247,6 +245,7 @@ package final class NetworkPanelModel {
     @ObservationIgnored private var visibleEntryIDs: [NetworkListEntry.ID] = []
     @ObservationIgnored private var visibleEntryIDSet: Set<NetworkListEntry.ID> = []
     @ObservationIgnored private var nextCreationSequence: UInt64 = 0
+    @ObservationIgnored private var nextListTransactionRevision: UInt64 = 0
     @ObservationIgnored private var selectedRequestAnchorID: NetworkRequest.ID?
 #if DEBUG
     private struct RawTransactionDeliveryWaiter {
@@ -984,13 +983,16 @@ package final class NetworkPanelModel {
         guard isReset || topologyChangedEntryIDs.isEmpty == false else {
             return
         }
+        precondition(
+            nextListTransactionRevision < UInt64.max,
+            "Network list transaction revision overflowed."
+        )
+        nextListTransactionRevision += 1
 #if DEBUG
         listTransactionPublicationCountStorageForTesting &+= 1
 #endif
         let transaction = NetworkPanelListTransaction(
-            newEntryIDs: visibleEntryIDs,
-            topologyChangedEntryIDs: topologyChangedEntryIDs,
-            isReset: isReset
+            revision: nextListTransactionRevision
         )
 #if DEBUG
         lastListTransactionStorageForTesting = transaction

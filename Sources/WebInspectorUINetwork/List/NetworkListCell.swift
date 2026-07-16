@@ -192,6 +192,10 @@ extension NetworkListCell {
     package var hasActiveRequestObservationForTesting: Bool {
         entryObservation != nil
     }
+
+    package var entryObservationForTesting: PortableObservationTracking.Token? {
+        entryObservation
+    }
 }
 #endif
 #endif
