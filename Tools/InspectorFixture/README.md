@@ -43,6 +43,7 @@ launcher defaults.
 | JavaScript dialogs | Tap **Show alert**, **Show confirm**, and **Show prompt**; complete each UIKit dialog and confirm the status output records the result. |
 | `target=_blank` routing | Tap **Open page B in target blank** and confirm Monocly loads page B in the current browser view. |
 | POST request and response bodies | Tap **Send local JSON POST**, select `/api/echo` in Network, and inspect both **Request** and **Response** preview roles. |
+| Large Network list throughput | Tap **Send 2305 local requests**, keep Network visible, and confirm all `/api/burst?request=…` rows arrive in request order while the list remains responsive and the selected row stays selected. |
 | Network list and previews | Page A issues JSON, redirect, SVG image, and intentionally disconnected requests. Inspect headers, JSON body, image preview, redirect chain, and failure state. |
 | Movie/HLS preview | Tap **Load local HLS movie**, select `/media/fixture.m3u8` in Network, and confirm the finite local movie renders in Preview. Select its `/media/fixture.ts` request and confirm the 206 response has `Content-Range` / `Accept-Ranges` headers and plays from the original URL without fetching a response body into WebInspectorKit. |
 | Navigation generations | Navigate A → B, then use **History back** or Monocly back. DOM changes while Network history remains available. |
@@ -59,7 +60,7 @@ python3 Tools/InspectorFixture/test_server.py
 ```
 
 The test boots the server on an ephemeral port and verifies the route shapes,
-stress markers, dialog and navigation targets, used/unused CSS variables,
+stress markers, the large local Network request route, dialog and navigation targets, used/unused CSS variables,
 distinct POST request/response bodies, finite local HLS media with byte-range
 responses, local-only
 assets, redirect, JSON/image responses, and the connection-level failed

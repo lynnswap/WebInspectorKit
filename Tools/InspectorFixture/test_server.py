@@ -83,6 +83,8 @@ class InspectorFixtureTests(unittest.TestCase):
         self.assertIn('id="dialog-confirm"', text)
         self.assertIn('id="dialog-prompt"', text)
         self.assertIn('id="post-round-trip"', text)
+        self.assertIn('id="network-burst"', text)
+        self.assertIn('id="network-burst-status"', text)
         self.assertIn('id="load-movie-preview"', text)
         self.assertIn('id="fixture-movie" controls preload="none"', text)
 
@@ -95,6 +97,14 @@ class InspectorFixtureTests(unittest.TestCase):
             f"const MUTATION_EVENT_COUNT = {fixture.MUTATION_EVENT_COUNT};",
             site_text,
         )
+        self.assertIn(
+            f"const NETWORK_REQUEST_COUNT = {fixture.NETWORK_REQUEST_COUNT};",
+            site_text,
+        )
+        self.assertIn(
+            f"const NETWORK_REQUEST_CONCURRENCY = {fixture.NETWORK_REQUEST_CONCURRENCY};",
+            site_text,
+        )
         self.assertIn('attachShadow({ mode: "open" })', site_text)
         self.assertIn('fetch("/api/data")', site_text)
         self.assertIn('fetch("/redirect")', site_text)
@@ -103,6 +113,8 @@ class InspectorFixtureTests(unittest.TestCase):
         self.assertIn('confirm("Inspector fixture confirm?")', site_text)
         self.assertIn('prompt("Inspector fixture prompt", "fixture default")', site_text)
         self.assertIn('fetch("/api/echo"', site_text)
+        self.assertIn('fetch(`/api/burst?request=${request}`', site_text)
+        self.assertIn("window.runInspectorNetworkBurst = emitNetworkBurst", site_text)
         self.assertIn('video.src = "/media/fixture.m3u8"', site_text)
         for periodic_api in ("setInterval", "setTimeout", "requestAnimationFrame"):
             self.assertNotIn(periodic_api, site_text)
@@ -138,6 +150,32 @@ class InspectorFixtureTests(unittest.TestCase):
                 "received": request_value,
             },
         )
+
+    def test_network_burst_route_preserves_each_request_identity(self) -> None:
+        request = fixture.NETWORK_REQUEST_COUNT - 1
+
+        status, headers, body = self.read(f"/api/burst?request={request}")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "application/json")
+        self.assertEqual(headers["X-Inspector-Fixture"], "self-authored")
+        self.assertEqual(headers["X-Inspector-Fixture-Request"], str(request))
+        self.assertEqual(
+            json.loads(body),
+            {"fixture": "network-burst", "request": request},
+        )
+
+    def test_network_burst_rejects_missing_or_out_of_range_identity(self) -> None:
+        for path in (
+            "/api/burst",
+            "/api/burst?request=-1",
+            f"/api/burst?request={fixture.NETWORK_REQUEST_COUNT}",
+        ):
+            with self.subTest(path=path):
+                with self.assertRaises(urllib.error.HTTPError) as request_error:
+                    self.read(path)
+
+                self.assertEqual(request_error.exception.code, 400)
 
     def test_local_hls_is_a_finite_self_contained_movie(self) -> None:
         playlist_status, playlist_headers, playlist_body = self.read(

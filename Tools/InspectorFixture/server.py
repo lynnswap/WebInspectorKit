@@ -11,11 +11,13 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Final
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 
 CARD_COUNT: Final = 2_305
 MUTATION_EVENT_COUNT: Final = 2_305
+NETWORK_REQUEST_COUNT: Final = 2_305
+NETWORK_REQUEST_CONCURRENCY: Final = 16
 MEDIA_SEGMENT: Final = (Path(__file__).parent / "assets" / "fixture.ts").read_bytes()
 HLS_PLAYLIST: Final = b"""#EXTM3U
 #EXT-X-VERSION:3
@@ -110,6 +112,11 @@ def page_a() -> bytes:
           <h2>Request and response bodies</h2>
           <button id="post-round-trip" type="button">Send local JSON POST</button>
           <output id="post-status" aria-live="polite">POST idle</output>
+        </div>
+        <div class="fixture-control-group">
+          <h2>Large Network list</h2>
+          <button id="network-burst" type="button">Send {NETWORK_REQUEST_COUNT} local requests</button>
+          <output id="network-burst-status" aria-live="polite">Network burst idle</output>
         </div>
         <div class="fixture-control-group">
           <h2>Local HLS movie</h2>
@@ -231,6 +238,8 @@ fixture-shadow { display: block; padding: 12px; border: 2px dashed #7d53c5; }
 
 SITE_JS: Final = f"""
 const MUTATION_EVENT_COUNT = {MUTATION_EVENT_COUNT};
+const NETWORK_REQUEST_COUNT = {NETWORK_REQUEST_COUNT};
+const NETWORK_REQUEST_CONCURRENCY = {NETWORK_REQUEST_CONCURRENCY};
 
 customElements.define("fixture-shadow", class extends HTMLElement {{
   connectedCallback() {{
@@ -323,6 +332,44 @@ async function postRoundTrip() {{
   status.textContent = `POST complete: ${{value.fixture}} received ${{value.received.fixture}}`;
 }}
 
+async function emitNetworkBurst() {{
+  const button = document.querySelector("#network-burst");
+  const status = document.querySelector("#network-burst-status");
+  button.disabled = true;
+  status.textContent = `Network burst pending: 0 / ${{NETWORK_REQUEST_COUNT}}`;
+  let nextRequest = 0;
+  let completed = 0;
+
+  async function runWorker() {{
+    while (nextRequest < NETWORK_REQUEST_COUNT) {{
+      const request = nextRequest;
+      nextRequest += 1;
+      const response = await fetch(`/api/burst?request=${{request}}`, {{ cache: "no-store" }});
+      if (!response.ok) {{
+        throw new Error(`Network burst request ${{request}} failed with HTTP ${{response.status}}`);
+      }}
+      const value = await response.json();
+      if (value.fixture !== "network-burst" || value.request !== request) {{
+        throw new Error(`Network burst response ${{request}} did not preserve its identity`);
+      }}
+      completed += 1;
+    }}
+  }}
+
+  try {{
+    await Promise.all(Array.from(
+      {{ length: NETWORK_REQUEST_CONCURRENCY }},
+      () => runWorker(),
+    ));
+    status.textContent = `Network burst complete: ${{completed}} / ${{NETWORK_REQUEST_COUNT}}`;
+  }} catch (error) {{
+    status.textContent = `Network burst failed after ${{completed}} requests: ${{error.message}}`;
+    throw error;
+  }} finally {{
+    button.disabled = false;
+  }}
+}}
+
 function loadMoviePreview() {{
   const video = document.querySelector("#fixture-movie");
   video.src = "/media/fixture.m3u8";
@@ -331,12 +378,14 @@ function loadMoviePreview() {{
 }}
 
 window.runInspectorMutationBurst = emitMutationBurst;
+window.runInspectorNetworkBurst = emitNetworkBurst;
 document.querySelector("#mutation-burst").addEventListener("click", emitMutationBurst);
 document.querySelector("#replace-feed").addEventListener("click", replaceDynamicFeed);
 document.querySelector("#dialog-alert").addEventListener("click", runAlertDialog);
 document.querySelector("#dialog-confirm").addEventListener("click", runConfirmDialog);
 document.querySelector("#dialog-prompt").addEventListener("click", runPromptDialog);
 document.querySelector("#post-round-trip").addEventListener("click", postRoundTrip);
+document.querySelector("#network-burst").addEventListener("click", emitNetworkBurst);
 document.querySelector("#load-movie-preview").addEventListener("click", loadMoviePreview);
 document.querySelector("#fixture-movie").addEventListener("loadedmetadata", () => {{
   document.querySelector("#movie-status").textContent = "Local HLS metadata loaded";
@@ -378,7 +427,8 @@ class InspectorFixtureHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-        path = urlsplit(self.path).path
+        request_url = urlsplit(self.path)
+        path = request_url.path
         if path in ("/", "/a"):
             self._send(HTTPStatus.OK, "text/html; charset=utf-8", page_a())
         elif path == "/b":
@@ -405,6 +455,8 @@ class InspectorFixtureHandler(BaseHTTPRequestHandler):
                 "application/json",
                 b'{"message":"Page B detail JSON loaded"}',
             )
+        elif path == "/api/burst":
+            self._send_network_burst(request_url.query)
         elif path == "/redirect":
             self._redirect("/api/data")
         elif path == "/redirect-image":
@@ -490,6 +542,47 @@ class InspectorFixtureHandler(BaseHTTPRequestHandler):
             "video/mp2t",
             MEDIA_SEGMENT[start : end + 1],
             headers=headers,
+        )
+
+    def _send_network_burst(self, query: str) -> None:
+        try:
+            query_values = (
+                parse_qs(query, keep_blank_values=True, strict_parsing=True)
+                if query
+                else {}
+            )
+        except ValueError:
+            query_values = {}
+        request_values = query_values.get("request", [])
+        if set(query_values) != {"request"} or len(request_values) != 1:
+            self._send(
+                HTTPStatus.BAD_REQUEST,
+                "text/plain; charset=utf-8",
+                b"one request identity required\n",
+            )
+            return
+        try:
+            request = int(request_values[0])
+        except ValueError:
+            request = -1
+        if request < 0 or request >= NETWORK_REQUEST_COUNT:
+            self._send(
+                HTTPStatus.BAD_REQUEST,
+                "text/plain; charset=utf-8",
+                b"invalid request identity\n",
+            )
+            return
+
+        response = json.dumps(
+            {"fixture": "network-burst", "request": request},
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        self._send(
+            HTTPStatus.OK,
+            "application/json",
+            response,
+            headers={"X-Inspector-Fixture-Request": str(request)},
         )
 
     def _send(
