@@ -1250,7 +1250,7 @@ func documentUpdatedDuringAttachRestartsDOMBootstrap() async throws {
 
 @MainActor
 @Test
-func cancelledDOMReloadReplyCannotReplaceNewBootstrap() async throws {
+func consecutiveDocumentUpdatesReloadLatestDocumentWithinSingleLoad() async throws {
     let targetID = ProtocolTarget.ID("page-reload")
     let (backend, transport, context) = try await startTransportBackedContext(
         targetID: targetID,
@@ -1271,11 +1271,20 @@ func cancelledDOMReloadReplyCannotReplaceNewBootstrap() async throws {
         after: startupMessageCount
     )
 
+    let secondUpdateBaseline = context.eventPumpAppliedSequenceForTesting
     await receiveTransportTargetEvent(
         transport,
         targetID: targetID,
         method: "DOM.documentUpdated",
         params: "{}"
+    )
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: secondUpdateBaseline))
+
+    await receiveTransportTargetReply(
+        transport,
+        targetID: staleReload.targetIdentifier,
+        messageID: try transportMessageID(staleReload.message),
+        result: transportDocumentResult(nodeID: "stale-root")
     )
     let currentReload = try await waitForTransportTargetMessage(
         backend,
@@ -1294,13 +1303,6 @@ func cancelledDOMReloadReplyCannotReplaceNewBootstrap() async throws {
         context.rootNode?.id == DOMNode.ID(DOM.Node.ID("current-root"))
     }
 
-    await receiveTransportTargetReply(
-        transport,
-        targetID: staleReload.targetIdentifier,
-        messageID: try transportMessageID(staleReload.message),
-        result: transportDocumentResult(nodeID: "stale-root")
-    )
-    await Task.yield()
     #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("current-root")))
     #expect(context.node(for: DOMNode.ID(DOM.Node.ID("stale-root"))) == nil)
 }
@@ -1567,6 +1569,77 @@ func currentPageCommitInitializesNewAgentWithoutReenablingPage() async throws {
     ] {
         #expect(commands.filter { $0 == command }.count == 2)
     }
+    #expect(context.state == .attached)
+}
+
+@MainActor
+@Test
+func documentUpdatedDuringCurrentPageRetargetUsesTheRetargetDocumentLoad() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let consoleEnableGate = WebInspectorTestGate()
+    let getDocumentGate = WebInspectorTestGate()
+    let staleDocumentID = DOM.Node.ID("stale-retarget-root")
+    let currentDocumentID = DOM.Node.ID("current-retarget-root")
+
+    await runtime.backend.hold(domain: "Console", method: "enable", gate: consoleEnableGate)
+    await enqueueStartupReplies(
+        on: runtime.backend,
+        document: DOM.Node(id: staleDocumentID, nodeType: 9, nodeName: "#document")
+    )
+    await runtime.backend.enqueue(
+        DOM.Node(id: currentDocumentID, nodeType: 9, nodeName: "#document"),
+        for: "DOM",
+        method: "getDocument"
+    )
+    await runtime.backend.enqueue(
+        DOM.Node(id: currentDocumentID, nodeType: 9, nodeName: "#document"),
+        for: "DOM",
+        method: "getDocument"
+    )
+
+    await runtime.backend.emit(
+        .didCommitProvisionalTarget(WebInspectorTargetCommitLifecycle(
+            oldTargetID: .currentPage,
+            newTarget: WebInspectorLifecycleTarget(
+                id: .currentPage,
+                kind: .page,
+                frameID: FrameID("main-frame"),
+                isProvisional: false,
+                pageBindingID: "retarget-document-agent"
+            )
+        )),
+        target: target
+    )
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "Console",
+        method: "enable",
+        count: 2
+    )
+
+    await runtime.backend.hold(domain: "DOM", method: "getDocument", gate: getDocumentGate)
+    await runtime.backend.emit(.documentUpdated, target: target)
+    await consoleEnableGate.open()
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "DOM",
+        method: "getDocument",
+        count: 3
+    )
+    await runtime.backend.emit(
+        .attributeModified(currentDocumentID, name: "data-buffered", value: "preserved"),
+        target: target
+    )
+    await getDocumentGate.open()
+
+    try await waitUntil {
+        context.rootNode?.id == DOMNode.ID(currentDocumentID)
+            && context.rootNode?.attributes["data-buffered"] == "preserved"
+    }
+    let commands = await runtime.backend.recordedCommands()
+    #expect(commands.filter {
+        $0 == RecordedCommand(domain: "DOM", method: "getDocument")
+    }.count == 3)
+    #expect(context.node(for: DOMNode.ID(staleDocumentID)) == nil)
     #expect(context.state == .attached)
 }
 
