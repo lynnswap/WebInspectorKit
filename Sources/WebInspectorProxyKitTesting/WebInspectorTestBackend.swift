@@ -85,6 +85,11 @@ private struct EventSubscriptionKey: Hashable, Sendable {
     var domain: WebInspectorProxyEventDomain
 }
 
+private struct OrderedEventSubscriptionKey: Hashable, Sendable {
+    var route: RoutingTargetID
+    var targetID: WebInspectorTarget.ID
+}
+
 private struct SubscriberWaiter: Sendable {
     var id: UInt64
     var route: RoutingTargetID?
@@ -121,6 +126,8 @@ public actor WebInspectorTestBackend {
     private var completedCommands: [RecordedCommand]
     private var heldCommands: [HeldCommand]
     private var eventContinuations: [EventSubscriptionKey: [UUID: AsyncStream<WebInspectorProxyEvent>.Continuation]]
+    private var orderedEventContinuations: [OrderedEventSubscriptionKey: [UUID: AsyncStream<WebInspectorProxyOrderedEvent>.Continuation]]
+    private var orderedEventSequence: UInt64
     private var subscriberWaiters: [SubscriberWaiter]
     private var recordedCommandWaiters: [RecordedCommandWaiter]
     private var completedCommandWaiters: [CompletedCommandWaiter]
@@ -134,6 +141,8 @@ public actor WebInspectorTestBackend {
         completedCommands = []
         heldCommands = []
         eventContinuations = [:]
+        orderedEventContinuations = [:]
+        orderedEventSequence = 0
         subscriberWaiters = []
         recordedCommandWaiters = []
         completedCommandWaiters = []
@@ -312,6 +321,14 @@ public actor WebInspectorTestBackend {
         await waitForSubscriber(route: target.route, targetID: target.id, domain: eventDomain, count: count)
     }
 
+    /// Returns the number of active ordered event subscribers for a target.
+    public func activeOrderedEventSubscriberCount(for target: WebInspectorTarget) -> Int {
+        orderedEventContinuations[OrderedEventSubscriptionKey(
+            route: target.route,
+            targetID: target.id
+        )]?.count ?? 0
+    }
+
     /// Holds matching commands until the supplied gate opens.
     public func hold(domain: String, method: String, gate: WebInspectorTestGate) async {
         heldCommands.append(HeldCommand(domain: domain, method: method, gate: gate))
@@ -323,13 +340,28 @@ public actor WebInspectorTestBackend {
         route: RoutingTargetID?,
         domain: WebInspectorProxyEventDomain
     ) {
+        let (nextSequence, overflow) = orderedEventSequence.addingReportingOverflow(1)
+        precondition(!overflow, "Test event sequence exhausted.")
+        orderedEventSequence = nextSequence
+        let resolvedRoute = route ?? unambiguousRoute(for: targetID, domain: domain)
         let key = EventSubscriptionKey(
-            route: route ?? unambiguousRoute(for: targetID, domain: domain),
+            route: resolvedRoute,
             targetID: targetID,
             domain: domain
         )
         for continuation in eventContinuations[key, default: [:]].values {
             continuation.yield(event)
+        }
+        for (orderedKey, continuations) in orderedEventContinuations {
+            let deliveredEvent = orderedKey.route == resolvedRoute && orderedKey.targetID == targetID
+                ? event
+                : nil
+            for continuation in continuations.values {
+                continuation.yield(WebInspectorProxyOrderedEvent(
+                    sequence: nextSequence,
+                    event: deliveredEvent
+                ))
+            }
         }
     }
 
@@ -349,13 +381,38 @@ public actor WebInspectorTestBackend {
         }
     }
 
+    private func addOrderedEventContinuation(
+        _ continuation: AsyncStream<WebInspectorProxyOrderedEvent>.Continuation,
+        id: UUID,
+        key: OrderedEventSubscriptionKey
+    ) {
+        orderedEventContinuations[key, default: [:]][id] = continuation
+        resolveSubscriberWaiters()
+    }
+
+    private func removeOrderedEventContinuation(id: UUID, key: OrderedEventSubscriptionKey) {
+        orderedEventContinuations[key]?[id] = nil
+        if orderedEventContinuations[key]?.isEmpty == true {
+            orderedEventContinuations[key] = nil
+        }
+    }
+
     private func subscriberCount(for key: EventSubscriptionKey) -> Int {
-        eventContinuations[key]?.count ?? 0
+        (eventContinuations[key]?.count ?? 0)
+            + (orderedEventContinuations[OrderedEventSubscriptionKey(
+                route: key.route,
+                targetID: key.targetID
+            )]?.count ?? 0)
     }
 
     private func subscriberCount(for targetID: WebInspectorTarget.ID, domain: WebInspectorProxyEventDomain) -> Int {
-        eventContinuations.reduce(into: 0) { count, entry in
+        let domainCount = eventContinuations.reduce(into: 0) { count, entry in
             if entry.key.targetID == targetID && entry.key.domain == domain {
+                count += entry.value.count
+            }
+        }
+        return domainCount + orderedEventContinuations.reduce(into: 0) { count, entry in
+            if entry.key.targetID == targetID {
                 count += entry.value.count
             }
         }
@@ -369,7 +426,11 @@ public actor WebInspectorTestBackend {
         let matchingKeys = keys ?? eventContinuations.keys.filter {
             $0.targetID == targetID && $0.domain == domain
         }
-        let routes = Set(matchingKeys.map(\.route))
+        let routes = Set(matchingKeys.map(\.route)).union(
+            orderedEventContinuations.keys.compactMap {
+                $0.targetID == targetID ? $0.route : nil
+            }
+        )
         guard routes.count <= 1 else {
             preconditionFailure(
                 "Multiple routes are subscribed for \(domain.rawValue) target \(targetID); emit with WebInspectorTarget."
@@ -550,6 +611,35 @@ extension WebInspectorTestBackend: WebInspectorProxyBackend {
             )
         }
         return result
+    }
+
+    package func dispatchCommandWithReplyBoundary<Payload: Sendable, Result: Sendable>(
+        _ command: WebInspectorProxyCommand<Payload, Result>
+    ) async throws -> WebInspectorProxyCommandReply<Result> {
+        let value = try await dispatchCommand(command)
+        return WebInspectorProxyCommandReply(
+            value: value,
+            receivedSequence: orderedEventSequence
+        )
+    }
+
+    package func orderedEvents(
+        route: RoutingTargetID,
+        targetID: WebInspectorTarget.ID
+    ) async -> WebInspectorProxyOrderedEventFeed {
+        let key = OrderedEventSubscriptionKey(route: route, targetID: targetID)
+        let pair = AsyncStream<WebInspectorProxyOrderedEvent>.makeStream(bufferingPolicy: .unbounded)
+        let id = UUID()
+        addOrderedEventContinuation(pair.continuation, id: id, key: key)
+        pair.continuation.onTermination = { _ in
+            Task {
+                await self.removeOrderedEventContinuation(id: id, key: key)
+            }
+        }
+        return WebInspectorProxyOrderedEventFeed(
+            initialSequence: orderedEventSequence,
+            events: pair.stream
+        )
     }
 
     package func waitForEventSubscription(

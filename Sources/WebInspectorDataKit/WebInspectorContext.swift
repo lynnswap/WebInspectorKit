@@ -235,7 +235,21 @@ public final class WebInspectorContext {
         }
     }
 
-    private typealias LoadedDOMDocument = (node: DOM.Node, generation: Int)
+    private struct LoadedDOMDocument {
+        var node: DOM.Node
+        var generation: Int
+        var bootstrapID: UInt64
+    }
+
+    private struct DOMBootstrap {
+        var id: UInt64
+        var events: [DOM.Event]
+    }
+
+    private struct OrderedEventWaiter {
+        var sequence: UInt64
+        var continuation: CheckedContinuation<Bool, Never>
+    }
 
     private struct ElementPickerDesiredState {
         let id: UInt64
@@ -363,6 +377,7 @@ public final class WebInspectorContext {
     private var domEditHistoryTarget: WebInspectorTarget?
     private var didInvalidateDOMEditHistoryTarget: Bool
     private var documentReloadTask: Task<Void, Never>?
+    private var inspectorInspectResolutionTask: Task<Void, Never>?
     private var inspectResolutionTask: Task<Void, Never>?
     private var pageHighlightMaintenanceTask: Task<Void, Never>?
     private var elementPickerOperation: ElementPickerOperation?
@@ -379,6 +394,11 @@ public final class WebInspectorContext {
     private var styleTrackingAcquisitions: [StyleTrackingKey: StyleTrackingAcquisition]
     private var nextStyleTrackingAcquisitionGeneration: UInt64
     private var eventPumps: [WebInspectorEventPump]
+    private var orderedEventSubscriptionGeneration: UInt64
+    private var lastOrderedEventSequence: UInt64
+    private var orderedEventWaiters: [OrderedEventWaiter]
+    private var domBootstrap: DOMBootstrap?
+    private var nextDOMBootstrapID: UInt64
 #if DEBUG
     private var eventPumpAppliedSequenceForTestingStorage: UInt64
     private var eventPumpAppliedWaitersForTesting: [UInt64: EventPumpAppliedWaiterForTesting]
@@ -445,6 +465,7 @@ public final class WebInspectorContext {
         currentPageCleanupTask = nil
         domEditHistoryTarget = nil
         documentReloadTask = nil
+        inspectorInspectResolutionTask = nil
         inspectResolutionTask = nil
         pageHighlightMaintenanceTask = nil
         elementPickerOperation = nil
@@ -461,6 +482,11 @@ public final class WebInspectorContext {
         styleTrackingAcquisitions = [:]
         nextStyleTrackingAcquisitionGeneration = 0
         eventPumps = []
+        orderedEventSubscriptionGeneration = 0
+        lastOrderedEventSequence = 0
+        orderedEventWaiters = []
+        domBootstrap = nil
+        nextDOMBootstrapID = 0
 #if DEBUG
         eventPumpAppliedSequenceForTestingStorage = 0
         eventPumpAppliedWaitersForTesting = [:]
@@ -525,6 +551,7 @@ public final class WebInspectorContext {
         currentPageRetargetTask?.cancel()
         currentPageCleanupTask?.cancel()
         documentReloadTask?.cancel()
+        inspectorInspectResolutionTask?.cancel()
         inspectResolutionTask?.cancel()
         pageHighlightMaintenanceTask?.cancel()
         cancelFrameDocumentLoadTasks()
@@ -547,6 +574,8 @@ public final class WebInspectorContext {
         previousStartupTask?.cancel()
         currentPageRetargetTask?.cancel()
         currentPageRetargetTask = nil
+        inspectorInspectResolutionTask?.cancel()
+        inspectorInspectResolutionTask = nil
         invalidateElementPickerOperation()
         isElementPickerEnabled = false
         state = .attaching
@@ -644,6 +673,8 @@ public final class WebInspectorContext {
             preconditionFailure("DOMNode is not registered in this WebInspectorContext.")
         }
         pendingInspectedNodeID = nil
+        inspectorInspectResolutionTask?.cancel()
+        inspectorInspectResolutionTask = nil
         inspectResolutionTask?.cancel()
         inspectResolutionTask = nil
         pageHighlightMaintenanceTask?.cancel()
@@ -847,6 +878,38 @@ public final class WebInspectorContext {
 
     package var eventPumpAppliedSequenceForTesting: UInt64 {
         eventPumpAppliedSequenceForTestingStorage
+    }
+
+    package var orderedEventSubscriptionStateForTesting: (generation: UInt64, sequence: UInt64) {
+        (orderedEventSubscriptionGeneration, lastOrderedEventSequence)
+    }
+
+    package func applyOrderedEventForTesting(
+        _ event: WebInspectorProxyOrderedEvent,
+        target: WebInspectorTarget,
+        subscriptionGeneration: UInt64,
+        beforeWatermarkUpdate: (@Sendable () async -> Void)? = nil,
+        isolation: isolated (any Actor) = #isolation
+    ) async {
+        await applyOrderedEvent(
+            event,
+            target: target,
+            subscriptionGeneration: subscriptionGeneration,
+            beforeWatermarkUpdate: beforeWatermarkUpdate,
+            isolation: isolation
+        )
+    }
+
+    package func subscribeForTesting(
+        to target: WebInspectorTarget,
+        beforeValidation: @escaping @Sendable () async -> Void,
+        isolation: isolated (any Actor) = #isolation
+    ) async {
+        await subscribe(
+            to: target,
+            beforeValidation: beforeValidation,
+            isolation: isolation
+        )
     }
 
     package var elementPickerDesiredStateForTesting: (id: UInt64, isEnabled: Bool)? {
@@ -2019,6 +2082,8 @@ public final class WebInspectorContext {
         currentPageCleanupTask = nil
         documentReloadTask?.cancel()
         documentReloadTask = nil
+        inspectorInspectResolutionTask?.cancel()
+        inspectorInspectResolutionTask = nil
         inspectResolutionTask?.cancel()
         inspectResolutionTask = nil
         pageHighlightMaintenanceTask?.cancel()
@@ -2053,7 +2118,7 @@ public final class WebInspectorContext {
         do {
             let target = try await proxy.waitForCurrentPage()
             currentPage = target
-            subscribe(to: target, isolation: isolation)
+            await subscribe(to: target, isolation: isolation)
             await waitForCurrentPageEventSubscriptions(target, isolation: isolation)
             guard Task.isCancelled == false else {
                 await disableEnabledDomainsAfterCancellation(isolation: isolation)
@@ -2119,7 +2184,7 @@ public final class WebInspectorContext {
             guard isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
-            applyDocument(document.node, isolation: isolation)
+            applyLoadedDOMDocument(document, isolation: isolation)
             transition(to: .attached)
         } catch is CancellationError {
             await disableEnabledDomainsAfterCancellation(isolation: isolation)
@@ -2153,8 +2218,6 @@ public final class WebInspectorContext {
     ) async {
         _ = isolation
         await target.waitForModelEventSubscriptions()
-        await proxy.waitForEventSubscription(targetID: target.id, route: target.route, domain: .target)
-        await proxy.waitForEventSubscription(targetID: target.id, route: target.route, domain: .page)
     }
 
     private func disableEnabledDomainsBeforeRestart(
@@ -2417,17 +2480,36 @@ public final class WebInspectorContext {
         on target: WebInspectorTarget,
         isolation: isolated (any Actor)
     ) async throws -> LoadedDOMDocument {
-        _ = isolation
         while true {
             let generation = domDocumentGeneration
-            let document = try await target.dom.getDocument()
+            let bootstrapID = beginDOMBootstrap()
+            let reply: WebInspectorProxyCommandReply<DOM.Node>
+            do {
+                reply = try await target.dom.getDocumentWithReplyBoundary()
+            } catch {
+                abandonDOMBootstrap(id: bootstrapID)
+                throw error
+            }
+            guard await waitForOrderedEvents(
+                through: reply.receivedSequence,
+                isolation: isolation
+            ) else {
+                abandonDOMBootstrap(id: bootstrapID)
+                throw CancellationError()
+            }
             guard Task.isCancelled == false else {
+                abandonDOMBootstrap(id: bootstrapID)
                 throw CancellationError()
             }
             guard isDOMDocumentGeneration(generation, isolation: isolation) else {
+                abandonDOMBootstrap(id: bootstrapID)
                 continue
             }
-            return (node: document, generation: generation)
+            return LoadedDOMDocument(
+                node: reply.value,
+                generation: generation,
+                bootstrapID: bootstrapID
+            )
         }
     }
 
@@ -2440,6 +2522,39 @@ public final class WebInspectorContext {
             return document
         }
         return try await loadCurrentDOMDocument(on: target, isolation: isolation)
+    }
+
+    private func beginDOMBootstrap() -> UInt64 {
+        let id = nextDOMBootstrapID
+        let (nextID, overflow) = nextDOMBootstrapID.addingReportingOverflow(1)
+        precondition(!overflow, "DOM bootstrap identity exhausted.")
+        nextDOMBootstrapID = nextID
+        domBootstrap = DOMBootstrap(id: id, events: [])
+        return id
+    }
+
+    private func abandonDOMBootstrap(id: UInt64) {
+        guard domBootstrap?.id == id else {
+            return
+        }
+        domBootstrap = nil
+    }
+
+    private func applyLoadedDOMDocument(
+        _ document: LoadedDOMDocument,
+        reason: DOMTreeSnapshotReason = .initialDocument,
+        isolation: isolated (any Actor)
+    ) {
+        precondition(
+            domBootstrap?.id == document.bootstrapID,
+            "Loaded DOM document must own the active bootstrap."
+        )
+        let bufferedEvents = domBootstrap?.events ?? []
+        domBootstrap = nil
+        applyDocument(document.node, reason: reason, isolation: isolation)
+        for event in bufferedEvents {
+            apply(event, isolation: isolation)
+        }
     }
 
     private func resetReplayBackedModelsBeforeEnable() {
@@ -2568,53 +2683,158 @@ public final class WebInspectorContext {
         }
     }
 
-    private func subscribe(to target: WebInspectorTarget, isolation: isolated (any Actor)) {
+    private func subscribe(
+        to target: WebInspectorTarget,
+        beforeValidation: (@Sendable () async -> Void)? = nil,
+        isolation: isolated (any Actor)
+    ) async {
         stopEventPumps()
-
-        let domPump = WebInspectorEventPump(stream: target.dom.events, isolation: isolation) { [weak self] event in
+        let subscriptionGeneration = orderedEventSubscriptionGeneration
+        let feed = await target.orderedEventFeed()
+        let pump = WebInspectorEventPump(stream: feed.events, isolation: isolation) { [weak self, target] sequencedEvent in
             guard let self else { return }
-            self.apply(event, isolation: isolation)
-            self.recordEventPumpAppliedForTesting()
+            await self.applyOrderedEvent(
+                sequencedEvent,
+                target: target,
+                subscriptionGeneration: subscriptionGeneration,
+                beforeWatermarkUpdate: nil,
+                isolation: isolation
+            )
         }
-
-        let networkPump = WebInspectorEventPump(stream: target.network.events, isolation: isolation) { [weak self] event in
-            guard let self else { return }
-            await self.apply(event, isolation: isolation)
-            self.recordEventPumpAppliedForTesting()
+        if let beforeValidation {
+            await beforeValidation()
         }
-
-        let cssPump = WebInspectorEventPump(stream: target.css.events, isolation: isolation) { [weak self] event in
-            guard let self else { return }
-            self.apply(event, isolation: isolation)
-            self.recordEventPumpAppliedForTesting()
+        guard subscriptionGeneration == orderedEventSubscriptionGeneration else {
+            pump.stop()
+            return
         }
-
-        let consolePump = WebInspectorEventPump(stream: target.targetedConsoleEvents, isolation: isolation) { [weak self] event in
-            guard let self else { return }
-            self.apply(event.event, targetID: event.targetID, isolation: isolation)
-            self.recordEventPumpAppliedForTesting()
-        }
-
-        let runtimePump = WebInspectorEventPump(stream: target.runtime.events, isolation: isolation) { [weak self, targetID = target.id] event in
-            guard let self else { return }
-            self.apply(event, targetID: targetID, isolation: isolation)
-            self.recordEventPumpAppliedForTesting()
-        }
-
-        let lifecyclePump = WebInspectorEventPump(stream: target.lifecycleEvents, isolation: isolation) { [weak self] event in
-            guard let self else { return }
-            self.apply(event, isolation: isolation)
-            self.recordEventPumpAppliedForTesting()
-        }
-
-        eventPumps = [domPump, networkPump, cssPump, consolePump, runtimePump, lifecyclePump]
+        precondition(
+            feed.initialSequence >= lastOrderedEventSequence,
+            "Ordered event feed moved backwards."
+        )
+        lastOrderedEventSequence = feed.initialSequence
+        eventPumps = [pump]
     }
 
     private func stopEventPumps() {
+        let (nextGeneration, overflow) = orderedEventSubscriptionGeneration.addingReportingOverflow(1)
+        precondition(!overflow, "Ordered event subscription identity exhausted.")
+        orderedEventSubscriptionGeneration = nextGeneration
         for pump in eventPumps {
             pump.stop()
         }
         eventPumps = []
+        domBootstrap = nil
+        resolveOrderedEventWaiters(reachedBoundary: false)
+    }
+
+    private func applyOrderedEvent(
+        _ sequencedEvent: WebInspectorProxyOrderedEvent,
+        target: WebInspectorTarget,
+        subscriptionGeneration: UInt64,
+        beforeWatermarkUpdate: (@Sendable () async -> Void)?,
+        isolation: isolated (any Actor)
+    ) async {
+        guard subscriptionGeneration == orderedEventSubscriptionGeneration else {
+            return
+        }
+        precondition(
+            sequencedEvent.sequence > lastOrderedEventSequence,
+            "Ordered event sequence must increase monotonically."
+        )
+        if let event = sequencedEvent.event {
+            switch event {
+            case let .targetLifecycle(value):
+                apply(value, isolation: isolation)
+            case let .dom(value):
+                if case .documentUpdated = value {
+                    apply(value, isolation: isolation)
+                } else if domBootstrap != nil {
+                    domBootstrap?.events.append(value)
+                } else {
+                    apply(value, isolation: isolation)
+                }
+            case let .css(value):
+                apply(value, isolation: isolation)
+            case let .network(value):
+                await apply(value, isolation: isolation)
+            case let .console(value):
+                apply(value.event, targetID: value.targetID, isolation: isolation)
+            case let .runtime(value):
+                apply(value, targetID: target.id, isolation: isolation)
+            case let .inspector(value):
+                resolveInspectorInspectEvent(value, on: target, isolation: isolation)
+            }
+            recordEventPumpAppliedForTesting()
+        }
+        if let beforeWatermarkUpdate {
+            await beforeWatermarkUpdate()
+        }
+        guard subscriptionGeneration == orderedEventSubscriptionGeneration else {
+            return
+        }
+        lastOrderedEventSequence = sequencedEvent.sequence
+        resolveReachedOrderedEventWaiters()
+    }
+
+    private func resolveInspectorInspectEvent(
+        _ event: Inspector.Event,
+        on target: WebInspectorTarget,
+        isolation: isolated (any Actor)
+    ) {
+        inspectorInspectResolutionTask?.cancel()
+        let pageGeneration = currentPageGeneration
+        let documentGeneration = domDocumentGeneration
+        inspectorInspectResolutionTask = Task { [weak self, target] in
+            _ = isolation
+            guard let event = await target.resolveDOMInspectEvent(event) else {
+                return
+            }
+            guard Task.isCancelled == false, let self else {
+                return
+            }
+            guard self.isCurrentPageGeneration(pageGeneration, isolation: isolation),
+                  self.isDOMDocumentGeneration(documentGeneration, isolation: isolation) else {
+                return
+            }
+            self.apply(event, isolation: isolation)
+        }
+    }
+
+    private func waitForOrderedEvents(
+        through sequence: UInt64,
+        isolation: isolated (any Actor)
+    ) async -> Bool {
+        _ = isolation
+        guard lastOrderedEventSequence < sequence else {
+            return true
+        }
+        return await withCheckedContinuation { continuation in
+            orderedEventWaiters.append(OrderedEventWaiter(
+                sequence: sequence,
+                continuation: continuation
+            ))
+        }
+    }
+
+    private func resolveReachedOrderedEventWaiters() {
+        var pending: [OrderedEventWaiter] = []
+        for waiter in orderedEventWaiters {
+            if waiter.sequence <= lastOrderedEventSequence {
+                waiter.continuation.resume(returning: true)
+            } else {
+                pending.append(waiter)
+            }
+        }
+        orderedEventWaiters = pending
+    }
+
+    private func resolveOrderedEventWaiters(reachedBoundary: Bool) {
+        let waiters = orderedEventWaiters
+        orderedEventWaiters = []
+        for waiter in waiters {
+            waiter.continuation.resume(returning: reachedBoundary)
+        }
     }
 
     private func recordEventPumpAppliedForTesting() {
@@ -2925,6 +3145,7 @@ public final class WebInspectorContext {
     @discardableResult
     private func advanceDOMDocumentGeneration(isolation: isolated (any Actor)) -> Int {
         _ = isolation
+        domBootstrap = nil
         domDocumentGeneration += 1
         return domDocumentGeneration
     }
@@ -3007,14 +3228,26 @@ public final class WebInspectorContext {
         documentReloadTask = Task { [weak self, currentPage, generation] in
             _ = isolation
             do {
-                let document = try await currentPage.dom.getDocument()
+                guard let self else {
+                    return
+                }
+                let document = try await self.loadCurrentDOMDocument(
+                    on: currentPage,
+                    isolation: isolation
+                )
                 guard Task.isCancelled == false else {
+                    self.abandonDOMBootstrap(id: document.bootstrapID)
                     return
                 }
-                guard self?.isDOMDocumentGeneration(generation, isolation: isolation) == true else {
+                guard self.isDOMDocumentGeneration(generation, isolation: isolation) else {
+                    self.abandonDOMBootstrap(id: document.bootstrapID)
                     return
                 }
-                self?.applyDocument(document, reason: .documentUpdated, isolation: isolation)
+                self.applyLoadedDOMDocument(
+                    document,
+                    reason: .documentUpdated,
+                    isolation: isolation
+                )
             } catch is CancellationError {
                 return
             } catch {
@@ -3064,6 +3297,8 @@ extension WebInspectorContext {
         }
         commitNetworkNavigation(commit)
         let refreshedTarget = target.withPageBinding(from: commit.newTarget)
+        let retainsProtocolAgent = target.pageBindingID == refreshedTarget.pageBindingID
+            && hasRequiredCurrentPageDomainLeases(for: target)
         currentPage = refreshedTarget
 
         currentPageRetargetTask?.cancel()
@@ -3075,13 +3310,37 @@ extension WebInspectorContext {
 
         currentPageRetargetTask = Task { [weak self, refreshedTarget, generation] in
             _ = isolation
-            await self?.retargetCurrentPage(refreshedTarget, generation: generation, isolation: isolation)
+            await self?.retargetCurrentPage(
+                refreshedTarget,
+                generation: generation,
+                retainDomainLeases: retainsProtocolAgent,
+                committedFrom: target,
+                isolation: isolation
+            )
         }
+    }
+
+    private func hasRequiredCurrentPageDomainLeases(for target: WebInspectorTarget) -> Bool {
+        guard let inspectorTrackingTarget,
+              let pageTrackingTarget,
+              let runtimeTrackingTarget,
+              let networkTrackingTarget,
+              let consoleTrackingTarget else {
+            return false
+        }
+        let expectedBinding = target.pageBindingID
+        return inspectorTrackingTarget.pageBindingID == expectedBinding
+            && pageTrackingTarget.pageBindingID == expectedBinding
+            && runtimeTrackingTarget.pageBindingID == expectedBinding
+            && networkTrackingTarget.pageBindingID == expectedBinding
+            && consoleTrackingTarget.pageBindingID == expectedBinding
     }
 
     private func retargetCurrentPage(
         _ target: WebInspectorTarget,
         generation: Int,
+        retainDomainLeases: Bool = false,
+        committedFrom previousTarget: WebInspectorTarget? = nil,
         isolation: isolated (any Actor)
     ) async {
         defer {
@@ -3089,41 +3348,64 @@ extension WebInspectorContext {
                 currentPageRetargetTask = nil
             }
         }
-        await discardCurrentPageDomainLeases(isolation: isolation)
+        let enablesPageDomain: Bool
+        if retainDomainLeases {
+            enablesPageDomain = false
+        } else if previousTarget != nil {
+            let retainedPageLease = await prepareDomainLeasesForCommittedTarget(
+                to: target,
+                generation: generation,
+                isolation: isolation
+            )
+            guard Task.isCancelled == false,
+                  isCurrentPageGeneration(generation, isolation: isolation) else {
+                return
+            }
+            enablesPageDomain = retainedPageLease == false
+        } else {
+            await discardCurrentPageDomainLeases(isolation: isolation)
+            enablesPageDomain = true
+        }
 
         do {
             guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
-            try await enableInspectorTracking(on: target, generation: generation, isolation: isolation)
-            guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
-                return
-            }
-            try await enablePageTracking(on: target, generation: generation, isolation: isolation)
-            guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
-                return
-            }
-            try await enableRuntimeTracking(on: target, generation: generation, isolation: isolation)
-            guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
-                return
-            }
-            try await enableNetworkTracking(on: target, generation: generation, isolation: isolation)
-            guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
-                return
+            if retainDomainLeases == false {
+                try await enableInspectorTracking(on: target, generation: generation, isolation: isolation)
+                guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
+                    return
+                }
+                if enablesPageDomain {
+                    try await enablePageTracking(on: target, generation: generation, isolation: isolation)
+                    guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
+                        return
+                    }
+                }
+                try await enableRuntimeTracking(on: target, generation: generation, isolation: isolation)
+                guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
+                    return
+                }
+                try await enableNetworkTracking(on: target, generation: generation, isolation: isolation)
+                guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
+                    return
+                }
             }
             var document = try await loadCurrentDOMDocument(on: target, isolation: isolation)
             guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
-            try await enableConsoleTracking(on: target, generation: generation, isolation: isolation)
-            guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
-                return
+            if retainDomainLeases == false {
+                try await enableConsoleTracking(on: target, generation: generation, isolation: isolation)
+                guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
+                    return
+                }
             }
             document = try await reloadDOMDocumentIfNeeded(document, on: target, isolation: isolation)
             guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
-            applyDocument(document.node, reason: .pageChanged, isolation: isolation)
+            applyLoadedDOMDocument(document, reason: .pageChanged, isolation: isolation)
             if case .attaching = state {
                 transition(to: .attached)
             }
@@ -3133,8 +3415,61 @@ extension WebInspectorContext {
             guard isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
-            failIfTerminal(error, operation: "current page retarget")
+            let retargetError = error as? WebInspectorProxyError
+                ?? .attachFailed(String(describing: error))
+            if let teardownError = await disableEnabledDomainsAfterStartupFailure(isolation: isolation) {
+                WebInspectorDataKitLog.debug(
+                    "domain disable after retarget failure also failed: \(String(describing: teardownError))"
+                )
+            }
+            fail(retargetError)
         }
+    }
+
+    private func prepareDomainLeasesForCommittedTarget(
+        to committedTarget: WebInspectorTarget,
+        generation: Int,
+        isolation: isolated (any Actor)
+    ) async -> Bool {
+        await discardStyleTrackingLeases(isolation: isolation)
+        guard Task.isCancelled == false,
+              isCurrentPageGeneration(generation, isolation: isolation) else {
+            return false
+        }
+        for domain in [
+            WebInspectorEnabledDomain.inspector,
+            .runtime,
+            .network,
+            .console,
+        ] {
+            let trackingTarget: WebInspectorTarget?
+            switch domain {
+            case .inspector:
+                trackingTarget = inspectorTrackingTarget
+                inspectorTrackingTarget = nil
+            case .runtime:
+                trackingTarget = runtimeTrackingTarget
+                runtimeTrackingTarget = nil
+            case .network:
+                trackingTarget = networkTrackingTarget
+                networkTrackingTarget = nil
+            case .console:
+                trackingTarget = consoleTrackingTarget
+                consoleTrackingTarget = nil
+            case .page, .css:
+                preconditionFailure("Unexpected committed-target domain transition.")
+            }
+            guard let trackingTarget else {
+                continue
+            }
+            await domainEnablement.discardLease(domain, on: trackingTarget)
+        }
+
+        guard pageTrackingTarget != nil else {
+            return false
+        }
+        self.pageTrackingTarget = committedTarget
+        return true
     }
 
     private func applyCurrentPageFrameNavigated(
@@ -3446,6 +3781,8 @@ extension WebInspectorContext {
         cancelStyleToggleOperations()
         cssInspectorBaselineStore.reset()
         cssStyleSheetLifetimesByID = [:]
+        inspectorInspectResolutionTask?.cancel()
+        inspectorInspectResolutionTask = nil
         inspectResolutionTask?.cancel()
         inspectResolutionTask = nil
         styleRefreshTask?.cancel()

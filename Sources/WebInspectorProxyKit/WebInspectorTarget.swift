@@ -158,10 +158,16 @@ public struct WebInspectorTarget: Identifiable, Sendable {
         proxy.targetedConsoleEvents(targetID: id, route: route)
     }
 
+    package func orderedEventFeed() async -> WebInspectorProxyOrderedEventFeed {
+        await proxy.orderedEvents(targetID: id, route: route)
+    }
+
+    package func resolveDOMInspectEvent(_ event: Inspector.Event) async -> DOM.Event? {
+        await proxy.domInspectEvent(for: event, route: route)
+    }
+
     package func waitForModelEventSubscriptions() async {
-        for domain in [WebInspectorProxyEventDomain.dom, .inspector, .css, .network, .console, .runtime] {
-            await proxy.waitForEventSubscription(targetID: id, route: route, domain: domain)
-        }
+        await proxy.waitForEventSubscription(targetID: id, route: route, domain: .ordered)
     }
 }
 
@@ -197,6 +203,22 @@ package struct DomainClientContext: Sendable {
     ) async throws -> Result {
         _ = resultType
         return try await proxy.dispatchCommand(
+            targetID: targetID,
+            route: route,
+            domain: domain,
+            method: method,
+            payload: payload
+        )
+    }
+
+    package func dispatchWithReplyBoundary<Payload: Sendable, Result: Sendable>(
+        domain: WebInspectorProxyDomain,
+        method: String,
+        payload: Payload,
+        returning resultType: Result.Type = Result.self
+    ) async throws -> WebInspectorProxyCommandReply<Result> {
+        _ = resultType
+        return try await proxy.dispatchCommandWithReplyBoundary(
             targetID: targetID,
             route: route,
             domain: domain,

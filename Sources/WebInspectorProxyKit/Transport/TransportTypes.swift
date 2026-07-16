@@ -121,6 +121,11 @@ package struct ProtocolCommand: Equatable, Sendable {
     }
 }
 
+package struct ProtocolOrderedEventFeed: Sendable {
+    package var initialSequence: UInt64
+    package var events: AsyncStream<ProtocolEvent>
+}
+
 package enum ProtocolNetworkPageMembership: Equatable, Sendable {
     case currentPage
     case otherPage
@@ -132,6 +137,9 @@ package struct ProtocolEvent: Equatable, Sendable {
     package var domain: ProtocolDomain
     package var method: String
     package var targetID: ProtocolTarget.ID?
+    package var targetRecord: ProtocolTarget.Record?
+    package var belongedToCurrentPage: Bool
+    package var agentScopeTargetID: ProtocolTarget.ID?
     package var sourceTargetID: ProtocolTarget.ID?
     package var pageBindingTargetID: ProtocolTarget.ID?
     package var networkOriginTargetID: ProtocolTarget.ID?
@@ -167,6 +175,9 @@ package struct ProtocolEvent: Equatable, Sendable {
         domain: ProtocolDomain,
         method: String,
         targetID: ProtocolTarget.ID?,
+        targetRecord: ProtocolTarget.Record? = nil,
+        belongedToCurrentPage: Bool = false,
+        agentScopeTargetID: ProtocolTarget.ID? = nil,
         sourceTargetID: ProtocolTarget.ID? = nil,
         pageBindingTargetID: ProtocolTarget.ID? = nil,
         networkOriginTargetID: ProtocolTarget.ID? = nil,
@@ -183,6 +194,9 @@ package struct ProtocolEvent: Equatable, Sendable {
         self.domain = domain
         self.method = method
         self.targetID = targetID
+        self.targetRecord = targetRecord
+        self.belongedToCurrentPage = belongedToCurrentPage
+        self.agentScopeTargetID = agentScopeTargetID
         self.sourceTargetID = sourceTargetID
         self.pageBindingTargetID = pageBindingTargetID
         self.networkOriginTargetID = networkOriginTargetID

@@ -77,7 +77,9 @@ private struct WebInspectorDomainEnablementKey: Hashable, Sendable {
 
     init(target: WebInspectorTarget, domain: WebInspectorEnabledDomain) {
         targetID = target.id
-        pageBinding = target.pageBindingID
+        pageBinding = domain == .page && target.kind == .page
+            ? nil
+            : target.pageBindingID
         self.domain = domain
     }
 }
