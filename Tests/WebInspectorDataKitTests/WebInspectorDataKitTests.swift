@@ -3959,6 +3959,188 @@ func latestRootNetworkBurstIsConservedThroughDataKitInFIFOOrder() async throws {
 
 @MainActor
 @Test
+func unfilteredNetworkInsertionsDoNotVisitExistingQueryMembership() async throws {
+    let eventCount = 257
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
+    let controller = WebInspectorFetchedResultsController(fetchedResults: results)
+    let transactionRecorder = FetchedResultsTransactionRecorder(
+        stream: controller.transactions
+    )
+    defer { transactionRecorder.cancel() }
+    try await transactionRecorder.waitUntilStarted()
+    let visitBaseline = await context.networkFullProjectionRecordVisitCountForTesting()
+    let resultMaterializationBaseline = results.networkFullMembershipVisitCountForTesting
+    let expectedModelIDs = (0..<eventCount).map { index in
+        NetworkRequest.ID(Network.Request.ID("unfiltered-insert-\(index)"))
+    }
+
+    for index in 0..<eventCount {
+        let requestID = Network.Request.ID("unfiltered-insert-\(index)")
+        await context.apply(.requestWillBeSent(
+            id: requestID,
+            request: Network.Request(
+                id: requestID,
+                url: "https://example.test/\(index)",
+                method: "GET"
+            ),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: Double(index)
+        ))
+    }
+
+    try await transactionRecorder.waitForTransactionCount(eventCount)
+
+    let updatedIndex = eventCount / 2
+    let updatedRequestID = Network.Request.ID("unfiltered-insert-\(updatedIndex)")
+    await context.apply(.responseReceived(
+        id: updatedRequestID,
+        response: Network.Response(
+            url: "https://example.test/\(updatedIndex)",
+            status: 200,
+            mimeType: "application/json"
+        ),
+        resourceType: .fetch,
+        timestamp: Double(eventCount)
+    ))
+    await context.apply(.dataReceived(
+        id: updatedRequestID,
+        dataLength: 7,
+        encodedDataLength: 3,
+        timestamp: Double(eventCount + 1)
+    ))
+    await context.apply(.loadingFinished(
+        id: updatedRequestID,
+        timestamp: Double(eventCount + 2),
+        sourceMapURL: nil,
+        metrics: nil
+    ))
+    try await transactionRecorder.waitForTransactionCount(eventCount + 3)
+
+    context.network.clearRequests()
+    let postResetRequestID = Network.Request.ID("unfiltered-after-reset")
+    await context.apply(.requestWillBeSent(
+        id: postResetRequestID,
+        request: Network.Request(
+            id: postResetRequestID,
+            url: "https://example.test/after-reset",
+            method: "GET"
+        ),
+        resourceType: .fetch,
+        redirectResponse: nil,
+        timestamp: Double(eventCount + 3)
+    ))
+    try await transactionRecorder.waitForTransactionCount(eventCount + 5)
+
+    #expect(
+        await context.networkFullProjectionRecordVisitCountForTesting() == visitBaseline
+    )
+    #expect(results.networkFullMembershipVisitCountForTesting == resultMaterializationBaseline)
+    #expect(results.items.map(\.id.proxyID) == [postResetRequestID])
+
+    let firstInsert = transactionRecorder.transactions[0]
+    #expect(firstInsert.oldSnapshot.sections.isEmpty)
+    #expect(firstInsert.newSnapshot.itemIDs == [expectedModelIDs[0]])
+    #expect(firstInsert.sectionChanges == [
+        .insert(sectionID: .defaultSection, index: 0),
+    ])
+
+    let lastInsert = transactionRecorder.transactions[eventCount - 1]
+    #expect(lastInsert.oldSnapshot.itemIDs == Array(expectedModelIDs.dropLast()))
+    #expect(lastInsert.newSnapshot.itemIDs == expectedModelIDs)
+    #expect(lastInsert.newSnapshot.itemIDs == lastInsert.newSnapshot.itemIDs)
+
+    let expectedUpdateChanges: [WebInspectorFetchedResultsItemChange<NetworkRequest.ID>] = [
+        .update(
+            itemID: expectedModelIDs[updatedIndex],
+            indexPath: WebInspectorFetchedResultsIndexPath(
+                section: 0,
+                item: updatedIndex
+            )
+        ),
+    ]
+    for update in transactionRecorder.transactions[eventCount..<(eventCount + 3)] {
+        #expect(update.oldSnapshot.itemIDs == expectedModelIDs)
+        #expect(update.newSnapshot.itemIDs == expectedModelIDs)
+        #expect(update.itemChanges == expectedUpdateChanges)
+    }
+
+    let reset = transactionRecorder.transactions[eventCount + 3]
+    #expect(reset.isReset)
+    #expect(reset.oldSnapshot.itemIDs == expectedModelIDs)
+    #expect(reset.newSnapshot.sections.isEmpty)
+
+    let postResetInsert = transactionRecorder.transactions[eventCount + 4]
+    #expect(postResetInsert.oldSnapshot.sections.isEmpty)
+    #expect(postResetInsert.newSnapshot.itemIDs == [NetworkRequest.ID(postResetRequestID)])
+    #expect(lastInsert.newSnapshot.itemIDs == expectedModelIDs)
+}
+
+@MainActor
+@Test
+func unfilteredNetworkResultsReconcileOutOfOrderNotificationCompletion() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
+    let controller = WebInspectorFetchedResultsController(fetchedResults: results)
+    let transactionRecorder = FetchedResultsTransactionRecorder(
+        stream: controller.transactions
+    )
+    defer { transactionRecorder.cancel() }
+    try await transactionRecorder.waitUntilStarted()
+
+    let requests = (0..<3).map { index in
+        let requestID = Network.Request.ID("out-of-order-\(index)")
+        return NetworkRequest(
+            request: Network.Request(
+                id: requestID,
+                url: "https://example.test/out-of-order/\(index)",
+                method: "GET"
+            ),
+            initiator: nil,
+            resourceType: .fetch,
+            timestamp: Double(index),
+            modelContext: context
+        )
+    }
+
+    results.applyUnfilteredNetworkRequestChange(
+        requests[2],
+        at: 2,
+        publishesContentUpdate: false,
+        requestAtIndex: { requests[$0] }
+    )
+    results.applyUnfilteredNetworkRequestChange(
+        requests[0],
+        at: 0,
+        publishesContentUpdate: false,
+        requestAtIndex: { requests[$0] }
+    )
+    results.applyUnfilteredNetworkRequestChange(
+        requests[1],
+        at: 1,
+        publishesContentUpdate: true,
+        requestAtIndex: { requests[$0] }
+    )
+    try await transactionRecorder.waitForTransactionCount(4)
+
+    let expectedIDs = requests.map(\.id)
+    #expect(results.items.map(\.id) == expectedIDs)
+    #expect(transactionRecorder.transactions[0].newSnapshot.itemIDs == [expectedIDs[0]])
+    #expect(transactionRecorder.transactions[1].newSnapshot.itemIDs == Array(expectedIDs[0...1]))
+    #expect(transactionRecorder.transactions[2].newSnapshot.itemIDs == expectedIDs)
+    #expect(transactionRecorder.transactions[3].oldSnapshot.itemIDs == expectedIDs)
+    #expect(transactionRecorder.transactions[3].newSnapshot.itemIDs == expectedIDs)
+    #expect(transactionRecorder.transactions[3].itemChanges == [
+        .update(
+            itemID: expectedIDs[1],
+            indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 1)
+        ),
+    ])
+}
+
+@MainActor
+@Test
 func delayedNetworkConsumerUsesEventTimeTargetAfterFrameRetarget() async throws {
     let transport = TransportSession(backend: FakeTransportBackend(), responseTimeout: .milliseconds(750))
     await installTransportPageTarget(

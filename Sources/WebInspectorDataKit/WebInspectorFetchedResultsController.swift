@@ -1,4 +1,68 @@
 import Foundation
+import Synchronization
+
+final class WebInspectorFetchedResultsSingleSectionSnapshotLedger<
+    ItemID: Hashable & Sendable
+>: Sendable {
+    private struct State {
+        var itemIDs: [ItemID]
+        var itemIDSet: Set<ItemID>
+    }
+
+    private let state: Mutex<State>
+
+    init(itemIDs: [ItemID]) {
+        let itemIDSet = Set(itemIDs)
+        precondition(
+            itemIDSet.count == itemIDs.count,
+            "A fetched-results snapshot ledger cannot contain duplicate item IDs."
+        )
+        state = Mutex(State(itemIDs: itemIDs, itemIDSet: itemIDSet))
+    }
+
+    func append(_ itemID: ItemID, expectedCount: Int) -> Int {
+        state.withLock { state in
+            precondition(
+                state.itemIDs.count == expectedCount,
+                "A fetched-results snapshot ledger must advance from the current result count."
+            )
+            precondition(
+                state.itemIDSet.insert(itemID).inserted,
+                "A fetched-results snapshot ledger cannot append a duplicate item ID."
+            )
+            state.itemIDs.append(itemID)
+            return state.itemIDs.count
+        }
+    }
+
+    func itemID(at index: Int, expectedCount: Int) -> ItemID {
+        state.withLock { state in
+            precondition(
+                state.itemIDs.count == expectedCount,
+                "A fetched-results snapshot ledger must match the current result count."
+            )
+            precondition(
+                state.itemIDs.indices.contains(index),
+                "A fetched-results snapshot ledger index must be in bounds."
+            )
+            return state.itemIDs[index]
+        }
+    }
+
+    func snapshot(at count: Int) -> WebInspectorFetchedResultsSnapshot<ItemID> {
+        let itemIDs = state.withLock { state in
+            precondition(
+                count >= 0 && count <= state.itemIDs.count,
+                "A fetched-results snapshot ledger count must describe a published prefix."
+            )
+            return Array(state.itemIDs.prefix(count))
+        }
+        guard itemIDs.isEmpty == false else {
+            return WebInspectorFetchedResultsSnapshot()
+        }
+        return WebInspectorFetchedResultsSnapshot(itemIDs: itemIDs)
+    }
+}
 
 /// Section/item position inside fetched results.
 public struct WebInspectorFetchedResultsIndexPath: Hashable, Sendable {
@@ -124,11 +188,47 @@ public struct WebInspectorFetchedResultsTransaction<Model: WebInspectorFetchable
     /// Item identity type for the model.
     public typealias ItemID = Model.ID
 
+    private enum SnapshotStorage: Sendable {
+        case materialized(
+            old: WebInspectorFetchedResultsSnapshot<ItemID>,
+            new: WebInspectorFetchedResultsSnapshot<ItemID>
+        )
+        case singleSectionLedger(
+            WebInspectorFetchedResultsSingleSectionSnapshotLedger<ItemID>,
+            oldCount: Int,
+            newCount: Int
+        )
+
+        var oldSnapshot: WebInspectorFetchedResultsSnapshot<ItemID> {
+            switch self {
+            case let .materialized(old, _):
+                return old
+            case let .singleSectionLedger(ledger, oldCount, _):
+                return ledger.snapshot(at: oldCount)
+            }
+        }
+
+        var newSnapshot: WebInspectorFetchedResultsSnapshot<ItemID> {
+            switch self {
+            case let .materialized(_, new):
+                return new
+            case let .singleSectionLedger(ledger, _, newCount):
+                return ledger.snapshot(at: newCount)
+            }
+        }
+    }
+
+    private let snapshotStorage: SnapshotStorage
+
     /// Snapshot before the transaction.
-    public let oldSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>
+    public var oldSnapshot: WebInspectorFetchedResultsSnapshot<ItemID> {
+        snapshotStorage.oldSnapshot
+    }
 
     /// Snapshot after the transaction.
-    public let newSnapshot: WebInspectorFetchedResultsSnapshot<ItemID>
+    public var newSnapshot: WebInspectorFetchedResultsSnapshot<ItemID> {
+        snapshotStorage.newSnapshot
+    }
 
     /// A Boolean value indicating whether consumers should treat the change as a full reset.
     public let isReset: Bool
@@ -152,11 +252,48 @@ public struct WebInspectorFetchedResultsTransaction<Model: WebInspectorFetchable
         sectionChanges: [WebInspectorFetchedResultsSectionChange] = [],
         itemChanges: [WebInspectorFetchedResultsItemChange<ItemID>]
     ) {
-        self.oldSnapshot = oldSnapshot
-        self.newSnapshot = newSnapshot
+        snapshotStorage = .materialized(old: oldSnapshot, new: newSnapshot)
         self.isReset = isReset
         self.sectionChanges = sectionChanges
         self.itemChanges = itemChanges
+    }
+
+    init(
+        singleSectionLedger: WebInspectorFetchedResultsSingleSectionSnapshotLedger<ItemID>,
+        oldCount: Int,
+        newCount: Int,
+        sectionChanges: [WebInspectorFetchedResultsSectionChange] = [],
+        itemChanges: [WebInspectorFetchedResultsItemChange<ItemID>]
+    ) {
+        snapshotStorage = .singleSectionLedger(
+            singleSectionLedger,
+            oldCount: oldCount,
+            newCount: newCount
+        )
+        isReset = false
+        self.sectionChanges = sectionChanges
+        self.itemChanges = itemChanges
+    }
+
+    /// Returns whether two transactions describe the same snapshots and changes.
+    public static func == (
+        lhs: WebInspectorFetchedResultsTransaction<Model>,
+        rhs: WebInspectorFetchedResultsTransaction<Model>
+    ) -> Bool {
+        lhs.oldSnapshot == rhs.oldSnapshot
+            && lhs.newSnapshot == rhs.newSnapshot
+            && lhs.isReset == rhs.isReset
+            && lhs.sectionChanges == rhs.sectionChanges
+            && lhs.itemChanges == rhs.itemChanges
+    }
+
+    /// Hashes the snapshots and changes described by the transaction.
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(oldSnapshot)
+        hasher.combine(newSnapshot)
+        hasher.combine(isReset)
+        hasher.combine(sectionChanges)
+        hasher.combine(itemChanges)
     }
 
     init(

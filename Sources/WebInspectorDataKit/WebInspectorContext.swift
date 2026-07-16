@@ -791,6 +791,15 @@ public final class WebInspectorContext {
         return requestsByID[NetworkRequest.ID(id)]
     }
 
+#if DEBUG
+    package func networkFullProjectionRecordVisitCountForTesting(
+        isolation: isolated (any Actor) = #isolation
+    ) async -> Int {
+        requireOwner(isolation)
+        return await networkRequestIndex.fullProjectionRecordVisitCountForTesting
+    }
+#endif
+
     /// Clears retained Network requests and emits reset transactions.
     public func clearNetworkRequests(isolation: isolated (any Actor) = #isolation) {
         requireOwner(isolation)
@@ -5757,15 +5766,29 @@ extension WebInspectorContext {
         networkFetchedResults.removeAll { $0.value == nil }
         if inserted {
             networkCollectionState.didInsertRequest()
-            for registration in networkFetchedResults {
-                registration.value?.insertNetworkRequest(
+        }
+        for registration in networkFetchedResults {
+            guard let results = registration.value else {
+                continue
+            }
+            let plan = results.currentNetworkQueryPlan(context: self)
+            if plan.requiresQuery == false, results.sectionBy == nil {
+                guard let itemIndex = networkRequestOrderIndicesByID[request.id] else {
+                    preconditionFailure("An unfiltered Network request must have a registered order index.")
+                }
+                results.applyUnfilteredNetworkRequestChange(
+                    request,
+                    at: itemIndex,
+                    publishesContentUpdate: inserted == false,
+                    requestAtIndex: unfilteredNetworkRequest(at:)
+                )
+            } else if inserted {
+                results.insertNetworkRequest(
                     request,
                     lookup: { id in self.requestsByID[id] }
                 )
-            }
-        } else {
-            for registration in networkFetchedResults {
-                registration.value?.refreshNetworkRequestAfterMutation(
+            } else {
+                results.refreshNetworkRequestAfterMutation(
                     request,
                     lookup: { id in self.requestsByID[id] }
                 )
@@ -6335,6 +6358,18 @@ extension WebInspectorContext {
                 continue
             }
             let plan = results.currentNetworkQueryPlan(context: self)
+            if plan.requiresQuery == false, results.sectionBy == nil {
+                guard let itemIndex = networkRequestOrderIndicesByID[request.id] else {
+                    preconditionFailure("An unfiltered Network request must have a registered order index.")
+                }
+                results.applyUnfilteredNetworkRequestChange(
+                    request,
+                    at: itemIndex,
+                    publishesContentUpdate: inserted == false,
+                    requestAtIndex: unfilteredNetworkRequest(at:)
+                )
+                continue
+            }
             if plan.requiresModelPredicate {
                 if inserted {
                     results.insertNetworkRequest(
@@ -6347,15 +6382,6 @@ extension WebInspectorContext {
                         lookup: { id in self.requestsByID[id] }
                     )
                 }
-                continue
-            }
-            if inserted == false,
-               plan.requiresQuery == false,
-               results.sectionBy == nil {
-                guard let itemIndex = networkRequestOrderIndicesByID[request.id] else {
-                    preconditionFailure("An unfiltered Network request must have a registered order index.")
-                }
-                results.publishUnfilteredNetworkRequestUpdate(request, at: itemIndex)
                 continue
             }
             let oldSnapshot = results.networkSnapshotForDelta
@@ -6383,6 +6409,18 @@ extension WebInspectorContext {
         for registration in networkFetchedResults {
             registration.value?.resetNetworkItems()
         }
+    }
+
+    private func unfilteredNetworkRequest(at index: Int) -> NetworkRequest {
+        precondition(
+            orderedRequestIDs.indices.contains(index),
+            "An unfiltered Network result cannot advance past the registered request order."
+        )
+        let id = orderedRequestIDs[index]
+        guard let request = requestsByID[id] else {
+            preconditionFailure("An ordered Network request must remain registered while results advance.")
+        }
+        return request
     }
 }
 

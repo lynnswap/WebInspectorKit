@@ -9,8 +9,17 @@ package actor NetworkRequestIndex {
     private var recordsByID: [NetworkRequest.ID: NetworkRequestRecord] = [:]
     private var orderedIDs: [NetworkRequest.ID] = []
     private var lastAppliedSequence: UInt64 = 0
+#if DEBUG
+    private var fullProjectionRecordVisitCountForTestingStorage = 0
+#endif
 
     package init() {}
+
+#if DEBUG
+    package var fullProjectionRecordVisitCountForTesting: Int {
+        fullProjectionRecordVisitCountForTestingStorage
+    }
+#endif
 
     package func replace(with inputs: [NetworkRequestRecordInput], sequence: UInt64) {
         guard apply(sequence: sequence) else {
@@ -112,6 +121,9 @@ package actor NetworkRequestIndex {
         var records: [NetworkRequestRecord] = []
         records.reserveCapacity(orderedIDs.count)
         for id in orderedIDs {
+#if DEBUG
+            fullProjectionRecordVisitCountForTestingStorage &+= 1
+#endif
             guard let record = recordsByID[id] else {
                 continue
             }

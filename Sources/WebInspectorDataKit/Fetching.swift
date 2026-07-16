@@ -321,6 +321,8 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
     @ObservationIgnored private var networkQueryPlan: NetworkRequestQueryPlan?
     @ObservationIgnored private var networkQueryState: NetworkRequestQueryState?
     @ObservationIgnored private var networkResultSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID>?
+    @ObservationIgnored private var networkUnfilteredSnapshotLedger:
+        WebInspectorFetchedResultsSingleSectionSnapshotLedger<NetworkRequest.ID>?
 #if DEBUG
     @ObservationIgnored package private(set) var networkFullMembershipVisitCountForTesting = 0
 #endif
@@ -340,6 +342,7 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         networkQueryPlan = nil
         networkQueryState = nil
         networkResultSnapshot = nil
+        networkUnfilteredSnapshotLedger = nil
     }
 
     deinit {
@@ -513,6 +516,9 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
 
 extension WebInspectorFetchedResults where Model == NetworkRequest {
     var networkSnapshotForDelta: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID> {
+        if let networkUnfilteredSnapshotLedger {
+            return networkUnfilteredSnapshotLedger.snapshot(at: items.count)
+        }
         if let networkResultSnapshot {
             return networkResultSnapshot
         }
@@ -544,7 +550,7 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
             networkQueryState = nil
             setItems(requests)
         }
-        networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
+        configureNetworkSnapshotStorage(plan: plan)
     }
 
     func applyNetworkFetchDescriptor(
@@ -563,7 +569,7 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
             networkQueryState = nil
             resetItems(requests)
         }
-        networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
+        configureNetworkSnapshotStorage(plan: plan)
     }
 
     func resetNetworkItems() {
@@ -571,7 +577,15 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
             networkQueryState = NetworkRequestQueryState(plan: state.plan, requests: [])
         }
         resetItems([])
-        networkResultSnapshot = WebInspectorFetchedResultsSnapshot()
+        if networkQueryPlan?.requiresQuery == false, sectionBy == nil {
+            networkUnfilteredSnapshotLedger = WebInspectorFetchedResultsSingleSectionSnapshotLedger(
+                itemIDs: []
+            )
+            networkResultSnapshot = nil
+        } else {
+            networkUnfilteredSnapshotLedger = nil
+            networkResultSnapshot = WebInspectorFetchedResultsSnapshot()
+        }
     }
 
     func insertNetworkRequest(
@@ -579,8 +593,12 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
         lookup: (NetworkRequest.ID) -> NetworkRequest?
     ) {
         guard var state = networkQueryState else {
-            insertItem(request)
-            networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
+            if sectionBy == nil, networkQueryPlan?.requiresQuery == false {
+                insertUnfilteredNetworkRequest(request)
+            } else {
+                insertItem(request)
+                networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
+            }
             return
         }
         state.upsert(request: request)
@@ -607,29 +625,52 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
         networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
     }
 
-    func publishUnfilteredNetworkRequestUpdate(
+    func applyUnfilteredNetworkRequestChange(
         _ request: NetworkRequest,
-        at itemIndex: Int
+        at itemIndex: Int,
+        publishesContentUpdate: Bool,
+        requestAtIndex: (Int) -> NetworkRequest
     ) {
-        precondition(networkQueryState == nil, "An unfiltered Network update cannot have query state.")
-        precondition(sectionBy == nil, "An unfiltered Network update cannot have sections.")
+        precondition(
+            networkQueryState == nil,
+            "An unfiltered Network change cannot have query state."
+        )
+        precondition(
+            sectionBy == nil,
+            "An unfiltered Network change must not have a section descriptor."
+        )
+        precondition(itemIndex >= 0, "An unfiltered Network change must have a valid item index.")
+
+        while items.count <= itemIndex {
+            let nextIndex = items.count
+            let nextRequest = requestAtIndex(nextIndex)
+            insertUnfilteredNetworkRequest(nextRequest)
+        }
         precondition(
             items.indices.contains(itemIndex) && items[itemIndex] === request,
-            "An unfiltered Network update must reference its registered item position."
+            "An unfiltered Network change must reference its registered item position."
         )
-        let snapshot = networkSnapshotForDelta
+        guard publishesContentUpdate else {
+            return
+        }
+        guard let networkUnfilteredSnapshotLedger else {
+            preconditionFailure("An unfiltered Network change must have append-only snapshot storage.")
+        }
+        let itemCount = items.count
         precondition(
-            snapshot.sections.count == 1
-                && snapshot.sections[0].itemIDs.indices.contains(itemIndex)
-                && snapshot.sections[0].itemIDs[itemIndex] == request.id,
-            "An unfiltered Network update must preserve its existing snapshot position."
+            networkUnfilteredSnapshotLedger.itemID(
+                at: itemIndex,
+                expectedCount: itemCount
+            ) == request.id,
+            "An unfiltered Network change must preserve its existing snapshot position."
         )
         guard transactionRelay.hasContinuations else {
             return
         }
         transactionRelay.yield(WebInspectorFetchedResultsTransaction<NetworkRequest>(
-            oldSnapshot: snapshot,
-            newSnapshot: snapshot,
+            singleSectionLedger: networkUnfilteredSnapshotLedger,
+            oldCount: itemCount,
+            newCount: itemCount,
             itemChanges: [
                 .update(
                     itemID: request.id,
@@ -643,6 +684,9 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
         _ delta: NetworkResultSetDelta,
         lookup: (NetworkRequest.ID) -> NetworkRequest?
     ) {
+#if DEBUG
+        networkFullMembershipVisitCountForTesting &+= delta.snapshot.itemIDs.count
+#endif
         let oldSnapshot = networkSnapshotForDelta
         items = delta.snapshot.itemIDs.compactMap(lookup)
         sections = delta.snapshot.sections.map { section in
@@ -652,6 +696,7 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
                 items: section.itemIDs.compactMap(lookup)
             )
         }
+        networkUnfilteredSnapshotLedger = nil
         networkResultSnapshot = delta.snapshot
         if oldSnapshot != delta.snapshot {
             bumpTopologyRevision()
@@ -662,5 +707,83 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
             return
         }
         transactionRelay.yield(transaction)
+    }
+
+    func insertUnfilteredNetworkRequest(_ request: NetworkRequest) {
+        precondition(networkQueryState == nil, "An unfiltered Network insert cannot have query state.")
+        precondition(
+            networkQueryPlan?.requiresQuery == false,
+            "An unfiltered Network insert must not require query evaluation."
+        )
+        precondition(
+            sectionBy == nil,
+            "An unfiltered Network insert must not have a section descriptor."
+        )
+        guard let networkUnfilteredSnapshotLedger else {
+            preconditionFailure("An unfiltered Network insert must have append-only snapshot storage.")
+        }
+
+        let oldCount = items.count
+        let newCount = networkUnfilteredSnapshotLedger.append(
+            request.id,
+            expectedCount: oldCount
+        )
+        precondition(newCount == oldCount + 1, "An unfiltered Network insert must append one item.")
+
+        items.append(request)
+        if oldCount == 0 {
+            precondition(sections.isEmpty, "An empty unfiltered result cannot have sections.")
+            sections = [
+                WebInspectorFetchSection(
+                    id: .defaultSection,
+                    title: nil,
+                    items: [request]
+                ),
+            ]
+        } else {
+            precondition(
+                sections.count == 1
+                    && sections[0].id == .defaultSection
+                    && sections[0].items.count == oldCount,
+                "An unfiltered Network result must preserve its single section."
+            )
+            sections[0].items.append(request)
+        }
+        networkResultSnapshot = nil
+        bumpTopologyRevision()
+
+        guard transactionRelay.hasContinuations else {
+            return
+        }
+        let sectionChanges: [WebInspectorFetchedResultsSectionChange] = oldCount == 0
+            ? [.insert(sectionID: .defaultSection, index: 0)]
+            : []
+        transactionRelay.yield(WebInspectorFetchedResultsTransaction<NetworkRequest>(
+            singleSectionLedger: networkUnfilteredSnapshotLedger,
+            oldCount: oldCount,
+            newCount: newCount,
+            sectionChanges: sectionChanges,
+            itemChanges: [
+                .insert(
+                    itemID: request.id,
+                    indexPath: WebInspectorFetchedResultsIndexPath(
+                        section: 0,
+                        item: oldCount
+                    )
+                ),
+            ]
+        ))
+    }
+
+    private func configureNetworkSnapshotStorage(plan: NetworkRequestQueryPlan) {
+        if plan.requiresQuery == false, sectionBy == nil {
+            networkUnfilteredSnapshotLedger = WebInspectorFetchedResultsSingleSectionSnapshotLedger(
+                itemIDs: items.map(\.id)
+            )
+            networkResultSnapshot = nil
+        } else {
+            networkUnfilteredSnapshotLedger = nil
+            networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
+        }
     }
 }
