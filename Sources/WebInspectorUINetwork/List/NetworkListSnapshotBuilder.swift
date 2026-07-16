@@ -61,6 +61,8 @@ package actor NetworkListSnapshotBuilder: NetworkListSnapshotBuilding {
 
         var uniqueEntryIDs = Set<NetworkListEntry.ID>()
         uniqueEntryIDs.reserveCapacity(input.entryIDs.count)
+        var snapshot = NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>()
+        snapshot.appendSections([.main])
         var lowerBound = 0
         while lowerBound < input.entryIDs.count {
             guard !Task.isCancelled else {
@@ -70,12 +72,14 @@ package actor NetworkListSnapshotBuilder: NetworkListSnapshotBuilding {
                 lowerBound + Self.cooperativeBatchSize,
                 input.entryIDs.count
             )
-            for entryID in input.entryIDs[lowerBound..<upperBound] {
+            let entryIDs = Array(input.entryIDs[lowerBound..<upperBound])
+            for entryID in entryIDs {
                 precondition(
                     uniqueEntryIDs.insert(entryID).inserted,
                     "Duplicate row IDs detected in NetworkListViewController"
                 )
             }
+            snapshot.appendItems(entryIDs, toSection: .main)
             lowerBound = upperBound
             await Task.yield()
         }
@@ -83,12 +87,6 @@ package actor NetworkListSnapshotBuilder: NetworkListSnapshotBuilding {
             throw CancellationError()
         }
 
-        var snapshot = NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>()
-        snapshot.appendSections([.main])
-        snapshot.appendItems(input.entryIDs, toSection: .main)
-        guard !Task.isCancelled else {
-            throw CancellationError()
-        }
         return NetworkListSnapshotArtifact(input: input, snapshot: snapshot)
     }
 }
