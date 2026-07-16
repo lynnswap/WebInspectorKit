@@ -106,6 +106,24 @@ package actor TransportSession {
             throw TransportSession.Error.transportClosed
         }
 
+        if isLatestRootNetworkCommand(command) {
+            let semanticTargetID: ProtocolTarget.ID?
+            switch command.routing {
+            case .root:
+                semanticTargetID = nil
+            case let .target(targetID):
+                semanticTargetID = networkRouting.routingTargetID(
+                    forStableTargetID: targetID
+                )
+            case let .octopus(pageTarget):
+                semanticTargetID = try pageTarget ?? currentMainPageTarget()
+            }
+            return try await sendRoot(
+                command,
+                semanticTargetID: semanticTargetID
+            )
+        }
+
         switch command.routing {
         case .root:
             return try await sendRoot(command)
@@ -288,6 +306,39 @@ package actor TransportSession {
         )
     }
 
+    private func isLatestRootNetworkCommand(
+        _ command: ProtocolCommand
+    ) -> Bool {
+        guard protocolProfile.generation == .latest,
+              command.domain == .network,
+              command.method == "Network.getResponseBody",
+              let params = try? TransportMessageParser.decode(
+                  NetworkRequestIDParams.self,
+                  from: command.parametersData
+              ) else {
+            return false
+        }
+        return isProcessQualifiedNetworkRequestID(params.requestId)
+    }
+
+    private func isProcessQualifiedNetworkRequestID(_ requestID: String) -> Bool {
+        let prefix = "request-"
+        guard requestID.hasPrefix(prefix) else {
+            return false
+        }
+        let components = requestID
+            .dropFirst(prefix.count)
+            .split(separator: ".", omittingEmptySubsequences: false)
+        guard components.count == 2,
+              let processID = UInt64(components[0]),
+              String(processID) == components[0],
+              let resourceID = UInt64(components[1]),
+              String(resourceID) == components[1] else {
+            return false
+        }
+        return true
+    }
+
     private func sendTarget(
         _ command: ProtocolCommand,
         targetID: ProtocolTarget.ID
@@ -438,26 +489,14 @@ package actor TransportSession {
         }
 
         let domain = ProtocolDomain(method: method)
-        let latestRootNetworkTargets: TransportNetworkRouting.EventTargets?
-        if protocolProfile.generation == .latest && domain == .network {
-            switch resolveLatestRootNetworkEventTargets(
-                method: method,
-                paramsData: parsed.paramsData
-            ) {
-            case let .deliver(targets):
-                latestRootNetworkTargets = targets
-            case .deferred:
-                return
-            }
-        } else {
-            latestRootNetworkTargets = nil
-        }
-        let targetID: ProtocolTarget.ID?
-        if let latestRootNetworkTargets {
-            targetID = latestRootNetworkTargets.routingTargetID
-        } else {
-            targetID = targetIDForRootEvent(method: method, paramsData: parsed.paramsData)
-        }
+        let isLatestRootNetworkEvent = protocolProfile.generation == .latest
+            && domain == .network
+        // Do not scope or defer these events by frame topology. WebKit's
+        // page-owned ProxyingNetworkAgent has already process-qualified the
+        // requestId; frame and target fields are lifecycle metadata only.
+        let targetID = isLatestRootNetworkEvent
+            ? targetRegistry.currentMainPageTargetID
+            : targetIDForRootEvent(method: method, paramsData: parsed.paramsData)
         let sourceTargetID = sourceTargetIDForRootEvent(method: method, targetID: targetID)
         let destroyedCurrentMainPageTarget = method == "Target.targetDestroyed"
             && targetID != nil
@@ -491,19 +530,17 @@ package actor TransportSession {
             targetID: pageBindingTargetID,
             paramsData: parsed.paramsData
         )
-        await emitResolvedDeferredRootNetworkEvents()
-        // ProxyingPageAgent is installed by the inspected page's
-        // WebPageInspectorController and registers IPC receivers for that
-        // page in each process. A provisional process is still part of the
-        // same semantic current page, not a second inspected page.
+        // These proxying agents are installed by the inspected page's
+        // WebPageInspectorController and register IPC receivers for that page
+        // in each process. A provisional process is still part of the same
+        // semantic current page, not a second inspected page.
         await emit(
             domain: domain,
             method: method,
             targetID: targetID,
             sourceTargetID: sourceTargetID,
             pageBindingTargetID: pageBindingTargetID,
-            networkScopeTargetID: latestRootNetworkTargets?.stableScopeTargetID,
-            networkPageMembership: latestRootNetworkTargets?.pageMembership,
+            networkPageMembership: isLatestRootNetworkEvent ? .currentPage : nil,
             rootPageBelongedToCurrentPage: protocolProfile.pageTopologyMayArriveAtRoot
                 && domain == .page ? true : nil,
             paramsData: parsed.paramsData,
@@ -567,7 +604,6 @@ package actor TransportSession {
             targetID: pageBindingTargetID,
             paramsData: parsed.paramsData
         )
-        await emitResolvedDeferredRootNetworkEvents()
         await emit(
             domain: ProtocolDomain(method: method),
             method: method,
@@ -685,7 +721,6 @@ package actor TransportSession {
             ) else {
                 return
             }
-            networkRouting.removeFrame(params.frameId)
             targetRegistry.recordFrameDetached(params.frameId)
             return
         }
@@ -872,152 +907,6 @@ package actor TransportSession {
                 return targetRegistry.currentMainPageTargetID
             default:
                 return nil
-            }
-        }
-    }
-
-    private func resolveLatestRootNetworkEventTargets(
-        method: String,
-        paramsData: Data
-    ) -> LatestRootNetworkEventResolution {
-        // Do not add WebSocket routing here. WebKit 625's root
-        // ProxyingNetworkAgent forwards only HTTP request lifecycle events;
-        // InspectorNetworkAgent emits WebSocket events through the page target.
-        guard let params = try? TransportMessageParser.decode(
-            NetworkRequestRoutingParams.self,
-            from: paramsData
-        ), let requestID = params.requestId else {
-            return .deliver(TransportNetworkRouting.EventTargets(
-                routingTargetID: targetRegistry.currentMainPageTargetID,
-                stableScopeTargetID: nil,
-                pageMembership: .currentPage
-            ))
-        }
-        let isTerminalEvent = method == "Network.loadingFinished"
-            || method == "Network.loadingFailed"
-
-        if networkRouting.hasDeferredRequest(requestID) {
-            networkRouting.deferEvent(
-                requestID: requestID,
-                frameID: params.frameId,
-                targetID: params.targetId,
-                method: method,
-                paramsData: paramsData
-            )
-            return .deferred
-        }
-
-        var requestTargets = networkRouting.requestTargets(for: requestID)
-        if method == "Network.requestWillBeSent", requestTargets == nil {
-            requestTargets = networkRequestTargets(
-                frameID: params.frameId,
-                targetID: params.targetId
-            )
-            if let requestTargets {
-                networkRouting.record(requestTargets, for: requestID)
-            } else {
-                networkRouting.deferEvent(
-                    requestID: requestID,
-                    frameID: params.frameId,
-                    targetID: params.targetId,
-                    method: method,
-                    paramsData: paramsData
-                )
-                return .deferred
-            }
-        } else if requestTargets == nil {
-            requestTargets = networkRequestTargets(
-                frameID: params.frameId,
-                targetID: params.targetId
-            )
-            guard let requestTargets else {
-                networkRouting.deferEvent(
-                    requestID: requestID,
-                    frameID: params.frameId,
-                    targetID: params.targetId,
-                    method: method,
-                    paramsData: paramsData
-                )
-                return .deferred
-            }
-            networkRouting.record(requestTargets, for: requestID)
-        }
-
-        if isTerminalEvent {
-            networkRouting.removeRequest(requestID)
-        }
-        return .deliver(TransportNetworkRouting.EventTargets(
-            routingTargetID: requestTargets?.routingTargetID,
-            stableScopeTargetID: requestTargets?.stableScopeTargetID,
-            pageMembership: requestTargets.map {
-                $0.belongedToCurrentPage ? .currentPage : .otherPage
-            } ?? .unresolved
-        ))
-    }
-
-    private func networkRequestTargets(
-        for targetID: ProtocolTarget.ID
-    ) -> TransportNetworkRouting.RequestTargets? {
-        guard let target = targetRegistry.target(for: targetID),
-              target.kind == .page || target.kind == .frame,
-              !target.isProvisional else {
-            return nil
-        }
-        let belongedToCurrentPage = target.kind == .frame
-            || targetID == targetRegistry.currentMainPageTargetID
-        return TransportNetworkRouting.RequestTargets(
-            stableScopeTargetID: target.kind == .page ? nil : targetID,
-            routingTargetID: targetID,
-            belongedToCurrentPage: belongedToCurrentPage
-        )
-    }
-
-    private func networkRequestTargets(
-        frameID: ProtocolFrame.ID?,
-        targetID: ProtocolTarget.ID?
-    ) -> TransportNetworkRouting.RequestTargets? {
-        if let frameID,
-           let resolvedTargetID = targetRegistry.targetID(forFrameID: frameID),
-           let targets = networkRequestTargets(for: resolvedTargetID) {
-            return targets
-        }
-        guard let targetID,
-              !targetID.rawValue.isEmpty else {
-            return nil
-        }
-        return networkRequestTargets(for: targetID)
-    }
-
-    private func emitResolvedDeferredRootNetworkEvents() async {
-        var targetsByRequestID: [
-            String: TransportNetworkRouting.RequestTargets
-        ] = [:]
-        for (requestID, identity) in networkRouting.deferredRequestIdentities {
-            if let targets = networkRequestTargets(
-                frameID: identity.frameID,
-                targetID: identity.targetID
-            ) {
-                targetsByRequestID[requestID] = targets
-            }
-        }
-
-        for event in networkRouting.resolveDeferredEvents(
-            targetsByRequestID: targetsByRequestID
-        ) {
-            await emit(
-                domain: .network,
-                method: event.method,
-                targetID: event.targets.routingTargetID,
-                sourceTargetID: event.targets.routingTargetID,
-                networkScopeTargetID: event.targets.stableScopeTargetID,
-                networkPageMembership: event.targets.belongedToCurrentPage
-                    ? .currentPage
-                    : .otherPage,
-                paramsData: event.paramsData
-            )
-            if event.method == "Network.loadingFinished"
-                || event.method == "Network.loadingFailed" {
-                networkRouting.removeRequest(event.requestID)
             }
         }
     }
@@ -1452,66 +1341,10 @@ package actor TransportSession {
     }
 }
 
-private enum LatestRootNetworkEventResolution: Sendable {
-    case deliver(TransportNetworkRouting.EventTargets)
-    case deferred
-}
-
 private struct TransportNetworkRouting: Sendable {
-    struct RequestTargets: Equatable, Sendable {
-        let stableScopeTargetID: ProtocolTarget.ID?
-        var routingTargetID: ProtocolTarget.ID
-        let belongedToCurrentPage: Bool
-    }
-
-    struct EventTargets: Equatable, Sendable {
-        var routingTargetID: ProtocolTarget.ID?
-        var stableScopeTargetID: ProtocolTarget.ID?
-        var pageMembership: ProtocolNetworkPageMembership
-    }
-
-    struct DeferredRequestIdentity: Equatable, Sendable {
-        var frameID: ProtocolFrame.ID?
-        var targetID: ProtocolTarget.ID?
-    }
-
-    struct ResolvedDeferredEvent: Equatable, Sendable {
-        var requestID: String
-        var method: String
-        var paramsData: Data
-        var targets: RequestTargets
-    }
-
-    private struct DeferredEvent: Equatable, Sendable {
-        var requestID: String
-        var method: String
-        var paramsData: Data
-    }
-
-    // ProxyingNetworkAgent rewrites WebProcess resource identifiers through
-    // IdentifierRegistry.protocolRequestId(processIdentifier, resourceID)
-    // before emitting them. The raw protocol requestId is therefore already
-    // the canonical, process-qualified key across the root agent.
-    private var requestTargetsByRequestID: [String: RequestTargets] = [:]
-    private var deferredRequestIdentitiesByRequestID: [
-        String: DeferredRequestIdentity
-    ] = [:]
-    private var deferredEvents: [DeferredEvent] = []
     private var committedTargetIDsByStableTargetID: [
         ProtocolTarget.ID: ProtocolTarget.ID
     ] = [:]
-
-    func requestTargets(for requestID: String) -> RequestTargets? {
-        requestTargetsByRequestID[requestID]
-    }
-
-    var deferredRequestIdentities: [String: DeferredRequestIdentity] {
-        deferredRequestIdentitiesByRequestID
-    }
-
-    func hasDeferredRequest(_ requestID: String) -> Bool {
-        deferredRequestIdentitiesByRequestID[requestID] != nil
-    }
 
     func routingTargetID(
         forStableTargetID targetID: ProtocolTarget.ID
@@ -1519,116 +1352,17 @@ private struct TransportNetworkRouting: Sendable {
         committedTargetIDsByStableTargetID[targetID] ?? targetID
     }
 
-    mutating func record(_ targets: RequestTargets, for requestID: String) {
-        requestTargetsByRequestID[requestID] = targets
-    }
-
-    mutating func deferEvent(
-        requestID: String,
-        frameID: ProtocolFrame.ID?,
-        targetID: ProtocolTarget.ID?,
-        method: String,
-        paramsData: Data
-    ) {
-        var identity = deferredRequestIdentitiesByRequestID[requestID]
-            ?? DeferredRequestIdentity(frameID: nil, targetID: nil)
-        identity.frameID = identity.frameID ?? frameID
-        if identity.targetID == nil,
-           let targetID,
-           !targetID.rawValue.isEmpty {
-            identity.targetID = targetID
-        }
-        deferredRequestIdentitiesByRequestID[requestID] = identity
-        deferredEvents.append(DeferredEvent(
-            requestID: requestID,
-            method: method,
-            paramsData: paramsData
-        ))
-    }
-
-    mutating func resolveDeferredEvents(
-        targetsByRequestID: [String: RequestTargets]
-    ) -> [ResolvedDeferredEvent] {
-        guard !targetsByRequestID.isEmpty else {
-            return []
-        }
-        for (requestID, targets) in targetsByRequestID {
-            requestTargetsByRequestID[requestID] = targets
-            deferredRequestIdentitiesByRequestID.removeValue(
-                forKey: requestID
-            )
-        }
-        let resolvedRequestIDs = Set(targetsByRequestID.keys)
-        let resolvedEvents = deferredEvents.compactMap { event in
-            targetsByRequestID[event.requestID].map { targets in
-                ResolvedDeferredEvent(
-                    requestID: event.requestID,
-                    method: event.method,
-                    paramsData: event.paramsData,
-                    targets: targets
-                )
-            }
-        }
-        deferredEvents.removeAll {
-            resolvedRequestIDs.contains($0.requestID)
-        }
-        return resolvedEvents
-    }
-
-    mutating func removeRequest(_ requestID: String) {
-        requestTargetsByRequestID.removeValue(forKey: requestID)
-        deferredRequestIdentitiesByRequestID.removeValue(forKey: requestID)
-        deferredEvents.removeAll { $0.requestID == requestID }
-    }
-
     mutating func removeTarget(_ targetID: ProtocolTarget.ID) {
-        let deferredRequestIDs = Set(
-            deferredRequestIdentitiesByRequestID.compactMap {
-                $0.value.targetID == targetID ? $0.key : nil
-            }
-        )
-        for requestID in deferredRequestIDs {
-            deferredRequestIdentitiesByRequestID.removeValue(forKey: requestID)
-        }
-        deferredEvents.removeAll {
-            deferredRequestIDs.contains($0.requestID)
-        }
         committedTargetIDsByStableTargetID =
             committedTargetIDsByStableTargetID.filter {
                 $0.value != targetID
             }
     }
 
-    mutating func removeFrame(_ frameID: ProtocolFrame.ID) {
-        let deferredRequestIDs = Set(
-            deferredRequestIdentitiesByRequestID.compactMap {
-                $0.value.frameID == frameID ? $0.key : nil
-            }
-        )
-        for requestID in deferredRequestIDs {
-            deferredRequestIdentitiesByRequestID.removeValue(forKey: requestID)
-        }
-        deferredEvents.removeAll {
-            deferredRequestIDs.contains($0.requestID)
-        }
-    }
-
     mutating func retarget(
         from oldTargetID: ProtocolTarget.ID,
         to newTargetID: ProtocolTarget.ID
     ) {
-        for requestID in requestTargetsByRequestID.keys where
-            requestTargetsByRequestID[requestID]?.routingTargetID == oldTargetID
-        {
-            requestTargetsByRequestID[requestID]?.routingTargetID = newTargetID
-        }
-        for requestID in deferredRequestIdentitiesByRequestID.keys where
-            deferredRequestIdentitiesByRequestID[requestID]?.targetID
-                == oldTargetID
-        {
-            deferredRequestIdentitiesByRequestID[requestID]?.targetID =
-                newTargetID
-        }
         for stableTargetID in committedTargetIDsByStableTargetID.keys where
             committedTargetIDsByStableTargetID[stableTargetID] == oldTargetID
         {
@@ -1638,9 +1372,6 @@ private struct TransportNetworkRouting: Sendable {
     }
 
     mutating func removeAll() {
-        requestTargetsByRequestID.removeAll()
-        deferredRequestIdentitiesByRequestID.removeAll()
-        deferredEvents.removeAll()
         committedTargetIDsByStableTargetID.removeAll()
     }
 }
@@ -1693,12 +1424,6 @@ private struct PageFrameNavigatedParams: Decodable {
 
 private struct PageFrameDetachedParams: Decodable {
     var frameId: ProtocolFrame.ID
-}
-
-private struct NetworkRequestRoutingParams: Decodable {
-    var requestId: String?
-    var frameId: ProtocolFrame.ID?
-    var targetId: ProtocolTarget.ID?
 }
 
 private struct RuntimeExecutionContextDestroyedParams: Decodable {

@@ -280,12 +280,11 @@ func destroyedLatestFrameCanStillUseTheRootNetworkAgent() async throws {
 }
 
 @Test
-func latestRootNetworkLifecycleKeepsTheRequestTargetOrigin() async throws {
+func latestRootNetworkLifecycleUsesTheInspectedPageOwner() async throws {
     let session = TransportSession(
         backend: FakeTransportBackend(),
         protocolProfile: .latest
     )
-    let frameTargetID = ProtocolTarget.ID("frame-42-7")
     await session.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","isProvisional":false,"isPaused":false}}}"#
     )
@@ -296,34 +295,36 @@ func latestRootNetworkLifecycleKeepsTheRequestTargetOrigin() async throws {
     var iterator = events.makeAsyncIterator()
 
     await session.receiveRootMessage(
-        #"{"method":"Network.requestWillBeSent","params":{"requestId":"frame-7.99","frameId":"frame-7.999","targetId":"frame-42-7"}}"#
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-7.99","frameId":"frame-7.999","targetId":"frame-42-7"}}"#
     )
     let requestWillBeSent = try #require(await iterator.next())
-    #expect(requestWillBeSent.targetID == frameTargetID)
-    #expect(requestWillBeSent.networkScopeTargetID == frameTargetID)
+    #expect(requestWillBeSent.targetID == ProtocolTarget.ID("page-main"))
+    #expect(requestWillBeSent.networkScopeTargetID == nil)
+    #expect(requestWillBeSent.networkPageMembership == .currentPage)
 
     await session.receiveRootMessage(
-        #"{"method":"Network.responseReceived","params":{"requestId":"frame-7.99"}}"#
+        #"{"method":"Network.responseReceived","params":{"requestId":"request-7.99"}}"#
     )
     let responseReceived = try #require(await iterator.next())
-    #expect(responseReceived.targetID == frameTargetID)
-    #expect(responseReceived.networkScopeTargetID == frameTargetID)
+    #expect(responseReceived.targetID == ProtocolTarget.ID("page-main"))
+    #expect(responseReceived.networkScopeTargetID == nil)
+    #expect(responseReceived.networkPageMembership == .currentPage)
 
     await session.receiveRootMessage(
-        #"{"method":"Network.loadingFinished","params":{"requestId":"frame-7.99"}}"#
+        #"{"method":"Network.loadingFinished","params":{"requestId":"request-7.99"}}"#
     )
     let loadingFinished = try #require(await iterator.next())
-    #expect(loadingFinished.targetID == frameTargetID)
-    #expect(loadingFinished.networkScopeTargetID == frameTargetID)
+    #expect(loadingFinished.targetID == ProtocolTarget.ID("page-main"))
+    #expect(loadingFinished.networkScopeTargetID == nil)
+    #expect(loadingFinished.networkPageMembership == .currentPage)
 }
 
 @Test
-func latestRootNetworkDefersLifecycleUntilFrameOwnerArrives() async throws {
+func latestRootNetworkEmitsBeforeFrameOwnerArrivesWithoutReplaying() async throws {
     let session = TransportSession(
         backend: FakeTransportBackend(),
         protocolProfile: .latest
     )
-    let frameTargetID = ProtocolTarget.ID("frame-42-7")
     await session.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","isProvisional":false,"isPaused":false}}}"#
     )
@@ -335,32 +336,47 @@ func latestRootNetworkDefersLifecycleUntilFrameOwnerArrives() async throws {
     )
 
     await session.receiveRootMessage(
-        #"{"method":"Network.requestWillBeSent","params":{"requestId":"frame-7.99","frameId":"frame-7.42","targetId":""}}"#
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-7.99","frameId":"frame-7.42","targetId":""}}"#
     )
     await session.receiveRootMessage(
-        #"{"method":"Network.responseReceived","params":{"requestId":"frame-7.99"}}"#
+        #"{"method":"Network.responseReceived","params":{"requestId":"request-7.99"}}"#
     )
+    let immediateEvents = try await networkEvents.events(prefix: 2)
+    #expect(immediateEvents.map(\.targetID) == [
+        ProtocolTarget.ID("page-main"),
+        ProtocolTarget.ID("page-main"),
+    ])
+    #expect(immediateEvents.map(\.networkScopeTargetID) == [nil, nil])
+
     await session.receiveRootMessage(
         #"{"method":"Page.frameNavigated","params":{"frame":{"id":"frame-7.42","parentId":"frame-7.1"}}}"#
     )
     await session.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-42-7","type":"frame","isProvisional":false,"isPaused":false}}}"#
     )
+    await session.receiveRootMessage(
+        #"{"method":"Network.loadingFinished","params":{"requestId":"request-7.99"}}"#
+    )
 
-    let events = try await networkEvents.events(prefix: 2)
+    let events = try await networkEvents.events(prefix: 3)
     #expect(events.map(\.method) == [
         "Network.requestWillBeSent",
         "Network.responseReceived",
+        "Network.loadingFinished",
     ])
-    #expect(events.map(\.targetID) == [frameTargetID, frameTargetID])
-    #expect(events.map(\.networkScopeTargetID) == [
-        frameTargetID,
-        frameTargetID,
-    ])
+    #expect(events.map(\.targetID) == Array(repeating: ProtocolTarget.ID("page-main"), count: 3))
+    #expect(events.map(\.networkScopeTargetID) == [nil, nil, nil])
+    let requestIDs = try events.map {
+        try JSONDecoder().decode(
+            TestNetworkRequestIDParams.self,
+            from: $0.paramsData
+        ).requestId
+    }
+    #expect(requestIDs == Array(repeating: "request-7.99", count: 3))
 }
 
 @Test
-func latestRootNetworkPreservesFastTerminalLifecycleUntilOwnerArrives() async throws {
+func latestRootNetworkPreservesFastTerminalLifecycleWithoutTopology() async throws {
     let session = TransportSession(
         backend: FakeTransportBackend(),
         protocolProfile: .latest
@@ -373,13 +389,13 @@ func latestRootNetworkPreservesFastTerminalLifecycleUntilOwnerArrives() async th
     )
 
     await session.receiveRootMessage(
-        #"{"method":"Network.requestWillBeSent","params":{"requestId":"unresolved-request","frameId":"frame-404.1","targetId":""}}"#
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-404.1","frameId":"frame-404.1","targetId":""}}"#
     )
     await session.receiveRootMessage(
-        #"{"method":"Network.responseReceived","params":{"requestId":"unresolved-request"}}"#
+        #"{"method":"Network.responseReceived","params":{"requestId":"request-404.1"}}"#
     )
     await session.receiveRootMessage(
-        #"{"method":"Network.loadingFailed","params":{"requestId":"unresolved-request"}}"#
+        #"{"method":"Network.loadingFailed","params":{"requestId":"request-404.1"}}"#
     )
 
     await session.receiveRootMessage(
@@ -392,7 +408,7 @@ func latestRootNetworkPreservesFastTerminalLifecycleUntilOwnerArrives() async th
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-1-404","type":"frame","isProvisional":false,"isPaused":false}}}"#
     )
     await session.receiveRootMessage(
-        #"{"method":"Network.requestWillBeSent","params":{"requestId":"current-request","targetId":"page-main"}}"#
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-7.1","targetId":"page-main"}}"#
     )
 
     let events = try await networkEvents.events(prefix: 4)
@@ -403,11 +419,12 @@ func latestRootNetworkPreservesFastTerminalLifecycleUntilOwnerArrives() async th
         "Network.requestWillBeSent",
     ])
     #expect(events.map(\.targetID) == [
-        ProtocolTarget.ID("frame-1-404"),
-        ProtocolTarget.ID("frame-1-404"),
-        ProtocolTarget.ID("frame-1-404"),
+        ProtocolTarget.ID("page-main"),
+        ProtocolTarget.ID("page-main"),
+        ProtocolTarget.ID("page-main"),
         ProtocolTarget.ID("page-main"),
     ])
+    #expect(events.map(\.networkScopeTargetID) == [nil, nil, nil, nil])
     let requestIDs = try events.map {
         try JSONDecoder().decode(
             TestNetworkRequestIDParams.self,
@@ -415,15 +432,15 @@ func latestRootNetworkPreservesFastTerminalLifecycleUntilOwnerArrives() async th
         ).requestId
     }
     #expect(requestIDs == [
-        "unresolved-request",
-        "unresolved-request",
-        "unresolved-request",
-        "current-request",
+        "request-404.1",
+        "request-404.1",
+        "request-404.1",
+        "request-7.1",
     ])
 }
 
 @Test
-func latestRootNetworkReleasesUnresolvedLifecycleWhenFrameDetaches() async throws {
+func latestRootNetworkPreservesLifecycleAfterFrameDetaches() async throws {
     let session = TransportSession(
         backend: FakeTransportBackend(),
         protocolProfile: .latest
@@ -436,43 +453,43 @@ func latestRootNetworkReleasesUnresolvedLifecycleWhenFrameDetaches() async throw
     )
 
     await session.receiveRootMessage(
-        #"{"method":"Network.requestWillBeSent","params":{"requestId":"detached-request","frameId":"frame-404.1","targetId":""}}"#
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-404.1","frameId":"frame-404.1","targetId":""}}"#
     )
     await session.receiveRootMessage(
-        #"{"method":"Network.responseReceived","params":{"requestId":"detached-request"}}"#
+        #"{"method":"Network.responseReceived","params":{"requestId":"request-404.1"}}"#
     )
     await session.receiveRootMessage(
         #"{"method":"Page.frameDetached","params":{"frameId":"frame-404.1"}}"#
     )
-
     await session.receiveRootMessage(
-        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"frame-7.1"}}}"#
-    )
-    await session.receiveRootMessage(
-        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"frame-404.1","parentId":"frame-7.1"}}}"#
-    )
-    await session.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-1-404","type":"frame","isProvisional":false,"isPaused":false}}}"#
-    )
-    await session.receiveRootMessage(
-        #"{"method":"Network.requestWillBeSent","params":{"requestId":"current-request","targetId":"page-main"}}"#
+        #"{"method":"Network.loadingFinished","params":{"requestId":"request-404.1"}}"#
     )
 
-    let event = try await networkEvents.event()
-    let params = try JSONDecoder().decode(
-        TestNetworkRequestIDParams.self,
-        from: event.paramsData
-    )
-    #expect(params.requestId == "current-request")
+    let events = try await networkEvents.events(prefix: 3)
+    #expect(events.map(\.method) == [
+        "Network.requestWillBeSent",
+        "Network.responseReceived",
+        "Network.loadingFinished",
+    ])
+    #expect(events.map(\.targetID) == [
+        ProtocolTarget.ID("page-main"),
+        ProtocolTarget.ID("page-main"),
+        ProtocolTarget.ID("page-main"),
+    ])
+    #expect(events.map(\.networkScopeTargetID) == [nil, nil, nil])
+    #expect(events.map(\.networkPageMembership) == [
+        .currentPage,
+        .currentPage,
+        .currentPage,
+    ])
 }
 
 @Test
-func latestRootNetworkKeepsDestroyedTargetLifecycleRouteUntilTerminal() async throws {
+func latestRootNetworkIgnoresDestroyedFrameMetadataUntilTerminal() async throws {
     let session = TransportSession(
         backend: FakeTransportBackend(),
         protocolProfile: .latest
     )
-    let frameTargetID = ProtocolTarget.ID("frame-42-7")
     await session.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","isProvisional":false,"isPaused":false}}}"#
     )
@@ -484,18 +501,18 @@ func latestRootNetworkKeepsDestroyedTargetLifecycleRouteUntilTerminal() async th
     )
 
     await session.receiveRootMessage(
-        #"{"method":"Network.requestWillBeSent","params":{"requestId":"frame-7.99","targetId":"frame-42-7"}}"#
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-7.99","targetId":"frame-42-7"}}"#
     )
-    #expect(try await networkEvents.event().targetID == frameTargetID)
+    #expect(try await networkEvents.event().targetID == ProtocolTarget.ID("page-main"))
 
     await session.receiveRootMessage(
         #"{"method":"Target.targetDestroyed","params":{"targetId":"frame-42-7"}}"#
     )
     await session.receiveRootMessage(
-        #"{"method":"Network.responseReceived","params":{"requestId":"frame-7.99"}}"#
+        #"{"method":"Network.responseReceived","params":{"requestId":"request-7.99"}}"#
     )
     await session.receiveRootMessage(
-        #"{"method":"Network.loadingFinished","params":{"requestId":"frame-7.99"}}"#
+        #"{"method":"Network.loadingFinished","params":{"requestId":"request-7.99"}}"#
     )
 
     let events = try await networkEvents.events(prefix: 3)
@@ -505,15 +522,11 @@ func latestRootNetworkKeepsDestroyedTargetLifecycleRouteUntilTerminal() async th
         "Network.loadingFinished",
     ])
     #expect(events.map(\.targetID) == [
-        frameTargetID,
-        frameTargetID,
-        frameTargetID,
+        ProtocolTarget.ID("page-main"),
+        ProtocolTarget.ID("page-main"),
+        ProtocolTarget.ID("page-main"),
     ])
-    #expect(events.map(\.networkScopeTargetID) == [
-        frameTargetID,
-        frameTargetID,
-        frameTargetID,
-    ])
+    #expect(events.map(\.networkScopeTargetID) == [nil, nil, nil])
 }
 
 @Test
@@ -534,7 +547,7 @@ func latestRootNetworkLifecycleRetargetsCurrentPageWithoutChangingItsScope() asy
     var iterator = events.makeAsyncIterator()
 
     await session.receiveRootMessage(
-        #"{"method":"Network.requestWillBeSent","params":{"requestId":"navigation-request","targetId":"page-old"}}"#
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-42.7","targetId":"page-old"}}"#
     )
     let requestWillBeSent = try #require(await iterator.next())
     #expect(requestWillBeSent.targetID == oldTargetID)
@@ -544,14 +557,14 @@ func latestRootNetworkLifecycleRetargetsCurrentPageWithoutChangingItsScope() asy
         #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-old","newTargetId":"page-new"}}"#
     )
     await session.receiveRootMessage(
-        #"{"method":"Network.responseReceived","params":{"requestId":"navigation-request"}}"#
+        #"{"method":"Network.responseReceived","params":{"requestId":"request-42.7"}}"#
     )
     let responseReceived = try #require(await iterator.next())
     #expect(responseReceived.targetID == newTargetID)
     #expect(responseReceived.networkScopeTargetID == nil)
 
     await session.receiveRootMessage(
-        #"{"method":"Network.loadingFinished","params":{"requestId":"navigation-request"}}"#
+        #"{"method":"Network.loadingFinished","params":{"requestId":"request-42.7"}}"#
     )
     let loadingFinished = try #require(await iterator.next())
     #expect(loadingFinished.targetID == newTargetID)
@@ -559,12 +572,11 @@ func latestRootNetworkLifecycleRetargetsCurrentPageWithoutChangingItsScope() asy
 }
 
 @Test
-func latestRootNetworkDefersProvisionalPageUntilItBecomesCurrent() async throws {
+func latestRootNetworkTreatsProvisionalProcessMetadataAsCurrentPage() async throws {
     let session = TransportSession(
         backend: FakeTransportBackend(),
         protocolProfile: .latest
     )
-    let newPageTargetID = ProtocolTarget.ID("page-new")
     await session.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-old","type":"page","isProvisional":false,"isPaused":false}}}"#
     )
@@ -576,7 +588,7 @@ func latestRootNetworkDefersProvisionalPageUntilItBecomesCurrent() async throws 
     )
 
     await session.receiveRootMessage(
-        #"{"method":"Network.requestWillBeSent","params":{"requestId":"navigation-request","targetId":"page-new"}}"#
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-42.7","targetId":"page-new"}}"#
     )
     await session.receiveRootMessage(
         #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-old","newTargetId":"page-new"}}"#
@@ -584,19 +596,17 @@ func latestRootNetworkDefersProvisionalPageUntilItBecomesCurrent() async throws 
 
     let event = try await networkEvents.event()
     #expect(event.method == "Network.requestWillBeSent")
-    #expect(event.targetID == newPageTargetID)
+    #expect(event.targetID == ProtocolTarget.ID("page-old"))
     #expect(event.networkScopeTargetID == nil)
     #expect(event.networkPageMembership == .currentPage)
 }
 
 @Test
-func latestRootNetworkRedirectKeepsInitialScopeAcrossFrameCommit() async throws {
+func latestRootNetworkRedirectRemainsUnscopedAcrossFrameCommit() async throws {
     let session = TransportSession(
         backend: FakeTransportBackend(),
         protocolProfile: .latest
     )
-    let oldTargetID = ProtocolTarget.ID("frame-42-7")
-    let newTargetID = ProtocolTarget.ID("frame-42-8")
     await session.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","isProvisional":false,"isPaused":false}}}"#
     )
@@ -610,28 +620,28 @@ func latestRootNetworkRedirectKeepsInitialScopeAcrossFrameCommit() async throws 
     var iterator = events.makeAsyncIterator()
 
     await session.receiveRootMessage(
-        #"{"method":"Network.requestWillBeSent","params":{"requestId":"frame-7.99","targetId":"frame-42-7"}}"#
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-7.99","targetId":"frame-42-7"}}"#
     )
     let initialRequest = try #require(await iterator.next())
-    #expect(initialRequest.targetID == oldTargetID)
-    #expect(initialRequest.networkScopeTargetID == oldTargetID)
+    #expect(initialRequest.targetID == ProtocolTarget.ID("page-main"))
+    #expect(initialRequest.networkScopeTargetID == nil)
 
     await session.receiveRootMessage(
         #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-42-7","newTargetId":"frame-42-8"}}"#
     )
     await session.receiveRootMessage(
-        #"{"method":"Network.requestWillBeSent","params":{"requestId":"frame-7.99","targetId":"frame-42-8","redirectResponse":{"url":"https://frame.example.test/redirect","status":302}}}"#
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-7.99","targetId":"frame-42-8","redirectResponse":{"url":"https://frame.example.test/redirect","status":302}}}"#
     )
     let redirectRequest = try #require(await iterator.next())
-    #expect(redirectRequest.targetID == newTargetID)
-    #expect(redirectRequest.networkScopeTargetID == oldTargetID)
+    #expect(redirectRequest.targetID == ProtocolTarget.ID("page-main"))
+    #expect(redirectRequest.networkScopeTargetID == nil)
 
     await session.receiveRootMessage(
-        #"{"method":"Network.responseReceived","params":{"requestId":"frame-7.99"}}"#
+        #"{"method":"Network.responseReceived","params":{"requestId":"request-7.99"}}"#
     )
     let responseReceived = try #require(await iterator.next())
-    #expect(responseReceived.targetID == newTargetID)
-    #expect(responseReceived.networkScopeTargetID == oldTargetID)
+    #expect(responseReceived.targetID == ProtocolTarget.ID("page-main"))
+    #expect(responseReceived.networkScopeTargetID == nil)
 }
 
 @Test

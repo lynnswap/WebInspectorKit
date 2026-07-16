@@ -2250,7 +2250,7 @@ func transportBackendUsesTargetWrappedNetworkEventSourceAfterFrameMappingChanges
 }
 
 @Test
-func transportBackendRoutesFrameNetworkCommandThroughLatestRootAgent() async throws {
+func transportBackendRoutesProcessQualifiedRequestThroughLatestRootAgent() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(
         backend: backend,
@@ -2280,7 +2280,7 @@ func transportBackendRoutesFrameNetworkCommandThroughLatestRootAgent() async thr
 
     await waitForEventSubscription(target, domain: .network)
     await transport.receiveRootMessage(
-        #"{"method":"Network.requestWillBeSent","params":{"requestId":"frame-request","frameId":"frame-7.42","loaderId":"loader-7.42","targetId":"","request":{"url":"https://frame.example.test/","method":"GET"},"initiator":{"type":"other","nodeId":7},"timestamp":7.5,"type":"Document"}}"#
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-7.99","frameId":"frame-7.42","loaderId":"loader-7.42","targetId":"","request":{"url":"https://frame.example.test/","method":"GET"},"initiator":{"type":"other","nodeId":7},"timestamp":7.5,"type":"Document"}}"#
     )
 
     await transport.receiveRootMessage(
@@ -2298,7 +2298,7 @@ func transportBackendRoutesFrameNetworkCommandThroughLatestRootAgent() async thr
         #"{"method":"Target.targetDestroyed","params":{"targetId":"frame-42-7"}}"#
     )
     await transport.receiveRootMessage(
-        #"{"method":"Network.responseReceived","params":{"requestId":"frame-request","frameId":"frame-7.42","loaderId":"loader-7.42","type":"Document","response":{"url":"https://frame.example.test/","status":200,"statusText":"OK","mimeType":"text/html","headers":{},"source":"network"},"timestamp":8}}"#
+        #"{"method":"Network.responseReceived","params":{"requestId":"request-7.99","frameId":"frame-7.42","loaderId":"loader-7.42","type":"Document","response":{"url":"https://frame.example.test/","status":200,"statusText":"OK","mimeType":"text/html","headers":{},"source":"network"},"timestamp":8}}"#
     )
 
     let events = try await value(of: eventTask)
@@ -2307,11 +2307,11 @@ func transportBackendRoutesFrameNetworkCommandThroughLatestRootAgent() async thr
         Issue.record("Expected current-page route to receive frame Network.requestWillBeSent.")
         return
     }
-    #expect(id == Network.Request.ID("frame-request", scopedToTargetRawValue: "frame-42-7"))
+    #expect(id == Network.Request.ID("request-7.99"))
     #expect(request.id == id)
     #expect(request.url == "https://frame.example.test/")
     #expect(request.method == "GET")
-    #expect(initiator.nodeID == DOM.Node.ID("7", scopedToTargetRawValue: "frame-42-7"))
+    #expect(initiator.nodeID == DOM.Node.ID("7"))
     #expect(resourceType == .document)
     #expect(timestamp == 7.5)
     guard case let .responseReceived(responseID, _, _, _) = events[1] else {
@@ -2327,7 +2327,7 @@ func transportBackendRoutesFrameNetworkCommandThroughLatestRootAgent() async thr
         try await backend.waitForMessage()
     })
     #expect(try messageMethod(rootMessage) == "Network.getResponseBody")
-    #expect(try messageParameters(rootMessage)["requestId"] as? String == "frame-request")
+    #expect(try messageParameters(rootMessage)["requestId"] as? String == "request-7.99")
     #expect(await backend.sentTargetMessages().isEmpty)
     await transport.receiveRootMessage(
         #"{"id":\#(try messageID(rootMessage)),"result":{"body":"frame body","base64Encoded":false}}"#
@@ -2682,7 +2682,7 @@ func transportBackendAssociatesFrameTargetCreatedAfterPageTopology() async throw
 }
 
 @Test
-func transportBackendDoesNotDeliverNonCurrentPageRootNetworkEventsToCurrentPageRoute() async throws {
+func transportBackendTreatsLatestRootNetworkTargetAsProcessMetadata() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(
         backend: backend,
@@ -2704,23 +2704,24 @@ func transportBackendDoesNotDeliverNonCurrentPageRootNetworkEventsToCurrentPageR
 
     await waitForEventSubscription(target, domain: .network)
     await transport.receiveRootMessage(
-        #"{"method":"Network.requestWillBeSent","params":{"requestId":"other-page-request","frameId":"frame-8.1","loaderId":"loader-8.1","targetId":"page-other","request":{"url":"https://other-page.example.test/","method":"GET"},"initiator":{"type":"other"},"timestamp":8.5,"type":"Document"}}"#
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-8.1","frameId":"frame-8.1","loaderId":"loader-8.1","targetId":"page-other","request":{"url":"https://other-page.example.test/","method":"GET"},"initiator":{"type":"other"},"timestamp":8.5,"type":"Document"}}"#
     )
     await transport.receiveRootMessage(
-        #"{"method":"Network.requestWillBeSent","params":{"requestId":"current-page-request","frameId":"frame-7.1","loaderId":"loader-7.1","targetId":"page-main","request":{"url":"https://current-page.example.test/","method":"GET"},"initiator":{"type":"other"},"timestamp":9,"type":"Document"}}"#
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-7.1","frameId":"frame-7.1","loaderId":"loader-7.1","targetId":"page-main","request":{"url":"https://current-page.example.test/","method":"GET"},"initiator":{"type":"other"},"timestamp":9,"type":"Document"}}"#
     )
 
     let event = try #require(try await value(of: eventTask))
     guard case let .requestWillBeSent(id, request, _, _, _, _) = event else {
-        Issue.record("Expected current-page Network.requestWillBeSent.")
+        Issue.record("Expected inspected-page Network.requestWillBeSent.")
         return
     }
-    #expect(id == Network.Request.ID("current-page-request"))
-    #expect(request.url == "https://current-page.example.test/")
+    #expect(id == Network.Request.ID("request-8.1"))
+    #expect(id.targetScopeRawValue == nil)
+    #expect(request.url == "https://other-page.example.test/")
 }
 
 @Test
-func transportBackendDoesNotDeliverUnresolvedRootNetworkEventsToCurrentPageRoute() async throws {
+func transportBackendDeliversLatestRootNetworkWithoutFrameTopology() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(
         backend: backend,
@@ -2728,28 +2729,74 @@ func transportBackendDoesNotDeliverUnresolvedRootNetworkEventsToCurrentPageRoute
         responseTimeout: .milliseconds(750)
     )
     await installPageTarget(in: transport)
-    await installMainPageFrame(in: transport)
     let proxy = try await WebInspectorProxy(transport: transport)
     let target = try await proxy.waitForCurrentPage()
 
-    let eventProbe = CompletionProbe()
     let eventTask = Task {
         var iterator = target.network.events.makeAsyncIterator()
-        if await iterator.next() != nil {
-            await eventProbe.finish()
-        }
-    }
-    defer {
-        eventTask.cancel()
+        return await iterator.next()
     }
 
     await waitForEventSubscription(target, domain: .network)
     await transport.receiveRootMessage(
-        #"{"method":"Network.requestWillBeSent","params":{"requestId":"unresolved-request","frameId":"frame-404.1","targetId":"","request":{"url":"https://unresolved.example.test/","method":"GET"},"initiator":{"type":"other"},"timestamp":9.5,"type":"Document"}}"#
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-404.1","frameId":"frame-404.1","loaderId":"loader-404.1","targetId":"","request":{"url":"https://unresolved.example.test/","method":"GET"},"initiator":{"type":"other"},"timestamp":9.5,"type":"Document"}}"#
     )
 
-    try await Task.sleep(for: .milliseconds(100))
-    #expect(await eventProbe.isFinished() == false)
+    let event = try #require(try await value(of: eventTask))
+    guard case let .requestWillBeSent(id, request, _, _, _, _) = event else {
+        Issue.record("Expected topology-independent Network.requestWillBeSent.")
+        return
+    }
+    #expect(id == Network.Request.ID("request-404.1"))
+    #expect(id.targetScopeRawValue == nil)
+    #expect(request.url == "https://unresolved.example.test/")
+}
+
+@Test
+func transportBackendPreservesLargeLatestRootNetworkBurstInFIFOOrder() async throws {
+    let eventCount = 2_305
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let eventTask = Task { () -> [Network.Request.ID] in
+        var requestIDs: [Network.Request.ID] = []
+        requestIDs.reserveCapacity(eventCount)
+        for await event in target.network.events {
+            guard case let .requestWillBeSent(id, _, _, _, _, _) = event else {
+                continue
+            }
+            requestIDs.append(id)
+            if requestIDs.count == eventCount {
+                break
+            }
+        }
+        return requestIDs
+    }
+
+    await waitForEventSubscription(target, domain: .network)
+    for index in 0..<eventCount {
+        let requestID = "request-\(index + 1).\(index + 100)"
+        let message = """
+        {"method":"Network.requestWillBeSent","params":{"requestId":"\(requestID)","frameId":"frame-\(index).1","loaderId":"loader-\(index)","targetId":"","request":{"url":"https://example.test/\(index)","method":"GET"},"initiator":{"type":"other"},"timestamp":\(index),"type":"Image"}}
+        """
+        await transport.receiveRootMessage(
+            message
+        )
+    }
+
+    let requestIDs = try await value(of: eventTask, timeout: .seconds(10))
+    #expect(requestIDs.count == eventCount)
+    #expect(requestIDs == (0..<eventCount).map {
+        Network.Request.ID("request-\($0 + 1).\($0 + 100)")
+    })
+    #expect(requestIDs.allSatisfy { $0.targetScopeRawValue == nil })
 }
 
 @Test
