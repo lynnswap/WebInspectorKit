@@ -43,13 +43,13 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             case building(ActiveBuild)
         }
 
-        private let builder: any NetworkListSnapshotBuilding
+        private let builderFactory: any NetworkListSnapshotBuilderMaking
         private var state = State.idle
         private var nextGeneration: UInt64 = 0
         private var idleWaiters: [CheckedContinuation<Void, Never>] = []
 
-        init(builder: any NetworkListSnapshotBuilding) {
-            self.builder = builder
+        init(builderFactory: any NetworkListSnapshotBuilderMaking) {
+            self.builderFactory = builderFactory
         }
 
         var hasWorkInFlight: Bool {
@@ -105,7 +105,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
                 preconditionFailure("A Network list snapshot build must be serialized.")
             }
             let generation = takeNextGeneration()
-            let builder = self.builder
+            let builder = builderFactory.makeBuilder()
             let request = work.request
             let task = Task(priority: .userInitiated) { @MainActor [weak self] in
                 do {
@@ -263,7 +263,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         self.init(
             model: model,
             listFrameScheduler: NetworkListDisplayLinkFrameScheduler(),
-            listSnapshotBuilder: NetworkListSnapshotBuilder(),
+            listSnapshotBuilderFactory: NetworkListSnapshotBuilderFactory(),
             snapshotApplyCompletionScheduler: NetworkListImmediateSnapshotApplyCompletionScheduler()
         )
     }
@@ -271,14 +271,14 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     package convenience init(
         model: NetworkPanelModel,
         listFrameScheduler: any NetworkListFrameScheduling,
-        listSnapshotBuilder: any NetworkListSnapshotBuilding,
+        listSnapshotBuilderFactory: any NetworkListSnapshotBuilderMaking,
         snapshotApplyCompletionScheduler: any NetworkListSnapshotApplyCompletionScheduling =
             NetworkListImmediateSnapshotApplyCompletionScheduler()
     ) {
         self.init(
             model: model,
             frameScheduler: listFrameScheduler,
-            snapshotBuilder: listSnapshotBuilder,
+            snapshotBuilderFactory: listSnapshotBuilderFactory,
             snapshotApplyCompletionScheduler: snapshotApplyCompletionScheduler
         )
     }
@@ -286,13 +286,13 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private init(
         model: NetworkPanelModel,
         frameScheduler: any NetworkListFrameScheduling,
-        snapshotBuilder: any NetworkListSnapshotBuilding,
+        snapshotBuilderFactory: any NetworkListSnapshotBuilderMaking,
         snapshotApplyCompletionScheduler: any NetworkListSnapshotApplyCompletionScheduling
     ) {
         self.model = model
         listFrameScheduler = frameScheduler
         listSnapshotBuildCoordinator = ListSnapshotBuildCoordinator(
-            builder: snapshotBuilder
+            builderFactory: snapshotBuilderFactory
         )
         self.snapshotApplyCompletionScheduler = snapshotApplyCompletionScheduler
         entrySelectionAction = { [model] entryID in

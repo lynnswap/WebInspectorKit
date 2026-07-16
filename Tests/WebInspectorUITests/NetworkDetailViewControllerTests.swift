@@ -2600,11 +2600,11 @@ struct NetworkDetailViewControllerTests {
         let selectedRequest = try #require(context.registeredRequest(for: selectedRequestID))
         model.selectRequest(selectedRequest)
         let frameScheduler = ManualNetworkListFrameScheduler()
-        let snapshotBuilder = BarrierNetworkListSnapshotBuilder()
+        let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let listViewController = NetworkListViewController(
             model: model,
             listFrameScheduler: frameScheduler,
-            listSnapshotBuilder: snapshotBuilder
+            listSnapshotBuilderFactory: snapshotBuilder
         )
         let window = showInWindow(listViewController, makeVisible: true)
         defer { window.isHidden = true }
@@ -2684,11 +2684,11 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(context: context)
         let request = try #require(context.registeredRequest(for: requestID))
         let frameScheduler = ManualNetworkListFrameScheduler()
-        let snapshotBuilder = BarrierNetworkListSnapshotBuilder()
+        let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let listViewController = NetworkListViewController(
             model: model,
             listFrameScheduler: frameScheduler,
-            listSnapshotBuilder: snapshotBuilder
+            listSnapshotBuilderFactory: snapshotBuilder
         )
         let window = showInWindow(listViewController, makeVisible: true)
         defer { window.isHidden = true }
@@ -2709,7 +2709,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func concreteListSnapshotBuilderBuildsTypedArtifactOnItsActor() async throws {
+    func concreteListSnapshotBuilderFactoryMakesDedicatedActors() async throws {
         let context = makeContext()
         context.seedNetworkRequest(
             requestID: "actor-builder",
@@ -2725,10 +2725,13 @@ struct NetworkDetailViewControllerTests {
             entryIDs: model.displayEntryIDs,
             revision: 41
         )
-        let builder: any NetworkListSnapshotBuilding = NetworkListSnapshotBuilder()
+        let builderFactory = NetworkListSnapshotBuilderFactory()
+        let builder = builderFactory.makeBuilder()
+        let nextBuilder = builderFactory.makeBuilder()
 
         let artifact = try await builder.build(input)
 
+        #expect(ObjectIdentifier(builder) != ObjectIdentifier(nextBuilder))
         #expect(artifact.input == input)
         #expect(artifact.snapshot.sectionIdentifiers == [.main])
         #expect(artifact.snapshot.itemIdentifiers == input.entryIDs)
@@ -2749,12 +2752,12 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(context: context)
         _ = try #require(context.registeredRequest(for: initialRequestID))
         let frameScheduler = ManualNetworkListFrameScheduler()
-        let snapshotBuilder = BarrierNetworkListSnapshotBuilder()
+        let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let applyCompletionScheduler = ManualNetworkListSnapshotApplyCompletionScheduler()
         let listViewController = NetworkListViewController(
             model: model,
             listFrameScheduler: frameScheduler,
-            listSnapshotBuilder: snapshotBuilder,
+            listSnapshotBuilderFactory: snapshotBuilder,
             snapshotApplyCompletionScheduler: applyCompletionScheduler
         )
         let window = showInWindow(listViewController, makeVisible: true)
@@ -2847,11 +2850,11 @@ struct NetworkDetailViewControllerTests {
         let selectedRequest = try #require(context.registeredRequest(for: selectedRequestID))
         model.selectRequest(selectedRequest)
         let frameScheduler = ManualNetworkListFrameScheduler()
-        let snapshotBuilder = BarrierNetworkListSnapshotBuilder()
+        let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let listViewController = NetworkListViewController(
             model: model,
             listFrameScheduler: frameScheduler,
-            listSnapshotBuilder: snapshotBuilder
+            listSnapshotBuilderFactory: snapshotBuilder
         )
         let window = showInWindow(listViewController, makeVisible: true)
         defer { window.isHidden = true }
@@ -3079,11 +3082,11 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(context: context)
         let firstRequest = try #require(context.registeredRequest(for: firstRequestID))
         let frameScheduler = ManualNetworkListFrameScheduler()
-        let snapshotBuilder = BarrierNetworkListSnapshotBuilder()
+        let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let listViewController = NetworkListViewController(
             model: model,
             listFrameScheduler: frameScheduler,
-            listSnapshotBuilder: snapshotBuilder
+            listSnapshotBuilderFactory: snapshotBuilder
         )
         let window = showInWindow(listViewController, makeVisible: true)
         defer { window.isHidden = true }
@@ -3118,7 +3121,7 @@ struct NetworkDetailViewControllerTests {
         listViewController.suspendRenderingForTesting()
         #expect(listViewController.hasActiveListSnapshotBuildForTesting == false)
         #expect(frameScheduler.hasScheduledFrame == false)
-        await snapshotBuilder.waitUntilCancelledBuildCount(1)
+        await snapshotBuilder.waitUntilCancellationObservedCount(1)
 
         listViewController.resumeRenderingForTesting()
         await snapshotBuilder.waitUntilStartedBuildCount(3)
@@ -3130,7 +3133,17 @@ struct NetworkDetailViewControllerTests {
         await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
 
         #expect(listViewController.displayedRequestIDsForTesting == [secondRequest.id, firstRequest.id])
-        let statistics = await snapshotBuilder.statistics()
+        var statistics = await snapshotBuilder.statistics()
+        #expect(statistics.activeBuildCount == 1)
+        #expect(statistics.cancellationObservedCount == 1)
+        #expect(statistics.cancelledBuildCount == 0)
+        #expect(statistics.finishedBuildIDs.contains(3))
+        #expect(statistics.maximumActiveBuildCount == 2)
+
+        await snapshotBuilder.releaseBuild(2)
+        await snapshotBuilder.waitUntilCancelledBuildCount(1)
+        statistics = await snapshotBuilder.statistics()
+        #expect(statistics.activeBuildCount == 0)
         #expect(statistics.cancelledBuildCount == 1)
         #expect(statistics.startedBuildPriorities.allSatisfy { $0 == .userInitiated })
     }
@@ -3147,12 +3160,12 @@ struct NetworkDetailViewControllerTests {
         ))
         let model = NetworkPanelModel(context: context)
         let frameScheduler = ManualNetworkListFrameScheduler()
-        let snapshotBuilder = BarrierNetworkListSnapshotBuilder()
+        let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let applyCompletionScheduler = ManualNetworkListSnapshotApplyCompletionScheduler()
         let listViewController = NetworkListViewController(
             model: model,
             listFrameScheduler: frameScheduler,
-            listSnapshotBuilder: snapshotBuilder,
+            listSnapshotBuilderFactory: snapshotBuilder,
             snapshotApplyCompletionScheduler: applyCompletionScheduler
         )
         let window = showInWindow(listViewController, makeVisible: true)
@@ -4416,55 +4429,124 @@ private final class ManualNetworkListSnapshotApplyCompletionScheduler:
     }
 }
 
+private struct BarrierNetworkListSnapshotBuilderFactory: NetworkListSnapshotBuilderMaking {
+    private let state = BarrierNetworkListSnapshotBuildState()
+
+    func makeBuilder() -> any NetworkListSnapshotBuilding {
+        BarrierNetworkListSnapshotBuilder(state: state)
+    }
+
+    func waitUntilStartedBuildCount(_ targetCount: Int) async {
+        await state.waitUntilStartedBuildCount(targetCount)
+    }
+
+    func releaseBuild(_ buildID: Int) async {
+        await state.releaseBuild(buildID)
+    }
+
+    func waitUntilCancellationObservedCount(_ targetCount: Int) async {
+        await state.waitUntilCancellationObservedCount(targetCount)
+    }
+
+    func waitUntilCancelledBuildCount(_ targetCount: Int) async {
+        await state.waitUntilCancelledBuildCount(targetCount)
+    }
+
+    func statistics() async -> BarrierNetworkListSnapshotBuildState.Statistics {
+        await state.statistics()
+    }
+}
+
 private actor BarrierNetworkListSnapshotBuilder: NetworkListSnapshotBuilding {
+    private let state: BarrierNetworkListSnapshotBuildState
+
+    init(state: BarrierNetworkListSnapshotBuildState) {
+        self.state = state
+    }
+
+    func build(
+        _ input: NetworkListSnapshotBuildInput
+    ) async throws(CancellationError) -> NetworkListSnapshotArtifact {
+        let buildID = await state.buildDidStart(priority: Task.currentPriority)
+        await withTaskCancellationHandler {
+            await state.waitForRelease(of: buildID)
+        } onCancel: {
+            Task {
+                await state.buildDidObserveCancellation(buildID)
+            }
+        }
+        guard !Task.isCancelled else {
+            await state.buildDidCancel(buildID)
+            throw CancellationError()
+        }
+
+        var snapshot = NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>()
+        snapshot.appendSections([.main])
+        snapshot.appendItems(input.entryIDs, toSection: .main)
+        await state.buildDidFinish(buildID)
+        return NetworkListSnapshotArtifact(input: input, snapshot: snapshot)
+    }
+}
+
+private actor BarrierNetworkListSnapshotBuildState {
     struct Statistics: Equatable, Sendable {
         var startedBuildCount: Int
         var activeBuildCount: Int
         var maximumActiveBuildCount: Int
+        var cancellationObservedCount: Int
         var cancelledBuildCount: Int
+        var finishedBuildIDs: Set<Int>
         var startedBuildPriorities: [TaskPriority]
     }
 
-    private struct StartedBuildWaiter {
+    private struct CountWaiter {
         var targetCount: Int
         var continuation: CheckedContinuation<Void, Never>
     }
 
     private var startedBuildCount = 0
-    private var activeBuildCount = 0
+    private var activeBuildIDs: Set<Int> = []
     private var maximumActiveBuildCount = 0
+    private var cancellationObservedBuildIDs: Set<Int> = []
     private var cancelledBuildCount = 0
+    private var finishedBuildIDs: Set<Int> = []
     private var startedBuildPriorities: [TaskPriority] = []
     private var releasedBuilds: Set<Int> = []
-    private var cancelledBuilds: Set<Int> = []
     private var releaseWaiters: [Int: CheckedContinuation<Void, Never>] = [:]
-    private var startedBuildWaiters: [StartedBuildWaiter] = []
-    private var cancelledBuildWaiters: [StartedBuildWaiter] = []
+    private var startedBuildWaiters: [CountWaiter] = []
+    private var cancellationObservedWaiters: [CountWaiter] = []
+    private var cancelledBuildWaiters: [CountWaiter] = []
 
-    func build(
-        _ input: NetworkListSnapshotBuildInput
-    ) async throws(CancellationError) -> NetworkListSnapshotArtifact {
+    func buildDidStart(priority: TaskPriority) -> Int {
         startedBuildCount += 1
         let buildID = startedBuildCount
-        activeBuildCount += 1
-        maximumActiveBuildCount = Swift.max(maximumActiveBuildCount, activeBuildCount)
-        startedBuildPriorities.append(Task.currentPriority)
+        precondition(activeBuildIDs.insert(buildID).inserted)
+        maximumActiveBuildCount = Swift.max(maximumActiveBuildCount, activeBuildIDs.count)
+        startedBuildPriorities.append(priority)
         resumeStartedBuildWaiters()
-        defer {
-            activeBuildCount -= 1
-        }
+        return buildID
+    }
 
-        do {
-            try await waitForRelease(of: buildID)
-        } catch {
-            cancelledBuildCount += 1
-            resumeCancelledBuildWaiters()
-            throw error
+    func buildDidObserveCancellation(_ buildID: Int) {
+        if cancellationObservedBuildIDs.insert(buildID).inserted {
+            resumeCancellationObservedWaiters()
         }
-        var snapshot = NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>()
-        snapshot.appendSections([.main])
-        snapshot.appendItems(input.entryIDs, toSection: .main)
-        return NetworkListSnapshotArtifact(input: input, snapshot: snapshot)
+    }
+
+    func buildDidCancel(_ buildID: Int) {
+        precondition(
+            activeBuildIDs.remove(buildID) != nil,
+            "A canceled Network list snapshot build must still be active."
+        )
+        cancelledBuildCount += 1
+        resumeCancelledBuildWaiters()
+    }
+
+    func buildDidFinish(_ buildID: Int) {
+        precondition(
+            activeBuildIDs.remove(buildID) != nil && finishedBuildIDs.insert(buildID).inserted,
+            "A Network list snapshot build must finish exactly once."
+        )
     }
 
     func waitUntilStartedBuildCount(_ targetCount: Int) async {
@@ -4473,7 +4555,7 @@ private actor BarrierNetworkListSnapshotBuilder: NetworkListSnapshotBuilding {
         }
         await withCheckedContinuation { continuation in
             startedBuildWaiters.append(
-                StartedBuildWaiter(
+                CountWaiter(
                     targetCount: targetCount,
                     continuation: continuation
                 )
@@ -4489,13 +4571,27 @@ private actor BarrierNetworkListSnapshotBuilder: NetworkListSnapshotBuilding {
         }
     }
 
+    func waitUntilCancellationObservedCount(_ targetCount: Int) async {
+        guard cancellationObservedBuildIDs.count < targetCount else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            cancellationObservedWaiters.append(
+                CountWaiter(
+                    targetCount: targetCount,
+                    continuation: continuation
+                )
+            )
+        }
+    }
+
     func waitUntilCancelledBuildCount(_ targetCount: Int) async {
         guard cancelledBuildCount < targetCount else {
             return
         }
         await withCheckedContinuation { continuation in
             cancelledBuildWaiters.append(
-                StartedBuildWaiter(
+                CountWaiter(
                     targetCount: targetCount,
                     continuation: continuation
                 )
@@ -4506,45 +4602,29 @@ private actor BarrierNetworkListSnapshotBuilder: NetworkListSnapshotBuilding {
     func statistics() -> Statistics {
         Statistics(
             startedBuildCount: startedBuildCount,
-            activeBuildCount: activeBuildCount,
+            activeBuildCount: activeBuildIDs.count,
             maximumActiveBuildCount: maximumActiveBuildCount,
+            cancellationObservedCount: cancellationObservedBuildIDs.count,
             cancelledBuildCount: cancelledBuildCount,
+            finishedBuildIDs: finishedBuildIDs,
             startedBuildPriorities: startedBuildPriorities
         )
     }
 
-    private func waitForRelease(of buildID: Int) async throws(CancellationError) {
-        await withTaskCancellationHandler {
-            if releasedBuilds.remove(buildID) == nil,
-               cancelledBuilds.remove(buildID) == nil {
-                await withCheckedContinuation { continuation in
-                    precondition(
-                        releaseWaiters[buildID] == nil,
-                        "A Network list snapshot build can only wait on one release barrier."
-                    )
-                    releaseWaiters[buildID] = continuation
-                }
+    func waitForRelease(of buildID: Int) async {
+        if releasedBuilds.remove(buildID) == nil {
+            await withCheckedContinuation { continuation in
+                precondition(
+                    releaseWaiters[buildID] == nil,
+                    "A Network list snapshot build can only wait on one release barrier."
+                )
+                releaseWaiters[buildID] = continuation
             }
-        } onCancel: {
-            Task {
-                await self.cancelWaitForRelease(of: buildID)
-            }
-        }
-        guard !Task.isCancelled else {
-            throw CancellationError()
-        }
-    }
-
-    private func cancelWaitForRelease(of buildID: Int) {
-        if let waiter = releaseWaiters.removeValue(forKey: buildID) {
-            waiter.resume()
-        } else {
-            cancelledBuilds.insert(buildID)
         }
     }
 
     private func resumeStartedBuildWaiters() {
-        var remainingWaiters: [StartedBuildWaiter] = []
+        var remainingWaiters: [CountWaiter] = []
         for waiter in startedBuildWaiters {
             if startedBuildCount >= waiter.targetCount {
                 waiter.continuation.resume()
@@ -4556,7 +4636,7 @@ private actor BarrierNetworkListSnapshotBuilder: NetworkListSnapshotBuilding {
     }
 
     private func resumeCancelledBuildWaiters() {
-        var remainingWaiters: [StartedBuildWaiter] = []
+        var remainingWaiters: [CountWaiter] = []
         for waiter in cancelledBuildWaiters {
             if cancelledBuildCount >= waiter.targetCount {
                 waiter.continuation.resume()
@@ -4565,6 +4645,18 @@ private actor BarrierNetworkListSnapshotBuilder: NetworkListSnapshotBuilding {
             }
         }
         cancelledBuildWaiters = remainingWaiters
+    }
+
+    private func resumeCancellationObservedWaiters() {
+        var remainingWaiters: [CountWaiter] = []
+        for waiter in cancellationObservedWaiters {
+            if cancellationObservedBuildIDs.count >= waiter.targetCount {
+                waiter.continuation.resume()
+            } else {
+                remainingWaiters.append(waiter)
+            }
+        }
+        cancellationObservedWaiters = remainingWaiters
     }
 }
 #endif

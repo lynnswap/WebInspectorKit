@@ -35,6 +35,18 @@ package protocol NetworkListSnapshotBuilding: Actor {
     ) async throws(CancellationError) -> NetworkListSnapshotArtifact
 }
 
+package protocol NetworkListSnapshotBuilderMaking: Sendable {
+    func makeBuilder() -> any NetworkListSnapshotBuilding
+}
+
+package struct NetworkListSnapshotBuilderFactory: NetworkListSnapshotBuilderMaking {
+    package init() {}
+
+    package func makeBuilder() -> any NetworkListSnapshotBuilding {
+        NetworkListSnapshotBuilder()
+    }
+}
+
 package actor NetworkListSnapshotBuilder: NetworkListSnapshotBuilding {
     package init() {}
 
