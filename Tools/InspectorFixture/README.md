@@ -27,31 +27,54 @@ The server can also run independently:
 python3 Tools/InspectorFixture/server.py --port 8765
 ```
 
-Set `FIXTURE_PORT`, `DERIVED_DATA_PATH`, or `SIMULATOR_NAME` to override the
-launcher defaults.
+Set `FIXTURE_PORT`, `DERIVED_DATA_PATH`, `SIMULATOR_NAME`, or
+`FIXTURE_INITIAL_PATH` to override the launcher defaults. The initial path
+defaults to `/a?visit=a1` and must remain a loopback-relative path.
 
 ## Manual verification matrix
 
-| Contract | Fixture action |
-| --- | --- |
-| Large DOM and scrolling | Expand `body` / `product-grid`; page A contains 2,305 self-authored card subtrees. |
-| Event delivery beyond the former implicit limit | With the inspector attached, tap **Emit 2305 DOM mutations** and confirm the attachment stays ready and the final card attributes appear. |
-| Insert/remove projection | Tap **Replace dynamic feed** and inspect the 96 replacement rows. |
-| Picker, styles, pseudo-elements, CSS variables | Pick **Pick me and inspect computed styles**; it has border, padding, shadow, `::before` / `::after`, one used custom property, and two unused custom properties for the reveal control. |
-| Shadow DOM | Expand `fixture-shadow` and its open shadow root. |
-| Frame routing | Expand the same-origin `fixture-frame` document and inspect a frame row. |
-| JavaScript dialogs | Tap **Show alert**, **Show confirm**, and **Show prompt**; complete each UIKit dialog and confirm the status output records the result. |
-| `target=_blank` routing | Tap **Open page B in target blank** and confirm Monocly loads page B in the current browser view. |
-| POST request and response bodies | Tap **Send local JSON POST**, select `/api/echo` in Network, and inspect both **Request** and **Response** preview roles. |
-| Large Network list throughput | Tap **Send 2305 local requests**, keep Network visible, and confirm all `/api/burst?request=…` rows arrive in request order while the list remains responsive and the selected row stays selected. |
-| Network list and previews | Page A issues JSON, redirect, SVG image, and intentionally disconnected requests. Inspect headers, JSON body, image preview, redirect chain, and failure state. |
-| Movie/HLS preview | Tap **Load local HLS movie**, select `/media/fixture.m3u8` in Network, and confirm the finite local movie renders in Preview. Select its `/media/fixture.ts` request and confirm the 206 response has `Content-Range` / `Accept-Ranges` headers and plays from the original URL without fetching a response body into WebInspectorKit. |
-| Navigation generations | Navigate A → B, then use **History back** or Monocly back. DOM changes while Network history remains available. |
-| Idle behavior | After the one-shot requests settle, do nothing and sample the main thread. The fixture has no interval, animation loop, or periodic mutation. |
+| Contract | Fixture action | Verification boundary |
+| --- | --- | --- |
+| Large DOM and scrolling | Expand `body` / `product-grid`; page A contains 2,305 self-authored card subtrees. | sim-use / manual: scroll and expand while sampling responsiveness. |
+| Event delivery beyond the former implicit limit | With the inspector attached, tap **Emit 2305 DOM mutations** and confirm the attachment stays ready and the final card attributes appear. | sim-use / manual. |
+| Insert/remove projection | Tap **Replace dynamic feed** and inspect the 96 replacement rows. | sim-use / manual. |
+| Picker, styles, pseudo-elements, CSS variables | Pick **Pick me and inspect computed styles**; it has border, padding, shadow, `::before` / `::after`, one used custom property, and two unused custom properties for the reveal control. | sim-use / manual: confirm the DOM row becomes selected and the highlight remains after picker mode exits. |
+| Shadow DOM | Expand `fixture-shadow` and its open shadow root. | sim-use / manual. |
+| Committed navigation generations | Start at A (`a1`), tap **Navigate to page B (b1)**, then **Navigate directly to page A (a2)**. The `data-fixture-visit` marker distinguishes all three committed documents. | sim-use / manual: DOM must show `a1 → b1 → a2` without an attachment failure. |
+| Reload and back-forward | On B tap **Reload b1**, **History back**, and **History forward**. Monocly's own back/forward controls exercise the same history as the fixture buttons. | sim-use / manual: each committed document must replace the DOM generation. |
+| Failed top-level provisional navigation | Tap **Start failed top-level navigation**. `/navigation-failure` closes before an HTTP response, so the current committed document must remain selected. | sim-use / manual: attachment, DOM, and the current Network generation remain usable. |
+| Subframe lifecycle | Use **Navigate subframe A → B**, **Reload subframe**, **Start failed subframe navigation**, **Detach subframe**, and **Reinsert subframe**. | sim-use / manual: only the child frame changes; no action may reset the top-level generation or Network session. |
+| Frame routing | Expand `fixture-frame` and inspect a frame row before and after the subframe actions. | sim-use / manual. |
+| JavaScript dialogs | Tap **Show alert**, **Show confirm**, and **Show prompt**; complete each UIKit dialog and confirm the status output records the result. | sim-use / manual. |
+| `target=_blank` routing | Tap **Open page B in target blank** and confirm Monocly loads page B in the current browser view. | sim-use / manual. |
+| POST request and response bodies | Tap **Send local JSON POST**, select `/api/echo` in Network, and inspect both **Request** and **Response** preview roles. | sim-use / manual. |
+| Large Network list throughput | Run **Send 2305 local requests**, then **Send 10000 local requests**. Every URL carries `visit`, `run`, and `request` identities. | sim-use / manual: confirm the final list contains every request in logical request order, stays responsive, and preserves selection. |
+| Network list and previews | Page A issues visit-marked JSON, redirect, SVG image, and intentionally disconnected requests. Inspect headers, JSON body, image preview, redirect chain, and failure state. | sim-use / manual. |
+| Movie/HLS preview | Tap **Load local HLS movie**, select `/media/fixture.m3u8` in Network, and confirm the finite local movie renders in Preview. Select its `/media/fixture.ts` request and confirm the 206 response has `Content-Range` / `Accept-Ranges` headers and plays from the original URL without fetching a response body into WebInspectorKit. | sim-use / manual. |
+| Idle behavior | After the one-shot requests settle, do nothing and sample the main thread. The fixture has no interval, animation loop, or periodic mutation. | Instruments or an equivalent process-level sample; the server regression test only proves that the authored JavaScript contains no periodic API. |
 
-The value `2,305` is only deterministic test input chosen to cross the removed
-2,048 buffering threshold. It is not a product limit and is never read by
-WebInspectorKit.
+### Network navigation retention
+
+Run the same `a1 → b1 → a2`, reload, and back-forward sequence twice:
+
+1. With **Preserve Log** off (the default), a committed top-level main-resource
+   change clears the prior visit's Network rows. After the `b1` commit, `a1`
+   request markers must be absent. Reload and back-forward each begin another
+   current Network session. Failed provisional and subframe navigation must not
+   clear the current top-level rows.
+2. With **Preserve Log** on, the same committed navigations retain the prior
+   `a1` / `b1` rows and append the new visit's rows. Failed provisional and
+   subframe navigation still must not create a top-level session boundary.
+
+These assertions require sim-use or equivalent UI automation because the
+fixture cannot read or mutate an inspector preference and cannot inspect the
+Network list. The server regression test verifies only the authored stimuli and
+their wire identities.
+
+The values `2,305` and `10,000` are deterministic fixture inputs. They are not
+product limits and are never read by WebInspectorKit. The burst endpoint accepts
+any non-negative request identity; only the authored buttons choose these two
+workloads.
 
 ## Regression test
 
@@ -59,9 +82,12 @@ WebInspectorKit.
 python3 Tools/InspectorFixture/test_server.py
 ```
 
-The test boots the server on an ephemeral port and verifies the route shapes,
-stress markers, the large local Network request route, dialog and navigation targets, used/unused CSS variables,
-distinct POST request/response bodies, finite local HLS media with byte-range
-responses, local-only
-assets, redirect, JSON/image responses, and the connection-level failed
-request.
+The test boots the server on an ephemeral port and verifies the visit-marked
+committed-navigation payloads, reload/back/forward controls, connection-level
+top-level and subframe failures, subframe lifecycle controls, parameterized
+large Network request identities without a 2,305/10,000 server cap, dialog and
+picker targets, used/unused CSS variables, distinct POST request/response
+bodies, finite local HLS media with byte-range responses, local-only assets,
+redirects, JSON/image responses, and one-shot JavaScript without periodic
+timers. It does not claim to verify inspector UI state; the matrix above marks
+those sim-use-only assertions explicitly.

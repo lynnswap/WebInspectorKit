@@ -4,10 +4,25 @@ set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 FIXTURE_PORT=${FIXTURE_PORT:-8765}
+FIXTURE_INITIAL_PATH=${FIXTURE_INITIAL_PATH:-/a?visit=a1}
 DERIVED_DATA_PATH=${DERIVED_DATA_PATH:-/tmp/WebInspectorKit-Monocly-Fixture-DerivedData}
 SIMULATOR_NAME=${SIMULATOR_NAME:-iPhone 17}
 DEVICE_UDID=${DEVICE_UDID:-}
 SERVER_PID=
+
+case "$FIXTURE_INITIAL_PATH" in
+    /*) ;;
+    *)
+        echo "FIXTURE_INITIAL_PATH must be an absolute loopback path beginning with '/'." >&2
+        exit 1
+        ;;
+esac
+case "$FIXTURE_INITIAL_PATH" in
+    //*|*://*)
+        echo "FIXTURE_INITIAL_PATH must not contain a host or URL scheme." >&2
+        exit 1
+        ;;
+esac
 
 cleanup() {
     if [ -n "$SERVER_PID" ]; then
@@ -95,11 +110,11 @@ xcodebuild build \
 xcrun simctl terminate "$DEVICE_UDID" lynnpd.Monocly 2>/dev/null || true
 xcrun simctl install "$DEVICE_UDID" "$DERIVED_DATA_PATH/Build/Products/Debug-iphonesimulator/Monocly.app"
 
-SIMCTL_CHILD_WEBSPECTOR_INITIAL_URL="http://127.0.0.1:$FIXTURE_PORT/a" \
+SIMCTL_CHILD_WEBSPECTOR_INITIAL_URL="http://127.0.0.1:$FIXTURE_PORT$FIXTURE_INITIAL_PATH" \
 SIMCTL_CHILD_WEBSPECTOR_AUTO_OPEN_INSPECTOR=1 \
 SIMCTL_CHILD_WEBSPECTOR_EPHEMERAL_SESSION=1 \
 xcrun simctl launch --terminate-running-process "$DEVICE_UDID" lynnpd.Monocly
 
-echo "Inspector fixture is running at http://127.0.0.1:$FIXTURE_PORT/a"
+echo "Inspector fixture is running at http://127.0.0.1:$FIXTURE_PORT$FIXTURE_INITIAL_PATH"
 echo "Monocly launched on $DEVICE_UDID; press Control-C to stop the server."
 wait "$SERVER_PID"

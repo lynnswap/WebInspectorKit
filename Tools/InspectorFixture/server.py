@@ -16,7 +16,8 @@ from urllib.parse import parse_qs, urlsplit
 
 CARD_COUNT: Final = 2_305
 MUTATION_EVENT_COUNT: Final = 2_305
-NETWORK_REQUEST_COUNT: Final = 2_305
+DEFAULT_NETWORK_REQUEST_COUNT: Final = 2_305
+LARGE_NETWORK_REQUEST_COUNT: Final = 10_000
 NETWORK_REQUEST_CONCURRENCY: Final = 16
 MEDIA_SEGMENT: Final = (Path(__file__).parent / "assets" / "fixture.ts").read_bytes()
 HLS_PLAYLIST: Final = b"""#EXTM3U
@@ -30,6 +31,14 @@ HLS_PLAYLIST: Final = b"""#EXTM3U
 #EXT-X-ENDLIST
 """
 SINGLE_BYTE_RANGE: Final = re.compile(r"bytes=(\d*)-(\d*)\Z")
+FIXTURE_MARKER: Final = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
+
+
+def _fixture_marker(query: str, name: str, default: str) -> str:
+    values = parse_qs(query, keep_blank_values=True).get(name, [])
+    if len(values) != 1 or FIXTURE_MARKER.fullmatch(values[0]) is None:
+        return default
+    return values[0]
 
 
 def _parse_single_byte_range(value: str, length: int) -> tuple[int, int] | None:
@@ -71,7 +80,7 @@ def _cards(count: int = CARD_COUNT) -> str:
     )
 
 
-def page_a() -> bytes:
+def page_a(visit: str = "a1") -> bytes:
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -81,15 +90,19 @@ def page_a() -> bytes:
   <link rel="stylesheet" href="/assets/site.css">
   <script src="/assets/site.js" defer></script>
 </head>
-<body data-fixture-page="a">
+<body data-fixture-page="a" data-fixture-visit="{visit}">
   <header class="fixture-toolbar">
     <div>
-      <strong>Inspector Fixture A</strong>
+      <strong>Inspector Fixture A ({visit})</strong>
       <span id="network-status" aria-live="polite">Network pending</span>
     </div>
     <nav aria-label="Fixture navigation">
-      <a id="navigate-b" href="/b">Navigate to page B</a>
-      <a id="target-blank" href="/b?source=target-blank" target="_blank" rel="opener">Open page B in target blank</a>
+      <a id="navigate-b" href="/b?visit=b1&amp;return=a2">Navigate to page B (b1)</a>
+      <a id="target-blank" href="/b?visit=b1&amp;return=a2&amp;source=target-blank" target="_blank" rel="opener">Open page B in target blank</a>
+      <button id="reload-page" type="button">Reload {visit}</button>
+      <button id="history-back" type="button">History back</button>
+      <button id="history-forward" type="button">History forward</button>
+      <a id="failed-navigation" href="/navigation-failure?visit={visit}">Start failed top-level navigation</a>
       <button id="mutation-burst" type="button">Emit {MUTATION_EVENT_COUNT} DOM mutations</button>
       <button id="replace-feed" type="button">Replace dynamic feed</button>
     </nav>
@@ -115,7 +128,8 @@ def page_a() -> bytes:
         </div>
         <div class="fixture-control-group">
           <h2>Large Network list</h2>
-          <button id="network-burst" type="button">Send {NETWORK_REQUEST_COUNT} local requests</button>
+          <button id="network-burst" type="button">Send {DEFAULT_NETWORK_REQUEST_COUNT} local requests</button>
+          <button id="network-burst-large" type="button">Send {LARGE_NETWORK_REQUEST_COUNT} local requests</button>
           <output id="network-burst-status" aria-live="polite">Network burst idle</output>
         </div>
         <div class="fixture-control-group">
@@ -126,8 +140,18 @@ def page_a() -> bytes:
         </div>
       </section>
       <fixture-shadow id="shadow-host"></fixture-shadow>
-      <iframe id="fixture-frame" src="/frame" title="Same-origin fixture frame"></iframe>
-      <img id="redirect-image" src="/redirect-image" alt="Redirected fixture image" width="160" height="90">
+      <section class="fixture-control-group" aria-label="Subframe lifecycle">
+        <h2>Subframe lifecycle</h2>
+        <button id="subframe-navigate" type="button">Navigate subframe A → B</button>
+        <button id="subframe-reload" type="button">Reload subframe</button>
+        <button id="subframe-fail" type="button">Start failed subframe navigation</button>
+        <button id="subframe-detach" type="button">Detach subframe</button>
+        <button id="subframe-reinsert" type="button">Reinsert subframe</button>
+      </section>
+      <div id="frame-host">
+        <iframe id="fixture-frame" src="/frame/a?visit={visit}" title="Same-origin fixture frame"></iframe>
+      </div>
+      <img id="redirect-image" src="/redirect-image?visit={visit}" alt="Redirected fixture image" width="160" height="90">
       <output id="burst-status">Mutation burst idle</output>
       <ol id="dynamic-feed"><li>Initial dynamic row</li></ol>
     </section>
@@ -140,8 +164,8 @@ def page_a() -> bytes:
 """.encode("utf-8")
 
 
-def page_b() -> bytes:
-    return """<!doctype html>
+def page_b(visit: str = "b1", return_visit: str = "a2") -> bytes:
+    return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -150,14 +174,17 @@ def page_b() -> bytes:
   <link rel="stylesheet" href="/assets/site.css">
   <script src="/assets/page-b.js" defer></script>
 </head>
-<body data-fixture-page="b" class="fixture-secondary-page">
+<body data-fixture-page="b" data-fixture-visit="{visit}" class="fixture-secondary-page">
   <main class="fixture-secondary">
     <p class="fixture-eyebrow">Committed navigation target</p>
-    <h1>Inspector Fixture B</h1>
+    <h1>Inspector Fixture B ({visit})</h1>
     <p id="detail-status">Detail JSON pending</p>
     <nav aria-label="Fixture return navigation">
       <button id="history-back" type="button">History back</button>
-      <a id="navigate-a" href="/a">Navigate directly to page A</a>
+      <button id="history-forward" type="button">History forward</button>
+      <button id="reload-page" type="button">Reload {visit}</button>
+      <a id="navigate-a" href="/a?visit={return_visit}">Navigate directly to page A ({return_visit})</a>
+      <a id="failed-navigation" href="/navigation-failure?visit={visit}">Start failed top-level navigation</a>
     </nav>
     <section id="page-b-tree">
       <article><h2>Different document identity</h2><p>Page B keeps navigation resets observable.</p></article>
@@ -169,16 +196,16 @@ def page_b() -> bytes:
 """.encode("utf-8")
 
 
-def frame_page() -> bytes:
+def frame_page(page: str = "a", visit: str = "a1") -> bytes:
     rows = "".join(
         f'<li data-frame-row="{index}">Frame row {index}</li>' for index in range(64)
     )
     return f"""<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>Fixture frame</title></head>
-<body data-fixture-page="frame">
+<head><meta charset="utf-8"><title>Fixture frame {page}</title></head>
+<body data-fixture-page="frame-{page}" data-fixture-visit="{visit}">
   <section id="frame-root">
-    <h1>Same-origin frame document</h1>
+    <h1>Same-origin frame document {page} ({visit})</h1>
     <ul>{rows}</ul>
   </section>
 </body>
@@ -238,8 +265,18 @@ fixture-shadow { display: block; padding: 12px; border: 2px dashed #7d53c5; }
 
 SITE_JS: Final = f"""
 const MUTATION_EVENT_COUNT = {MUTATION_EVENT_COUNT};
-const NETWORK_REQUEST_COUNT = {NETWORK_REQUEST_COUNT};
+const DEFAULT_NETWORK_REQUEST_COUNT = {DEFAULT_NETWORK_REQUEST_COUNT};
+const LARGE_NETWORK_REQUEST_COUNT = {LARGE_NETWORK_REQUEST_COUNT};
 const NETWORK_REQUEST_CONCURRENCY = {NETWORK_REQUEST_CONCURRENCY};
+const fixtureVisit = document.body.dataset.fixtureVisit;
+
+function fixtureURL(path, parameters = {{}}) {{
+  const url = new URL(path, location.href);
+  for (const [name, value] of Object.entries(parameters)) {{
+    url.searchParams.set(name, String(value));
+  }}
+  return `${{url.pathname}}${{url.search}}`;
+}}
 
 customElements.define("fixture-shadow", class extends HTMLElement {{
   connectedCallback() {{
@@ -260,9 +297,9 @@ function setNetworkStatus(message) {{
 
 async function exerciseNetwork() {{
   const operations = [
-    fetch("/api/data").then(response => response.json()),
-    fetch("/redirect").then(response => response.json()),
-    fetch("/failed").then(() => {{ throw new Error("failure endpoint unexpectedly replied"); }}),
+    fetch(fixtureURL("/api/data", {{visit: fixtureVisit}})).then(response => response.json()),
+    fetch(fixtureURL("/redirect", {{visit: fixtureVisit}})).then(response => response.json()),
+    fetch(fixtureURL("/failed", {{visit: fixtureVisit}})).then(() => {{ throw new Error("failure endpoint unexpectedly replied"); }}),
   ];
   const results = await Promise.allSettled(operations);
   const fulfilled = results.filter(result => result.status === "fulfilled").length;
@@ -313,7 +350,7 @@ function runPromptDialog() {{
 async function postRoundTrip() {{
   const status = document.querySelector("#post-status");
   status.textContent = "POST pending";
-  const response = await fetch("/api/echo", {{
+  const response = await fetch(fixtureURL("/api/echo", {{visit: fixtureVisit}}), {{
     method: "POST",
     headers: {{
       "Content-Type": "application/json",
@@ -332,24 +369,41 @@ async function postRoundTrip() {{
   status.textContent = `POST complete: ${{value.fixture}} received ${{value.received.fixture}}`;
 }}
 
-async function emitNetworkBurst() {{
+async function emitNetworkBurst(
+  count = DEFAULT_NETWORK_REQUEST_COUNT,
+  run = `burst-${{fixtureVisit}}-${{count}}`,
+) {{
+  if (!Number.isSafeInteger(count) || count <= 0) {{
+    throw new TypeError("Network burst count must be a positive safe integer");
+  }}
   const button = document.querySelector("#network-burst");
+  const largeButton = document.querySelector("#network-burst-large");
   const status = document.querySelector("#network-burst-status");
   button.disabled = true;
-  status.textContent = `Network burst pending: 0 / ${{NETWORK_REQUEST_COUNT}}`;
+  largeButton.disabled = true;
+  status.textContent = `Network burst pending: 0 / ${{count}}`;
   let nextRequest = 0;
   let completed = 0;
 
   async function runWorker() {{
-    while (nextRequest < NETWORK_REQUEST_COUNT) {{
+    while (nextRequest < count) {{
       const request = nextRequest;
       nextRequest += 1;
-      const response = await fetch(`/api/burst?request=${{request}}`, {{ cache: "no-store" }});
+      const response = await fetch(fixtureURL("/api/burst", {{
+        visit: fixtureVisit,
+        run,
+        request,
+      }}), {{ cache: "no-store" }});
       if (!response.ok) {{
         throw new Error(`Network burst request ${{request}} failed with HTTP ${{response.status}}`);
       }}
       const value = await response.json();
-      if (value.fixture !== "network-burst" || value.request !== request) {{
+      if (
+        value.fixture !== "network-burst"
+        || value.visit !== fixtureVisit
+        || value.run !== run
+        || value.request !== request
+      ) {{
         throw new Error(`Network burst response ${{request}} did not preserve its identity`);
       }}
       completed += 1;
@@ -361,13 +415,50 @@ async function emitNetworkBurst() {{
       {{ length: NETWORK_REQUEST_CONCURRENCY }},
       () => runWorker(),
     ));
-    status.textContent = `Network burst complete: ${{completed}} / ${{NETWORK_REQUEST_COUNT}}`;
+    status.textContent = `Network burst complete: ${{completed}} / ${{count}}`;
   }} catch (error) {{
     status.textContent = `Network burst failed after ${{completed}} requests: ${{error.message}}`;
     throw error;
   }} finally {{
     button.disabled = false;
+    largeButton.disabled = false;
   }}
+}}
+
+const fixtureFrame = document.querySelector("#fixture-frame");
+const frameHost = document.querySelector("#frame-host");
+
+function requireConnectedFixtureFrame() {{
+  if (!fixtureFrame.isConnected) {{
+    throw new Error("Fixture frame must be reinserted before navigation");
+  }}
+  return fixtureFrame;
+}}
+
+function navigateSubframe() {{
+  requireConnectedFixtureFrame().src = fixtureURL("/frame/b", {{visit: fixtureVisit}});
+}}
+
+function reloadSubframe() {{
+  const frame = requireConnectedFixtureFrame();
+  if (!frame.contentWindow) {{
+    throw new Error("Fixture frame has no browsing context");
+  }}
+  frame.contentWindow.location.reload();
+}}
+
+function failSubframeNavigation() {{
+  requireConnectedFixtureFrame().src = fixtureURL("/frame/failure", {{visit: fixtureVisit}});
+}}
+
+function detachSubframe() {{
+  fixtureFrame.remove();
+}}
+
+function reinsertSubframe() {{
+  if (fixtureFrame.isConnected) return;
+  fixtureFrame.src = fixtureURL("/frame/a", {{visit: fixtureVisit, reinserted: 1}});
+  frameHost.append(fixtureFrame);
 }}
 
 function loadMoviePreview() {{
@@ -385,8 +476,21 @@ document.querySelector("#dialog-alert").addEventListener("click", runAlertDialog
 document.querySelector("#dialog-confirm").addEventListener("click", runConfirmDialog);
 document.querySelector("#dialog-prompt").addEventListener("click", runPromptDialog);
 document.querySelector("#post-round-trip").addEventListener("click", postRoundTrip);
-document.querySelector("#network-burst").addEventListener("click", emitNetworkBurst);
+document.querySelector("#network-burst").addEventListener("click", () => {{
+  emitNetworkBurst(DEFAULT_NETWORK_REQUEST_COUNT, `burst-${{fixtureVisit}}-2305`);
+}});
+document.querySelector("#network-burst-large").addEventListener("click", () => {{
+  emitNetworkBurst(LARGE_NETWORK_REQUEST_COUNT, `burst-${{fixtureVisit}}-10000`);
+}});
 document.querySelector("#load-movie-preview").addEventListener("click", loadMoviePreview);
+document.querySelector("#reload-page").addEventListener("click", () => location.reload());
+document.querySelector("#history-back").addEventListener("click", () => history.back());
+document.querySelector("#history-forward").addEventListener("click", () => history.forward());
+document.querySelector("#subframe-navigate").addEventListener("click", navigateSubframe);
+document.querySelector("#subframe-reload").addEventListener("click", reloadSubframe);
+document.querySelector("#subframe-fail").addEventListener("click", failSubframeNavigation);
+document.querySelector("#subframe-detach").addEventListener("click", detachSubframe);
+document.querySelector("#subframe-reinsert").addEventListener("click", reinsertSubframe);
 document.querySelector("#fixture-movie").addEventListener("loadedmetadata", () => {{
   document.querySelector("#movie-status").textContent = "Local HLS metadata loaded";
 }});
@@ -395,8 +499,11 @@ exerciseNetwork();
 
 
 PAGE_B_JS: Final = b"""
+const fixtureVisit = document.body.dataset.fixtureVisit;
 document.querySelector("#history-back").addEventListener("click", () => history.back());
-fetch("/api/detail")
+document.querySelector("#history-forward").addEventListener("click", () => history.forward());
+document.querySelector("#reload-page").addEventListener("click", () => location.reload());
+fetch(`/api/detail?visit=${encodeURIComponent(fixtureVisit)}`)
   .then(response => response.json())
   .then(value => { document.querySelector("#detail-status").textContent = value.message; });
 """
@@ -430,11 +537,26 @@ class InspectorFixtureHandler(BaseHTTPRequestHandler):
         request_url = urlsplit(self.path)
         path = request_url.path
         if path in ("/", "/a"):
-            self._send(HTTPStatus.OK, "text/html; charset=utf-8", page_a())
+            visit = _fixture_marker(request_url.query, "visit", "a1")
+            self._send(HTTPStatus.OK, "text/html; charset=utf-8", page_a(visit))
         elif path == "/b":
-            self._send(HTTPStatus.OK, "text/html; charset=utf-8", page_b())
-        elif path == "/frame":
-            self._send(HTTPStatus.OK, "text/html; charset=utf-8", frame_page())
+            visit = _fixture_marker(request_url.query, "visit", "b1")
+            return_visit = _fixture_marker(request_url.query, "return", "a2")
+            self._send(
+                HTTPStatus.OK,
+                "text/html; charset=utf-8",
+                page_b(visit, return_visit),
+            )
+        elif path in ("/frame", "/frame/a", "/frame/b"):
+            visit = _fixture_marker(request_url.query, "visit", "a1")
+            frame_page_name = "b" if path == "/frame/b" else "a"
+            self._send(
+                HTTPStatus.OK,
+                "text/html; charset=utf-8",
+                frame_page(frame_page_name, visit),
+            )
+        elif path in ("/navigation-failure", "/frame/failure"):
+            self._close_without_response()
         elif path == "/assets/site.css":
             self._send(HTTPStatus.OK, "text/css; charset=utf-8", SITE_CSS)
         elif path == "/assets/site.js":
@@ -458,9 +580,11 @@ class InspectorFixtureHandler(BaseHTTPRequestHandler):
         elif path == "/api/burst":
             self._send_network_burst(request_url.query)
         elif path == "/redirect":
-            self._redirect("/api/data")
+            visit = _fixture_marker(request_url.query, "visit", "a1")
+            self._redirect(f"/api/data?visit={visit}")
         elif path == "/redirect-image":
-            self._redirect("/assets/image.svg?redirected=1")
+            visit = _fixture_marker(request_url.query, "visit", "a1")
+            self._redirect(f"/assets/image.svg?redirected=1&visit={visit}")
         elif path == "/failed":
             self._close_without_response()
         elif path == "/healthz":
@@ -554,18 +678,27 @@ class InspectorFixtureHandler(BaseHTTPRequestHandler):
         except ValueError:
             query_values = {}
         request_values = query_values.get("request", [])
-        if set(query_values) != {"request"} or len(request_values) != 1:
+        run_values = query_values.get("run", [])
+        visit_values = query_values.get("visit", [])
+        if (
+            set(query_values) != {"request", "run", "visit"}
+            or len(request_values) != 1
+            or len(run_values) != 1
+            or len(visit_values) != 1
+            or FIXTURE_MARKER.fullmatch(run_values[0]) is None
+            or FIXTURE_MARKER.fullmatch(visit_values[0]) is None
+        ):
             self._send(
                 HTTPStatus.BAD_REQUEST,
                 "text/plain; charset=utf-8",
-                b"one request identity required\n",
+                b"one visit, run, and request identity required\n",
             )
             return
         try:
             request = int(request_values[0])
         except ValueError:
             request = -1
-        if request < 0 or request >= NETWORK_REQUEST_COUNT:
+        if request < 0:
             self._send(
                 HTTPStatus.BAD_REQUEST,
                 "text/plain; charset=utf-8",
@@ -573,8 +706,15 @@ class InspectorFixtureHandler(BaseHTTPRequestHandler):
             )
             return
 
+        run = run_values[0]
+        visit = visit_values[0]
         response = json.dumps(
-            {"fixture": "network-burst", "request": request},
+            {
+                "fixture": "network-burst",
+                "request": request,
+                "run": run,
+                "visit": visit,
+            },
             separators=(",", ":"),
             sort_keys=True,
         ).encode("utf-8")
@@ -582,7 +722,11 @@ class InspectorFixtureHandler(BaseHTTPRequestHandler):
             HTTPStatus.OK,
             "application/json",
             response,
-            headers={"X-Inspector-Fixture-Request": str(request)},
+            headers={
+                "X-Inspector-Fixture-Request": str(request),
+                "X-Inspector-Fixture-Run": run,
+                "X-Inspector-Fixture-Visit": visit,
+            },
         )
 
     def _send(

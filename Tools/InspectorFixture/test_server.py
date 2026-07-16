@@ -64,30 +64,76 @@ class InspectorFixtureTests(unittest.TestCase):
             return response.status, dict(response.headers.items()), response.read()
 
     def test_page_a_contains_the_integrated_protocol_stressors(self) -> None:
-        status, headers, body = self.read("/a")
+        status, headers, body = self.read("/a?visit=a1")
         text = body.decode("utf-8")
 
         self.assertEqual(status, 200)
         self.assertEqual(headers["X-Inspector-Fixture"], "self-authored")
+        self.assertIn('data-fixture-page="a" data-fixture-visit="a1"', text)
         self.assertEqual(text.count('class="fixture-card"'), fixture.CARD_COUNT)
         self.assertGreater(fixture.CARD_COUNT, 2_048)
         self.assertIn('id="mutation-burst"', text)
         self.assertIn('id="picker-target"', text)
         self.assertIn('<fixture-shadow id="shadow-host">', text)
-        self.assertIn('id="fixture-frame" src="/frame"', text)
-        self.assertIn('id="navigate-b" href="/b"', text)
+        self.assertIn('id="fixture-frame" src="/frame/a?visit=a1"', text)
+        self.assertIn('id="navigate-b" href="/b?visit=b1&amp;return=a2"', text)
         self.assertIn(
-            'id="target-blank" href="/b?source=target-blank" target="_blank"',
+            'id="target-blank" href="/b?visit=b1&amp;return=a2&amp;source=target-blank" target="_blank"',
             text,
         )
+        self.assertIn('id="reload-page"', text)
+        self.assertIn('id="history-back"', text)
+        self.assertIn('id="history-forward"', text)
+        self.assertIn('id="failed-navigation" href="/navigation-failure?visit=a1"', text)
+        for control in (
+            "subframe-navigate",
+            "subframe-reload",
+            "subframe-fail",
+            "subframe-detach",
+            "subframe-reinsert",
+        ):
+            self.assertIn(f'id="{control}"', text)
         self.assertIn('id="dialog-alert"', text)
         self.assertIn('id="dialog-confirm"', text)
         self.assertIn('id="dialog-prompt"', text)
         self.assertIn('id="post-round-trip"', text)
         self.assertIn('id="network-burst"', text)
+        self.assertIn('id="network-burst-large"', text)
         self.assertIn('id="network-burst-status"', text)
         self.assertIn('id="load-movie-preview"', text)
         self.assertIn('id="fixture-movie" controls preload="none"', text)
+
+    def test_committed_navigation_and_subframe_payloads_have_distinct_visit_markers(self) -> None:
+        _, _, page_a2 = self.read("/a?visit=a2")
+        _, _, page_b1 = self.read("/b?visit=b1&return=a2")
+        _, _, frame_a = self.read("/frame/a?visit=a1")
+        _, _, frame_b = self.read("/frame/b?visit=a1")
+
+        self.assertIn(
+            'data-fixture-page="a" data-fixture-visit="a2"',
+            page_a2.decode("utf-8"),
+        )
+        page_b_text = page_b1.decode("utf-8")
+        self.assertIn(
+            'data-fixture-page="b" data-fixture-visit="b1"',
+            page_b_text,
+        )
+        self.assertIn('id="navigate-a" href="/a?visit=a2"', page_b_text)
+        self.assertIn('id="reload-page"', page_b_text)
+        self.assertIn('id="history-back"', page_b_text)
+        self.assertIn('id="history-forward"', page_b_text)
+        self.assertIn(
+            'id="failed-navigation" href="/navigation-failure?visit=b1"',
+            page_b_text,
+        )
+        self.assertIn(
+            'data-fixture-page="frame-a" data-fixture-visit="a1"',
+            frame_a.decode("utf-8"),
+        )
+        self.assertIn(
+            'data-fixture-page="frame-b" data-fixture-visit="a1"',
+            frame_b.decode("utf-8"),
+        )
 
     def test_scripts_encode_one_shot_mutation_network_and_history_flows(self) -> None:
         _, _, site_script = self.read("/assets/site.js")
@@ -99,7 +145,11 @@ class InspectorFixtureTests(unittest.TestCase):
             site_text,
         )
         self.assertIn(
-            f"const NETWORK_REQUEST_COUNT = {fixture.NETWORK_REQUEST_COUNT};",
+            f"const DEFAULT_NETWORK_REQUEST_COUNT = {fixture.DEFAULT_NETWORK_REQUEST_COUNT};",
+            site_text,
+        )
+        self.assertIn(
+            f"const LARGE_NETWORK_REQUEST_COUNT = {fixture.LARGE_NETWORK_REQUEST_COUNT};",
             site_text,
         )
         self.assertIn(
@@ -107,19 +157,34 @@ class InspectorFixtureTests(unittest.TestCase):
             site_text,
         )
         self.assertIn('attachShadow({ mode: "open" })', site_text)
-        self.assertIn('fetch("/api/data")', site_text)
-        self.assertIn('fetch("/redirect")', site_text)
-        self.assertIn('fetch("/failed")', site_text)
+        self.assertIn('fixtureURL("/api/data", {visit: fixtureVisit})', site_text)
+        self.assertIn('fixtureURL("/redirect", {visit: fixtureVisit})', site_text)
+        self.assertIn('fixtureURL("/failed", {visit: fixtureVisit})', site_text)
         self.assertIn('alert("Inspector fixture alert")', site_text)
         self.assertIn('confirm("Inspector fixture confirm?")', site_text)
         self.assertIn('prompt("Inspector fixture prompt", "fixture default")', site_text)
-        self.assertIn('fetch("/api/echo"', site_text)
-        self.assertIn('fetch(`/api/burst?request=${request}`', site_text)
+        self.assertIn('fixtureURL("/api/echo", {visit: fixtureVisit})', site_text)
+        self.assertIn('fixtureURL("/api/burst", {', site_text)
         self.assertIn("window.runInspectorNetworkBurst = emitNetworkBurst", site_text)
+        self.assertIn("count = DEFAULT_NETWORK_REQUEST_COUNT", site_text)
+        self.assertIn("while (nextRequest < count)", site_text)
+        self.assertIn("emitNetworkBurst(LARGE_NETWORK_REQUEST_COUNT", site_text)
         self.assertIn('video.src = "/media/fixture.m3u8"', site_text)
-        for periodic_api in ("setInterval", "setTimeout", "requestAnimationFrame"):
-            self.assertNotIn(periodic_api, site_text)
-        self.assertIn("history.back()", page_b_script.decode("utf-8"))
+        self.assertIn('location.reload()', site_text)
+        self.assertIn('history.back()', site_text)
+        self.assertIn('history.forward()', site_text)
+        self.assertIn('fixtureURL("/frame/b", {visit: fixtureVisit})', site_text)
+        self.assertIn('frame.contentWindow.location.reload()', site_text)
+        self.assertIn('fixtureURL("/frame/failure", {visit: fixtureVisit})', site_text)
+        self.assertIn('fixtureFrame.remove()', site_text)
+        self.assertIn('frameHost.append(fixtureFrame)', site_text)
+        page_b_text = page_b_script.decode("utf-8")
+        for script in (site_text, page_b_text):
+            for periodic_api in ("setInterval", "setTimeout", "requestAnimationFrame"):
+                self.assertNotIn(periodic_api, script)
+        self.assertIn("history.back()", page_b_text)
+        self.assertIn("history.forward()", page_b_text)
+        self.assertIn("location.reload()", page_b_text)
 
     def test_picker_target_exposes_used_and_unused_css_variables(self) -> None:
         _, _, stylesheet = self.read("/assets/site.css")
@@ -153,24 +218,35 @@ class InspectorFixtureTests(unittest.TestCase):
         )
 
     def test_network_burst_route_preserves_each_request_identity(self) -> None:
-        request = fixture.NETWORK_REQUEST_COUNT - 1
+        request = fixture.LARGE_NETWORK_REQUEST_COUNT + 137
 
-        status, headers, body = self.read(f"/api/burst?request={request}")
+        status, headers, body = self.read(
+            f"/api/burst?visit=a1&run=burst-10000&request={request}"
+        )
 
         self.assertEqual(status, 200)
         self.assertEqual(headers["Content-Type"], "application/json")
         self.assertEqual(headers["X-Inspector-Fixture"], "self-authored")
         self.assertEqual(headers["X-Inspector-Fixture-Request"], str(request))
+        self.assertEqual(headers["X-Inspector-Fixture-Run"], "burst-10000")
+        self.assertEqual(headers["X-Inspector-Fixture-Visit"], "a1")
         self.assertEqual(
             json.loads(body),
-            {"fixture": "network-burst", "request": request},
+            {
+                "fixture": "network-burst",
+                "request": request,
+                "run": "burst-10000",
+                "visit": "a1",
+            },
         )
 
-    def test_network_burst_rejects_missing_or_out_of_range_identity(self) -> None:
+    def test_network_burst_rejects_missing_or_invalid_identity(self) -> None:
         for path in (
             "/api/burst",
-            "/api/burst?request=-1",
-            f"/api/burst?request={fixture.NETWORK_REQUEST_COUNT}",
+            "/api/burst?visit=a1&run=missing-request",
+            "/api/burst?visit=a1&run=negative&request=-1",
+            "/api/burst?visit=a1&run=bad%20marker&request=1",
+            "/api/burst?visit=a1&run=extra&request=1&unknown=value",
         ):
             with self.subTest(path=path):
                 with self.assertRaises(urllib.error.HTTPError) as request_error:
@@ -250,9 +326,11 @@ class InspectorFixtureTests(unittest.TestCase):
 
     def test_all_page_and_asset_references_are_local(self) -> None:
         bodies = [
-            self.read("/a")[2],
-            self.read("/b")[2],
-            self.read("/frame")[2],
+            self.read("/a?visit=a1")[2],
+            self.read("/a?visit=a2")[2],
+            self.read("/b?visit=b1&return=a2")[2],
+            self.read("/frame/a?visit=a1")[2],
+            self.read("/frame/b?visit=a1")[2],
             self.read("/assets/site.css")[2],
             self.read("/assets/site.js")[2],
             self.read("/assets/page-b.js")[2],
@@ -265,9 +343,19 @@ class InspectorFixtureTests(unittest.TestCase):
     def test_redirect_json_image_and_missing_routes_have_stable_wire_shapes(self) -> None:
         opener = urllib.request.build_opener(NoRedirect)
         with self.assertRaises(urllib.error.HTTPError) as redirect_error:
-            opener.open(self.base_url + "/redirect", timeout=2)
+            opener.open(self.base_url + "/redirect?visit=a1", timeout=2)
         self.assertEqual(redirect_error.exception.code, 302)
-        self.assertEqual(redirect_error.exception.headers["Location"], "/api/data")
+        self.assertEqual(
+            redirect_error.exception.headers["Location"],
+            "/api/data?visit=a1",
+        )
+        with self.assertRaises(urllib.error.HTTPError) as image_redirect_error:
+            opener.open(self.base_url + "/redirect-image?visit=a2", timeout=2)
+        self.assertEqual(image_redirect_error.exception.code, 302)
+        self.assertEqual(
+            image_redirect_error.exception.headers["Location"],
+            "/assets/image.svg?redirected=1&visit=a2",
+        )
 
         json_status, json_headers, json_body = self.read("/api/data")
         image_status, image_headers, image_body = self.read("/assets/image.svg")
@@ -282,16 +370,22 @@ class InspectorFixtureTests(unittest.TestCase):
         self.assertTrue(image_body.startswith(b"<svg"))
         self.assertEqual(missing_error.exception.code, 404)
 
-    def test_failed_route_terminates_without_an_http_response(self) -> None:
-        connection = http.client.HTTPConnection(
-            "127.0.0.1",
-            self.server.server_port,
-            timeout=2,
-        )
-        connection.request("GET", "/failed")
-        with self.assertRaises(http.client.RemoteDisconnected):
-            connection.getresponse()
-        connection.close()
+    def test_failed_fetch_and_navigation_routes_terminate_without_an_http_response(self) -> None:
+        for path in (
+            "/failed?visit=a1",
+            "/navigation-failure?visit=a1",
+            "/frame/failure?visit=a1",
+        ):
+            with self.subTest(path=path):
+                connection = http.client.HTTPConnection(
+                    "127.0.0.1",
+                    self.server.server_port,
+                    timeout=2,
+                )
+                connection.request("GET", path)
+                with self.assertRaises(http.client.RemoteDisconnected):
+                    connection.getresponse()
+                connection.close()
 
     def test_malformed_request_line_returns_http_error_before_path_exists(self) -> None:
         with socket.create_connection(
