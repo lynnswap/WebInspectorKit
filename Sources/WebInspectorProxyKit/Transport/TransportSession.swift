@@ -77,8 +77,15 @@ package actor TransportSession {
     }
 
     package func orderedEvents() -> AsyncStream<ProtocolEvent> {
+        orderedEventFeed().events
+    }
+
+    package func orderedEventFeed() -> ProtocolOrderedEventFeed {
         guard !closed else {
-            return finishedStream(of: ProtocolEvent.self)
+            return ProtocolOrderedEventFeed(
+                initialSequence: eventSequences.current.sequence,
+                events: finishedStream(of: ProtocolEvent.self)
+            )
         }
         let pair = AsyncStream<ProtocolEvent>.makeStream(bufferingPolicy: .unbounded)
         let subscriberID = eventSubscribers.insertOrdered(pair.continuation)
@@ -87,7 +94,10 @@ package actor TransportSession {
                 await self?.removeOrderedSubscriber(subscriberID)
             }
         }
-        return pair.stream
+        return ProtocolOrderedEventFeed(
+            initialSequence: eventSequences.current.sequence,
+            events: pair.stream
+        )
     }
 
     package func send(_ command: ProtocolCommand) async throws -> ProtocolCommand.Result {
@@ -1170,6 +1180,11 @@ package actor TransportSession {
             domain: domain,
             method: method,
             targetID: targetID,
+            targetRecord: targetID.flatMap { targetRegistry.target(for: $0) },
+            belongedToCurrentPage: eventBelongsToCurrentPage(targetID: targetID),
+            agentScopeTargetID: eventAgentScopeTargetID(
+                targetID: sourceTargetID ?? targetID
+            ),
             sourceTargetID: sourceTargetID,
             pageBindingTargetID: pageBindingTargetID,
             networkOriginTargetID: resolvedNetworkOriginTargetID,
@@ -1322,6 +1337,32 @@ package actor TransportSession {
             return deliveredTargetID
         }
         return nil
+    }
+
+    private func eventBelongsToCurrentPage(targetID: ProtocolTarget.ID?) -> Bool {
+        guard let targetID else {
+            return targetRegistry.currentMainPageTargetID != nil
+        }
+        if targetID == targetRegistry.currentMainPageTargetID {
+            return true
+        }
+        guard let record = targetRegistry.target(for: targetID) else {
+            return false
+        }
+        return record.kind == .frame && !record.isProvisional
+    }
+
+    private func eventAgentScopeTargetID(targetID: ProtocolTarget.ID?) -> ProtocolTarget.ID? {
+        guard let targetID,
+              let record = targetRegistry.target(for: targetID) else {
+            return nil
+        }
+        switch record.kind {
+        case .page:
+            return nil
+        case .frame, .worker, .serviceWorker, .other:
+            return targetID
+        }
     }
 
     private func networkFrameOwner(

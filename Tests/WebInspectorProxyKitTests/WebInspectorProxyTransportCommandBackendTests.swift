@@ -808,6 +808,108 @@ func transportBackendDeliversCurrentPageTargetCommitLifecycleAfterRetarget() asy
 }
 
 @Test
+func orderedCurrentPageFeedUsesEventTimeRoutingAcrossDelayedCommitDrain() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
+    let oldTargetID = ProtocolTarget.ID("page-old")
+    let newTargetID = ProtocolTarget.ID("page-new")
+    let frameTargetID = ProtocolTarget.ID("frame-42-7")
+    await installPageTarget(in: transport, targetID: oldTargetID)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-42-7","type":"frame","isProvisional":false,"isPaused":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+    let feed = await target.orderedEventFeed()
+
+    await receiveTargetEvent(
+        transport,
+        targetID: oldTargetID,
+        method: "DOM.attributeModified",
+        params: #"{"nodeId":1,"name":"old","value":"1"}"#
+    )
+    await receiveTargetEvent(
+        transport,
+        targetID: oldTargetID,
+        method: "Runtime.executionContextCreated",
+        params: #"{"context":{"id":1,"name":"Old","type":"normal"}}"#
+    )
+    await receiveTargetEvent(
+        transport,
+        targetID: oldTargetID,
+        method: "Network.requestWillBeSent",
+        params: #"{"requestId":"old-request","frameId":"old-frame","loaderId":"old-loader","request":{"url":"https://example.test/old","method":"GET"},"initiator":{"type":"other"},"type":"Fetch","timestamp":1}"#
+    )
+    await receiveTargetEvent(
+        transport,
+        targetID: frameTargetID,
+        method: "DOM.attributeModified",
+        params: #"{"nodeId":2,"name":"frame","value":"1"}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-new","type":"page","isProvisional":true,"isPaused":false}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-old","newTargetId":"page-new"}}"#
+    )
+    await receiveTargetEvent(
+        transport,
+        targetID: newTargetID,
+        method: "DOM.attributeModified",
+        params: #"{"nodeId":3,"name":"new","value":"1"}"#
+    )
+    await receiveTargetEvent(
+        transport,
+        targetID: newTargetID,
+        method: "Runtime.executionContextCreated",
+        params: #"{"context":{"id":2,"name":"New","type":"normal"}}"#
+    )
+    await receiveTargetEvent(
+        transport,
+        targetID: newTargetID,
+        method: "Network.requestWillBeSent",
+        params: #"{"requestId":"new-request","frameId":"new-frame","loaderId":"new-loader","request":{"url":"https://example.test/new","method":"GET"},"initiator":{"type":"other"},"type":"Fetch","timestamp":2}"#
+    )
+
+    var tokens: [String] = []
+    for await sequencedEvent in feed.events {
+        guard let event = sequencedEvent.event else {
+            continue
+        }
+        switch event {
+        case let .dom(.attributeModified(id, name, _)):
+            tokens.append("dom:\(name):\(id.targetScopeRawValue ?? "page")")
+        case let .runtime(.executionContextCreated(context)):
+            tokens.append("runtime:\(context.name):\(context.id.targetScopeRawValue ?? "page")")
+        case let .network(.requestWillBeSent(id, _, _, _, _, _)):
+            tokens.append("network:\(id.unscopedRawValue)")
+        case .targetLifecycle(.didCommitProvisionalTarget):
+            tokens.append("commit")
+        default:
+            continue
+        }
+        if tokens.count == 8 {
+            break
+        }
+    }
+
+    #expect(tokens == [
+        "dom:old:page",
+        "runtime:Old:page",
+        "network:old-request",
+        "dom:frame:frame-42-7",
+        "commit",
+        "dom:new:page",
+        "runtime:New:page",
+        "network:new-request",
+    ])
+}
+
+@Test
 func transportBackendDeliversCurrentPageTargetDestroyedLifecycle() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
@@ -2688,6 +2790,72 @@ func transportBackendDoesNotDeliverFrameDocumentUpdatedToCurrentPageDOMRoute() a
 
     try await Task.sleep(for: .milliseconds(100))
     #expect(await eventProbe.isFinished() == false)
+}
+
+@Test
+func orderedCurrentPageFeedTreatsFrameDocumentUpdatedAsWatermarkOnly() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(in: transport)
+    await installMainPageFrame(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-42-7","type":"frame","isProvisional":false,"isPaused":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+    let feed = await target.orderedEventFeed()
+
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("frame-42-7"),
+        method: "DOM.documentUpdated",
+        params: "{}"
+    )
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "DOM.attributeModified",
+        params: #"{"nodeId":1,"name":"page","value":"1"}"#
+    )
+
+    var iterator = feed.events.makeAsyncIterator()
+    let frameWatermark = try #require(await iterator.next())
+    #expect(frameWatermark.event == nil)
+    let pageEvent = try #require(await iterator.next())
+    guard case let .dom(.attributeModified(_, name, value)) = pageEvent.event else {
+        Issue.record("Expected the following main-page DOM event.")
+        return
+    }
+    #expect(name == "page")
+    #expect(value == "1")
+}
+
+@Test
+func orderedCurrentPageFeedTreatsProvisionalRootRuntimeEventAsWatermarkOnly() async throws {
+    let transport = TransportSession(
+        backend: FakeTransportBackend(),
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-42-8","type":"frame","isProvisional":true,"isPaused":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+    let feed = await target.orderedEventFeed()
+
+    await transport.receiveRootMessage(
+        #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":8,"name":"Provisional","type":"normal","frameId":"frame-8.42"}}}"#
+    )
+
+    var iterator = feed.events.makeAsyncIterator()
+    let watermark = try #require(await iterator.next())
+    #expect(watermark.event == nil)
 }
 
 @Test

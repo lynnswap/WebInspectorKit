@@ -11,6 +11,7 @@ package enum WebInspectorProxyDomain: String, Hashable, Sendable {
 }
 
 package enum WebInspectorProxyEventDomain: String, Hashable, Sendable {
+    case ordered = "Ordered"
     case target = "Target"
     case dom = "DOM"
     case inspector = "Inspector"
@@ -19,6 +20,16 @@ package enum WebInspectorProxyEventDomain: String, Hashable, Sendable {
     case console = "Console"
     case runtime = "Runtime"
     case page = "Page"
+}
+
+package struct WebInspectorProxyCommandReply<Result: Sendable>: Sendable {
+    package let value: Result
+    package let receivedSequence: UInt64
+
+    package init(value: Result, receivedSequence: UInt64) {
+        self.value = value
+        self.receivedSequence = receivedSequence
+    }
 }
 
 package struct WebInspectorProxyCommand<Payload: Sendable, Result: Sendable>: Sendable {
@@ -53,10 +64,39 @@ package enum WebInspectorProxyEvent: Sendable {
     case runtime(Runtime.Event)
 }
 
+package struct WebInspectorProxyOrderedEvent: Sendable {
+    package let sequence: UInt64
+    package let event: WebInspectorProxyEvent?
+
+    package init(sequence: UInt64, event: WebInspectorProxyEvent?) {
+        self.sequence = sequence
+        self.event = event
+    }
+}
+
+package struct WebInspectorProxyOrderedEventFeed: Sendable {
+    package let initialSequence: UInt64
+    package let events: AsyncStream<WebInspectorProxyOrderedEvent>
+
+    package init(initialSequence: UInt64, events: AsyncStream<WebInspectorProxyOrderedEvent>) {
+        self.initialSequence = initialSequence
+        self.events = events
+    }
+}
+
 package protocol WebInspectorProxyBackend: Sendable {
     func dispatchCommand<Payload: Sendable, Result: Sendable>(
         _ command: WebInspectorProxyCommand<Payload, Result>
     ) async throws -> Result
+
+    func dispatchCommandWithReplyBoundary<Payload: Sendable, Result: Sendable>(
+        _ command: WebInspectorProxyCommand<Payload, Result>
+    ) async throws -> WebInspectorProxyCommandReply<Result>
+
+    func orderedEvents(
+        route: RoutingTargetID,
+        targetID: WebInspectorTarget.ID
+    ) async -> WebInspectorProxyOrderedEventFeed
 
     nonisolated func events(
         route: RoutingTargetID,

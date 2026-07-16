@@ -352,6 +352,67 @@ public actor WebInspectorProxy {
         return try await backend.dispatchCommand(command)
     }
 
+    package func dispatchCommandWithReplyBoundary<Payload: Sendable, Result: Sendable>(
+        targetID: WebInspectorTarget.ID,
+        route: RoutingTargetID,
+        domain: WebInspectorProxyDomain,
+        method: String,
+        payload: Payload
+    ) async throws -> WebInspectorProxyCommandReply<Result> {
+        guard closeState == .open else {
+            throw WebInspectorProxyError.closed
+        }
+        guard let backend else {
+            throw unimplementedCommand(domain: domain.rawValue, method: method)
+        }
+        let commandTarget = resolvedCommandTarget(
+            targetID: targetID,
+            route: route,
+            domain: domain,
+            payload: payload
+        )
+        let command = WebInspectorProxyCommand<Payload, Result>(
+            targetID: commandTarget.targetID,
+            route: commandTarget.route,
+            domain: domain,
+            method: method,
+            payload: payload
+        )
+        return try await backend.dispatchCommandWithReplyBoundary(command)
+    }
+
+    package nonisolated func orderedEvents(
+        targetID: WebInspectorTarget.ID,
+        route: RoutingTargetID
+    ) async -> WebInspectorProxyOrderedEventFeed {
+        guard let backend else {
+            preconditionFailure("WebInspectorProxy has no backend for ordered events.")
+        }
+        let backendFeed = await backend.orderedEvents(route: route, targetID: targetID)
+        let stream = AsyncStream<WebInspectorProxyOrderedEvent>(bufferingPolicy: .unbounded) { continuation in
+            let task = Task {
+                for await sequencedEvent in backendFeed.events {
+                    let event = sequencedEvent.event
+                    if case let .targetLifecycle(lifecycleEvent) = event {
+                        await self.applyTargetLifecycleEventToProxyState(lifecycleEvent)
+                    }
+                    continuation.yield(WebInspectorProxyOrderedEvent(
+                        sequence: sequencedEvent.sequence,
+                        event: event
+                    ))
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+        return WebInspectorProxyOrderedEventFeed(
+            initialSequence: backendFeed.initialSequence,
+            events: stream
+        )
+    }
+
     package nonisolated func domEvents(
         targetID: WebInspectorTarget.ID,
         route: RoutingTargetID
@@ -524,14 +585,24 @@ public actor WebInspectorProxy {
         route: RoutingTargetID,
         continuation: AsyncStream<DOM.Event>.Continuation
     ) async {
-        guard case let .inspect(object, _) = event else {
+        guard let event = await domInspectEvent(for: event, route: route) else {
             return
+        }
+        continuation.yield(event)
+    }
+
+    package nonisolated func domInspectEvent(
+        for event: Inspector.Event,
+        route: RoutingTargetID
+    ) async -> DOM.Event? {
+        guard case let .inspect(object, _) = event else {
+            return nil
         }
         guard object.subtype?.rawValue == "node", let objectID = object.id else {
             logger.debug(
                 "Inspector.inspect ignored reason=non-node route=\(Self.logDescription(route), privacy: .public) subtype=\(String(describing: object.subtype), privacy: .public)"
             )
-            return
+            return nil
         }
         logger.debug(
             "Inspector.inspect resolving route=\(Self.logDescription(route), privacy: .public) objectID=\(objectID.rawValue, privacy: .public)"
@@ -549,11 +620,12 @@ public actor WebInspectorProxy {
             logger.debug(
                 "Inspector.inspect resolved objectID=\(objectID.rawValue, privacy: .public) nodeID=\(nodeID.rawValue, privacy: .public)"
             )
-            continuation.yield(.inspect(nodeID))
+            return .inspect(nodeID)
         } catch {
             logger.debug(
                 "Inspector.inspect requestNode failed objectID=\(objectID.rawValue, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
+            return nil
         }
     }
 
