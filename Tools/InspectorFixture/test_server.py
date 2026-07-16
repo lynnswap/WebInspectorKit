@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import json
 import re
+import socket
 import threading
 import unittest
 import urllib.error
@@ -291,6 +292,16 @@ class InspectorFixtureTests(unittest.TestCase):
         with self.assertRaises(http.client.RemoteDisconnected):
             connection.getresponse()
         connection.close()
+
+    def test_malformed_request_line_returns_http_error_before_path_exists(self) -> None:
+        with socket.create_connection(
+            ("127.0.0.1", self.server.server_port),
+            timeout=2,
+        ) as connection:
+            connection.sendall(b"GET /" + (b"x" * 65_537) + b" HTTP/1.1\r\n\r\n")
+            response = connection.recv(1_024)
+
+        self.assertTrue(response.startswith(b"HTTP/1.1 414"), response[:80])
 
 
 if __name__ == "__main__":

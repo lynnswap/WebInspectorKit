@@ -620,6 +620,8 @@ class InspectorFixtureHandler(BaseHTTPRequestHandler):
         self.connection.close()
 
     def log_message(self, format: str, *args: object) -> None:
+        if urlsplit(getattr(self, "path", "")).path == "/api/burst":
+            return
         print(f"[InspectorFixture] {self.address_string()} {format % args}")
 
 
