@@ -38,25 +38,121 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             var pendingWork: Work?
         }
 
-        private enum State {
-            case idle
-            case building(ActiveBuild)
+        private enum BuildOutcome {
+            case success(NetworkListSnapshotArtifact)
+            case cancelled
+        }
+
+        private enum TrackedBuild {
+            case active(ActiveBuild)
+            case retired(generation: UInt64, task: Task<Void, Never>)
+
+            var generation: UInt64 {
+                switch self {
+                case .active(let build):
+                    build.generation
+                case .retired(let generation, _):
+                    generation
+                }
+            }
+        }
+
+        private struct BuildTaskSlots {
+            private var first: TrackedBuild?
+            private var second: TrackedBuild?
+
+            var count: Int {
+                (first == nil ? 0 : 1) + (second == nil ? 0 : 1)
+            }
+
+            var hasAvailableSlot: Bool {
+                first == nil || second == nil
+            }
+
+            var activeBuild: ActiveBuild? {
+                if case .active(let build) = first {
+                    return build
+                }
+                if case .active(let build) = second {
+                    return build
+                }
+                return nil
+            }
+
+            mutating func insertActive(_ build: ActiveBuild) {
+                precondition(
+                    activeBuild == nil,
+                    "Only one current Network list snapshot build may run."
+                )
+                if first == nil {
+                    first = .active(build)
+                } else if second == nil {
+                    second = .active(build)
+                } else {
+                    preconditionFailure("A Network list snapshot build must wait for an available task slot.")
+                }
+            }
+
+            mutating func updateActive(_ build: ActiveBuild) {
+                if case .active(let currentBuild) = first,
+                   currentBuild.generation == build.generation {
+                    first = .active(build)
+                    return
+                }
+                if case .active(let currentBuild) = second,
+                   currentBuild.generation == build.generation {
+                    second = .active(build)
+                    return
+                }
+                preconditionFailure("The current Network list snapshot build must occupy one task slot.")
+            }
+
+            mutating func retireActive() -> Task<Void, Never>? {
+                if case .active(let build) = first {
+                    first = .retired(generation: build.generation, task: build.task)
+                    return build.task
+                }
+                if case .active(let build) = second {
+                    second = .retired(generation: build.generation, task: build.task)
+                    return build.task
+                }
+                return nil
+            }
+
+            mutating func remove(generation: UInt64) -> TrackedBuild? {
+                if first?.generation == generation {
+                    defer { first = nil }
+                    return first
+                }
+                if second?.generation == generation {
+                    defer { second = nil }
+                    return second
+                }
+                return nil
+            }
         }
 
         private let builderFactory: any NetworkListSnapshotBuilderMaking
-        private var state = State.idle
+        private var buildTaskSlots = BuildTaskSlots()
+        private var deferredWork: Work?
         private var nextGeneration: UInt64 = 0
         private var idleWaiters: [CheckedContinuation<Void, Never>] = []
+        private var trackedTaskCompletionWaiters: [CheckedContinuation<Void, Never>] = []
 
         init(builderFactory: any NetworkListSnapshotBuilderMaking) {
             self.builderFactory = builderFactory
         }
 
         var hasWorkInFlight: Bool {
-            if case .building = state {
-                return true
-            }
-            return false
+            buildTaskSlots.activeBuild != nil || deferredWork != nil
+        }
+
+        var trackedBuildTaskCount: Int {
+            buildTaskSlots.count
+        }
+
+        var hasDeferredWork: Bool {
+            deferredWork != nil
         }
 
         func submit(
@@ -64,10 +160,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             completion: @escaping Completion
         ) {
             let work = Work(request: request, completion: completion)
-            switch state {
-            case .idle:
-                start(work)
-            case .building(var activeBuild):
+            if var activeBuild = buildTaskSlots.activeBuild {
                 if activeBuild.pendingWork == nil,
                    activeBuild.work.request == request {
                     return
@@ -76,23 +169,30 @@ package final class NetworkListViewController: UICollectionViewController, UISea
                     return
                 }
                 activeBuild.pendingWork = work
-                state = .building(activeBuild)
+                buildTaskSlots.updateActive(activeBuild)
+                return
+            }
+            if deferredWork?.request == request {
+                return
+            }
+            if buildTaskSlots.hasAvailableSlot {
+                start(work)
+            } else {
+                deferredWork = work
             }
         }
 
         @discardableResult
         func cancel() -> Bool {
-            guard case .building(let activeBuild) = state else {
-                return false
-            }
-            state = .idle
-            activeBuild.task.cancel()
-            resumeIdleWaiters()
-            return true
+            let discardedWork = buildTaskSlots.activeBuild != nil || deferredWork != nil
+            deferredWork = nil
+            buildTaskSlots.retireActive()?.cancel()
+            resumeIdleWaitersIfNeeded()
+            return discardedWork
         }
 
         func waitUntilIdle() async {
-            guard case .building = state else {
+            guard hasWorkInFlight else {
                 return
             }
             await withCheckedContinuation { continuation in
@@ -100,25 +200,38 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             }
         }
 
-        private func start(_ work: Work) {
-            guard case .idle = state else {
-                preconditionFailure("A Network list snapshot build must be serialized.")
+        func waitUntilTrackedTasksComplete() async {
+            guard trackedBuildTaskCount > 0 else {
+                return
             }
+            await withCheckedContinuation { continuation in
+                trackedTaskCompletionWaiters.append(continuation)
+            }
+        }
+
+        private func start(_ work: Work) {
+            precondition(
+                buildTaskSlots.hasAvailableSlot,
+                "A Network list snapshot build must wait for an available task slot."
+            )
             let generation = takeNextGeneration()
             let builder = builderFactory.makeBuilder()
             let request = work.request
             let task = Task(priority: .userInitiated) { @MainActor [weak self] in
                 do {
                     let artifact = try await builder.build(request)
-                    self?.buildDidFinish(
+                    self?.buildDidComplete(
                         generation: generation,
-                        artifact: artifact
+                        outcome: .success(artifact)
                     )
                 } catch {
-                    self?.buildDidCancel(generation: generation)
+                    self?.buildDidComplete(
+                        generation: generation,
+                        outcome: .cancelled
+                    )
                 }
             }
-            state = .building(
+            buildTaskSlots.insertActive(
                 ActiveBuild(
                     generation: generation,
                     task: task,
@@ -128,40 +241,46 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             )
         }
 
-        private func buildDidFinish(
+        private func buildDidComplete(
             generation: UInt64,
-            artifact: NetworkListSnapshotArtifact
+            outcome: BuildOutcome
         ) {
-            guard case .building(let activeBuild) = state,
-                  activeBuild.generation == generation else {
-                return
+            guard let trackedBuild = buildTaskSlots.remove(generation: generation) else {
+                preconditionFailure("A completed Network list snapshot build must be tracked.")
             }
-            precondition(
-                artifact.input == activeBuild.work.request,
-                "A Network list snapshot builder must return the requested input."
-            )
-            state = .idle
-            if activeBuild.pendingWork == nil {
-                activeBuild.work.completion(artifact)
-            }
-            if let pendingWork = activeBuild.pendingWork {
-                start(pendingWork)
-            } else {
-                resumeIdleWaiters()
+            switch trackedBuild {
+            case .active(let activeBuild):
+                if case .success(let artifact) = outcome {
+                    precondition(
+                        artifact.input == activeBuild.work.request,
+                        "A Network list snapshot builder must return the requested input."
+                    )
+                    if activeBuild.pendingWork == nil {
+                        activeBuild.work.completion(artifact)
+                    }
+                }
+                if let pendingWork = activeBuild.pendingWork {
+                    start(pendingWork)
+                } else {
+                    startDeferredWorkIfPossible()
+                    resumeIdleWaitersIfNeeded()
+                }
+                resumeTrackedTaskCompletionWaitersIfNeeded()
+            case .retired:
+                startDeferredWorkIfPossible()
+                resumeIdleWaitersIfNeeded()
+                resumeTrackedTaskCompletionWaitersIfNeeded()
             }
         }
 
-        private func buildDidCancel(generation: UInt64) {
-            guard case .building(let activeBuild) = state,
-                  activeBuild.generation == generation else {
+        private func startDeferredWorkIfPossible() {
+            guard buildTaskSlots.activeBuild == nil,
+                  buildTaskSlots.hasAvailableSlot,
+                  let deferredWork else {
                 return
             }
-            state = .idle
-            if let pendingWork = activeBuild.pendingWork {
-                start(pendingWork)
-            } else {
-                resumeIdleWaiters()
-            }
+            self.deferredWork = nil
+            start(deferredWork)
         }
 
         private func takeNextGeneration() -> UInt64 {
@@ -173,9 +292,23 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             return nextGeneration
         }
 
-        private func resumeIdleWaiters() {
+        private func resumeIdleWaitersIfNeeded() {
+            guard hasWorkInFlight == false else {
+                return
+            }
             let waiters = idleWaiters
             idleWaiters.removeAll(keepingCapacity: true)
+            for waiter in waiters {
+                waiter.resume()
+            }
+        }
+
+        private func resumeTrackedTaskCompletionWaitersIfNeeded() {
+            guard trackedBuildTaskCount == 0 else {
+                return
+            }
+            let waiters = trackedTaskCompletionWaiters
+            trackedTaskCompletionWaiters.removeAll(keepingCapacity: true)
             for waiter in waiters {
                 waiter.resume()
             }
@@ -906,6 +1039,14 @@ extension NetworkListViewController {
         listSnapshotBuildCoordinator.hasWorkInFlight
     }
 
+    package var trackedListSnapshotBuildTaskCountForTesting: Int {
+        listSnapshotBuildCoordinator.trackedBuildTaskCount
+    }
+
+    package var hasDeferredListSnapshotBuildForTesting: Bool {
+        listSnapshotBuildCoordinator.hasDeferredWork
+    }
+
     package func suspendRenderingForTesting() {
         suspendRendering()
     }
@@ -944,6 +1085,10 @@ extension NetworkListViewController {
 
     package func waitForListSnapshotBuildIdleForTesting() async {
         await listSnapshotBuildCoordinator.waitUntilIdle()
+    }
+
+    package func waitForTrackedListSnapshotBuildTasksForTesting() async {
+        await listSnapshotBuildCoordinator.waitUntilTrackedTasksComplete()
     }
 
     package func flushPendingListProjectionForTesting() {

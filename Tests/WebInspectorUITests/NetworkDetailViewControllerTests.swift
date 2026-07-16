@@ -2738,6 +2738,34 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func concreteListSnapshotBuilderRetainsEveryEntryAcrossCooperativeBatches() async throws {
+        let context = makeContext()
+        let entryCount = 769
+        for index in 0..<entryCount {
+            context.seedNetworkRequest(
+                requestID: "cooperative-builder-\(index)",
+                url: "https://example.test/cooperative-builder-\(index).json",
+                resourceTypeRawValue: "Fetch",
+                responseMIMEType: "application/json",
+                responseStatus: 200,
+                responseStatusText: "OK",
+                timestamp: Double(index)
+            )
+        }
+        let input = NetworkListSnapshotBuildInput(
+            entryIDs: NetworkPanelModel(context: context).displayEntryIDs,
+            revision: 42
+        )
+        let builder = NetworkListSnapshotBuilderFactory().makeBuilder()
+
+        let artifact = try await builder.build(input)
+
+        #expect(input.entryIDs.count == entryCount)
+        #expect(artifact.input == input)
+        #expect(artifact.snapshot.itemIdentifiers == input.entryIDs)
+    }
+
+    @Test
     func staleReadySnapshotNeverAppliesAfterNewerTransactionArrives() async throws {
         let context = makeContext()
         let initialRequestID = context.seedNetworkRequest(
@@ -3068,7 +3096,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func hiddenListReloadsAfterCancellingInFlightSnapshotBuild() async throws {
+    func repeatedHideShowBoundsRetiredSnapshotBuildsAndAppliesLatestRevision() async throws {
         let context = makeContext()
         let firstRequestID = context.seedNetworkRequest(
             requestID: "first",
@@ -3098,7 +3126,7 @@ struct NetworkDetailViewControllerTests {
         frameScheduler.fireScheduledFrame()
         await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
         #expect(listViewController.displayedRequestIDsForTesting == [firstRequest.id])
-        let transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        var transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
         let secondRequestID = context.seedNetworkRequest(
             requestID: "second",
             url: "https://example.test/second.json",
@@ -3121,10 +3149,12 @@ struct NetworkDetailViewControllerTests {
         listViewController.suspendRenderingForTesting()
         #expect(listViewController.hasActiveListSnapshotBuildForTesting == false)
         #expect(frameScheduler.hasScheduledFrame == false)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 1)
         await snapshotBuilder.waitUntilCancellationObservedCount(1)
 
         listViewController.resumeRenderingForTesting()
         await snapshotBuilder.waitUntilStartedBuildCount(3)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 2)
         #expect(frameScheduler.hasScheduledFrame == false)
         await snapshotBuilder.releaseBuild(3)
         await listViewController.waitForListSnapshotBuildIdleForTesting()
@@ -3139,12 +3169,114 @@ struct NetworkDetailViewControllerTests {
         #expect(statistics.cancelledBuildCount == 0)
         #expect(statistics.finishedBuildIDs.contains(3))
         #expect(statistics.maximumActiveBuildCount == 2)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 1)
+
+        transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        let thirdRequestID = context.seedNetworkRequest(
+            requestID: "third",
+            url: "https://example.test/third.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 2
+        )
+        let thirdRequest = try #require(context.registeredRequest(for: thirdRequestID))
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: transactionDeliveryBaseline
+        ))
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(4)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 2)
+
+        listViewController.suspendRenderingForTesting()
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 2)
+        #expect(frameScheduler.hasScheduledFrame == false)
+        await snapshotBuilder.waitUntilCancellationObservedCount(2)
+
+        listViewController.resumeRenderingForTesting()
+        #expect(listViewController.hasDeferredListSnapshotBuildForTesting)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 2)
+        statistics = await snapshotBuilder.statistics()
+        #expect(statistics.startedBuildCount == 4)
+
+        await snapshotBuilder.releaseBuild(4)
+        await snapshotBuilder.waitUntilCancelledBuildCount(1)
+        await snapshotBuilder.waitUntilStartedBuildCount(5)
+        #expect(listViewController.hasDeferredListSnapshotBuildForTesting == false)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 2)
+        await snapshotBuilder.releaseBuild(5)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
+        #expect(
+            listViewController.displayedRequestIDsForTesting
+                == [thirdRequest.id, secondRequest.id, firstRequest.id]
+        )
+
+        transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        let fourthRequestID = context.seedNetworkRequest(
+            requestID: "fourth",
+            url: "https://example.test/fourth.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 3
+        )
+        let fourthRequest = try #require(context.registeredRequest(for: fourthRequestID))
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: transactionDeliveryBaseline
+        ))
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(6)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 2)
+
+        listViewController.suspendRenderingForTesting()
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 2)
+        #expect(frameScheduler.hasScheduledFrame == false)
+        await snapshotBuilder.waitUntilCancellationObservedCount(3)
+
+        listViewController.resumeRenderingForTesting()
+        #expect(listViewController.hasDeferredListSnapshotBuildForTesting)
+        statistics = await snapshotBuilder.statistics()
+        #expect(statistics.startedBuildCount == 6)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 2)
+
+        await snapshotBuilder.releaseBuild(6)
+        await snapshotBuilder.waitUntilCancelledBuildCount(2)
+        await snapshotBuilder.waitUntilStartedBuildCount(7)
+        #expect(listViewController.hasDeferredListSnapshotBuildForTesting == false)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 2)
+        await snapshotBuilder.releaseBuild(7)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
+
+        #expect(
+            listViewController.displayedRequestIDsForTesting
+                == [fourthRequest.id, thirdRequest.id, secondRequest.id, firstRequest.id]
+        )
+        #expect(listViewController.displayedEntryIDsForTesting == model.displayEntryIDs)
+        statistics = await snapshotBuilder.statistics()
+        #expect(statistics.activeBuildCount == 1)
+        #expect(statistics.maximumActiveBuildCount == 2)
+        #expect(statistics.cancellationObservedCount == 3)
+        #expect(statistics.cancelledBuildCount == 2)
+        #expect(statistics.finishedBuildIDs.isSuperset(of: [3, 5, 7]))
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 1)
 
         await snapshotBuilder.releaseBuild(2)
-        await snapshotBuilder.waitUntilCancelledBuildCount(1)
+        await snapshotBuilder.waitUntilCancelledBuildCount(3)
+        await listViewController.waitForTrackedListSnapshotBuildTasksForTesting()
         statistics = await snapshotBuilder.statistics()
         #expect(statistics.activeBuildCount == 0)
-        #expect(statistics.cancelledBuildCount == 1)
+        #expect(statistics.cancelledBuildCount == 3)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 0)
         #expect(statistics.startedBuildPriorities.allSatisfy { $0 == .userInitiated })
     }
 

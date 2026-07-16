@@ -48,6 +48,8 @@ package struct NetworkListSnapshotBuilderFactory: NetworkListSnapshotBuilderMaki
 }
 
 package actor NetworkListSnapshotBuilder: NetworkListSnapshotBuilding {
+    private static let cooperativeBatchSize = 256
+
     package init() {}
 
     package func build(
@@ -56,10 +58,30 @@ package actor NetworkListSnapshotBuilder: NetworkListSnapshotBuilding {
         guard !Task.isCancelled else {
             throw CancellationError()
         }
-        precondition(
-            input.entryIDs.count == Set(input.entryIDs).count,
-            "Duplicate row IDs detected in NetworkListViewController"
-        )
+
+        var uniqueEntryIDs = Set<NetworkListEntry.ID>()
+        uniqueEntryIDs.reserveCapacity(input.entryIDs.count)
+        var lowerBound = 0
+        while lowerBound < input.entryIDs.count {
+            guard !Task.isCancelled else {
+                throw CancellationError()
+            }
+            let upperBound = min(
+                lowerBound + Self.cooperativeBatchSize,
+                input.entryIDs.count
+            )
+            for entryID in input.entryIDs[lowerBound..<upperBound] {
+                precondition(
+                    uniqueEntryIDs.insert(entryID).inserted,
+                    "Duplicate row IDs detected in NetworkListViewController"
+                )
+            }
+            lowerBound = upperBound
+            await Task.yield()
+        }
+        guard !Task.isCancelled else {
+            throw CancellationError()
+        }
 
         var snapshot = NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>()
         snapshot.appendSections([.main])
