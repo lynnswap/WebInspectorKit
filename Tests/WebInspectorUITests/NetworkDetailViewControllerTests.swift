@@ -2599,15 +2599,18 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(context: context)
         let selectedRequest = try #require(context.registeredRequest(for: selectedRequestID))
         model.selectRequest(selectedRequest)
-        let frameScheduler = ManualNetworkListProjectionFrameScheduler()
+        let frameScheduler = ManualNetworkListFrameScheduler()
+        let snapshotBuilder = BarrierNetworkListSnapshotBuilder()
         let listViewController = NetworkListViewController(
             model: model,
-            listProjectionFrameScheduler: frameScheduler,
-            listSnapshotBuildExecutor: NetworkListDetachedSnapshotBuildExecutor()
+            listFrameScheduler: frameScheduler,
+            listSnapshotBuilder: snapshotBuilder
         )
         let window = showInWindow(listViewController, makeVisible: true)
         defer { window.isHidden = true }
 
+        await snapshotBuilder.waitUntilStartedBuildCount(1)
+        await snapshotBuilder.releaseBuild(1)
         await listViewController.flushPendingSnapshotUpdateForTesting()
         #expect(listViewController.displayedRequestIDsForTesting == [selectedRequest.id])
         let snapshotApplyBaseline = listViewController.snapshotApplyCountForTesting
@@ -2636,6 +2639,18 @@ struct NetworkDetailViewControllerTests {
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyBaseline)
 
         frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(2)
+        let buildStatistics = await snapshotBuilder.statistics()
+        #expect(buildStatistics.startedBuildCount == 2)
+        #expect(buildStatistics.maximumActiveBuildCount == 1)
+        await snapshotBuilder.releaseBuild(2)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyBaseline)
+        #expect(frameScheduler.scheduledFrameCount == scheduledFrameBaseline + 2)
+        #expect(frameScheduler.hasScheduledFrame)
+
+        frameScheduler.fireScheduledFrame()
         await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
 
         let finalEntryIDs = model.displayEntryIDs
@@ -2655,6 +2670,168 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func completedListSnapshotBuildWaitsForDisplayFrameBeforeApplying() async throws {
+        let context = makeContext()
+        let requestID = context.seedNetworkRequest(
+            requestID: "frame-admission",
+            url: "https://example.test/frame-admission.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 0
+        )
+        let model = NetworkPanelModel(context: context)
+        let request = try #require(context.registeredRequest(for: requestID))
+        let frameScheduler = ManualNetworkListFrameScheduler()
+        let snapshotBuilder = BarrierNetworkListSnapshotBuilder()
+        let listViewController = NetworkListViewController(
+            model: model,
+            listFrameScheduler: frameScheduler,
+            listSnapshotBuilder: snapshotBuilder
+        )
+        let window = showInWindow(listViewController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        #expect(listViewController.snapshotApplyCountForTesting == 0)
+        await snapshotBuilder.waitUntilStartedBuildCount(1)
+        await snapshotBuilder.releaseBuild(1)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+
+        try #require(listViewController.snapshotApplyCountForTesting == 0)
+        try #require(frameScheduler.hasScheduledFrame)
+
+        frameScheduler.fireScheduledFrame()
+        await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
+
+        #expect(listViewController.snapshotApplyCountForTesting == 1)
+        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+    }
+
+    @Test
+    func concreteListSnapshotBuilderBuildsTypedArtifactOnItsActor() async throws {
+        let context = makeContext()
+        context.seedNetworkRequest(
+            requestID: "actor-builder",
+            url: "https://example.test/actor-builder.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 0
+        )
+        let model = NetworkPanelModel(context: context)
+        let input = NetworkListSnapshotBuildInput(
+            entryIDs: model.displayEntryIDs,
+            revision: 41
+        )
+        let builder: any NetworkListSnapshotBuilding = NetworkListSnapshotBuilder()
+
+        let artifact = try await builder.build(input)
+
+        #expect(artifact.input == input)
+        #expect(artifact.snapshot.sectionIdentifiers == [.main])
+        #expect(artifact.snapshot.itemIdentifiers == input.entryIDs)
+    }
+
+    @Test
+    func staleReadySnapshotNeverAppliesAfterNewerTransactionArrives() async throws {
+        let context = makeContext()
+        let initialRequestID = context.seedNetworkRequest(
+            requestID: "applying-a",
+            url: "https://example.test/applying-a.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 0
+        )
+        let model = NetworkPanelModel(context: context)
+        _ = try #require(context.registeredRequest(for: initialRequestID))
+        let frameScheduler = ManualNetworkListFrameScheduler()
+        let snapshotBuilder = BarrierNetworkListSnapshotBuilder()
+        let applyCompletionScheduler = ManualNetworkListSnapshotApplyCompletionScheduler()
+        let listViewController = NetworkListViewController(
+            model: model,
+            listFrameScheduler: frameScheduler,
+            listSnapshotBuilder: snapshotBuilder,
+            snapshotApplyCompletionScheduler: applyCompletionScheduler
+        )
+        let window = showInWindow(listViewController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        await snapshotBuilder.waitUntilStartedBuildCount(1)
+        await snapshotBuilder.releaseBuild(1)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await applyCompletionScheduler.waitUntilScheduledCompletionCount(1)
+        #expect(listViewController.snapshotApplyCountForTesting == 1)
+
+        var transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        context.seedNetworkRequest(
+            requestID: "ready-b",
+            url: "https://example.test/ready-b.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 1
+        )
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: transactionDeliveryBaseline
+        ))
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(2)
+        await snapshotBuilder.releaseBuild(2)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        #expect(listViewController.hasPendingSnapshotUpdateForTesting)
+        #expect(listViewController.snapshotApplyCountForTesting == 1)
+        try #require(frameScheduler.hasScheduledFrame)
+
+        transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        context.seedNetworkRequest(
+            requestID: "latest-c",
+            url: "https://example.test/latest-c.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 2
+        )
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: transactionDeliveryBaseline
+        ))
+
+        applyCompletionScheduler.runNextCompletion()
+        #expect(listViewController.snapshotApplyCountForTesting == 1)
+        #expect(frameScheduler.hasScheduledFrame)
+
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(3)
+        #expect(listViewController.hasPendingSnapshotUpdateForTesting == false)
+        #expect(listViewController.snapshotApplyCountForTesting == 1)
+
+        await snapshotBuilder.releaseBuild(3)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        #expect(listViewController.snapshotApplyCountForTesting == 1)
+        try #require(frameScheduler.hasScheduledFrame)
+
+        frameScheduler.fireScheduledFrame()
+        await applyCompletionScheduler.waitUntilScheduledCompletionCount(2)
+
+        #expect(listViewController.snapshotApplyCountForTesting == 2)
+        #expect(listViewController.displayedEntryIDsForTesting == model.displayEntryIDs)
+
+        applyCompletionScheduler.runNextCompletion()
+        await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
+
+        #expect(listViewController.displayedEntryIDsForTesting == model.displayEntryIDs)
+        #expect(listViewController.snapshotApplyCountForTesting == 2)
+        #expect(applyCompletionScheduler.pendingCompletionCount == 0)
+    }
+
+    @Test
     func listSnapshotBuildSerializesRunningWorkAndKeepsLatestReplacement() async throws {
         let context = makeContext()
         let selectedRequestID = context.seedNetworkRequest(
@@ -2669,18 +2846,18 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(context: context)
         let selectedRequest = try #require(context.registeredRequest(for: selectedRequestID))
         model.selectRequest(selectedRequest)
-        let frameScheduler = ManualNetworkListProjectionFrameScheduler()
-        let buildExecutor = BarrierNetworkListSnapshotBuildExecutor()
+        let frameScheduler = ManualNetworkListFrameScheduler()
+        let snapshotBuilder = BarrierNetworkListSnapshotBuilder()
         let listViewController = NetworkListViewController(
             model: model,
-            listProjectionFrameScheduler: frameScheduler,
-            listSnapshotBuildExecutor: buildExecutor
+            listFrameScheduler: frameScheduler,
+            listSnapshotBuilder: snapshotBuilder
         )
         let window = showInWindow(listViewController, makeVisible: true)
         defer { window.isHidden = true }
 
-        await buildExecutor.waitUntilStartedBuildCount(1)
-        await buildExecutor.releaseBuild(1)
+        await snapshotBuilder.waitUntilStartedBuildCount(1)
+        await snapshotBuilder.releaseBuild(1)
         await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
         #expect(listViewController.displayedRequestIDsForTesting == [selectedRequest.id])
         let snapshotApplyBaseline = listViewController.snapshotApplyCountForTesting
@@ -2701,7 +2878,7 @@ struct NetworkDetailViewControllerTests {
             after: transactionDeliveryBaseline
         ))
         frameScheduler.fireScheduledFrame()
-        await buildExecutor.waitUntilStartedBuildCount(2)
+        await snapshotBuilder.waitUntilStartedBuildCount(2)
 
         transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
         context.seedNetworkRequest(
@@ -2733,25 +2910,30 @@ struct NetworkDetailViewControllerTests {
         ))
         frameScheduler.fireScheduledFrame()
 
-        var buildStatistics = await buildExecutor.statistics()
+        var buildStatistics = await snapshotBuilder.statistics()
         #expect(buildStatistics.startedBuildCount == 2)
         #expect(buildStatistics.activeBuildCount == 1)
         #expect(buildStatistics.maximumActiveBuildCount == 1)
 
-        await buildExecutor.releaseBuild(2)
-        await buildExecutor.waitUntilStartedBuildCount(3)
-        buildStatistics = await buildExecutor.statistics()
+        await snapshotBuilder.releaseBuild(2)
+        await snapshotBuilder.waitUntilStartedBuildCount(3)
+        buildStatistics = await snapshotBuilder.statistics()
         #expect(buildStatistics.startedBuildCount == 3)
         #expect(buildStatistics.activeBuildCount == 1)
         #expect(buildStatistics.maximumActiveBuildCount == 1)
 
-        await buildExecutor.releaseBuild(3)
+        await snapshotBuilder.releaseBuild(3)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        #expect(frameScheduler.scheduledFrameCount == scheduledFrameBaseline + 4)
+        #expect(frameScheduler.hasScheduledFrame)
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyBaseline)
+
+        frameScheduler.fireScheduledFrame()
         await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
 
         let finalEntryIDs = model.displayEntryIDs
         #expect(listViewController.displayedEntryIDsForTesting == finalEntryIDs)
         #expect(finalEntryIDs.count == 4)
-        #expect(frameScheduler.scheduledFrameCount == scheduledFrameBaseline + 3)
         #expect(listViewController.listProjectionFlushCountForTesting == projectionFlushBaseline + 3)
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyBaseline + 1)
         #expect(model.selectedRequest === selectedRequest)
@@ -2896,11 +3078,22 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         let firstRequest = try #require(context.registeredRequest(for: firstRequestID))
-        let listViewController = NetworkListViewController(model: model)
+        let frameScheduler = ManualNetworkListFrameScheduler()
+        let snapshotBuilder = BarrierNetworkListSnapshotBuilder()
+        let listViewController = NetworkListViewController(
+            model: model,
+            listFrameScheduler: frameScheduler,
+            listSnapshotBuilder: snapshotBuilder
+        )
         let window = showInWindow(listViewController, makeVisible: true)
         defer { window.isHidden = true }
 
-        await listViewController.flushPendingSnapshotUpdateForTesting()
+        await snapshotBuilder.waitUntilStartedBuildCount(1)
+        await snapshotBuilder.releaseBuild(1)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
         #expect(listViewController.displayedRequestIDsForTesting == [firstRequest.id])
         let transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
         let secondRequestID = context.seedNetworkRequest(
@@ -2917,18 +3110,33 @@ struct NetworkDetailViewControllerTests {
             after: transactionDeliveryBaseline
         ))
 
-        listViewController.flushPendingListProjectionForTesting()
-        #expect(listViewController.hasActiveListSnapshotBuildForTesting)
-        listViewController.suspendRenderingForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(2)
         #expect(listViewController.hasActiveListSnapshotBuildForTesting)
 
+        listViewController.suspendRenderingForTesting()
+        #expect(listViewController.hasActiveListSnapshotBuildForTesting == false)
+        #expect(frameScheduler.hasScheduledFrame == false)
+        await snapshotBuilder.waitUntilCancelledBuildCount(1)
+
         listViewController.resumeRenderingForTesting()
-        await listViewController.flushPendingSnapshotUpdateForTesting()
+        await snapshotBuilder.waitUntilStartedBuildCount(3)
+        #expect(frameScheduler.hasScheduledFrame == false)
+        await snapshotBuilder.releaseBuild(3)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
+
         #expect(listViewController.displayedRequestIDsForTesting == [secondRequest.id, firstRequest.id])
+        let statistics = await snapshotBuilder.statistics()
+        #expect(statistics.cancelledBuildCount == 1)
+        #expect(statistics.startedBuildPriorities.allSatisfy { $0 == .userInitiated })
     }
 
     @Test
-    func hiddenListDefersQueuedSnapshotApplyUntilAppearingAgain() async throws {
+    func hiddenListReconcilesAfterInFlightApplyCompletesWhileHidden() async throws {
         let context = makeContext()
         let request = try #require(await applyRequest(
             to: context,
@@ -2938,35 +3146,75 @@ struct NetworkDetailViewControllerTests {
             responseMimeType: "video/mp4"
         ))
         let model = NetworkPanelModel(context: context)
-        let listViewController = NetworkListViewController(model: model)
-        let window = showInWindow(listViewController)
+        let frameScheduler = ManualNetworkListFrameScheduler()
+        let snapshotBuilder = BarrierNetworkListSnapshotBuilder()
+        let applyCompletionScheduler = ManualNetworkListSnapshotApplyCompletionScheduler()
+        let listViewController = NetworkListViewController(
+            model: model,
+            listFrameScheduler: frameScheduler,
+            listSnapshotBuilder: snapshotBuilder,
+            snapshotApplyCompletionScheduler: applyCompletionScheduler
+        )
+        let window = showInWindow(listViewController, makeVisible: true)
         defer { window.isHidden = true }
-        await listViewController.flushPendingSnapshotUpdateForTesting()
+
+        await snapshotBuilder.waitUntilStartedBuildCount(1)
+        await snapshotBuilder.releaseBuild(1)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await applyCompletionScheduler.waitUntilScheduledCompletionCount(1)
+        applyCompletionScheduler.runNextCompletion()
+        await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
         #expect(listViewController.displayedRequestIDsForTesting == [request.id])
 
         let evaluationCountBeforeHiddenUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
-        listViewController.beginSnapshotApplyForTesting(requestIDs: [request.id])
-        await listViewController.queueSnapshotUpdateForTesting(requestIDs: [])
-        #expect(listViewController.hasPendingSnapshotUpdateForTesting)
-
-        listViewController.suspendRenderingForTesting()
-        #expect(listViewController.hasPendingSnapshotUpdateForTesting == false)
-
-        let transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        var transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
         model.setSearchText("does-not-match")
         #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
             after: transactionDeliveryBaseline
         ))
-        listViewController.finishSnapshotApplyForTesting(requestIDs: [request.id])
-        await listViewController.flushPendingSnapshotUpdateForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(2)
+        await snapshotBuilder.releaseBuild(2)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await applyCompletionScheduler.waitUntilScheduledCompletionCount(2)
+
+        #expect(listViewController.snapshotApplyCountForTesting == 2)
+        #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
+
+        listViewController.suspendRenderingForTesting()
+        #expect(listViewController.hasPendingSnapshotUpdateForTesting == false)
+        #expect(frameScheduler.hasScheduledFrame == false)
+
+        transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        model.setSearchText("")
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: transactionDeliveryBaseline
+        ))
+        applyCompletionScheduler.runNextCompletion()
 
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
-        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+        #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
+        #expect(frameScheduler.hasScheduledFrame == false)
 
         listViewController.resumeRenderingForTesting()
-        await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
+        await snapshotBuilder.waitUntilStartedBuildCount(3)
+        #expect(frameScheduler.hasScheduledFrame == false)
+        await snapshotBuilder.releaseBuild(3)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await applyCompletionScheduler.waitUntilScheduledCompletionCount(3)
+        applyCompletionScheduler.runNextCompletion()
+        await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
+
+        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
+        #expect(applyCompletionScheduler.pendingCompletionCount == 0)
     }
 
     @Test
@@ -4078,7 +4326,7 @@ private final class RecordingNetworkBodyPreviewViewController: UIViewController,
 }
 
 @MainActor
-private final class ManualNetworkListProjectionFrameScheduler: NetworkListProjectionFrameScheduling {
+private final class ManualNetworkListFrameScheduler: NetworkListFrameScheduling {
     private var pendingAction: (@MainActor () -> Void)?
     private(set) var scheduledFrameCount = 0
 
@@ -4111,11 +4359,70 @@ private final class ManualNetworkListProjectionFrameScheduler: NetworkListProjec
     }
 }
 
-private actor BarrierNetworkListSnapshotBuildExecutor: NetworkListSnapshotBuildExecuting {
+@MainActor
+private final class ManualNetworkListSnapshotApplyCompletionScheduler:
+    NetworkListSnapshotApplyCompletionScheduling
+{
+    private struct Waiter {
+        var targetCount: Int
+        var continuation: CheckedContinuation<Void, Never>
+    }
+
+    private var scheduledCompletionCount = 0
+    private var pendingCompletions: [@MainActor @Sendable () -> Void] = []
+    private var waiters: [Waiter] = []
+
+    var pendingCompletionCount: Int {
+        pendingCompletions.count
+    }
+
+    func schedule(_ completion: @escaping @MainActor @Sendable () -> Void) {
+        scheduledCompletionCount += 1
+        pendingCompletions.append(completion)
+        resumeWaiters()
+    }
+
+    func waitUntilScheduledCompletionCount(_ targetCount: Int) async {
+        guard scheduledCompletionCount < targetCount else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(
+                Waiter(
+                    targetCount: targetCount,
+                    continuation: continuation
+                )
+            )
+        }
+    }
+
+    func runNextCompletion() {
+        guard pendingCompletions.isEmpty == false else {
+            preconditionFailure("Expected a pending Network list snapshot apply completion.")
+        }
+        pendingCompletions.removeFirst()()
+    }
+
+    private func resumeWaiters() {
+        var remainingWaiters: [Waiter] = []
+        for waiter in waiters {
+            if scheduledCompletionCount >= waiter.targetCount {
+                waiter.continuation.resume()
+            } else {
+                remainingWaiters.append(waiter)
+            }
+        }
+        waiters = remainingWaiters
+    }
+}
+
+private actor BarrierNetworkListSnapshotBuilder: NetworkListSnapshotBuilding {
     struct Statistics: Equatable, Sendable {
         var startedBuildCount: Int
         var activeBuildCount: Int
         var maximumActiveBuildCount: Int
+        var cancelledBuildCount: Int
+        var startedBuildPriorities: [TaskPriority]
     }
 
     private struct StartedBuildWaiter {
@@ -4126,23 +4433,38 @@ private actor BarrierNetworkListSnapshotBuildExecutor: NetworkListSnapshotBuildE
     private var startedBuildCount = 0
     private var activeBuildCount = 0
     private var maximumActiveBuildCount = 0
+    private var cancelledBuildCount = 0
+    private var startedBuildPriorities: [TaskPriority] = []
     private var releasedBuilds: Set<Int> = []
+    private var cancelledBuilds: Set<Int> = []
     private var releaseWaiters: [Int: CheckedContinuation<Void, Never>] = [:]
     private var startedBuildWaiters: [StartedBuildWaiter] = []
+    private var cancelledBuildWaiters: [StartedBuildWaiter] = []
 
-    func execute<Output: Sendable>(
-        _ operation: @escaping @Sendable () -> Output
-    ) async -> Output {
+    func build(
+        _ input: NetworkListSnapshotBuildInput
+    ) async throws(CancellationError) -> NetworkListSnapshotArtifact {
         startedBuildCount += 1
         let buildID = startedBuildCount
         activeBuildCount += 1
         maximumActiveBuildCount = Swift.max(maximumActiveBuildCount, activeBuildCount)
+        startedBuildPriorities.append(Task.currentPriority)
         resumeStartedBuildWaiters()
+        defer {
+            activeBuildCount -= 1
+        }
 
-        await waitForRelease(of: buildID)
-        let output = operation()
-        activeBuildCount -= 1
-        return output
+        do {
+            try await waitForRelease(of: buildID)
+        } catch {
+            cancelledBuildCount += 1
+            resumeCancelledBuildWaiters()
+            throw error
+        }
+        var snapshot = NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>()
+        snapshot.appendSections([.main])
+        snapshot.appendItems(input.entryIDs, toSection: .main)
+        return NetworkListSnapshotArtifact(input: input, snapshot: snapshot)
     }
 
     func waitUntilStartedBuildCount(_ targetCount: Int) async {
@@ -4167,24 +4489,57 @@ private actor BarrierNetworkListSnapshotBuildExecutor: NetworkListSnapshotBuildE
         }
     }
 
+    func waitUntilCancelledBuildCount(_ targetCount: Int) async {
+        guard cancelledBuildCount < targetCount else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            cancelledBuildWaiters.append(
+                StartedBuildWaiter(
+                    targetCount: targetCount,
+                    continuation: continuation
+                )
+            )
+        }
+    }
+
     func statistics() -> Statistics {
         Statistics(
             startedBuildCount: startedBuildCount,
             activeBuildCount: activeBuildCount,
-            maximumActiveBuildCount: maximumActiveBuildCount
+            maximumActiveBuildCount: maximumActiveBuildCount,
+            cancelledBuildCount: cancelledBuildCount,
+            startedBuildPriorities: startedBuildPriorities
         )
     }
 
-    private func waitForRelease(of buildID: Int) async {
-        if releasedBuilds.remove(buildID) != nil {
-            return
+    private func waitForRelease(of buildID: Int) async throws(CancellationError) {
+        await withTaskCancellationHandler {
+            if releasedBuilds.remove(buildID) == nil,
+               cancelledBuilds.remove(buildID) == nil {
+                await withCheckedContinuation { continuation in
+                    precondition(
+                        releaseWaiters[buildID] == nil,
+                        "A Network list snapshot build can only wait on one release barrier."
+                    )
+                    releaseWaiters[buildID] = continuation
+                }
+            }
+        } onCancel: {
+            Task {
+                await self.cancelWaitForRelease(of: buildID)
+            }
         }
-        await withCheckedContinuation { continuation in
-            precondition(
-                releaseWaiters[buildID] == nil,
-                "A Network list snapshot build can only wait on one release barrier."
-            )
-            releaseWaiters[buildID] = continuation
+        guard !Task.isCancelled else {
+            throw CancellationError()
+        }
+    }
+
+    private func cancelWaitForRelease(of buildID: Int) {
+        if let waiter = releaseWaiters.removeValue(forKey: buildID) {
+            waiter.resume()
+        } else {
+            cancelledBuilds.insert(buildID)
         }
     }
 
@@ -4198,6 +4553,18 @@ private actor BarrierNetworkListSnapshotBuildExecutor: NetworkListSnapshotBuildE
             }
         }
         startedBuildWaiters = remainingWaiters
+    }
+
+    private func resumeCancelledBuildWaiters() {
+        var remainingWaiters: [StartedBuildWaiter] = []
+        for waiter in cancelledBuildWaiters {
+            if cancelledBuildCount >= waiter.targetCount {
+                waiter.continuation.resume()
+            } else {
+                remainingWaiters.append(waiter)
+            }
+        }
+        cancelledBuildWaiters = remainingWaiters
     }
 }
 #endif

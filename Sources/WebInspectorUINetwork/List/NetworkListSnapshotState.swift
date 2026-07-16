@@ -15,6 +15,7 @@ extension NetworkListViewController {
 extension NetworkListViewController {
     @MainActor
     struct SnapshotState {
+        private(set) var appliedRows = NetworkListViewController.SnapshotRows(entryIDs: [])
         private(set) var applyingRows: NetworkListViewController.SnapshotRows?
 
         var isApplying: Bool {
@@ -22,11 +23,20 @@ extension NetworkListViewController {
         }
 
         mutating func beginApplying(_ rows: NetworkListViewController.SnapshotRows) {
+            precondition(
+                applyingRows == nil,
+                "A Network list snapshot apply must finish before another begins."
+            )
             applyingRows = rows
         }
 
         mutating func finishApplying(_ rows: NetworkListViewController.SnapshotRows) {
+            precondition(
+                applyingRows == rows,
+                "A Network list snapshot apply must finish the rows it started."
+            )
             applyingRows = nil
+            appliedRows = rows
         }
     }
 }

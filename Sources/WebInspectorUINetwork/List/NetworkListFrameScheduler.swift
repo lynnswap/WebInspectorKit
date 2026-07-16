@@ -2,14 +2,14 @@
 import UIKit
 
 @MainActor
-package protocol NetworkListProjectionFrameScheduling: AnyObject {
+package protocol NetworkListFrameScheduling: AnyObject {
     func schedule(_ action: @escaping @MainActor () -> Void)
     func cancel()
     func invalidate()
 }
 
 @MainActor
-package final class NetworkListDisplayLinkFrameScheduler: NetworkListProjectionFrameScheduling {
+package final class NetworkListDisplayLinkFrameScheduler: NetworkListFrameScheduling {
     @MainActor
     private final class Target: NSObject {
         weak var scheduler: NetworkListDisplayLinkFrameScheduler?
