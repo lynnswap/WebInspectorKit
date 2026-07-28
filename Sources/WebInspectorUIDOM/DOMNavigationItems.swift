@@ -7,7 +7,7 @@ import UIKit
 package final class DOMNavigationItems: NSObject {
     private typealias UndoManagerProvider = @MainActor () -> UndoManager?
 
-    private let context: WebInspectorModelContext
+    private let context: WebInspectorContext
     private var statusTask: Task<Void, Never>?
     private var undoManagerProvider: UndoManagerProvider = { nil }
 
@@ -44,7 +44,7 @@ package final class DOMNavigationItems: NSObject {
         return item
     }()
 
-    package init(context: WebInspectorModelContext) {
+    package init(context: WebInspectorContext) {
         self.context = context
         super.init()
         startObservingInspection()
@@ -194,7 +194,7 @@ package final class DOMNavigationItems: NSObject {
         UIAction(
             title: String(localized: "reload", bundle: WebInspectorUILocalization.bundle),
             image: UIImage(systemName: "arrow.clockwise"),
-            attributes: context.state == .attached ? [] : [.disabled]
+            attributes: context.status.state == .attached ? [] : [.disabled]
         ) { [weak self] _ in
             self?.performReloadCommand()
         }
@@ -205,11 +205,11 @@ package final class DOMNavigationItems: NSObject {
             guard let self else {
                 return
             }
-            guard context.state == .attached else {
+            guard context.status.state == .attached else {
                 return
             }
             do {
-                try await context.reload()
+                try await context.page.reload()
             } catch {
                 WebInspectorUIDOMLog.debug("DOM reload failed: \(String(describing: error))")
             }
@@ -236,18 +236,16 @@ package final class DOMNavigationItems: NSObject {
     }
 
     private func deleteSelectedNodeFromNavigation(undoManager: UndoManager?) async {
-        guard let selectedNode = try? context.selectedDOMNode else {
+        guard let selectedNode = context.selectedNode else {
             return
         }
         do {
-            let result = try await context.removeDOMNodes([selectedNode])
-            guard let undo = result.undo else {
-                return
-            }
+            let result = try await context.dom.remove([selectedNode.id])
+            let undoCommands = try context.domUndoRedoCommands()
             DOMDeletionUndoRegistration.registerDeleteUndo(
                 on: undoManager,
-                capability: undo,
-                deletedNodeCount: result.appliedNodeIDs.count
+                commands: undoCommands,
+                deletedNodeCount: result.acceptedNodeIDs.count
             )
         } catch {
             return
@@ -269,7 +267,7 @@ package final class DOMNavigationItems: NSObject {
                 return
             }
             do {
-                try await context.setElementPickerEnabled(!(try context.isElementPickerEnabled))
+                try await context.dom.setInspectMode(enabled: !context.isElementPickerEnabled)
             } catch {
                 WebInspectorUIDOMLog.debug("DOM picker toggle failed: \(String(describing: error))")
             }
@@ -282,7 +280,7 @@ package final class DOMNavigationItems: NSObject {
         )
     }
 
-    private func renderPickItem(status: WebInspectorModelContext.Status) {
+    private func renderPickItem(status: WebInspectorContext.Status) {
         renderPickItem(
             isEnabled: status.state == .attached,
             isSelectingElement: status.isElementPickerEnabled

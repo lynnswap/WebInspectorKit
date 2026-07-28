@@ -7,14 +7,14 @@ import UIKit
 enum DOMDeletionUndoRegistration {
     static func registerDeleteUndo(
         on undoManager: UndoManager?,
-        capability: DOMUndoCapability,
+        commands: WebInspectorContext.DOMUndoRedoCommands,
         deletedNodeCount: Int
     ) {
         guard let undoManager, deletedNodeCount > 0 else {
             return
         }
         let target = DOMUndoCommandTarget(
-            capability: capability,
+            commands: commands,
             undoManager: undoManager,
             commandCount: deletedNodeCount,
             actionName: deletedNodeCount == 1
@@ -37,18 +37,18 @@ enum DOMDeletionUndoRegistration {
 
 @MainActor
 private final class DOMUndoCommandTarget: NSObject {
-    private let capability: DOMUndoCapability
+    private let commands: WebInspectorContext.DOMUndoRedoCommands
     private weak var undoManager: UndoManager?
     private let commandCount: Int
     private let actionName: String
 
     init(
-        capability: DOMUndoCapability,
+        commands: WebInspectorContext.DOMUndoRedoCommands,
         undoManager: UndoManager,
         commandCount: Int,
         actionName: String
     ) {
-        self.capability = capability
+        self.commands = commands
         self.undoManager = undoManager
         self.commandCount = commandCount
         self.actionName = actionName
@@ -118,13 +118,13 @@ private final class DOMUndoCommandTarget: NSObject {
 
     private func undoDeletedNodes() async throws {
         for _ in 0..<commandCount {
-            try await capability.undo()
+            try await commands.undo()
         }
     }
 
     private func redoDeletedNodes() async throws {
         for _ in 0..<commandCount {
-            try await capability.redo()
+            try await commands.redo()
         }
     }
 

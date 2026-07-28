@@ -1,51 +1,60 @@
 import Foundation
 
-/// A target-scoped handle for Web Inspector Network commands and events.
-public struct Network: Sendable, WebInspectorEventDomainHandle {
-    package static let commandDomain = WebInspectorProxyDomain.network
-    package static let eventDomain = WebInspectorProxyEventDomain.network
+/// Types and commands for the Web Inspector Network domain.
+public enum Network {
+    /// A target-scoped client for Network commands and events.
+    public struct Client: Sendable {
+        package let context: DomainClientContext
 
-    package let endpoint: DomainEndpoint
-
-    package init(endpoint: DomainEndpoint) {
-        self.endpoint = endpoint
-    }
-
-    package static func extractEvent(_ event: WebInspectorProxyEvent) -> Event? {
-        guard case let .network(value) = event else {
-            return nil
+        package init(context: DomainClientContext) {
+            self.context = context
         }
-        return value
+
+        /// Enables Network domain events and commands for the target.
+        public func enable() async throws {
+            try await context.dispatchVoid(
+                domain: .network,
+                method: "enable",
+                payload: EnablePayload()
+            )
+        }
+
+        /// Disables Network domain events for the target.
+        public func disable() async throws {
+            try await context.dispatchVoid(
+                domain: .network,
+                method: "disable",
+                payload: DisablePayload()
+            )
+        }
+
+        /// Returns the response body for a completed network request.
+        public func responseBody(
+            for id: Request.ID,
+            backendResourceIdentifier: BackendResourceID? = nil
+        ) async throws -> Body {
+            try await context.dispatch(
+                domain: .network,
+                method: "getResponseBody",
+                payload: GetResponseBodyPayload(id: id, backendResourceIdentifier: backendResourceIdentifier),
+                returning: Body.self
+            )
+        }
+
+        /// Network domain events emitted by this target.
+        public var events: EventStream {
+            EventStream {
+                context.networkEvents()
+            }
+        }
     }
 
-    /// Runs an operation with an atomically registered Network event scope.
-    ///
-    /// The first scope registers before `Network.enable` is sent. Scope
-    /// completion waits for the final matching `Network.disable`.
-    public func withEvents<Output>(
-        buffering: WebInspectorEventBufferingPolicy = .bounded(256),
-        isolation: isolated (any Actor)? = #isolation,
-        _ operation: (
-            AsyncThrowingStream<WebInspectorPageEvent<Network.Event>, any Error>
-        ) async throws -> Output
-    ) async throws -> Output {
-        try await _withEvents(
-            buffering: buffering,
-            isolation: isolation,
-            operation
-        )
+    package struct EnablePayload: Sendable {
+        package init() {}
     }
 
-    /// Returns the response body for a completed network request.
-    public func responseBody(
-        for id: Request.ID,
-        backendResourceIdentifier: BackendResourceID? = nil
-    ) async throws -> Body {
-        try await dispatch(
-            method: "getResponseBody",
-            payload: GetResponseBodyPayload(id: id, backendResourceIdentifier: backendResourceIdentifier),
-            returning: Body.self
-        )
+    package struct DisablePayload: Sendable {
+        package init() {}
     }
 
     package struct GetResponseBodyPayload: Sendable {
@@ -405,6 +414,29 @@ public struct Network: Sendable, WebInspectorEventDomainHandle {
         }
     }
 
+    /// An asynchronous stream of Network domain events.
+    public struct EventStream: AsyncSequence, Sendable {
+        /// The event yielded by the stream.
+        public typealias Element = Event
+
+        /// The iterator type used by the stream.
+        public typealias AsyncIterator = AsyncStream<Event>.Iterator
+
+        private let makeStream: @Sendable () -> AsyncStream<Event>
+
+        package init(
+            _ makeStream: @escaping @Sendable () -> AsyncStream<Event> = {
+                finishedStream(of: Event.self)
+            }
+        ) {
+            self.makeStream = makeStream
+        }
+
+        /// Creates an iterator over Network events.
+        public func makeAsyncIterator() -> AsyncIterator {
+            makeStream().makeAsyncIterator()
+        }
+    }
 }
 
 package extension Network.Request.ID {

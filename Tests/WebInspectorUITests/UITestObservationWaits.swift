@@ -1,3 +1,4 @@
+#if canImport(UIKit)
 import ObservationBridge
 import WebInspectorDataKit
 
@@ -110,3 +111,4 @@ final class UITestDeinitProbe {
         waiter.continuation.resume(returning: result)
     }
 }
+#endif

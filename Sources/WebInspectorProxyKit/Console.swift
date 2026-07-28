@@ -1,52 +1,65 @@
 import Foundation
 
-/// A target-scoped handle for Web Inspector Console commands and events.
-public struct Console: Sendable, WebInspectorEventDomainHandle {
-    package static let commandDomain = WebInspectorProxyDomain.console
-    package static let eventDomain = WebInspectorProxyEventDomain.console
+/// Types and commands for the Web Inspector Console domain.
+public enum Console {
+    /// A target-scoped client for Console commands and events.
+    public struct Client: Sendable {
+        package let context: DomainClientContext
 
-    package let endpoint: DomainEndpoint
-
-    package init(endpoint: DomainEndpoint) {
-        self.endpoint = endpoint
-    }
-
-    package static func extractEvent(_ event: WebInspectorProxyEvent) -> Event? {
-        guard case let .console(value) = event else {
-            return nil
+        package init(context: DomainClientContext) {
+            self.context = context
         }
-        return value.event
+
+        /// Enables Console domain events and commands for the target.
+        public func enable() async throws {
+            try await context.dispatchVoid(
+                domain: .console,
+                method: "enable",
+                payload: EnablePayload()
+            )
+        }
+
+        /// Disables Console domain events for the target.
+        public func disable() async throws {
+            try await context.dispatchVoid(
+                domain: .console,
+                method: "disable",
+                payload: DisablePayload()
+            )
+        }
+
+        /// Clears console messages in the inspected target.
+        public func clearMessages() async throws {
+            try await context.dispatchVoid(
+                domain: .console,
+                method: "clearMessages",
+                payload: ClearMessagesPayload()
+            )
+        }
+
+        /// Sets the logging level for a WebKit logging channel.
+        public func setLoggingChannelLevel(_ source: ChannelSource, level: ChannelLevel) async throws {
+            try await context.dispatchVoid(
+                domain: .console,
+                method: "setLoggingChannelLevel",
+                payload: SetLoggingChannelLevelPayload(source: source, level: level)
+            )
+        }
+
+        /// Console domain events emitted by this target.
+        public var events: EventStream {
+            EventStream {
+                context.consoleEvents()
+            }
+        }
     }
 
-    /// Runs an operation with an atomically registered Console event scope.
-    public func withEvents<Output>(
-        buffering: WebInspectorEventBufferingPolicy = .bounded(256),
-        isolation: isolated (any Actor)? = #isolation,
-        _ operation: (
-            AsyncThrowingStream<WebInspectorPageEvent<Console.Event>, any Error>
-        ) async throws -> Output
-    ) async throws -> Output {
-        try await _withEvents(
-            buffering: buffering,
-            isolation: isolation,
-            operation
-        )
+    package struct EnablePayload: Sendable {
+        package init() {}
     }
 
-    /// Clears console messages in the inspected target.
-    public func clearMessages() async throws {
-        try await dispatchVoid(
-            method: "clearMessages",
-            payload: ClearMessagesPayload()
-        )
-    }
-
-    /// Sets the logging level for a WebKit logging channel.
-    public func setLoggingChannelLevel(_ source: ChannelSource, level: ChannelLevel) async throws {
-        try await dispatchVoid(
-            method: "setLoggingChannelLevel",
-            payload: SetLoggingChannelLevelPayload(source: source, level: level)
-        )
+    package struct DisablePayload: Sendable {
+        package init() {}
     }
 
     package struct ClearMessagesPayload: Sendable {
@@ -256,4 +269,27 @@ public struct Console: Sendable, WebInspectorEventDomainHandle {
         }
     }
 
+    /// An asynchronous stream of Console domain events.
+    public struct EventStream: AsyncSequence, Sendable {
+        /// The event yielded by the stream.
+        public typealias Element = Event
+
+        /// The iterator type used by the stream.
+        public typealias AsyncIterator = AsyncStream<Event>.Iterator
+
+        private let makeStream: @Sendable () -> AsyncStream<Event>
+
+        package init(
+            _ makeStream: @escaping @Sendable () -> AsyncStream<Event> = {
+                finishedStream(of: Event.self)
+            }
+        ) {
+            self.makeStream = makeStream
+        }
+
+        /// Creates an iterator over Console events.
+        public func makeAsyncIterator() -> AsyncIterator {
+            makeStream().makeAsyncIterator()
+        }
+    }
 }

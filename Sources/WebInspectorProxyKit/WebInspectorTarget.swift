@@ -37,10 +37,14 @@ package struct RoutingTargetID: Hashable, Sendable {
     }
 }
 
-/// A package-owned physical WebKit target used while projecting one logical
-/// ``WebInspectorPage``. Public consumers never own physical target identity.
-package struct WebInspectorTarget: Identifiable, Sendable {
-    package struct ID: Hashable, Sendable {
+/// A typed handle for a Web Inspector protocol target.
+///
+/// Targets vend domain clients such as ``dom``, ``network``, and ``runtime``.
+/// Keep the target that DataKit or ProxyKit gives you instead of constructing
+/// transport target identifiers yourself.
+public struct WebInspectorTarget: Identifiable, Sendable {
+    /// Stable identity for a protocol target within one proxy connection.
+    public struct ID: Hashable, Sendable {
         package let rawValue: String
 
         package init(_ rawValue: String) {
@@ -50,29 +54,37 @@ package struct WebInspectorTarget: Identifiable, Sendable {
         package static let currentPage = ID("current-page")
     }
 
-    package enum Kind: Equatable, Sendable {
+    /// The kind of backend target represented by a ``WebInspectorTarget``.
+    public enum Kind: Sendable {
+        /// A top-level page target.
         case page
+
+        /// A frame target.
         case frame
+
+        /// A worker target.
         case worker
+
+        /// A service worker target.
         case serviceWorker
     }
 
-    package let id: ID
-    package let kind: Kind
-    package let frameID: FrameID?
-    package let isProvisional: Bool
+    /// The target identity used by typed domain clients.
+    public let id: ID
 
-    package let proxyReference: WebInspectorProxyReference
+    /// The backend target kind.
+    public let kind: Kind
+
+    /// The frame identifier for frame-backed targets.
+    public let frameID: FrameID?
+
+    /// A Boolean value indicating whether the target is provisional during
+    /// navigation.
+    public let isProvisional: Bool
+
+    package let proxy: WebInspectorProxy
     package let route: RoutingTargetID
     package let pageBindingID: String?
-    package let authority: WebInspectorCommandAuthority
-
-    package var proxy: WebInspectorProxy {
-        guard let proxy = proxyReference.resolve() else {
-            preconditionFailure("A package-only binding check outlived its WebInspectorProxy owner.")
-        }
-        return proxy
-    }
 
     package init(
         id: ID,
@@ -81,37 +93,15 @@ package struct WebInspectorTarget: Identifiable, Sendable {
         isProvisional: Bool,
         proxy: WebInspectorProxy,
         route: RoutingTargetID,
-        pageBindingID: String? = nil,
-        authority: WebInspectorCommandAuthority = .direct
+        pageBindingID: String? = nil
     ) {
         self.id = id
         self.kind = kind
         self.frameID = frameID
         self.isProvisional = isProvisional
-        proxyReference = WebInspectorProxyReference(proxy)
+        self.proxy = proxy
         self.route = route
         self.pageBindingID = pageBindingID
-        self.authority = authority
-    }
-
-    private init(
-        id: ID,
-        kind: Kind,
-        frameID: FrameID?,
-        isProvisional: Bool,
-        proxyReference: WebInspectorProxyReference,
-        route: RoutingTargetID,
-        pageBindingID: String?,
-        authority: WebInspectorCommandAuthority
-    ) {
-        self.id = id
-        self.kind = kind
-        self.frameID = frameID
-        self.isProvisional = isProvisional
-        self.proxyReference = proxyReference
-        self.route = route
-        self.pageBindingID = pageBindingID
-        self.authority = authority
     }
 
     package func withPageBinding(from lifecycleTarget: WebInspectorLifecycleTarget) -> WebInspectorTarget {
@@ -120,48 +110,58 @@ package struct WebInspectorTarget: Identifiable, Sendable {
             kind: lifecycleTarget.kind,
             frameID: lifecycleTarget.frameID,
             isProvisional: lifecycleTarget.isProvisional,
-            proxyReference: proxyReference,
+            proxy: proxy,
             route: route,
-            pageBindingID: lifecycleTarget.pageBindingID,
-            authority: authority
+            pageBindingID: lifecycleTarget.pageBindingID
         )
     }
 
-    package var dom: DOM {
-        DOM(endpoint: endpoint)
+    /// A typed client for DOM protocol commands and events.
+    public var dom: DOM.Client {
+        DOM.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
     }
 
-    package var css: CSS {
-        CSS(endpoint: endpoint)
+    /// A typed client for CSS protocol commands and events.
+    public var css: CSS.Client {
+        CSS.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
     }
 
-    package var network: Network {
-        Network(endpoint: endpoint)
+    /// A typed client for Network protocol commands and events.
+    public var network: Network.Client {
+        Network.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
     }
 
-    package var console: Console {
-        Console(endpoint: endpoint)
+    /// A typed client for Console protocol commands and events.
+    public var console: Console.Client {
+        Console.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
     }
 
-    package var runtime: Runtime {
-        Runtime(endpoint: endpoint)
+    /// A typed client for Runtime protocol commands and events.
+    public var runtime: Runtime.Client {
+        Runtime.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
     }
 
-    package var page: Page {
-        Page(endpoint: endpoint)
+    /// A typed client for Page protocol commands.
+    public var page: Page.Client {
+        Page.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
     }
 
-    package var inspector: Inspector {
-        Inspector(endpoint: endpoint)
+    package var inspector: Inspector.Client {
+        Inspector.Client(context: DomainClientContext(proxy: proxy, targetID: id, route: route))
     }
 
-    private var endpoint: DomainEndpoint {
-        DomainEndpoint(
-            proxyReference: proxyReference,
-            targetID: id,
-            route: route,
-            authority: authority
-        )
+    package var lifecycleEvents: AsyncStream<WebInspectorTargetLifecycleEvent> {
+        proxy.targetLifecycleEvents(targetID: id, route: route)
+    }
+
+    package var targetedConsoleEvents: AsyncStream<Console.TargetedEvent> {
+        proxy.targetedConsoleEvents(targetID: id, route: route)
+    }
+
+    package func waitForModelEventSubscriptions() async {
+        for domain in [WebInspectorProxyEventDomain.dom, .inspector, .css, .network, .console, .runtime] {
+            await proxy.waitForEventSubscription(targetID: id, route: route, domain: domain)
+        }
     }
 }
 
@@ -176,19 +176,66 @@ package extension WebInspectorProxy {
             route: RoutingTargetID(id.rawValue)
         )
     }
+}
 
-    nonisolated func modelTarget(
-        _ target: ModelTarget,
-        authorization: ConnectionModelCommandAuthorization
-    ) -> WebInspectorTarget {
-        WebInspectorTarget(
-            id: target.id,
-            kind: target.kind,
-            frameID: target.frameID,
-            isProvisional: false,
-            proxy: self,
-            route: RoutingTargetID(target.id.rawValue),
-            authority: .modelFeed(authorization)
+package struct DomainClientContext: Sendable {
+    package let proxy: WebInspectorProxy
+    package let targetID: WebInspectorTarget.ID
+    package let route: RoutingTargetID
+
+    package init(proxy: WebInspectorProxy, targetID: WebInspectorTarget.ID, route: RoutingTargetID) {
+        self.proxy = proxy
+        self.targetID = targetID
+        self.route = route
+    }
+
+    package func dispatch<Payload: Sendable, Result: Sendable>(
+        domain: WebInspectorProxyDomain,
+        method: String,
+        payload: Payload,
+        returning resultType: Result.Type = Result.self
+    ) async throws -> Result {
+        _ = resultType
+        return try await proxy.dispatchCommand(
+            targetID: targetID,
+            route: route,
+            domain: domain,
+            method: method,
+            payload: payload
         )
     }
+
+    package func dispatchVoid<Payload: Sendable>(
+        domain: WebInspectorProxyDomain,
+        method: String,
+        payload: Payload
+    ) async throws {
+        let _: Void = try await dispatch(
+            domain: domain,
+            method: method,
+            payload: payload,
+            returning: Void.self
+        )
+    }
+
+    package func domEvents() -> AsyncStream<DOM.Event> {
+        proxy.domEvents(targetID: targetID, route: route)
+    }
+
+    package func cssEvents() -> AsyncStream<CSS.Event> {
+        proxy.cssEvents(targetID: targetID, route: route)
+    }
+
+    package func networkEvents() -> AsyncStream<Network.Event> {
+        proxy.networkEvents(targetID: targetID, route: route)
+    }
+
+    package func consoleEvents() -> AsyncStream<Console.Event> {
+        proxy.consoleEvents(targetID: targetID, route: route)
+    }
+
+    package func runtimeEvents() -> AsyncStream<Runtime.Event> {
+        proxy.runtimeEvents(targetID: targetID, route: route)
+    }
+
 }

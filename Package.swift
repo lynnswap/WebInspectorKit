@@ -13,7 +13,7 @@ let package = Package(
     name: "WebInspectorKit",
     defaultLocalization: "en",
     platforms: [
-        .iOS("18.4"), .macOS("15.4")
+        .iOS(.v18), .macOS(.v15)
     ],
     products: [
         .library(
@@ -27,10 +27,6 @@ let package = Package(
         .library(
             name: "WebInspectorDataKit",
             targets: ["WebInspectorDataKit"]
-        ),
-        .library(
-            name: "WebInspectorDataKitTesting",
-            targets: ["WebInspectorDataKitTesting"]
         ),
         .library(
             name: "WebInspectorKit",
@@ -78,15 +74,6 @@ let package = Package(
             name: "WebInspectorDataKit",
             dependencies: [
                 "WebInspectorProxyKit"
-            ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WebInspectorDataKitTesting",
-            dependencies: [
-                "WebInspectorDataKit",
-                "WebInspectorProxyKit",
-                "WebInspectorProxyKitTesting",
             ],
             swiftSettings: strictSwiftSettings
         ),
@@ -169,16 +156,14 @@ let package = Package(
         .target(
             name: "WebInspectorKit",
             dependencies: [
-                "WebInspectorUI",
-                "WebInspectorDataKit"
+                "WebInspectorUI"
             ],
             swiftSettings: strictSwiftSettings
         ),
         .target(
             name: "WebInspectorTestSupport",
             dependencies: [
-                "WebInspectorProxyKit",
-                "WebInspectorProxyKitTesting",
+                "WebInspectorProxyKit"
             ],
             path: "Tests/WebInspectorTestSupport",
             swiftSettings: strictSwiftSettings
@@ -197,7 +182,6 @@ let package = Package(
             name: "WebInspectorDataKitTests",
             dependencies: [
                 "WebInspectorDataKit",
-                "WebInspectorDataKitTesting",
                 "WebInspectorProxyKitTesting",
                 "WebInspectorProxyKit",
                 "WebInspectorTestSupport"

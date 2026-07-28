@@ -107,20 +107,17 @@ package struct ProtocolCommand: Equatable, Sendable {
     package var method: String
     package var routing: Routing
     package var parametersData: Data
-    package var authority: WebInspectorCommandAuthority
 
     package init(
         domain: ProtocolDomain,
         method: String,
         routing: Routing,
-        parametersData: Data = Data("{}".utf8),
-        authority: WebInspectorCommandAuthority = .direct
+        parametersData: Data = Data("{}".utf8)
     ) {
         self.domain = domain
         self.method = method
         self.routing = routing
         self.parametersData = parametersData
-        self.authority = authority
     }
 }
 
@@ -223,6 +220,5 @@ package extension TransportSession {
         case replyTimeout(method: String, targetID: ProtocolTarget.ID?)
         case remoteError(method: String, targetID: ProtocolTarget.ID?, message: String)
         case transportClosed
-        case transportFailure(String)
     }
 }

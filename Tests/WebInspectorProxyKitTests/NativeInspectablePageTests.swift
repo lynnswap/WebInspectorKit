@@ -45,21 +45,6 @@ func overlappingNativeInspectablePagesRestoreOnlyAfterLastOwner() {
 
 @MainActor
 @Test
-func droppingNativeInspectablePageRestoresInspectability() {
-    let webView = WKWebView(frame: .zero)
-    webView.isInspectable = false
-    var page: NativeInspectablePage? = NativeInspectablePage(webView: webView)
-
-    #expect(webView.isInspectable)
-
-    page = nil
-
-    #expect(page == nil)
-    #expect(webView.isInspectable == false)
-}
-
-@MainActor
-@Test
 func nativeInspectablePageReloadFailsWhenWebViewIsUnavailable() {
     let page = NativeInspectablePage(missingWebViewForTesting: ())
 

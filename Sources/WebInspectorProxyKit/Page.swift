@@ -1,21 +1,23 @@
 import Foundation
 
-/// A target-scoped handle for Web Inspector Page commands.
-public struct Page: Sendable, WebInspectorDomainHandle {
-    package static let commandDomain = WebInspectorProxyDomain.page
+/// Types and commands for the Web Inspector Page domain.
+public enum Page {
+    /// A target-scoped client for Page commands.
+    public struct Client: Sendable {
+        package let context: DomainClientContext
 
-    package let endpoint: DomainEndpoint
+        package init(context: DomainClientContext) {
+            self.context = context
+        }
 
-    package init(endpoint: DomainEndpoint) {
-        self.endpoint = endpoint
-    }
-
-    /// Reloads the inspected page.
-    public func reload(ignoringCache: Bool = false) async throws {
-        try await dispatchVoid(
-            method: "reload",
-            payload: ReloadPayload(ignoringCache: ignoringCache)
-        )
+        /// Reloads the inspected page.
+        public func reload(ignoringCache: Bool = false) async throws {
+            try await context.dispatchVoid(
+                domain: .page,
+                method: "reload",
+                payload: ReloadPayload(ignoringCache: ignoringCache)
+            )
+        }
     }
 
     package struct ReloadPayload: Sendable {

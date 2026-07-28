@@ -81,6 +81,7 @@ public final class RuntimeObject: WebInspectorPersistentModel {
     /// A compact preview for the value, if included in the payload.
     public private(set) var preview: Runtime.ObjectPreview?
 
+    @ObservationIgnored weak var modelContext: WebInspectorContext?
     @ObservationIgnored var proxyID: Runtime.RemoteObject.ID?
 
     /// A Boolean value indicating whether this object has a live remote handle.
@@ -90,7 +91,8 @@ public final class RuntimeObject: WebInspectorPersistentModel {
 
     init(
         id: ID,
-        remoteObject: Runtime.RemoteObject
+        remoteObject: Runtime.RemoteObject,
+        modelContext: WebInspectorContext
     ) {
         self.id = id
         kind = remoteObject.kind
@@ -101,6 +103,29 @@ public final class RuntimeObject: WebInspectorPersistentModel {
         size = remoteObject.size
         preview = remoteObject.preview
         proxyID = remoteObject.id
+        self.modelContext = modelContext
+    }
+
+    /// Requests own property values for this object.
+    public func properties(isolation: isolated (any Actor) = #isolation) async throws -> [Property] {
+        guard canRequestProperties else {
+            return []
+        }
+        guard let modelContext else {
+            throw WebInspectorProxyError.disconnected("RuntimeObject is not registered in a WebInspectorContext.")
+        }
+        return try await modelContext.properties(for: self, isolation: isolation)
+    }
+
+    /// Requests collection entries for this object.
+    public func collectionEntries(isolation: isolated (any Actor) = #isolation) async throws -> [Entry] {
+        guard canRequestProperties else {
+            return []
+        }
+        guard let modelContext else {
+            throw WebInspectorProxyError.disconnected("RuntimeObject is not registered in a WebInspectorContext.")
+        }
+        return try await modelContext.collectionEntries(for: self, isolation: isolation)
     }
 
     func update(from remoteObject: Runtime.RemoteObject) {

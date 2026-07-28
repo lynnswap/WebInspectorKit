@@ -9,9 +9,8 @@ models instead of sending protocol commands directly. DataKit owns DOM, Network,
 Console, Runtime, and CSS model state for one inspected page and keeps those
 models updated as WebKit emits protocol events.
 
-Create one ``WebInspectorModelContext`` for an inspector lifetime. The UIKit
-convenience initializer attaches it to a `WKWebView` on the main actor and
-returns only after the initial model synchronization boundary:
+Attach a ``WebInspectorContainer`` to a `WKWebView`, then read the
+``WebInspectorContext`` for UI-bound model state:
 
 ```swift
 import WebKit
@@ -19,12 +18,14 @@ import WebInspectorDataKit
 
 @MainActor
 final class InspectorModel {
-    private(set) var context: WebInspectorModelContext?
+    private var container: WebInspectorContainer?
+    private(set) var context: WebInspectorContext?
     private var treeTask: Task<Void, Never>?
 
     func attach(to webView: WKWebView) async throws {
-        let context = try await WebInspectorModelContext(attachingTo: webView)
-        let tree = try context.domTree
+        let container = try await WebInspectorContainer(attachingTo: webView)
+        let context = container.mainContext
+        let tree = context.dom.treeController()
 
         treeTask = Task { @MainActor in
             for await update in tree.updates {
@@ -32,32 +33,30 @@ final class InspectorModel {
             }
         }
 
+        self.container = container
         self.context = context
     }
 
     func close() async {
         treeTask?.cancel()
-        await context?.close()
+        await container?.close()
+        container = nil
         context = nil
     }
 }
 ```
 
-Contexts are actor-owned rather than main-actor-only. ``WebInspectorModelContext/attach(to:isolation:)``
-confines a context permanently to the caller's current actor by default. Read
-observable state and invoke commands from that actor. The `WKWebView`
-convenience initializer above deliberately binds the context to `MainActor`.
+Contexts are actor-owned. Read and mutate context state from the same actor you
+used to create or obtain the context. For UIKit clients, ``WebInspectorContainer``
+provides ``WebInspectorContainer/mainContext`` as a main-actor context.
 
-Use the context directly for high-level operations. Runtime objects belong to
-an explicit binding-scoped group whose cleanup is awaited:
+Use the domain controllers on ``WebInspectorContext`` for high-level operations:
 
 ```swift
-try await context.setElementPickerEnabled(true)
-try await context.reload()
+try await context.dom.setInspectMode(enabled: true)
+try await context.page.reload()
 
-let result = try await context.withRuntimeObjectGroup { group in
-    try await group.evaluate("document.title")
-}
+let result = try await context.runtime.evaluate("document.title")
 print(result.object.description ?? "")
 ```
 
@@ -66,39 +65,12 @@ DOM edits, fetched-results style collection updates, or derived DOM tree
 snapshots. Reach for WebInspectorProxyKit when you need direct typed protocol
 access with no model layer.
 
-Create live Network and Console collections with their closed query values. The
-index actor evaluates filters, ordering, sections, and windows; the context's
-owner actor only resolves the identities in the published window:
-
-```swift
-let requests = try await context.networkRequests(matching: NetworkQuery(
-    search: "api.example.com",
-    resourceCategories: [.xhrFetch],
-    methods: ["GET", "POST"],
-    sort: .requestTimeDescending,
-    section: .method,
-    limit: 100
-))
-
-try await requests.update(NetworkQuery(
-    resourceCategories: [.script],
-    sort: .requestTimeAscending
-))
-
-for await update in requests.updates() {
-    apply(update)
-}
-```
-
 ## Topics
 
 ### Creating a Model Context
 
-- ``WebInspectorModelContext``
-- ``WebInspectorModelContext/Configuration``
-- ``WebInspectorModelContext/Domain``
-- ``WebInspectorModelContext/State``
-- ``WebInspectorModelContext/Failure``
+- ``WebInspectorContainer``
+- ``WebInspectorContext``
 
 ### Reading DOM State
 
@@ -111,16 +83,8 @@ for await update in requests.updates() {
 
 - ``NetworkRequest``
 - ``ConsoleMessage``
-- ``NetworkQuery``
-- ``NetworkSort``
-- ``NetworkSection``
-- ``ConsoleQuery``
-- ``ConsoleSort``
-- ``ConsoleSection``
-- ``WebInspectorFetchedResults``
-- ``WebInspectorFetchedResultsSnapshot``
-- ``WebInspectorFetchedResultsTransaction``
-- ``WebInspectorFetchedResultsUpdate``
+- ``WebInspectorFetchRequest``
+- ``WebInspectorFetchedResultsController``
 
 ### Runtime and CSS Models
 
@@ -131,10 +95,12 @@ for await update in requests.updates() {
 - ``CSSStyleSection``
 - ``CSSStyleProperty``
 
-### Mutations
+### Domain Operations
 
-- ``WebInspectorUndoPolicy``
-- ``DOMRevealPolicy``
-- ``DOMMutationOutcome``
-- ``DOMMutationFailure``
-- ``DOMUndoCapability``
+- ``DOMModelController``
+- ``NetworkModelController``
+- ``ConsoleModelController``
+- ``RuntimeModelController``
+- ``CSSModelController``
+- ``PageModelController``
+- ``WebInspectorEditHistory``

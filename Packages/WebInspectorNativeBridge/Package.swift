@@ -12,7 +12,7 @@ let swiftSettings: [SwiftSetting] = [
 let package = Package(
     name: "WebInspectorNativeBridge",
     platforms: [
-        .iOS("18.4"), .macOS("15.4")
+        .iOS(.v18), .macOS(.v15)
     ],
     products: [
         .library(

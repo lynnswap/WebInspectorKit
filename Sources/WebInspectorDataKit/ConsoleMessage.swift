@@ -4,7 +4,7 @@ import WebInspectorProxyKit
 
 /// Observable model for one console message.
 @Observable
-public final class ConsoleMessage: WebInspectorPersistentModel {
+public final class ConsoleMessage: WebInspectorFetchableModel {
     /// Stable identity for a console message within a context.
     public struct ID: Comparable, Hashable, Sendable {
         let ordinal: Int
@@ -59,14 +59,14 @@ public final class ConsoleMessage: WebInspectorPersistentModel {
     public private(set) var timestamp: Double?
     let targetID: WebInspectorTarget.ID?
 
-    @ObservationIgnored weak var modelContext: WebInspectorModelContext?
+    @ObservationIgnored weak var modelContext: WebInspectorContext?
 
     init(
         id: ID,
         message: Console.Message,
         parameters: [RuntimeObject],
         targetID: WebInspectorTarget.ID?,
-        modelContext: WebInspectorModelContext
+        modelContext: WebInspectorContext
     ) {
         self.id = id
         source = message.source

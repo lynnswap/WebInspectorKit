@@ -16,8 +16,7 @@ UIKit Web Inspector for `WKWebView`.
 ## Requirements
 
 - Swift 6.3+
-- iOS 18.4+ for the built-in UIKit inspector
-- iOS 18.4+ or macOS 15.4+ for ProxyKit, DataKit, and the native bridge
+- iOS 18+
 - ARM64/ARM64e Apple runtime; Intel Mac / x86_64 simulator environments are not
   supported.
 
@@ -32,9 +31,8 @@ UIKit Web Inspector for `WKWebView`.
 | --- | --- |
 | `WebInspectorKit` | You want the built-in UIKit inspector UI. |
 | `WebInspectorDataKit` | You want observable DOM, Network, Console, Runtime, and CSS models for a custom UI. |
-| `WebInspectorDataKitTesting` | You want a ready DataKit model scenario with replay, picker, replacement, and failure controls. |
 | `WebInspectorProxyKit` | You want typed Web Inspector protocol commands and events directly over an inspected `WKWebView`. |
-| `WebInspectorProxyKitTesting` | You want to drive ProxyKit's production connection path from a concrete raw WebKit peer in tests. |
+| `WebInspectorProxyKitTesting` | You want a public test runtime for ProxyKit/DataKit consumers without the native WebKit bridge. |
 
 ## Quick Start
 
@@ -72,78 +70,20 @@ let inspector = WebInspectorViewController(
 ```
 
 The built-in tab surface exposes DOM and Network tabs. Apps can also add UIKit
-tabs with an asynchronous `UIViewController` factory:
+tabs with a `UIViewController` factory:
 
 ```swift
 let consoleTab = WebInspectorTab(
     id: "app_console",
     title: "Console",
-    systemImage: "terminal",
-    requiredDomains: [.console]
+    systemImage: "terminal"
 ) { session in
-    let messages = try await session.model.consoleMessages()
-    return ConsoleViewController(messages: messages)
+    ConsoleViewController(inspectorSession: session)
 }
 
 let inspector = WebInspectorViewController(
     tabs: [.dom, .network, consoleTab]
 )
-```
-
-## Testing the Raw Wire
-
-`WebInspectorProxyKitTesting` attaches a concrete ``WebInspectorTestPeer``
-below ProxyKit's real connection core. Commands still pass through the
-production target registry, router, JSON codecs, model feed, and authority
-checks. Tests receive raw commands in transport FIFO order and must complete
-each command exactly once:
-
-```swift
-import WebInspectorProxyKit
-import WebInspectorProxyKitTesting
-
-let runtime = try await WebInspectorProxyTestRuntime.start()
-
-let reload = Task {
-    try await runtime.page.page.reload()
-}
-
-let command = try await runtime.peer.commands.next()
-precondition(command.method == "Page.reload")
-try await runtime.peer.reply(to: command)
-try await reload.value
-
-await runtime.close()
-```
-
-Use `WebInspectorTestJSONObject` for raw `params` and result objects, and use
-the peer's target lifecycle and event methods when a test needs inbound WebKit
-traffic. The testing product does not provide a semantic backend or synthetic
-model-state injection path.
-
-## Testing DataKit Models
-
-`WebInspectorDataKitTesting` composes the raw peer into model-level scenarios.
-It answers only the protocol bootstrap owned by the scenario; replay and target
-replacement still traverse ProxyKit's production connection core:
-
-```swift
-import WebInspectorDataKitTesting
-
-let runtime = try await WebInspectorDataKitTestRuntime.start(
-    scenario: .init(
-        document: .init(children: [
-            .element(id: "button", name: "button")
-        ]),
-        networkReplay: [
-            .init(id: "initial-request", url: "https://example.test/")
-        ]
-    )
-)
-
-let selected = try await runtime.selectElementWithPicker(nodeID: "button")
-precondition(selected.localName == "button")
-await runtime.close()
 ```
 
 ## Documentation
@@ -163,9 +103,8 @@ to GitHub Pages.
 Sources/
   WebInspectorKit/             Public built-in inspector product.
   WebInspectorDataKit/         Observable inspector model product.
-  WebInspectorDataKitTesting/  Ready production-path DataKit test scenarios.
   WebInspectorProxyKit/        Typed protocol proxy product.
-  WebInspectorProxyKitTesting/ Production-path raw peer test runtime.
+  WebInspectorProxyKitTesting/ Test runtime for proxy/model consumers.
   WebInspectorUI*/             Internal UIKit implementation targets.
 Packages/
   WebInspectorNativeBridge/    Local native bridge package for ProxyKit internals.

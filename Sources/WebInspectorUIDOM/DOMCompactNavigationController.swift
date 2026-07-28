@@ -17,7 +17,7 @@ package final class DOMCompactNavigationController: UINavigationController {
 
     package init(
         rootViewController: UIViewController,
-        context: WebInspectorModelContext
+        context: WebInspectorContext
     ) {
         rootViewController.webInspectorDetachFromContainerForReuse()
         super.init(rootViewController: rootViewController)
@@ -101,13 +101,13 @@ extension DOMCompactNavigationController {
 
 #Preview("DOM Compact Tree") {
     DOMCompactNavigationController(
-        rootViewController: DOMTreeViewController(context: DOMPreviewFixtures.makeWebInspectorModelContext())
+        rootViewController: DOMTreeViewController(context: DOMPreviewFixtures.makeWebInspectorContext())
     )
 }
 
 #Preview("DOM Compact Element") {
     DOMCompactNavigationController(
-        rootViewController: DOMElementViewController(context: DOMPreviewFixtures.makeWebInspectorModelContext())
+        rootViewController: DOMElementViewController(context: DOMPreviewFixtures.makeWebInspectorContext())
     )
 }
 #endif

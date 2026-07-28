@@ -1,6 +1,3 @@
-#if canImport(UIKit)
-import UIKit
-#endif
 import WebInspectorDataKit
 import WebInspectorUIBase
 
@@ -16,9 +13,9 @@ package enum NetworkPreviewFixtures {
         case detailRequestAndResponseLong
     }
 
-    package static func makePanelModel(mode: Mode) async throws -> NetworkPanelModel {
+    package static func makePanelModel(mode: Mode) -> NetworkPanelModel {
         let context = makeContext(mode: mode)
-        let model = try await NetworkPanelModel.make(context: context)
+        let model = NetworkPanelModel(context: context)
         switch mode {
         case .detail,
              .detailResponseOnlyShort,
@@ -32,25 +29,13 @@ package enum NetworkPreviewFixtures {
         return model
     }
 
-    #if canImport(UIKit)
-    package static func makeViewController(
-        mode: Mode,
-        makeReadyViewController: @escaping @MainActor (NetworkPanelModel) -> UIViewController
-    ) -> UIViewController {
-        NetworkPreviewResourceViewController(
-            mode: mode,
-            makeReadyViewController: makeReadyViewController
-        )
-    }
-    #endif
-
-    package static func makeContext(mode: Mode) -> WebInspectorModelContext {
-        let context = WebInspectorModelContext.preview()
+    package static func makeContext(mode: Mode) -> WebInspectorContext {
+        let context = WebInspectorContext.preview(isolation: MainActor.shared)
         applySampleData(to: context, mode: mode)
         return context
     }
 
-    package static func applySampleData(to context: WebInspectorModelContext, mode: Mode) {
+    package static func applySampleData(to context: WebInspectorContext, mode: Mode) {
         switch mode {
         case .detailResponseOnlyShort:
             applyRequest(
@@ -161,7 +146,7 @@ package enum NetworkPreviewFixtures {
 
     @discardableResult
     private static func applyRequest(
-        to context: WebInspectorModelContext,
+        to context: WebInspectorContext,
         requestID: String,
         url: String,
         method: String = "GET",
@@ -212,61 +197,3 @@ package enum NetworkPreviewFixtures {
         return #"{"kind":"\#(kind)","result":"ok","items":[\#(items)],"metadata":{"source":"preview","count":24}}"#
     }
 }
-
-#if canImport(UIKit)
-@MainActor
-private final class NetworkPreviewResourceViewController: UIViewController {
-    private var loadTask: Task<Void, Never>?
-
-    init(
-        mode: NetworkPreviewFixtures.Mode,
-        makeReadyViewController: @escaping @MainActor (NetworkPanelModel) -> UIViewController
-    ) {
-        super.init(nibName: nil, bundle: nil)
-        contentUnavailableConfiguration = UIContentUnavailableConfiguration.loading()
-        loadTask = Task { @MainActor [weak self] in
-            do {
-                let model = try await NetworkPreviewFixtures.makePanelModel(mode: mode)
-                guard let self, Task.isCancelled == false else {
-                    await model.retire()
-                    return
-                }
-                install(makeReadyViewController(model))
-                loadTask = nil
-            } catch {
-                guard let self else {
-                    return
-                }
-                var configuration = UIContentUnavailableConfiguration.empty()
-                configuration.text = "Network Preview Unavailable"
-                configuration.secondaryText = error.localizedDescription
-                contentUnavailableConfiguration = configuration
-                loadTask = nil
-            }
-        }
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    isolated deinit {
-        loadTask?.cancel()
-    }
-
-    private func install(_ viewController: UIViewController) {
-        contentUnavailableConfiguration = nil
-        addChild(viewController)
-        viewController.view.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(viewController.view)
-        NSLayoutConstraint.activate([
-            viewController.view.topAnchor.constraint(equalTo: view.topAnchor),
-            viewController.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            viewController.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            viewController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-        ])
-        viewController.didMove(toParent: self)
-    }
-}
-#endif

@@ -24,25 +24,25 @@ package enum WebInspectorProxyEventDomain: String, Hashable, Sendable {
 package struct WebInspectorProxyCommand<Payload: Sendable, Result: Sendable>: Sendable {
     package let targetID: WebInspectorTarget.ID
     package let route: RoutingTargetID
+    package let resultTargetScopeRawValue: String?
     package let domain: WebInspectorProxyDomain
     package let method: String
     package let payload: Payload
-    package let authority: WebInspectorCommandAuthority
 
     package init(
         targetID: WebInspectorTarget.ID,
         route: RoutingTargetID,
+        resultTargetScopeRawValue: String? = nil,
         domain: WebInspectorProxyDomain,
         method: String,
-        payload: Payload,
-        authority: WebInspectorCommandAuthority = .direct
+        payload: Payload
     ) {
         self.targetID = targetID
         self.route = route
+        self.resultTargetScopeRawValue = resultTargetScopeRawValue
         self.domain = domain
         self.method = method
         self.payload = payload
-        self.authority = authority
     }
 }
 
@@ -61,37 +61,15 @@ package protocol WebInspectorProxyBackend: Sendable {
         _ command: WebInspectorProxyCommand<Payload, Result>
     ) async throws -> Result
 
-    func acquireEventScope<Element: Sendable>(
+    nonisolated func events(
         route: RoutingTargetID,
         targetID: WebInspectorTarget.ID,
-        domain: WebInspectorProxyEventDomain,
-        buffering: WebInspectorEventBufferingPolicy,
-        extract: @escaping @Sendable (WebInspectorProxyEvent) -> Element?
-    ) async throws -> WebInspectorProxyEventScope<Element>
+        domain: WebInspectorProxyEventDomain
+    ) -> AsyncStream<WebInspectorProxyEvent>
 
-    func releaseEventScope(_ id: WebInspectorProxyEventScopeID) async throws
-}
-
-package extension WebInspectorProxyBackend {
-    func acquireEventScope<Element: Sendable>(
+    func waitForEventSubscription(
         route: RoutingTargetID,
         targetID: WebInspectorTarget.ID,
-        domain: WebInspectorProxyEventDomain,
-        buffering: WebInspectorEventBufferingPolicy,
-        extract: @escaping @Sendable (WebInspectorProxyEvent) -> Element?
-    ) async throws -> WebInspectorProxyEventScope<Element> {
-        _ = route
-        _ = targetID
-        _ = buffering
-        _ = extract
-        throw WebInspectorProxyError.commandFailed(
-            domain: domain.rawValue,
-            method: "withEvents",
-            message: "This backend does not implement structured event scopes."
-        )
-    }
-
-    func releaseEventScope(_ id: WebInspectorProxyEventScopeID) async throws {
-        _ = id
-    }
+        domain: WebInspectorProxyEventDomain
+    ) async
 }

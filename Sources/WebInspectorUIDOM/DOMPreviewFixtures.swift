@@ -4,16 +4,16 @@ import WebInspectorProxyKit
 
 @MainActor
 package enum DOMPreviewFixtures {
-    package static func makeWebInspectorModelContext(
+    package static func makeWebInspectorContext(
         document: DOM.Node = previewProxyDocument()
-    ) -> WebInspectorModelContext {
-        let context = WebInspectorModelContext.preview()
+    ) -> WebInspectorContext {
+        let context = WebInspectorContext.preview(isolation: MainActor.shared)
         context.seedDOMDocument(document)
         return context
     }
 
-    package static func firstElement(named localName: String, in context: WebInspectorModelContext) -> DOMNode? {
-        guard let rootNode = try? context.rootDOMNode else {
+    package static func firstElement(named localName: String, in context: WebInspectorContext) -> DOMNode? {
+        guard let rootNode = context.rootNode else {
             return nil
         }
         var stack = [rootNode]

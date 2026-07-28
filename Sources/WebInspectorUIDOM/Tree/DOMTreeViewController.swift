@@ -11,7 +11,7 @@ package final class DOMTreeViewController: UIViewController {
         treeView.undoManager
     }
 
-    package init(context: WebInspectorModelContext) {
+    package init(context: WebInspectorContext) {
         self.treeView = DOMTreeTextView(
             context: context,
             requestChildrenAction: { [weak context] nodeID in
@@ -19,10 +19,7 @@ package final class DOMTreeViewController: UIViewController {
                     return false
                 }
                 do {
-                    guard let node = try context.domNode(id: nodeID) else {
-                        return false
-                    }
-                    try await context.requestDOMChildren(of: node)
+                    try await context.dom.requestChildren(of: nodeID)
                     return true
                 } catch {
                     WebInspectorUIDOMLog.debug("DOM tree request children failed nodeID=\(String(describing: nodeID)): \(String(describing: error))")
@@ -33,19 +30,16 @@ package final class DOMTreeViewController: UIViewController {
                 guard let context else {
                     return
                 }
-                guard let node = try context.domNode(id: nodeID) else {
-                    return
-                }
-                try await context.highlightDOMNode(node)
+                try await context.dom.highlight(nodeID)
             },
             restoreHighlightAction: { [weak context] in
                 guard let context else {
                     return
                 }
-                if let selectedNode = try context.selectedDOMNode {
-                    try await context.highlightDOMNode(selectedNode)
+                if let selectedNode = context.selectedNode {
+                    try await context.dom.highlight(selectedNode.id)
                 } else {
-                    try await context.hideDOMHighlight()
+                    try await context.dom.hideHighlight()
                 }
             },
             copyNodeTextAction: { [weak context] nodeID, kind in
@@ -53,10 +47,7 @@ package final class DOMTreeViewController: UIViewController {
                     return nil
                 }
                 do {
-                    guard let node = try context.domNode(id: nodeID) else {
-                        return nil
-                    }
-                    return try await context.copyText(kind, for: node)
+                    return try await context.copyText(kind, for: nodeID)
                 } catch {
                     WebInspectorUIDOMLog.debug("DOM tree copy text failed nodeID=\(String(describing: nodeID)): \(String(describing: error))")
                     return nil
@@ -103,30 +94,35 @@ package final class DOMTreeViewController: UIViewController {
 
     private static func deleteNodeIDs(
         _ nodeIDs: [DOMNode.ID],
-        context: WebInspectorModelContext,
+        context: WebInspectorContext,
         undoManager: UndoManager?
     ) async -> Bool {
+        let deletedNodeCount: Int
+        let undoCommands: WebInspectorContext.DOMUndoRedoCommands
         do {
-            let nodes = try nodeIDs.map { id in
-                guard let node = try context.domNode(id: id) else {
-                    throw WebInspectorModelError.staleModel
-                }
-                return node
-            }
-            let result = try await context.removeDOMNodes(nodes)
-            guard let undo = result.undo else {
+            let result = try await context.dom.remove(nodeIDs)
+            deletedNodeCount = result.acceptedNodeIDs.count
+            undoCommands = try context.domUndoRedoCommands()
+        } catch let error as WebInspectorContext.DOMDeletionPartialFailure {
+            guard let partialUndoCommands = try? context.domUndoRedoCommands() else {
                 return false
             }
             DOMDeletionUndoRegistration.registerDeleteUndo(
                 on: undoManager,
-                capability: undo,
-                deletedNodeCount: result.appliedNodeIDs.count
+                commands: partialUndoCommands,
+                deletedNodeCount: error.deletedNodeCount
             )
-            return result.appliedNodeIDs.isEmpty == false
+            return error.deletedNodeCount > 0
         } catch {
             WebInspectorUIDOMLog.debug("DOM tree delete failed nodeIDs=\(nodeIDs.map { String(describing: $0) }): \(String(describing: error))")
             return false
         }
+        DOMDeletionUndoRegistration.registerDeleteUndo(
+            on: undoManager,
+            commands: undoCommands,
+            deletedNodeCount: deletedNodeCount
+        )
+        return deletedNodeCount > 0
     }
 
     override package func viewIsAppearing(_ animated: Bool) {
@@ -155,7 +151,7 @@ extension DOMTreeViewController {
 @MainActor
 private enum DOMTreeViewControllerPreview {
     static func makeViewController() -> UINavigationController {
-        let viewController = DOMTreeViewController(context: DOMPreviewFixtures.makeWebInspectorModelContext())
+        let viewController = DOMTreeViewController(context: DOMPreviewFixtures.makeWebInspectorContext())
         return UINavigationController(rootViewController: viewController)
     }
 }

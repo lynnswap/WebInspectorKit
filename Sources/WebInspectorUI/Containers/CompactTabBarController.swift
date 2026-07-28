@@ -6,18 +6,14 @@ import WebInspectorUIBase
 @MainActor
 package final class CompactTabBarController: UITabBarController, UITabBarControllerDelegate {
     private let session: WebInspectorSession
-    private let contentStore: PresentationContentStore
     private let tabTransitionAnimator = NoAnimationTabTransitionAnimator()
     private var nativeTabByItemID: [WebInspectorTab.DisplayItem.ID: UITab] = [:]
+    private var renderedContentRevision: Int?
     private var interfaceObservation: PortableObservationTracking.Token?
     private var isRenderingSelection = false
 
-    package init(
-        session: WebInspectorSession,
-        contentStore: PresentationContentStore
-    ) {
+    package init(session: WebInspectorSession) {
         self.session = session
-        self.contentStore = contentStore
         super.init(nibName: nil, bundle: nil)
 
         delegate = self
@@ -82,18 +78,25 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
     private func renderInterface(_ interface: InterfaceModel, animated: Bool) {
         let displayItems = interface.displayItems(for: .compact)
         let selectedDisplayItem = interface.resolvedSelection(for: .compact)
+        let contentRevision = interface.contextBoundContentRevision
+        let shouldRebuildContent = renderedContentRevision.map { $0 != contentRevision } ?? false
         renderSelectionFromInterface {
-            setTabsIfNeeded(for: displayItems, animated: animated)
+            if shouldRebuildContent {
+                nativeTabByItemID.removeAll()
+            }
+            setTabsIfNeeded(for: displayItems, animated: animated, force: shouldRebuildContent)
             renderSelection(selectedDisplayItem)
+            renderedContentRevision = contentRevision
         }
     }
 
     private func setTabsIfNeeded(
         for displayItems: [WebInspectorTab.DisplayItem],
-        animated: Bool
+        animated: Bool,
+        force: Bool = false
     ) {
         let nextItemIDs = displayItems.map(\.id)
-        guard tabs.map(\.identifier) != nextItemIDs else {
+        guard force || tabs.map(\.identifier) != nextItemIDs else {
             return
         }
         setTabs(nativeTabs(for: displayItems), animated: animated)
@@ -130,7 +133,6 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
 
         let descriptor = session.interface.descriptor(for: displayItem)
         let session = session
-        let contentStore = contentStore
         let nativeTab = UITab(
             title: descriptor?.title ?? "",
             image: descriptor?.image,
@@ -142,8 +144,8 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
             WebInspectorTab.ContentFactory.makeViewController(
                 for: displayItem,
                 session: session,
-                contentStore: contentStore,
-                hostLayout: .compact
+                hostLayout: .compact,
+                tabs: session.interface.tabs
             )
         }
         nativeTabByItemID[itemID] = nativeTab

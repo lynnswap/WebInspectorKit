@@ -26,11 +26,14 @@ public final class RuntimeContext: WebInspectorPersistentModel {
     /// The kind of execution context reported by WebKit.
     public private(set) var kind: Runtime.ContextKind
 
-    init(context: Runtime.ExecutionContext) {
+    @ObservationIgnored weak var modelContext: WebInspectorContext?
+
+    init(context: Runtime.ExecutionContext, modelContext: WebInspectorContext) {
         id = ID(context.id)
         name = context.name
         frameID = context.frameID
         kind = context.kind
+        self.modelContext = modelContext
     }
 
     func update(from context: Runtime.ExecutionContext) {

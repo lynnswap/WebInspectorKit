@@ -5,8 +5,8 @@ import WebInspectorKit
 
 @MainActor
 final class BrowserInspectorSessionAttachmentLifecycle {
-    typealias AttachAction = @MainActor (WKWebView) async throws -> Void
-    typealias DetachAction = @MainActor () async -> Void
+    typealias AttachAction = @MainActor (WebInspectorSession, WKWebView) async throws -> Void
+    typealias DetachAction = @MainActor (WebInspectorSession) async -> Void
 
     enum Attachment {
         case attached
@@ -65,54 +65,31 @@ final class BrowserInspectorSessionAttachmentLifecycle {
     }
 
     private let browserWindow: BrowserWindow
-    // The lifecycle owns the session lease. Effect tasks capture only the
-    // pre-bound operations, never this property or the lifecycle itself.
     private let inspectorSession: WebInspectorSession
     private let attachAction: AttachAction
     private let detachAction: DetachAction
     private var phase: AttachmentPhase = .detached
     private var lifecycleTask: Task<Void, Never>?
-    private var activeEffectID: UInt64?
-    private var nextEffectID: UInt64 = 0
     private weak var attachedWebView: WKWebView?
     var onAttachForTesting: ((WKWebView) -> Void)?
 
     init(
         browserWindow: BrowserWindow,
         inspectorSession: WebInspectorSession,
-        attachAction: AttachAction? = nil,
-        detachAction: DetachAction? = nil
+        attachAction: @escaping AttachAction = { inspectorSession, webView in
+            try await inspectorSession.attach(to: webView)
+        },
+        detachAction: @escaping DetachAction = { inspectorSession in
+            await inspectorSession.detach()
+        }
     ) {
         self.browserWindow = browserWindow
         self.inspectorSession = inspectorSession
-        self.attachAction = attachAction ?? { [weak inspectorSession] webView in
-            // The async Session method owns its own call lifetime. Keeping this
-            // capture weak prevents the stored effect task from extending the
-            // lifecycle's Session lease before or after that call.
-            guard let inspectorSession else {
-                throw CancellationError()
-            }
-            try await inspectorSession.attach(to: webView)
-        }
-        self.detachAction = detachAction ?? { [weak inspectorSession] in
-            guard let inspectorSession else {
-                return
-            }
-            await inspectorSession.detach()
-        }
+        self.attachAction = attachAction
+        self.detachAction = detachAction
     }
 
-    isolated deinit {
-        cancel()
-    }
-
-    /// Abandons the lifecycle during terminal owner teardown.
     func cancel() {
-        phase = .finalized
-        attachedWebView = nil
-        activeEffectID = nil
-        let lifecycleTask = lifecycleTask
-        self.lifecycleTask = nil
         lifecycleTask?.cancel()
     }
 
@@ -212,57 +189,36 @@ final class BrowserInspectorSessionAttachmentLifecycle {
     }
 
     private func startLifecycleTaskIfNeeded() {
-        guard lifecycleTask == nil,
-              let effect = phase.currentEffect else {
+        guard lifecycleTask == nil else {
             return
         }
 
-        if case let .attach(webView) = effect {
-            onAttachForTesting?(webView)
-        }
-
-        let effectID = nextEffectID
-        nextEffectID &+= 1
-        activeEffectID = effectID
+        let inspectorSession = inspectorSession
         let attachAction = attachAction
         let detachAction = detachAction
-        lifecycleTask = Task { @MainActor [weak self, effect, effectID, attachAction, detachAction] in
-            let result = await Self.perform(
-                effect,
-                attachAction: attachAction,
-                detachAction: detachAction
-            )
-            self?.commit(effect, result: result, id: effectID)
-        }
-    }
-
-    private static func perform(
-        _ effect: Effect,
-        attachAction: AttachAction,
-        detachAction: DetachAction
-    ) async -> EffectResult {
-        switch effect {
-        case let .attach(webView):
-            do {
-                try await attachAction(webView)
-                return .succeeded
-            } catch {
-                return .failed
+        lifecycleTask = Task { [weak self, inspectorSession, attachAction, detachAction] in
+            guard let self else {
+                return
             }
-        case .detach:
-            await detachAction()
-            return .succeeded
+            while let effect = self.phase.currentEffect {
+                let result: EffectResult
+                switch effect {
+                case let .attach(webView):
+                    do {
+                        self.onAttachForTesting?(webView)
+                        try await attachAction(inspectorSession, webView)
+                        result = .succeeded
+                    } catch {
+                        result = .failed
+                    }
+                case .detach:
+                    await detachAction(inspectorSession)
+                    result = .succeeded
+                }
+                self.finish(effect, result: result)
+            }
+            self.lifecycleTask = nil
         }
-    }
-
-    private func commit(_ effect: Effect, result: EffectResult, id: UInt64) {
-        guard activeEffectID == id else {
-            return
-        }
-        activeEffectID = nil
-        lifecycleTask = nil
-        finish(effect, result: result)
-        startLifecycleTaskIfNeeded()
     }
 
     private func finish(_ effect: Effect, result: EffectResult) {

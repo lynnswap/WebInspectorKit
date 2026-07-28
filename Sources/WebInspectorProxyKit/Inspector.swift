@@ -1,43 +1,36 @@
 import Foundation
 
-package struct Inspector: Sendable, WebInspectorEventDomainHandle {
-    package static let commandDomain = WebInspectorProxyDomain.inspector
-    package static let eventDomain = WebInspectorProxyEventDomain.inspector
+package enum Inspector {
+    package struct Client: Sendable {
+        private let context: DomainClientContext
 
-    package let endpoint: DomainEndpoint
-
-    package init(endpoint: DomainEndpoint) {
-        self.endpoint = endpoint
-    }
-
-    package static func extractEvent(
-        _ event: WebInspectorProxyEvent
-    ) -> Event? {
-        guard case let .inspector(value) = event else {
-            return nil
+        package init(context: DomainClientContext) {
+            self.context = context
         }
-        return value
-    }
 
-    package func enable() async throws {
-        try await dispatchVoid(
-            method: "enable",
-            payload: EnablePayload()
-        )
-    }
+        package func enable() async throws {
+            try await context.dispatchVoid(
+                domain: .inspector,
+                method: "enable",
+                payload: EnablePayload()
+            )
+        }
 
-    package func disable() async throws {
-        try await dispatchVoid(
-            method: "disable",
-            payload: DisablePayload()
-        )
-    }
+        package func disable() async throws {
+            try await context.dispatchVoid(
+                domain: .inspector,
+                method: "disable",
+                payload: DisablePayload()
+            )
+        }
 
-    package func initialized() async throws {
-        try await dispatchVoid(
-            method: "initialized",
-            payload: InitializedPayload()
-        )
+        package func initialized() async throws {
+            try await context.dispatchVoid(
+                domain: .inspector,
+                method: "initialized",
+                payload: InitializedPayload()
+            )
+        }
     }
 
     package struct EnablePayload: Sendable {
@@ -52,8 +45,18 @@ package struct Inspector: Sendable, WebInspectorEventDomainHandle {
         package init() {}
     }
 
+    package struct EventOrigin: Sendable {
+        package let targetID: WebInspectorTarget.ID
+        package let route: RoutingTargetID
+
+        package init(targetID: WebInspectorTarget.ID, route: RoutingTargetID) {
+            self.targetID = targetID
+            self.route = route
+        }
+    }
+
     package enum Event: Sendable {
-        case inspect(Runtime.RemoteObject, hints: Runtime.JSONValue?)
+        case inspect(Runtime.RemoteObject, hints: Runtime.JSONValue?, origin: EventOrigin?)
         case unknown(RawEvent)
     }
 }
