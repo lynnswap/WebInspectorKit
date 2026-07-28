@@ -96,8 +96,7 @@ func inspectorInspectResolvesNodeRemoteObjectToDOMInspectEvent() async throws {
                 kind: .object,
                 subtype: Runtime.Subtype(rawValue: "node")
             ),
-            hints: .object([:]),
-            origin: nil
+            hints: .object([:])
         ),
         target: target
     )
@@ -111,8 +110,8 @@ func inspectorInspectResolvesNodeRemoteObjectToDOMInspectEvent() async throws {
 
     let commands = await runtime.backend.recordedCommands()
     let command = try #require(commands.first)
-    #expect(command.targetID == target.id)
-    #expect(command.route == target.route)
+    #expect(command.targetID == .currentPage)
+    #expect(command.route == .currentPage)
     #expect(command.domain == "DOM")
     #expect(command.method == "requestNode")
     let payload = try #require(command.payload.cast(as: DOM.RequestNodePayload.self))
@@ -166,8 +165,7 @@ func inspectorInspectIgnoresNonNodeRemoteObject() async throws {
                 id: Runtime.RemoteObject.ID("function-object"),
                 kind: .function
             ),
-            hints: .object([:]),
-            origin: nil
+            hints: .object([:])
         ),
         target: target
     )
@@ -550,6 +548,11 @@ func scopedRuntimeIDsDispatchToOwningTarget() async throws {
 
 private struct TimedOut: Error {}
 
+private enum TaskValueRace<Value: Sendable>: Sendable {
+    case value(Value)
+    case timedOut
+}
+
 private actor EventRecorder<Element: Sendable> {
     private var recordedValue: Element?
 
@@ -562,22 +565,43 @@ private actor EventRecorder<Element: Sendable> {
     }
 }
 
+@Test
+func taskValueTimeoutCancelsTheUnderlyingTask() async {
+    let pair = AsyncStream<Int>.makeStream()
+    let task = Task {
+        var iterator = pair.stream.makeAsyncIterator()
+        return await iterator.next()
+    }
+    defer { pair.continuation.finish() }
+
+    await #expect(throws: TimedOut.self) {
+        _ = try await value(of: task, timeout: .milliseconds(10))
+    }
+    #expect(task.isCancelled)
+}
+
 private func value<T: Sendable>(
     of task: Task<T, Never>,
     timeout: Duration = .seconds(1)
 ) async throws -> T {
-    try await withThrowingTaskGroup(of: T.self) { group in
+    try await withThrowingTaskGroup(of: TaskValueRace<T>.self) { group in
+        defer { group.cancelAll() }
         group.addTask {
-            await task.value
+            .value(await task.value)
         }
         group.addTask {
             try await Task.sleep(for: timeout)
+            return .timedOut
+        }
+        guard let outcome = try await group.next() else {
             throw TimedOut()
         }
-        guard let value = try await group.next() else {
+        switch outcome {
+        case let .value(value):
+            return value
+        case .timedOut:
+            task.cancel()
             throw TimedOut()
         }
-        group.cancelAll()
-        return value
     }
 }

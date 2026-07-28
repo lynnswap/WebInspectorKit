@@ -8,16 +8,13 @@ private let logger = Logger(subsystem: "WebInspectorKit", category: "WebInspecto
 private struct ProtocolCommandTarget: Sendable {
     var targetID: WebInspectorTarget.ID
     var route: RoutingTargetID
-    var resultTargetScopeRawValue: String?
 
     init(
         targetID: WebInspectorTarget.ID,
-        route: RoutingTargetID,
-        resultTargetScopeRawValue: String? = nil
+        route: RoutingTargetID
     ) {
         self.targetID = targetID
         self.route = route
-        self.resultTargetScopeRawValue = resultTargetScopeRawValue
     }
 }
 
@@ -40,19 +37,26 @@ private struct ProtocolCommandTarget: Sendable {
 /// await proxy.close()
 /// ```
 public actor WebInspectorProxy {
-    /// Timeout configuration for command replies and current-page bootstrap.
+    /// Optional timeout configuration for command replies and current-page bootstrap.
     public struct Configuration: Equatable, Sendable {
         /// The maximum time to wait for an individual protocol command reply.
-        public var responseTimeout: Duration
+        ///
+        /// `nil` waits until WebKit replies, the connection closes, or the
+        /// calling task is cancelled. The default is `nil`.
+        public var responseTimeout: Duration?
 
         /// The maximum time to wait while discovering or refreshing the current
         /// page target.
-        public var bootstrapTimeout: Duration
+        ///
+        /// `nil` waits until WebKit publishes a target, the connection closes,
+        /// or the calling task is cancelled. The default is `nil`.
+        public var bootstrapTimeout: Duration?
 
-        /// Creates proxy timeout configuration.
+        /// Creates proxy timeout configuration. Pass a duration only when the
+        /// consumer explicitly owns a finite deadline.
         public init(
-            responseTimeout: Duration = .seconds(5),
-            bootstrapTimeout: Duration = .seconds(5)
+            responseTimeout: Duration? = nil,
+            bootstrapTimeout: Duration? = nil
         ) {
             self.responseTimeout = responseTimeout
             self.bootstrapTimeout = bootstrapTimeout
@@ -226,7 +230,7 @@ public actor WebInspectorProxy {
         return pageTarget
     }
 
-    package var bootstrapGracePeriod: Duration {
+    package var bootstrapGracePeriod: Duration? {
         configuration.bootstrapTimeout
     }
 
@@ -341,12 +345,72 @@ public actor WebInspectorProxy {
         let command = WebInspectorProxyCommand<Payload, Result>(
             targetID: commandTarget.targetID,
             route: commandTarget.route,
-            resultTargetScopeRawValue: commandTarget.resultTargetScopeRawValue,
             domain: domain,
             method: method,
             payload: payload
         )
         return try await backend.dispatchCommand(command)
+    }
+
+    package func dispatchCommandWithReplyBoundary<Payload: Sendable, Result: Sendable>(
+        targetID: WebInspectorTarget.ID,
+        route: RoutingTargetID,
+        domain: WebInspectorProxyDomain,
+        method: String,
+        payload: Payload
+    ) async throws -> WebInspectorProxyCommandReply<Result> {
+        guard closeState == .open else {
+            throw WebInspectorProxyError.closed
+        }
+        guard let backend else {
+            throw unimplementedCommand(domain: domain.rawValue, method: method)
+        }
+        let commandTarget = resolvedCommandTarget(
+            targetID: targetID,
+            route: route,
+            domain: domain,
+            payload: payload
+        )
+        let command = WebInspectorProxyCommand<Payload, Result>(
+            targetID: commandTarget.targetID,
+            route: commandTarget.route,
+            domain: domain,
+            method: method,
+            payload: payload
+        )
+        return try await backend.dispatchCommandWithReplyBoundary(command)
+    }
+
+    package nonisolated func orderedEvents(
+        targetID: WebInspectorTarget.ID,
+        route: RoutingTargetID
+    ) async -> WebInspectorProxyOrderedEventFeed {
+        guard let backend else {
+            preconditionFailure("WebInspectorProxy has no backend for ordered events.")
+        }
+        let backendFeed = await backend.orderedEvents(route: route, targetID: targetID)
+        let stream = AsyncStream<WebInspectorProxyOrderedEvent>(bufferingPolicy: .unbounded) { continuation in
+            let task = Task {
+                for await sequencedEvent in backendFeed.events {
+                    let event = sequencedEvent.event
+                    if case let .targetLifecycle(lifecycleEvent) = event {
+                        await self.applyTargetLifecycleEventToProxyState(lifecycleEvent)
+                    }
+                    continuation.yield(WebInspectorProxyOrderedEvent(
+                        sequence: sequencedEvent.sequence,
+                        event: event
+                    ))
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+        return WebInspectorProxyOrderedEventFeed(
+            initialSequence: backendFeed.initialSequence,
+            events: stream
+        )
     }
 
     package nonisolated func domEvents(
@@ -374,7 +438,6 @@ public actor WebInspectorProxy {
                             }
                             await self.emitDOMInspectEvent(
                                 for: value,
-                                targetID: targetID,
                                 route: route,
                                 continuation: continuation
                             )
@@ -519,71 +582,51 @@ public actor WebInspectorProxy {
 
     private nonisolated func emitDOMInspectEvent(
         for event: Inspector.Event,
-        targetID: WebInspectorTarget.ID,
         route: RoutingTargetID,
         continuation: AsyncStream<DOM.Event>.Continuation
     ) async {
-        guard case let .inspect(object, _, origin) = event else {
+        guard let event = await domInspectEvent(for: event, route: route) else {
             return
+        }
+        continuation.yield(event)
+    }
+
+    package nonisolated func domInspectEvent(
+        for event: Inspector.Event,
+        route: RoutingTargetID
+    ) async -> DOM.Event? {
+        guard case let .inspect(object, _) = event else {
+            return nil
         }
         guard object.subtype?.rawValue == "node", let objectID = object.id else {
             logger.debug(
                 "Inspector.inspect ignored reason=non-node route=\(Self.logDescription(route), privacy: .public) subtype=\(String(describing: object.subtype), privacy: .public)"
             )
-            return
+            return nil
         }
-        let targets = Self.inspectResolutionTargets(targetID: targetID, route: route, origin: origin)
         logger.debug(
-            "Inspector.inspect resolving route=\(Self.logDescription(route), privacy: .public) objectID=\(objectID.rawValue, privacy: .public) commandTarget=\(targets.commandTargetID.rawValue, privacy: .public) commandRoute=\(Self.logDescription(targets.commandRoute), privacy: .public) projectionTarget=\(targets.projectionTargetID.rawValue, privacy: .public)"
+            "Inspector.inspect resolving route=\(Self.logDescription(route), privacy: .public) objectID=\(objectID.rawValue, privacy: .public)"
         )
-        // WebKit's FrameDOMAgent does not implement requestNode. Even when an
-        // Inspector.inspect event is target-wrapped for a frame, the frontend
-        // asks the page DOM agent to translate the RemoteObject into a node id.
-        // The returned node still belongs to the inspect origin for current-page
-        // projection, so keep that scope when emitting DOM.inspect.
+        // Inspector.inspect is a page-target event. WebInspectorUI resolves it
+        // through the main page DOM agent, whose node namespace is unscoped.
         do {
             let nodeID: DOM.Node.ID = try await dispatchCommand(
-                targetID: targets.commandTargetID,
-                route: targets.commandRoute,
+                targetID: .currentPage,
+                route: .currentPage,
                 domain: .dom,
                 method: "requestNode",
                 payload: DOM.RequestNodePayload(objectID: objectID)
             )
-            let projectedNodeID = Self.projectedDOMNodeID(nodeID, targetID: targets.projectionTargetID, route: route)
             logger.debug(
-                "Inspector.inspect resolved objectID=\(objectID.rawValue, privacy: .public) nodeID=\(nodeID.rawValue, privacy: .public) projectedNodeID=\(projectedNodeID.rawValue, privacy: .public)"
+                "Inspector.inspect resolved objectID=\(objectID.rawValue, privacy: .public) nodeID=\(nodeID.rawValue, privacy: .public)"
             )
-            continuation.yield(.inspect(projectedNodeID))
+            return .inspect(nodeID)
         } catch {
             logger.debug(
-                "Inspector.inspect requestNode failed objectID=\(objectID.rawValue, privacy: .public) commandTarget=\(targets.commandTargetID.rawValue, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                "Inspector.inspect requestNode failed objectID=\(objectID.rawValue, privacy: .public) error=\(String(describing: error), privacy: .public)"
             )
-            continuation.yield(.unknown(RawEvent(domain: "Inspector", method: "inspect")))
+            return nil
         }
-    }
-
-    private nonisolated static func inspectResolutionTargets(
-        targetID: WebInspectorTarget.ID,
-        route: RoutingTargetID,
-        origin: Inspector.EventOrigin?
-    ) -> (
-        commandTargetID: WebInspectorTarget.ID,
-        commandRoute: RoutingTargetID,
-        projectionTargetID: WebInspectorTarget.ID
-    ) {
-        guard route == .currentPage else {
-            let commandTargetID = origin?.targetID ?? targetID
-            return (
-                commandTargetID: commandTargetID,
-                commandRoute: origin?.route ?? route,
-                projectionTargetID: commandTargetID
-            )
-        }
-        return (
-            commandTargetID: targetID,
-            commandRoute: route,
-            projectionTargetID: origin?.targetID ?? targetID
-        )
     }
 
     private nonisolated static func logDescription(_ route: RoutingTargetID) -> String {
@@ -644,11 +687,11 @@ public actor WebInspectorProxy {
                 route: RoutingTargetID(scopedTargetRawValue)
             )
         }
-        if let requestNodeObjectID = Self.requestNodeObjectID(from: payload, domain: domain) {
+        if let requestNodeObjectID = Self.requestNodeObjectID(from: payload, domain: domain),
+           let scopedTargetRawValue = requestNodeObjectID.targetScopeRawValue {
             return ProtocolCommandTarget(
-                targetID: targetID,
-                route: route,
-                resultTargetScopeRawValue: requestNodeObjectID.targetScopeRawValue
+                targetID: WebInspectorTarget.ID(scopedTargetRawValue),
+                route: RoutingTargetID(scopedTargetRawValue)
             )
         }
         if let remoteObjectID = Self.remoteObjectID(from: payload, domain: domain),
@@ -659,19 +702,6 @@ public actor WebInspectorProxy {
             )
         }
         return ProtocolCommandTarget(targetID: targetID, route: route)
-    }
-
-    private nonisolated static func projectedDOMNodeID(
-        _ nodeID: DOM.Node.ID,
-        targetID: WebInspectorTarget.ID,
-        route: RoutingTargetID
-    ) -> DOM.Node.ID {
-        guard route == .currentPage,
-              targetID != .currentPage,
-              nodeID.targetScopeRawValue == nil else {
-            return nodeID
-        }
-        return DOM.Node.ID(nodeID.rawValue, scopedToTargetRawValue: targetID.rawValue)
     }
 
     private nonisolated static func nodeID<Payload: Sendable>(
@@ -943,6 +973,12 @@ public actor WebInspectorProxy {
             return WebInspectorProxyError.commandFailed(domain: "Target", method: method, message: message)
         case let .missingTarget(targetID):
             return WebInspectorProxyError.disconnected("Target \(targetID.rawValue) disappeared during bootstrap.")
+        case let .unsupportedDomain(domain, targetID):
+            return WebInspectorProxyError.disconnected(
+                "Target \(targetID.rawValue) does not support \(domain.description) during bootstrap."
+            )
+        case .inspectedPageProcessTerminated:
+            return WebInspectorProxyError.disconnected("Inspected page process terminated during bootstrap.")
         case .malformedMessage:
             return WebInspectorProxyError.disconnected("Malformed target bootstrap message.")
         }
@@ -969,6 +1005,6 @@ public actor WebInspectorProxy {
                 ])
             }
         }
-        return WebInspectorProxyError.attachFailed(String(describing: error))
+        return WebInspectorProxyError.attachFailed((error as NSError).localizedDescription)
     }
 }

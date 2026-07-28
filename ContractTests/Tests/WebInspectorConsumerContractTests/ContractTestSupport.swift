@@ -1,55 +1,38 @@
 import Foundation
 import Testing
 import WebInspectorDataKit
+import WebInspectorDataKitTesting
 import WebInspectorProxyKit
 import WebInspectorProxyKitTesting
 
 enum ContractTestSupport {
     static func enqueueDataKitStartupReplies(
         on backend: WebInspectorTestBackend,
-        document: DOM.Node = WebInspectorProxyTestFixtures.domDocument()
+        document: DOM.Node = WebInspectorProxyTestFixtures.domDocument(),
+        requiresDomainEnableReplies: Bool = true,
+        pageEnableFailure: WebInspectorProxyError? = nil
     ) async {
-        await backend.enqueue((), for: "Inspector", method: "enable")
-        await backend.enqueue((), for: "Inspector", method: "initialized")
-        await backend.enqueue((), for: "Runtime", method: "enable")
-        await backend.enqueue((), for: "Network", method: "enable")
+        if requiresDomainEnableReplies {
+            await backend.enqueue((), for: "Inspector", method: "enable")
+            await backend.enqueue((), for: "Inspector", method: "initialized")
+            if let pageEnableFailure {
+                await backend.enqueueFailure(pageEnableFailure, for: "Page", method: "enable")
+            } else {
+                await backend.enqueue((), for: "Page", method: "enable")
+            }
+            await backend.enqueue((), for: "Runtime", method: "enable")
+            await backend.enqueue((), for: "Network", method: "enable")
+            await backend.enqueue((), for: "Console", method: "enable")
+        }
         await backend.enqueue(document, for: "DOM", method: "getDocument")
-        await backend.enqueue((), for: "Console", method: "enable")
     }
 
     static func enqueueDataKitShutdownReplies(on backend: WebInspectorTestBackend) async {
         await backend.enqueue((), for: "Console", method: "disable")
         await backend.enqueue((), for: "Runtime", method: "disable")
         await backend.enqueue((), for: "Network", method: "disable")
+        await backend.enqueue((), for: "Page", method: "disable")
         await backend.enqueue((), for: "Inspector", method: "disable")
-    }
-
-    @MainActor
-    static func startDataKitContext(
-        runtime: WebInspectorProxyTestRuntime,
-        document: DOM.Node = WebInspectorProxyTestFixtures.domDocument()
-    ) async throws -> (WebInspectorTarget, WebInspectorContainer, WebInspectorContext) {
-        let target = try await runtime.proxy.waitForCurrentPage()
-        await enqueueDataKitStartupReplies(on: runtime.backend, document: document)
-
-        let container = WebInspectorContainer(proxy: runtime.proxy)
-        let context = container.mainContext
-        try await waitForDataKitSubscribers(runtime: runtime, target: target)
-        try await waitUntil { context.state == .attached }
-        return (target, container, context)
-    }
-
-    static func waitForDataKitSubscribers(
-        runtime: WebInspectorProxyTestRuntime,
-        target: WebInspectorTarget,
-        count: Int = 1
-    ) async throws {
-        try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: count)
-        try await runtime.backend.waitForSubscribers(domain: "Inspector", target: target, count: count)
-        try await runtime.backend.waitForSubscribers(domain: "CSS", target: target, count: count)
-        try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: count)
-        try await runtime.backend.waitForSubscribers(domain: "Console", target: target, count: count)
-        try await runtime.backend.waitForSubscribers(domain: "Runtime", target: target, count: count)
     }
 
     static func emitFinishedRequest(
@@ -103,89 +86,43 @@ enum ContractTestSupport {
         )
     }
 
-    static func waitUntil(
-        timeout: Duration = .seconds(1),
-        isolation: isolated (any Actor)? = #isolation,
-        condition: () -> Bool
-    ) async throws {
-        _ = isolation
-        let clock = ContinuousClock()
-        let deadline = clock.now + timeout
-        while condition() == false {
-            if clock.now >= deadline {
-                throw TimedOut()
-            }
-            await Task.yield()
-        }
-    }
-
-    static func waitUntil(
-        timeout: Duration = .seconds(1),
-        isolation: isolated (any Actor)? = #isolation,
-        condition: () async -> Bool
-    ) async throws {
-        _ = isolation
-        let clock = ContinuousClock()
-        let deadline = clock.now + timeout
-        while await condition() == false {
-            if clock.now >= deadline {
-                throw TimedOut()
-            }
-            await Task.yield()
-        }
-    }
-
-    static func value<T: Sendable>(
-        of task: Task<T, Never>,
-        timeout: Duration = .seconds(1)
-    ) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask {
-                await task.value
-            }
-            group.addTask {
-                try await Task.sleep(for: timeout)
-                throw TimedOut()
-            }
-            guard let value = try await group.next() else {
-                throw TimedOut()
-            }
-            group.cancelAll()
-            return value
-        }
-    }
 }
 
-struct TimedOut: Error {}
+struct ContractEventStreamEnded: Error {}
 
 actor ContractDataKitActor {
     nonisolated let inspectorContainer: WebInspectorContainer
 
     private let runtime: WebInspectorProxyTestRuntime
     private var context: WebInspectorContext?
+    private var consoleController: WebInspectorFetchedResultsController<ConsoleMessage>?
 
     init(runtime: WebInspectorProxyTestRuntime, inspectorContainer: WebInspectorContainer? = nil) {
         self.runtime = runtime
         let container = inspectorContainer ?? WebInspectorContainer(proxy: runtime.proxy)
         self.inspectorContainer = container
         context = nil
+        consoleController = nil
     }
 
     @discardableResult
     func start(
         document: DOM.Node = WebInspectorProxyTestFixtures.domDocument(),
-        expectedSubscriberCount: Int = 1
+        requiresDomainEnableReplies: Bool = true,
+        pageEnableFailure: WebInspectorProxyError? = nil
     ) async throws -> WebInspectorTarget {
         let context = modelContext()
         let target = try await runtime.proxy.waitForCurrentPage()
-        await ContractTestSupport.enqueueDataKitStartupReplies(on: runtime.backend, document: document)
-        context.start()
-        try await ContractTestSupport.waitForDataKitSubscribers(
-            runtime: runtime,
-            target: target,
-            count: expectedSubscriberCount
+        await ContractTestSupport.enqueueDataKitStartupReplies(
+            on: runtime.backend,
+            document: document,
+            requiresDomainEnableReplies: requiresDomainEnableReplies,
+            pageEnableFailure: pageEnableFailure
         )
-        try await ContractTestSupport.waitUntil { context.state == .attached }
+        if pageEnableFailure != nil {
+            await runtime.backend.enqueue((), for: "Inspector", method: "disable")
+        }
+        try await context.startAndWaitForStartupForTesting()
         return target
     }
 
@@ -243,6 +180,9 @@ actor ContractDataKitActor {
             childNodeCount: 1
         )
         let target = try await start(document: document)
+        let treeController = try await context.treeController()
+        var treeUpdates = treeController.updates.makeAsyncIterator()
+        _ = try #require(await treeUpdates.next())
 
         await runtime.backend.emit(
             .setChildNodes(parent: WebInspectorProxyTestFixtures.domNodeID("contract-document"), nodes: [
@@ -261,13 +201,7 @@ actor ContractDataKitActor {
             target: target
         )
 
-        try await ContractTestSupport.waitUntil {
-            guard let root = context.rootNode,
-                  case let .loaded(children) = root.children else {
-                return false
-            }
-            return children.first?.attributes["data-contract"] == "dom"
-        }
+        _ = try #require(await treeUpdates.next())
         let root = try #require(context.rootNode)
         guard case let .loaded(children) = root.children else {
             Issue.record("Expected the seeded document to load children.")
@@ -277,7 +211,6 @@ actor ContractDataKitActor {
         #expect(context.node(for: child.id) === child)
         #expect(child.attributeList.map(\.name) == ["data-contract", "data-second"])
 
-        let treeController = try await context.treeController()
         #expect(treeController.snapshot.selectorPath(for: child.id) == "main")
         #expect(try context.selectorPath(for: child) == "main")
         #expect(try context.xPath(for: child) == "/main")
@@ -318,13 +251,15 @@ actor ContractDataKitActor {
         )
         let requestController: WebInspectorFetchedResultsController<NetworkRequest> =
             context.fetchedResultsController()
+        var requestTransactions = requestController.transactions.makeAsyncIterator()
         await ContractTestSupport.emitFinishedRequest(request, target: target, backend: runtime.backend)
 
-        let requests: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-        try await ContractTestSupport.waitUntil {
-            requests.items.first?.state == .finished
+        while requestController.items.first?.state != .finished {
+            guard await requestTransactions.next() != nil else {
+                throw ContractEventStreamEnded()
+            }
         }
-        let requestModel = try #require(requests.items.first)
+        let requestModel = try #require(requestController.items.first)
         #expect(requestModel.url == "https://example.com/data.json")
         #expect(requestModel.method == "GET")
         #expect(requestModel.status == 200)
@@ -375,12 +310,12 @@ actor ContractDataKitActor {
         #expect(evaluation.object.canRequestProperties)
     }
 
-    func waitForConsoleMessage(text: String) async throws {
-        let context = modelContext()
-        let messages: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
-        try await ContractTestSupport.waitUntil {
-            messages.items.contains { $0.text == text }
-        }
+    func consoleTransactions() -> AsyncStream<WebInspectorFetchedResultsTransaction<ConsoleMessage>> {
+        modelConsoleController().transactions
+    }
+
+    func containsConsoleMessage(text: String) -> Bool {
+        modelConsoleController().items.contains { $0.text == text }
     }
 
     private func modelContext() -> WebInspectorContext {
@@ -390,6 +325,16 @@ actor ContractDataKitActor {
         let context = WebInspectorContext(inspectorContainer, isolation: self)
         self.context = context
         return context
+    }
+
+    private func modelConsoleController() -> WebInspectorFetchedResultsController<ConsoleMessage> {
+        if let consoleController {
+            return consoleController
+        }
+        let controller: WebInspectorFetchedResultsController<ConsoleMessage> =
+            modelContext().fetchedResultsController()
+        consoleController = controller
+        return controller
     }
 
     private func requirePersistentModel<Model: WebInspectorPersistentModel>(_ model: Model) {

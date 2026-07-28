@@ -1179,11 +1179,17 @@ struct DOMContainerTests {
         let hoverFixture = try await makeLiveDOMContext()
         let input = try #require(hoverFixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
         hoverFixture.context.select(input)
+        await hoverFixture.runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
         let hoverViewController = DOMTreeViewController(context: hoverFixture.context)
         let hoverWindow = showInWindow(hoverViewController, useUIKitVisibility: false)
         defer { hoverWindow.isHidden = true }
         let hoverTreeView = hoverViewController.displayedDOMTreeTextViewForTesting
         #expect(await hoverTreeView.waitForRowDocumentForTesting())
+        _ = await recordedDOMCommands(
+            on: hoverFixture.runtime.backend,
+            method: "highlightNode",
+            count: 1
+        )
         let hoverBaselineCount = await hoverFixture.runtime.backend.recordedCommands()
             .filter { $0.domain == "DOM" && $0.method == "highlightNode" }
             .count
@@ -1225,6 +1231,34 @@ struct DOMContainerTests {
         await hideFixture.runtime.backend.enqueue((), for: "DOM", method: "hideHighlight")
         hideTreeView.endHoverForTesting()
         _ = await recordedDOMCommands(on: hideFixture.runtime.backend, method: "hideHighlight", count: 1)
+    }
+
+    @Test
+    func inspectedNodeHighlightHasOneSelectionPresentationOwner() async throws {
+        let fixture = try await makeLiveDOMContext()
+        let target = try await fixture.runtime.proxy.waitForCurrentPage()
+        let viewController = DOMTreeViewController(context: fixture.context)
+        let window = showInWindow(viewController, useUIKitVisibility: false)
+        defer { window.isHidden = true }
+        let treeView = viewController.displayedDOMTreeTextViewForTesting
+        #expect(await treeView.waitForRowDocumentForTesting())
+
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
+        await fixture.runtime.backend.emit(.inspect(DOM.Node.ID("input")), target: target)
+        _ = await recordedDOMCommands(
+            on: fixture.runtime.backend,
+            method: "highlightNode",
+            count: 1
+        )
+        #expect(await treeView.waitForObservedTreeRevisionForTesting(fixture.context.rootTreeController().revision))
+        treeView.routeCurrentSelectionInvalidationForTesting()
+        await treeView.waitForPageHighlightTaskForTesting()
+
+        let highlightedNodeIDs = await fixture.runtime.backend.recordedCommands()
+            .filter { $0.domain == "DOM" && $0.method == "highlightNode" }
+            .compactMap { $0.payload.cast(as: DOM.HighlightNodePayload.self)?.id }
+        #expect(highlightedNodeIDs == [DOM.Node.ID("input")])
     }
 
     @Test
@@ -1382,6 +1416,7 @@ struct DOMContainerTests {
     private func enqueueLiveStartupReplies(on backend: WebInspectorTestBackend, document: DOM.Node) async {
         await backend.enqueue((), for: "Inspector", method: "enable")
         await backend.enqueue((), for: "Inspector", method: "initialized")
+        await backend.enqueue((), for: "Page", method: "enable")
         await backend.enqueue((), for: "Runtime", method: "enable")
         await backend.enqueue((), for: "Network", method: "enable")
         await backend.enqueue(document, for: "DOM", method: "getDocument")

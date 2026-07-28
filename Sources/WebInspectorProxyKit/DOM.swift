@@ -35,6 +35,15 @@ public enum DOM {
             )
         }
 
+        package func getDocumentWithReplyBoundary() async throws -> WebInspectorProxyCommandReply<Node> {
+            try await context.dispatchWithReplyBoundary(
+                domain: .dom,
+                method: "getDocument",
+                payload: GetDocumentPayload(),
+                returning: Node.self
+            )
+        }
+
         /// Requests child-node events for a node up to the supplied depth.
         public func requestChildNodes(_ id: Node.ID, depth: Int = 1) async throws {
             try await context.dispatchVoid(
@@ -44,7 +53,7 @@ public enum DOM {
             )
         }
 
-        /// Resolves a runtime object into a DOM node identity.
+    /// Resolves a runtime object into a DOM node identity through its owning target.
         public func requestNode(forRemoteObject objectID: Runtime.RemoteObject.ID) async throws -> Node.ID {
             try await context.dispatch(
                 domain: .dom,

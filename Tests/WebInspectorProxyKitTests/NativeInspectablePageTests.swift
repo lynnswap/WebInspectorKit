@@ -56,4 +56,5 @@ func nativeInspectablePageReloadFailsWhenWebViewIsUnavailable() {
         #expect(String(describing: error) == "Inspected WKWebView is no longer available.")
     }
 }
+
 #endif

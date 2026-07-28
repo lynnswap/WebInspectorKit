@@ -17,6 +17,41 @@ extension WebInspectorUIRenderingTests {
 struct ParentContainerTests {
     private struct AttachmentFailure: Error {}
 
+    private enum PickerShutdownRaceResult: Sendable {
+        case shutdownIntentRegistered
+        case retirementCompleted
+    }
+
+    private actor PickerShutdownRaceRecorder {
+        private var result: PickerShutdownRaceResult?
+        private var waiters: [CheckedContinuation<PickerShutdownRaceResult, Never>] = []
+
+        func record(_ result: PickerShutdownRaceResult) {
+            guard self.result == nil else {
+                return
+            }
+            self.result = result
+            let currentWaiters = waiters
+            waiters.removeAll()
+            for waiter in currentWaiters {
+                waiter.resume(returning: result)
+            }
+        }
+
+        func waitForResult() async -> PickerShutdownRaceResult {
+            if let result {
+                return result
+            }
+            return await withCheckedContinuation { continuation in
+                if let result {
+                    continuation.resume(returning: result)
+                } else {
+                    waiters.append(continuation)
+                }
+            }
+        }
+    }
+
     @Test
     func sessionAndViewControllerUseDOMAndNetworkTabsByDefault() {
         let session = WebInspectorSession()
@@ -216,19 +251,24 @@ struct ParentContainerTests {
     }
 
     @Test
-    func attachClearsCachedTabContentForPreviousContext() async throws {
+    func attachAdvancesContextEpochAndEvictsRootPresentationContent() async throws {
         let session = makeSessionWithNoOpAttachment()
+        let viewController = WebInspectorViewController(session: session)
+        let contentStore = viewController.presentationContentStoreForTesting
+        let initialContextRevision = session.interface.contextBoundContentRevision
         _ = WebInspectorTab.ContentFactory.makeViewController(
             for: .dom,
             session: session,
+            contentStore: contentStore,
             hostLayout: .compact
         )
         _ = WebInspectorTab.ContentFactory.makeViewController(
             for: .network,
             session: session,
+            contentStore: contentStore,
             hostLayout: .regular
         )
-        #expect(session.interface.contentCacheCountForTesting > 0)
+        #expect(contentStore.contentCountForTesting > 0)
 
         var installedContext: WebInspectorContext?
         try await session.attachForTesting {
@@ -239,56 +279,67 @@ struct ParentContainerTests {
 
         let context = try #require(installedContext)
         #expect(session.context === context)
-        #expect(session.interface.contentCacheCountForTesting == 0)
+        #expect(session.interface.contextBoundContentRevision > initialContextRevision)
+        contentStore.prepare(for: session.interface.contextBoundContentRevision)
+        #expect(contentStore.contentCountForTesting == 0)
     }
 
     @Test
-    func installingDataContextClearsCachedTabContent() {
+    func installingDataContextAdvancesContextEpochAndEvictsRootPresentationContent() {
         let session = makeSessionWithNoOpAttachment()
+        let viewController = WebInspectorViewController(session: session)
+        let contentStore = viewController.presentationContentStoreForTesting
+        let initialContextRevision = session.interface.contextBoundContentRevision
         _ = WebInspectorTab.ContentFactory.makeViewController(
             for: .dom,
             session: session,
+            contentStore: contentStore,
             hostLayout: .compact
         )
         _ = WebInspectorTab.ContentFactory.makeViewController(
             for: .network,
             session: session,
+            contentStore: contentStore,
             hostLayout: .regular
         )
-        #expect(session.interface.contentCacheCountForTesting > 0)
+        #expect(contentStore.contentCountForTesting > 0)
 
         let context = makeContext()
         session.installDataContext(context)
 
         #expect(session.context === context)
-        #expect(session.interface.contentCacheCountForTesting == 0)
+        #expect(session.interface.contextBoundContentRevision > initialContextRevision)
+        contentStore.prepare(for: session.interface.contextBoundContentRevision)
+        #expect(contentStore.contentCountForTesting == 0)
     }
 
     @Test
-    func contentCacheEvictsEntriesFromPreviousEpoch() {
-        let cache = WebInspectorTab.ContentCache()
+    func presentationContentStoreEvictsEntriesFromPreviousContextEpoch() {
+        let contentStore = PresentationContentStore()
         let key = WebInspectorTab.ContentKey(tabID: "epoch-tab", contentID: "root")
 
-        let first = cache.viewController(for: key, epoch: 0) { UIViewController() }
-        #expect(cache.viewController(for: key, epoch: 0) { UIViewController() } === first)
+        let first = contentStore.viewController(for: key, contextEpoch: 0) { UIViewController() }
+        #expect(contentStore.viewController(for: key, contextEpoch: 0) { UIViewController() } === first)
 
-        let second = cache.viewController(for: key, epoch: 1) { UIViewController() }
+        let second = contentStore.viewController(for: key, contextEpoch: 1) { UIViewController() }
         #expect(second !== first)
-        #expect(cache.viewController(for: key, epoch: 1) { UIViewController() } === second)
-        #expect(cache.countForTesting == 1)
+        #expect(contentStore.viewController(for: key, contextEpoch: 1) { UIViewController() } === second)
+        #expect(contentStore.contentCountForTesting == 1)
     }
 
     @Test
     func representationBeforeDeferredRetirementKeepsContentAndSkipsDetach() async throws {
         let session = makeSessionWithNoOpAttachment()
+        let viewController = WebInspectorViewController(session: session)
+        let contentStore = viewController.presentationContentStoreForTesting
         _ = WebInspectorTab.ContentFactory.makeViewController(
             for: .dom,
             session: session,
+            contentStore: contentStore,
             hostLayout: .compact
         )
-        let viewController = WebInspectorViewController(session: session)
         viewController.loadViewIfNeeded()
-        #expect(session.interface.contentCacheCountForTesting > 0)
+        #expect(contentStore.contentCountForTesting > 0)
 
         let retirementBaseline = viewController.rootPresentationRetirementTaskCompletionCountForTesting
         viewController.finishRootPresentationLifecycleForTesting()
@@ -299,7 +350,184 @@ struct ParentContainerTests {
         #expect(await viewController.waitForRootPresentationRetirementTaskCompletionForTesting(after: retirementBaseline))
 
         #expect(session.detachCountForTesting == 0)
-        #expect(session.interface.contentCacheCountForTesting > 0)
+        #expect(contentStore.contentCountForTesting > 0)
+    }
+
+    @Test
+    func rootControllersSharingSessionOwnDistinctPresentationContent() throws {
+        let session = makeSessionWithNoOpAttachment()
+        let firstRoot = WebInspectorViewController(session: session)
+        let secondRoot = WebInspectorViewController(session: session)
+        let firstStore = firstRoot.presentationContentStoreForTesting
+        let secondStore = secondRoot.presentationContentStoreForTesting
+
+        let firstContent = WebInspectorTab.ContentFactory.makeViewController(
+            for: .network,
+            session: session,
+            contentStore: firstStore,
+            hostLayout: .compact
+        )
+        let secondContent = WebInspectorTab.ContentFactory.makeViewController(
+            for: .network,
+            session: session,
+            contentStore: secondStore,
+            hostLayout: .compact
+        )
+
+        #expect(firstContent !== secondContent)
+        #expect(firstStore.networkPanelModelForTesting !== secondStore.networkPanelModelForTesting)
+        #expect(firstStore.contentCountForTesting > 0)
+        #expect(secondStore.contentCountForTesting > 0)
+    }
+
+    @Test
+    func retiringBorrowedRootClearsOnlyItsPresentationContent() async throws {
+        let session = makeSessionWithNoOpAttachment()
+        let firstRoot = WebInspectorViewController(session: session)
+        let secondRoot = WebInspectorViewController(session: session)
+        firstRoot.automaticallyDetachesOnDismiss = false
+        secondRoot.automaticallyDetachesOnDismiss = false
+        firstRoot.loadViewIfNeeded()
+        secondRoot.loadViewIfNeeded()
+        firstRoot.beginAppearanceTransition(true, animated: false)
+        firstRoot.endAppearanceTransition()
+        secondRoot.beginAppearanceTransition(true, animated: false)
+        secondRoot.endAppearanceTransition()
+        let firstStore = firstRoot.presentationContentStoreForTesting
+        let secondStore = secondRoot.presentationContentStoreForTesting
+        #expect(firstStore.contentCountForTesting > 0)
+        #expect(secondStore.contentCountForTesting > 0)
+
+        let retirementBaseline = firstRoot.rootPresentationRetirementTaskCompletionCountForTesting
+        firstRoot.finishRootPresentationLifecycleForTesting()
+        #expect(
+            await firstRoot.waitForRootPresentationRetirementTaskCompletionForTesting(
+                after: retirementBaseline
+            )
+        )
+
+        #expect(session.detachCountForTesting == 0)
+        #expect(firstStore.contentCountForTesting == 0)
+        #expect(secondStore.contentCountForTesting > 0)
+    }
+
+    @Test
+    func sharedSessionDetachesOnlyAfterFinalActiveRootRetires() async throws {
+        let session = makeSessionWithNoOpAttachment()
+        let firstRoot = WebInspectorViewController(session: session)
+        let secondRoot = WebInspectorViewController(session: session)
+        secondRoot.automaticallyDetachesOnDismiss = false
+        firstRoot.loadViewIfNeeded()
+        secondRoot.loadViewIfNeeded()
+        firstRoot.beginAppearanceTransition(true, animated: false)
+        firstRoot.endAppearanceTransition()
+        secondRoot.beginAppearanceTransition(true, animated: false)
+        secondRoot.endAppearanceTransition()
+
+        var retirementBaseline = firstRoot.rootPresentationRetirementTaskCompletionCountForTesting
+        firstRoot.finishRootPresentationLifecycleForTesting()
+        #expect(
+            await firstRoot.waitForRootPresentationRetirementTaskCompletionForTesting(
+                after: retirementBaseline
+            )
+        )
+        #expect(session.detachCountForTesting == 0)
+
+        retirementBaseline = secondRoot.rootPresentationRetirementTaskCompletionCountForTesting
+        secondRoot.finishRootPresentationLifecycleForTesting()
+        #expect(
+            await secondRoot.waitForRootPresentationRetirementTaskCompletionForTesting(
+                after: retirementBaseline
+            )
+        )
+        #expect(session.detachCountForTesting == 1)
+    }
+
+    @Test
+    func deferredDetachCompletesWhenFinalActiveRootDeinitializes() async throws {
+        let session = makeSessionWithNoOpAttachment()
+        let firstRoot = WebInspectorViewController(session: session)
+        var finalRoot: WebInspectorViewController? = WebInspectorViewController(session: session)
+        finalRoot?.automaticallyDetachesOnDismiss = false
+        firstRoot.loadViewIfNeeded()
+        finalRoot?.loadViewIfNeeded()
+        firstRoot.beginAppearanceTransition(true, animated: false)
+        firstRoot.endAppearanceTransition()
+        finalRoot?.beginAppearanceTransition(true, animated: false)
+        finalRoot?.endAppearanceTransition()
+
+        let retirementBaseline = firstRoot.rootPresentationRetirementTaskCompletionCountForTesting
+        firstRoot.finishRootPresentationLifecycleForTesting()
+        #expect(
+            await firstRoot.waitForRootPresentationRetirementTaskCompletionForTesting(
+                after: retirementBaseline
+            )
+        )
+        #expect(session.detachCountForTesting == 0)
+
+        weak var releasedRoot = finalRoot
+        finalRoot = nil
+
+        #expect(releasedRoot == nil)
+        #expect(await waitUntilDetachCount(1, in: session))
+    }
+
+    @Test
+    func deinitRetirementWaitsForRootPresentedBeforeDeferredTaskRuns() async throws {
+        let session = makeSessionWithNoOpAttachment()
+        let firstRoot = WebInspectorViewController(session: session)
+        var finalRoot: WebInspectorViewController? = WebInspectorViewController(session: session)
+        finalRoot?.automaticallyDetachesOnDismiss = false
+        firstRoot.loadViewIfNeeded()
+        finalRoot?.loadViewIfNeeded()
+        firstRoot.beginAppearanceTransition(true, animated: false)
+        firstRoot.endAppearanceTransition()
+        finalRoot?.beginAppearanceTransition(true, animated: false)
+        finalRoot?.endAppearanceTransition()
+
+        let retirementBaseline = firstRoot.rootPresentationRetirementTaskCompletionCountForTesting
+        firstRoot.finishRootPresentationLifecycleForTesting()
+        #expect(
+            await firstRoot.waitForRootPresentationRetirementTaskCompletionForTesting(
+                after: retirementBaseline
+            )
+        )
+        #expect(session.detachCountForTesting == 0)
+
+        finalRoot = nil
+        let replacementRoot = WebInspectorViewController(session: session)
+        replacementRoot.automaticallyDetachesOnDismiss = false
+        replacementRoot.loadViewIfNeeded()
+        replacementRoot.beginAppearanceTransition(true, animated: false)
+        replacementRoot.endAppearanceTransition()
+        await Task.yield()
+        #expect(session.detachCountForTesting == 0)
+
+        let replacementBaseline = replacementRoot.rootPresentationRetirementTaskCompletionCountForTesting
+        replacementRoot.finishRootPresentationLifecycleForTesting()
+        #expect(
+            await replacementRoot.waitForRootPresentationRetirementTaskCompletionForTesting(
+                after: replacementBaseline
+            )
+        )
+        #expect(session.detachCountForTesting == 1)
+    }
+
+    @Test
+    func deinitAndScheduledFinishRetirePresentationOnlyOnce() async throws {
+        let session = makeSessionWithNoOpAttachment()
+        var root: WebInspectorViewController? = WebInspectorViewController(session: session)
+        root?.loadViewIfNeeded()
+        root?.beginAppearanceTransition(true, animated: false)
+        root?.endAppearanceTransition()
+
+        root?.finishRootPresentationLifecycleForTesting()
+        root = nil
+
+        #expect(await waitUntilDetachCount(1, in: session))
+        await Task.yield()
+        await Task.yield()
+        #expect(session.detachCountForTesting == 1)
     }
 
     @Test
@@ -404,7 +632,11 @@ struct ParentContainerTests {
     @Test
     func viewControllerPreviewSessionInjectsMockDOMAndNetworkModels() throws {
         let session = WebInspectorViewControllerPreviewFixtures.makeSession()
-        let model = session.interface.networkPanelModel(for: session.context)
+        let viewController = WebInspectorViewController(session: session)
+        let model = viewController.presentationContentStoreForTesting.networkPanelModel(
+            for: session.context,
+            contextEpoch: session.interface.contextBoundContentRevision
+        )
 
         #expect(session.context.rootNode?.nodeName == "#document")
         #expect(model.displayRequests.count >= 2)
@@ -440,6 +672,7 @@ struct ParentContainerTests {
             return customViewController
         }
         let session = WebInspectorSession(tabs: [.dom, customTab, .network])
+        let contentStore = PresentationContentStore()
         let projection = WebInspectorTab.DisplayProjection()
 
         #expect(
@@ -469,12 +702,14 @@ struct ParentContainerTests {
         let compactContent = WebInspectorTab.ContentFactory.makeViewController(
             for: .customTab(customTab.id),
             session: session,
+            contentStore: contentStore,
             hostLayout: .compact,
             tabs: session.interface.tabs
         )
         let regularContent = WebInspectorTab.ContentFactory.makeViewController(
             for: .customTab(customTab.id),
             session: session,
+            contentStore: contentStore,
             hostLayout: .regular,
             tabs: session.interface.tabs
         )
@@ -485,6 +720,7 @@ struct ParentContainerTests {
         let reparentedContent = WebInspectorTab.ContentFactory.makeViewController(
             for: .customTab(customTab.id),
             session: session,
+            contentStore: contentStore,
             hostLayout: .compact,
             tabs: session.interface.tabs
         )
@@ -507,6 +743,7 @@ struct ParentContainerTests {
             customViewController
         }
         let session = WebInspectorSession(tabs: [.dom, customTab])
+        let contentStore = PresentationContentStore()
         let projection = WebInspectorTab.DisplayProjection()
         let compactDisplayItems = projection.displayItems(for: .compact, tabs: session.interface.tabs)
         let displayItemIDs = compactDisplayItems.map(\.id)
@@ -534,6 +771,7 @@ struct ParentContainerTests {
         let customContent = WebInspectorTab.ContentFactory.makeViewController(
             for: .customTab(customTab.id),
             session: session,
+            contentStore: contentStore,
             hostLayout: .compact,
             tabs: session.interface.tabs
         )
@@ -624,16 +862,59 @@ struct ParentContainerTests {
     }
 
     @Test
+    func elementPickerActivationKeepsPresentationVisible() async throws {
+        let fixture = try await makeLiveSession()
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
+
+        let presenter = UIViewController()
+        let viewController = WebInspectorViewController(session: fixture.session)
+        viewController.horizontalSizeClassOverrideForTesting = .regular
+        let window = showInWindow(presenter)
+        defer { window.isHidden = true }
+
+        presenter.present(viewController, animated: false)
+        #expect(presenter.presentedViewController === viewController)
+
+        let host = try #require(
+            viewController.activeHostViewControllerForTesting
+                as? RegularTabContentViewController
+        )
+        host.loadViewIfNeeded()
+        let rootViewController = try #require(host.viewControllers.first)
+        rootViewController.loadViewIfNeeded()
+        let splitViewController = try childViewController(
+            ofType: DOMSplitViewController.self,
+            in: rootViewController
+        )
+        splitViewController.loadViewIfNeeded()
+        let navigationItems = try #require(
+            splitViewController.domNavigationItemsForTesting
+        )
+        var statusUpdates = fixture.context.statusUpdates.makeAsyncIterator()
+
+        navigationItems.performToggleElementPickerCommand()
+        while fixture.context.isElementPickerEnabled == false,
+              let status = await statusUpdates.next(),
+              status.isElementPickerEnabled == false {}
+
+        #expect(fixture.context.isElementPickerEnabled)
+        #expect(presenter.presentedViewController === viewController)
+        #expect(fixture.session.detachCountForTesting == 0)
+    }
+
+    @Test
     func rootPresentationFallbacksDetachOnlyOnce() async throws {
         let session = makeSessionWithNoOpAttachment()
+        let viewController = WebInspectorViewController(session: session)
+        let contentStore = viewController.presentationContentStoreForTesting
         _ = WebInspectorTab.ContentFactory.makeViewController(
             for: .dom,
             session: session,
+            contentStore: contentStore,
             hostLayout: .compact
         )
-        let viewController = WebInspectorViewController(session: session)
         viewController.loadViewIfNeeded()
-        #expect(session.interface.contentCacheCountForTesting > 0)
+        #expect(contentStore.contentCountForTesting > 0)
         let contentRevisionBeforeRetirement = session.interface.contextBoundContentRevision
 
         viewController.finishRootPresentationLifecycleForTesting()
@@ -641,7 +922,7 @@ struct ParentContainerTests {
         viewController.finishRootPresentationLifecycleForTesting()
 
         #expect(session.detachCountForTesting == 1)
-        #expect(session.interface.contentCacheCountForTesting == 0)
+        #expect(contentStore.contentCountForTesting == 0)
         #expect(session.interface.contextBoundContentRevision > contentRevisionBeforeRetirement)
     }
 
@@ -649,56 +930,60 @@ struct ParentContainerTests {
     func hiddenNavigationControllerRemovalFinishesRootPresentationLifecycle() async throws {
         let tab = makeNoOpTab(id: "webinspector_test_lifecycle_hidden")
         let session = makeSessionWithNoOpAttachment(tabs: [tab])
+        let viewController = WebInspectorViewController(session: session)
+        let contentStore = viewController.presentationContentStoreForTesting
         _ = WebInspectorTab.ContentFactory.makeViewController(
             for: .customTab(tab.id),
             session: session,
+            contentStore: contentStore,
             hostLayout: .compact,
             tabs: session.interface.tabs
         )
-        let viewController = WebInspectorViewController(session: session)
         let navigationController = UINavigationController(rootViewController: viewController)
         let window = showInWindow(navigationController)
         defer { window.isHidden = true }
 
         #expect(navigationController.view.window === window)
-        #expect(session.interface.contentCacheCountForTesting > 0)
+        #expect(contentStore.contentCountForTesting > 0)
 
         let coveringViewController = UIViewController()
         navigationController.pushViewController(coveringViewController, animated: false)
         #expect(navigationController.topViewController === coveringViewController)
         #expect(session.detachCountForTesting == 0)
-        #expect(session.interface.contentCacheCountForTesting > 0)
+        #expect(contentStore.contentCountForTesting > 0)
 
         window.rootViewController = UIViewController()
         window.layoutIfNeeded()
         #expect(navigationController.view.window == nil)
         #expect(await waitUntilDetachCount(1, in: session))
-        #expect(session.interface.contentCacheCountForTesting == 0)
+        #expect(contentStore.contentCountForTesting == 0)
     }
 
     @Test
     func directWindowRootRemovalFinishesRootPresentationLifecycle() async throws {
         let tab = makeNoOpTab(id: "webinspector_test_lifecycle_direct")
         let session = makeSessionWithNoOpAttachment(tabs: [tab])
+        let viewController = WebInspectorViewController(session: session)
+        let contentStore = viewController.presentationContentStoreForTesting
         _ = WebInspectorTab.ContentFactory.makeViewController(
             for: .customTab(tab.id),
             session: session,
+            contentStore: contentStore,
             hostLayout: .compact,
             tabs: session.interface.tabs
         )
-        let viewController = WebInspectorViewController(session: session)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
         #expect(viewController.view.window === window)
-        #expect(session.interface.contentCacheCountForTesting > 0)
+        #expect(contentStore.contentCountForTesting > 0)
 
         window.rootViewController = UIViewController()
         window.layoutIfNeeded()
 
         #expect(viewController.view.window == nil)
         #expect(await waitUntilDetachCount(1, in: session))
-        #expect(session.interface.contentCacheCountForTesting == 0)
+        #expect(contentStore.contentCountForTesting == 0)
     }
 
     @Test
@@ -723,20 +1008,22 @@ struct ParentContainerTests {
     @Test
     func interactiveDismissCancelDoesNotDetachOrDropContentCache() async throws {
         let session = makeSessionWithNoOpAttachment()
+        let viewController = WebInspectorViewController(session: session)
+        let contentStore = viewController.presentationContentStoreForTesting
         _ = WebInspectorTab.ContentFactory.makeViewController(
             for: .network,
             session: session,
+            contentStore: contentStore,
             hostLayout: .compact
         )
-        let viewController = WebInspectorViewController(session: session)
         viewController.loadViewIfNeeded()
-        let cacheCountBeforeCancel = session.interface.contentCacheCountForTesting
+        let cacheCountBeforeCancel = contentStore.contentCountForTesting
 
         viewController.finishRootPresentationLifecycleForTesting(cancelled: true)
 
         #expect(session.detachCountForTesting == 0)
         #expect(viewController.hasFinishedRootPresentationLifecycleForTesting == false)
-        #expect(session.interface.contentCacheCountForTesting == cacheCountBeforeCancel)
+        #expect(contentStore.contentCountForTesting == cacheCountBeforeCancel)
     }
 
     @Test
@@ -763,20 +1050,23 @@ struct ParentContainerTests {
     @Test
     func rootDismissDropsContentCacheWithoutAutomaticDetach() async throws {
         let session = makeSessionWithNoOpAttachment()
+        let viewController = WebInspectorViewController(session: session)
+        let contentStore = viewController.presentationContentStoreForTesting
         _ = WebInspectorTab.ContentFactory.makeViewController(
             for: .dom,
             session: session,
+            contentStore: contentStore,
             hostLayout: .compact
         )
         _ = WebInspectorTab.ContentFactory.makeViewController(
             for: .network,
             session: session,
+            contentStore: contentStore,
             hostLayout: .regular
         )
-        let viewController = WebInspectorViewController(session: session)
         viewController.automaticallyDetachesOnDismiss = false
         viewController.loadViewIfNeeded()
-        #expect(session.interface.contentCacheCountForTesting > 0)
+        #expect(contentStore.contentCountForTesting > 0)
         let contentRevisionBeforeRetirement = session.interface.contextBoundContentRevision
 
         let retirementBaseline = viewController.rootPresentationRetirementTaskCompletionCountForTesting
@@ -784,8 +1074,80 @@ struct ParentContainerTests {
         #expect(await viewController.waitForRootPresentationRetirementTaskCompletionForTesting(after: retirementBaseline))
 
         #expect(session.detachCountForTesting == 0)
-        #expect(session.interface.contentCacheCountForTesting == 0)
+        #expect(contentStore.contentCountForTesting == 0)
         #expect(session.interface.contextBoundContentRevision == contentRevisionBeforeRetirement)
+    }
+
+    @Test
+    func presentationEndSupersedesPendingElementPickerEnable() async throws {
+        let fixture = try await makeLiveSession()
+        let context = fixture.context
+        let enableGate = WebInspectorTestGate()
+
+        await fixture.runtime.backend.hold(
+            domain: "DOM",
+            method: "setInspectModeEnabled",
+            gate: enableGate
+        )
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "hideHighlight")
+
+        let enableTask = Task { @MainActor in
+            try await context.setElementPickerEnabled(true)
+        }
+        _ = await fixture.runtime.backend.waitForRecordedCommands(
+            domain: "DOM",
+            method: "setInspectModeEnabled",
+            count: 1
+        )
+        let enableDesiredStateID = try #require(context.elementPickerDesiredStateForTesting?.id)
+
+        let raceRecorder = PickerShutdownRaceRecorder()
+        let retirementTask = Task { @MainActor in
+            await fixture.session.retireRootPresentation(detach: false)
+            await raceRecorder.record(.retirementCompleted)
+        }
+        let desiredStateObservationTask = Task { @MainActor in
+            while context.elementPickerDesiredStateForTesting?.id == enableDesiredStateID
+                || context.elementPickerDesiredStateForTesting?.isEnabled != false {
+                guard Task.isCancelled == false else {
+                    return
+                }
+                await Task.yield()
+            }
+            await raceRecorder.record(.shutdownIntentRegistered)
+        }
+        let raceResult = await raceRecorder.waitForResult()
+        await enableGate.open()
+        desiredStateObservationTask.cancel()
+
+        try await enableTask.value
+        await retirementTask.value
+        await desiredStateObservationTask.value
+
+        #expect(raceResult == .shutdownIntentRegistered)
+        let pickerCommands = await fixture.runtime.backend.recordedCommands().filter {
+            $0.domain == "DOM" && $0.method == "setInspectModeEnabled"
+        }
+        #expect(pickerCommands.compactMap {
+            $0.payload.cast(as: DOM.SetInspectModeEnabledPayload.self)?.enabled
+        } == [true, false])
+        #expect(context.isElementPickerEnabled == false)
+    }
+
+    @Test
+    func presentationEndWithDisabledElementPickerSendsNoPickerCommand() async throws {
+        let fixture = try await makeLiveSession()
+        await fixture.runtime.backend.enqueue((), for: "DOM", method: "hideHighlight")
+
+        await fixture.session.retireRootPresentation(detach: false)
+
+        let pickerCommands = await fixture.runtime.backend.recordedCommands().filter {
+            $0.domain == "DOM" && $0.method == "setInspectModeEnabled"
+        }
+        #expect(pickerCommands.isEmpty)
+        #expect(fixture.context.isElementPickerEnabled == false)
     }
 
     @Test
@@ -824,10 +1186,12 @@ struct ParentContainerTests {
     @Test
     func compactFactoryUsesDomainNavigationControllers() throws {
         let session = WebInspectorSession(context: makeContext())
+        let contentStore = PresentationContentStore()
 
         let domViewController = WebInspectorTab.ContentFactory.makeViewController(
             for: .dom,
             session: session,
+            contentStore: contentStore,
             hostLayout: .compact
         )
         let domNavigationController = try #require(domViewController as? DOMCompactNavigationController)
@@ -836,6 +1200,7 @@ struct ParentContainerTests {
         let elementViewController = WebInspectorTab.ContentFactory.makeViewController(
             for: .domElement(parent: WebInspectorTab.dom.id),
             session: session,
+            contentStore: contentStore,
             hostLayout: .compact
         )
         let elementNavigationController = try #require(elementViewController as? DOMCompactNavigationController)
@@ -844,6 +1209,7 @@ struct ParentContainerTests {
         let networkViewController = WebInspectorTab.ContentFactory.makeViewController(
             for: .network,
             session: session,
+            contentStore: contentStore,
             hostLayout: .compact
         )
         let networkNavigationController = try #require(networkViewController as? NetworkCompactNavigationController)
@@ -873,9 +1239,11 @@ struct ParentContainerTests {
     @Test
     func cachedDOMTreeControllerIsSharedAcrossCompactAndRegularHosts() throws {
         let session = WebInspectorSession()
+        let contentStore = PresentationContentStore()
         let compactViewController = WebInspectorTab.ContentFactory.makeViewController(
             for: .dom,
             session: session,
+            contentStore: contentStore,
             hostLayout: .compact
         )
         let compactNavigationController = try #require(compactViewController as? DOMCompactNavigationController)
@@ -886,6 +1254,7 @@ struct ParentContainerTests {
         let regularRoot = WebInspectorTab.ContentFactory.makeViewController(
             for: .dom,
             session: session,
+            contentStore: contentStore,
             hostLayout: .regular
         )
         regularRoot.loadViewIfNeeded()
@@ -908,17 +1277,22 @@ struct ParentContainerTests {
     func networkPanelModelSelectionIsSharedAcrossParentHosts() async throws {
         let context = makeContext()
         let session = WebInspectorSession(context: context)
+        let contentStore = PresentationContentStore()
         let requestID = await applyRequest(
             to: context,
             requestID: "1",
             url: "https://example.com/app.js"
         )
         let request = try #require(context.registeredRequest(for: requestID))
-        let model = session.interface.networkPanelModel(for: context)
+        let model = contentStore.networkPanelModel(
+            for: context,
+            contextEpoch: session.interface.contextBoundContentRevision
+        )
         let compactNavigationController = try #require(
             WebInspectorTab.ContentFactory.makeViewController(
                 for: .network,
                 session: session,
+                contentStore: contentStore,
                 hostLayout: .compact
             ) as? NetworkCompactNavigationController
         )
@@ -935,6 +1309,7 @@ struct ParentContainerTests {
         let regularRoot = WebInspectorTab.ContentFactory.makeViewController(
             for: .network,
             session: session,
+            contentStore: contentStore,
             hostLayout: .regular
         )
         regularRoot.loadViewIfNeeded()
@@ -1079,6 +1454,54 @@ struct ParentContainerTests {
     private func makeFakeContainer() async throws -> WebInspectorContainer {
         let runtime = try await WebInspectorProxyTestRuntime.start()
         return WebInspectorContainer(proxy: runtime.proxy)
+    }
+
+    private struct LiveSessionFixture {
+        var runtime: WebInspectorProxyTestRuntime
+        var container: WebInspectorContainer
+        var context: WebInspectorContext
+        var session: WebInspectorSession
+    }
+
+    private func makeLiveSession() async throws -> LiveSessionFixture {
+        let runtime = try await WebInspectorProxyTestRuntime.start()
+        let target = try await runtime.proxy.waitForCurrentPage()
+        await runtime.backend.enqueue((), for: "Inspector", method: "enable")
+        await runtime.backend.enqueue((), for: "Inspector", method: "initialized")
+        await runtime.backend.enqueue((), for: "Page", method: "enable")
+        await runtime.backend.enqueue((), for: "Runtime", method: "enable")
+        await runtime.backend.enqueue((), for: "Page", method: "enable")
+        await runtime.backend.enqueue((), for: "Network", method: "enable")
+        await runtime.backend.enqueue(
+            DOM.Node(id: DOM.Node.ID("presentation-document"), nodeType: 9, nodeName: "#document"),
+            for: "DOM",
+            method: "getDocument"
+        )
+        await runtime.backend.enqueue((), for: "Console", method: "enable")
+
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
+        try await runtime.backend.waitForSubscribers(domain: "Inspector", target: target, count: 1)
+        try await runtime.backend.waitForSubscribers(domain: "CSS", target: target, count: 1)
+        try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 1)
+        try await runtime.backend.waitForSubscribers(domain: "Console", target: target, count: 1)
+        try await runtime.backend.waitForSubscribers(domain: "Runtime", target: target, count: 1)
+        if context.state != .attached {
+            for await status in context.statusUpdates {
+                if status.state == .attached {
+                    break
+                }
+                try #require(status.state == .attaching)
+            }
+        }
+        let session = WebInspectorSession(context: context)
+        return LiveSessionFixture(
+            runtime: runtime,
+            container: container,
+            context: context,
+            session: session
+        )
     }
 
     private func attach(

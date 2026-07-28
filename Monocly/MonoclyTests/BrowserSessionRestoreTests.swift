@@ -132,9 +132,19 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
+    func standardLaunchConfigurationUsesGoogleAndPersistentSessionWithoutOpeningInspector() throws {
+        let configuration = try BrowserLaunchConfiguration.resolve(environment: [:])
+
+        #expect(configuration.initialURL == URL(string: "https://www.google.com"))
+        #expect(configuration.sessionPersistenceMode == .persistent)
+        #expect(configuration.shouldAutoOpenInspector == false)
+    }
+
+    @Test
     func launchConfigurationUsesEphemeralSessionPersistenceForXCTestAndPreviews() throws {
         let testConfiguration = BrowserLaunchConfiguration.current(environment: [
-            "XCTestConfigurationFilePath": "/tmp/Monocly.xctestconfiguration"
+            "XCTestConfigurationFilePath": "/tmp/Monocly.xctestconfiguration",
+            BrowserLaunchConfiguration.inspectorFixtureURLEnvironmentKey: "http://127.0.0.1:8765/a",
         ])
         let previewConfiguration = BrowserLaunchConfiguration.current(environment: [
             "XCODE_RUNNING_FOR_PREVIEWS": "1"
@@ -142,20 +152,61 @@ struct BrowserSessionRestoreTests {
 
         #expect(testConfiguration.initialURL == URL(string: "about:blank"))
         #expect(testConfiguration.sessionPersistenceMode == .ephemeral)
+        #expect(testConfiguration.shouldAutoOpenInspector == false)
         #expect(previewConfiguration.initialURL == URL(string: "about:blank"))
         #expect(previewConfiguration.sessionPersistenceMode == .ephemeral)
+        #expect(previewConfiguration.shouldAutoOpenInspector == false)
     }
 
     @Test
-    func xctestLaunchConfigurationKeepsEnvironmentInitialURLButUsesEphemeralPersistence() throws {
-        let diagnosticURL = try #require(URL(string: "data:text/html;charset=utf-8,%3Chtml%3Etest%3C/html%3E"))
-        let configuration = BrowserLaunchConfiguration.current(environment: [
-            "XCTestConfigurationFilePath": "/tmp/Monocly.xctestconfiguration",
-            "WEBSPECTOR_INITIAL_URL": diagnosticURL.absoluteString
+    func xcodeTestOrPreviewConfigurationAllowsExplicitInitialURLWithoutChangingRuntimePolicy() throws {
+        let initialURL = try #require(URL(string: "https://test.example/initial"))
+        let configuration = BrowserLaunchConfiguration.xcodeTestOrPreview(initialURL: initialURL)
+
+        #expect(configuration.initialURL == initialURL)
+        #expect(configuration.sessionPersistenceMode == .ephemeral)
+        #expect(configuration.shouldAutoOpenInspector == false)
+    }
+
+    @Test
+    func inspectorFixtureLaunchConfigurationKeepsItsThreeRuntimeValuesAtomic() throws {
+        let fixtureURL = try #require(URL(string: "http://127.0.0.1:8765/a?visit=a1"))
+        let configuration = try BrowserLaunchConfiguration.resolve(environment: [
+            BrowserLaunchConfiguration.inspectorFixtureURLEnvironmentKey: fixtureURL.absoluteString
         ])
 
-        #expect(configuration.initialURL == diagnosticURL)
+        #expect(configuration.initialURL == fixtureURL)
         #expect(configuration.sessionPersistenceMode == .ephemeral)
+        #expect(configuration.shouldAutoOpenInspector)
+    }
+
+    @Test
+    func inspectorFixtureLaunchConfigurationAcceptsLocalhost() throws {
+        let fixtureURL = try #require(URL(string: "http://localhost:8765/a"))
+        let configuration = try BrowserLaunchConfiguration.resolve(environment: [
+            BrowserLaunchConfiguration.inspectorFixtureURLEnvironmentKey: fixtureURL.absoluteString
+        ])
+
+        #expect(configuration.initialURL == fixtureURL)
+    }
+
+    @Test
+    func inspectorFixtureLaunchConfigurationRejectsNonHTTPAndNonLoopbackURLs() {
+        #expect(throws: BrowserLaunchConfiguration.InspectorFixtureURLValidationError.requiresAbsoluteHTTPURL) {
+            try BrowserLaunchConfiguration.resolve(environment: [
+                BrowserLaunchConfiguration.inspectorFixtureURLEnvironmentKey: "https://127.0.0.1:8765/a"
+            ])
+        }
+        #expect(throws: BrowserLaunchConfiguration.InspectorFixtureURLValidationError.requiresAbsoluteHTTPURL) {
+            try BrowserLaunchConfiguration.resolve(environment: [
+                BrowserLaunchConfiguration.inspectorFixtureURLEnvironmentKey: "/a"
+            ])
+        }
+        #expect(throws: BrowserLaunchConfiguration.InspectorFixtureURLValidationError.requiresLoopbackHost) {
+            try BrowserLaunchConfiguration.resolve(environment: [
+                BrowserLaunchConfiguration.inspectorFixtureURLEnvironmentKey: "http://example.com/a"
+            ])
+        }
     }
 
     @Test
@@ -816,7 +867,7 @@ struct BrowserSessionRestoreTests {
         )
         let rootViewController = BrowserRootViewController(
             browserWindow: store,
-            launchConfiguration: BrowserLaunchConfiguration(initialURL: try #require(URL(string: "about:blank")))
+            launchConfiguration: .xcodeTestOrPreview()
         )
         rootViewController.loadViewIfNeeded()
         rootViewController.viewControllers.first?.loadViewIfNeeded()
@@ -852,7 +903,7 @@ struct BrowserSessionRestoreTests {
         let pageViewController = BrowserPageViewController(
             browserWindow: store,
             inspectorSession: WebInspectorSession(),
-            launchConfiguration: BrowserLaunchConfiguration(initialURL: initialURL),
+            launchConfiguration: .xcodeTestOrPreview(initialURL: initialURL),
             progressHideScheduler: scheduler
         )
 
@@ -894,7 +945,7 @@ struct BrowserSessionRestoreTests {
         let pageViewController = BrowserPageViewController(
             browserWindow: store,
             inspectorSession: WebInspectorSession(),
-            launchConfiguration: BrowserLaunchConfiguration(initialURL: initialURL),
+            launchConfiguration: .xcodeTestOrPreview(initialURL: initialURL),
             progressHideScheduler: ManualDelayScheduler()
         )
 
@@ -921,7 +972,7 @@ struct BrowserSessionRestoreTests {
         let pageViewController = BrowserPageViewController(
             browserWindow: store,
             inspectorSession: WebInspectorSession(),
-            launchConfiguration: BrowserLaunchConfiguration(initialURL: initialURL),
+            launchConfiguration: .xcodeTestOrPreview(initialURL: initialURL),
             progressHideScheduler: ManualDelayScheduler()
         )
 
@@ -961,7 +1012,7 @@ struct BrowserSessionRestoreTests {
         let pageViewController = BrowserPageViewController(
             browserWindow: store,
             inspectorSession: WebInspectorSession(),
-            launchConfiguration: BrowserLaunchConfiguration(initialURL: initialURL),
+            launchConfiguration: .xcodeTestOrPreview(initialURL: initialURL),
             progressHideScheduler: ManualDelayScheduler()
         )
         let navigationController = UINavigationController(rootViewController: pageViewController)
@@ -998,12 +1049,72 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
+    func javaScriptDialogPresenterFollowsPresentedInspector() throws {
+        let fixture = try makeJavaScriptDialogFixture()
+        defer { fixture.cleanup() }
+
+        #expect(fixture.tab.findPresenter(for: fixture.tab.webView) === fixture.inspectorViewController)
+    }
+
+    @Test
+    func javaScriptAlertPresentedAboveInspectorCompletesFromOKAction() async throws {
+        let dialogPresenter = JavaScriptDialogPresenterSpy()
+        let fixture = try makeJavaScriptDialogFixture(dialogPresenter: dialogPresenter)
+        defer { fixture.cleanup() }
+
+        await fixture.tab.presentJavaScriptAlert(
+            message: "Fixture alert",
+            webView: fixture.tab.webView
+        )
+
+        #expect(dialogPresenter.alertMessage == "Fixture alert")
+        #expect(dialogPresenter.presenter === fixture.inspectorViewController)
+        #expect(dialogPresenter.alertCompletionCount == 1)
+    }
+
+    @Test
+    func javaScriptConfirmPresentedAboveInspectorCompletesFromCancelAction() async throws {
+        let dialogPresenter = JavaScriptDialogPresenterSpy(confirmResult: false)
+        let fixture = try makeJavaScriptDialogFixture(dialogPresenter: dialogPresenter)
+        defer { fixture.cleanup() }
+
+        let result = await fixture.tab.presentJavaScriptConfirm(
+            message: "Fixture confirm",
+            webView: fixture.tab.webView
+        )
+
+        #expect(result == false)
+        #expect(dialogPresenter.confirmMessage == "Fixture confirm")
+        #expect(dialogPresenter.presenter === fixture.inspectorViewController)
+        #expect(dialogPresenter.confirmCompletionCount == 1)
+    }
+
+    @Test
+    func javaScriptPromptPresentedAboveInspectorCompletesWithEnteredText() async throws {
+        let dialogPresenter = JavaScriptDialogPresenterSpy(promptResult: "Entered value")
+        let fixture = try makeJavaScriptDialogFixture(dialogPresenter: dialogPresenter)
+        defer { fixture.cleanup() }
+
+        let result = await fixture.tab.presentJavaScriptPrompt(
+            prompt: "Fixture prompt",
+            defaultText: "Default value",
+            webView: fixture.tab.webView
+        )
+
+        #expect(result == "Entered value")
+        #expect(dialogPresenter.prompt == "Fixture prompt")
+        #expect(dialogPresenter.defaultText == "Default value")
+        #expect(dialogPresenter.presenter === fixture.inspectorViewController)
+        #expect(dialogPresenter.promptCompletionCount == 1)
+    }
+
+    @Test
     func tabSwitchInstallsSelectedWebViewOnceAndPreservesTabIdentity() async throws {
         let fixture = try makeAttachmentLifecycleFixture()
         let pageViewController = BrowserPageViewController(
             browserWindow: fixture.browserWindow,
             inspectorSession: WebInspectorSession(),
-            launchConfiguration: BrowserLaunchConfiguration(initialURL: try #require(URL(string: "about:blank"))),
+            launchConfiguration: .xcodeTestOrPreview(),
             progressHideScheduler: ManualDelayScheduler()
         )
         var installedWebViewIDs: [ObjectIdentifier] = []
@@ -1049,7 +1160,35 @@ struct BrowserSessionRestoreTests {
         await lifecycle.waitForTransitions()
 
         #expect(actions.attachedWebViews == [fixture.firstWebView, fixture.secondWebView])
-        #expect(actions.detachCount == 0)
+        #expect(actions.events == [
+            .attach(ObjectIdentifier(fixture.firstWebView)),
+            .detach,
+            .attach(ObjectIdentifier(fixture.secondWebView))
+        ])
+    }
+
+    @Test
+    func attachmentLifecycleDetachesBeforeReplacingAttachedWebView() async throws {
+        let fixture = try makeAttachmentLifecycleFixture()
+        let actions = ControlledInspectorAttachmentActions()
+        let lifecycle = BrowserInspectorSessionAttachmentLifecycle(
+            browserWindow: fixture.browserWindow,
+            inspectorSession: WebInspectorSession(),
+            attachAction: actions.attach,
+            detachAction: actions.detach
+        )
+        lifecycle.setAttachedForTesting(to: fixture.firstWebView)
+
+        fixture.browserWindow.selectTab(id: fixture.secondTabID)
+        lifecycle.selectedWebViewDidChange(to: fixture.secondWebView)
+        await actions.waitUntilAttachStarted(count: 1)
+        actions.releaseAttach()
+        await lifecycle.waitForTransitions()
+
+        #expect(actions.events == [
+            .detach,
+            .attach(ObjectIdentifier(fixture.secondWebView))
+        ])
     }
 
     @Test
@@ -1105,12 +1244,88 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
+    func inFlightAttachmentDoesNotRetainLifecycleOwner() async throws {
+        let fixture = try makeAttachmentLifecycleFixture()
+        let actions = ControlledInspectorAttachmentActions()
+        var lifecycle: BrowserInspectorSessionAttachmentLifecycle? = BrowserInspectorSessionAttachmentLifecycle(
+            browserWindow: fixture.browserWindow,
+            inspectorSession: WebInspectorSession(),
+            attachAction: actions.attach,
+            detachAction: actions.detach
+        )
+        weak var retainedLifecycle = lifecycle
+
+        lifecycle?.request(.attached)
+        await actions.waitUntilAttachStarted(count: 1)
+
+        lifecycle = nil
+
+        #expect(retainedLifecycle == nil)
+
+        actions.releaseAttach()
+        await actions.waitUntilAttachCompleted(count: 1)
+    }
+
+    @Test
+    func lateAttachmentCompletionDoesNotStartPendingReattachmentAfterLifecycleRelease() async throws {
+        let fixture = try makeAttachmentLifecycleFixture()
+        let actions = ControlledInspectorAttachmentActions()
+        var lifecycle: BrowserInspectorSessionAttachmentLifecycle? = BrowserInspectorSessionAttachmentLifecycle(
+            browserWindow: fixture.browserWindow,
+            inspectorSession: WebInspectorSession(),
+            attachAction: actions.attach,
+            detachAction: actions.detach
+        )
+        weak var retainedLifecycle = lifecycle
+
+        lifecycle?.request(.attached)
+        await actions.waitUntilAttachStarted(count: 1)
+        fixture.browserWindow.selectTab(id: fixture.secondTabID)
+        lifecycle?.selectedWebViewDidChange(to: fixture.secondWebView)
+
+        lifecycle = nil
+        #expect(retainedLifecycle == nil)
+
+        actions.releaseAttach()
+        await actions.waitUntilAttachCompleted(count: 1)
+
+        #expect(actions.attachedWebViews == [fixture.firstWebView])
+        #expect(actions.detachCount == 0)
+    }
+
+    @Test
+    func cancellingInFlightAttachmentRejectsLateCompletionAndPendingReattachment() async throws {
+        let fixture = try makeAttachmentLifecycleFixture()
+        let actions = ControlledInspectorAttachmentActions()
+        let lifecycle = BrowserInspectorSessionAttachmentLifecycle(
+            browserWindow: fixture.browserWindow,
+            inspectorSession: WebInspectorSession(),
+            attachAction: actions.attach,
+            detachAction: actions.detach
+        )
+
+        lifecycle.request(.attached)
+        await actions.waitUntilAttachStarted(count: 1)
+        fixture.browserWindow.selectTab(id: fixture.secondTabID)
+        lifecycle.selectedWebViewDidChange(to: fixture.secondWebView)
+
+        lifecycle.cancel()
+        actions.releaseAttach()
+        await actions.waitUntilAttachCompleted(count: 1)
+        lifecycle.request(.attached)
+
+        #expect(actions.attachedWebViews == [fixture.firstWebView])
+        #expect(actions.attachCompletionCount == 1)
+        #expect(actions.detachCount == 0)
+    }
+
+    @Test
     func mainSceneDelegateConnectsWithRestoredBrowserStore() throws {
         try withTemporarySessionStore { sessionStore, _ in
             let windowScene = try makeWindowScene()
             let selectedTabID = UUID()
             let restoredURL = try #require(URL(string: "https://example.com/restored"))
-            let launchConfiguration = BrowserLaunchConfiguration(
+            let launchConfiguration = BrowserLaunchConfiguration.xcodeTestOrPreview(
                 initialURL: try #require(URL(string: "https://fallback.example/"))
             )
             let snapshot = BrowserSession.Snapshot(
@@ -1147,7 +1362,7 @@ struct BrowserSessionRestoreTests {
     func mainSceneDelegateForcesSaveWhenSceneResignsActive() throws {
         try withTemporarySessionStore { sessionStore, _ in
             let windowScene = try makeWindowScene()
-            let launchConfiguration = BrowserLaunchConfiguration(
+            let launchConfiguration = BrowserLaunchConfiguration.xcodeTestOrPreview(
                 initialURL: try #require(URL(string: "https://initial.example/"))
             )
             let sceneDelegate = MonoclyMainSceneDelegate()
@@ -1176,7 +1391,7 @@ struct BrowserSessionRestoreTests {
     func mainSceneDelegateForcesSaveWhenSceneDisconnects() throws {
         try withTemporarySessionStore { sessionStore, _ in
             let windowScene = try makeWindowScene()
-            let launchConfiguration = BrowserLaunchConfiguration(
+            let launchConfiguration = BrowserLaunchConfiguration.xcodeTestOrPreview(
                 initialURL: try #require(URL(string: "https://initial.example/"))
             )
             let sceneDelegate = MonoclyMainSceneDelegate()
@@ -1256,6 +1471,56 @@ struct BrowserSessionRestoreTests {
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
         return condition()
+    }
+
+    private struct JavaScriptDialogFixture {
+        var tab: BrowserTab
+        var window: UIWindow
+        var rootViewController: UINavigationController
+        var inspectorViewController: UIViewController
+
+        func cleanup() {
+            rootViewController.dismiss(animated: false)
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+    }
+
+    private func makeJavaScriptDialogFixture(
+        dialogPresenter: any BrowserJavaScriptDialogPresenting = BrowserJavaScriptDialogPresenter()
+    ) throws -> JavaScriptDialogFixture {
+        let tab = BrowserTab(
+            url: try #require(URL(string: "about:blank")),
+            automaticallyLoadsInitialRequest: false,
+            javaScriptDialogPresenter: dialogPresenter
+        )
+        let pageViewController = UIViewController()
+        pageViewController.view.addSubview(tab.webView)
+        tab.webView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            tab.webView.leadingAnchor.constraint(equalTo: pageViewController.view.leadingAnchor),
+            tab.webView.trailingAnchor.constraint(equalTo: pageViewController.view.trailingAnchor),
+            tab.webView.topAnchor.constraint(equalTo: pageViewController.view.topAnchor),
+            tab.webView.bottomAnchor.constraint(equalTo: pageViewController.view.bottomAnchor),
+        ])
+
+        let rootViewController = UINavigationController(rootViewController: pageViewController)
+        let window = UIWindow(windowScene: try makeWindowScene())
+        window.rootViewController = rootViewController
+        window.makeKeyAndVisible()
+        rootViewController.loadViewIfNeeded()
+        window.layoutIfNeeded()
+
+        let inspectorViewController = UIViewController()
+        rootViewController.present(inspectorViewController, animated: false)
+        #expect(inspectorViewController.presentingViewController != nil)
+
+        return JavaScriptDialogFixture(
+            tab: tab,
+            window: window,
+            rootViewController: rootViewController,
+            inspectorViewController: inspectorViewController
+        )
     }
 
     private struct AttachmentLifecycleFixture {
@@ -1358,27 +1623,94 @@ struct BrowserSessionRestoreTests {
     }
 
     @MainActor
+    private final class JavaScriptDialogPresenterSpy: BrowserJavaScriptDialogPresenting {
+        private let confirmResult: Bool
+        private let promptResult: String?
+
+        private(set) weak var presenter: UIViewController?
+        private(set) var alertMessage: String?
+        private(set) var confirmMessage: String?
+        private(set) var prompt: String?
+        private(set) var defaultText: String?
+        private(set) var alertCompletionCount = 0
+        private(set) var confirmCompletionCount = 0
+        private(set) var promptCompletionCount = 0
+
+        init(confirmResult: Bool = true, promptResult: String? = nil) {
+            self.confirmResult = confirmResult
+            self.promptResult = promptResult
+        }
+
+        func presentAlert(
+            message: String,
+            from presenter: UIViewController,
+            completion: @escaping () -> Void
+        ) {
+            self.presenter = presenter
+            alertMessage = message
+            alertCompletionCount += 1
+            completion()
+        }
+
+        func presentConfirm(
+            message: String,
+            from presenter: UIViewController,
+            completion: @escaping (Bool) -> Void
+        ) {
+            self.presenter = presenter
+            confirmMessage = message
+            confirmCompletionCount += 1
+            completion(confirmResult)
+        }
+
+        func presentPrompt(
+            prompt: String,
+            defaultText: String?,
+            from presenter: UIViewController,
+            completion: @escaping (String?) -> Void
+        ) {
+            self.presenter = presenter
+            self.prompt = prompt
+            self.defaultText = defaultText
+            promptCompletionCount += 1
+            completion(promptResult)
+        }
+    }
+
+    @MainActor
     private final class ControlledInspectorAttachmentActions {
+        enum Event: Equatable {
+            case attach(ObjectIdentifier)
+            case detach
+        }
+
         private(set) var attachedWebViews: [WKWebView] = []
+        private(set) var attachCompletionCount = 0
         private(set) var detachCount = 0
+        private(set) var events: [Event] = []
         private var attachContinuation: CheckedContinuation<Void, Never>?
         private var attachResult: Result<Void, any Error> = .success(())
         private var attachStartedWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+        private var attachCompletedWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
         private var detachWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
 
-        func attach(_ inspectorSession: WebInspectorSession, _ webView: WKWebView) async throws {
+        func attach(_ webView: WKWebView) async throws {
             attachedWebViews.append(webView)
+            events.append(.attach(ObjectIdentifier(webView)))
             resumeAttachStartedWaiters()
             await withCheckedContinuation { continuation in
                 attachContinuation = continuation
             }
+            attachCompletionCount += 1
+            resumeAttachCompletedWaiters()
             let result = attachResult
             attachResult = .success(())
             try result.get()
         }
 
-        func detach(_ inspectorSession: WebInspectorSession) async {
+        func detach() async {
             detachCount += 1
+            events.append(.detach)
             resumeDetachWaiters()
         }
 
@@ -1388,6 +1720,15 @@ struct BrowserSessionRestoreTests {
             }
             await withCheckedContinuation { continuation in
                 attachStartedWaiters.append((count, continuation))
+            }
+        }
+
+        func waitUntilAttachCompleted(count: Int) async {
+            guard attachCompletionCount < count else {
+                return
+            }
+            await withCheckedContinuation { continuation in
+                attachCompletedWaiters.append((count, continuation))
             }
         }
 
@@ -1410,6 +1751,14 @@ struct BrowserSessionRestoreTests {
         private func resumeAttachStartedWaiters() {
             let readyWaiters = attachStartedWaiters.filter { attachedWebViews.count >= $0.0 }
             attachStartedWaiters.removeAll { attachedWebViews.count >= $0.0 }
+            for waiter in readyWaiters {
+                waiter.1.resume()
+            }
+        }
+
+        private func resumeAttachCompletedWaiters() {
+            let readyWaiters = attachCompletedWaiters.filter { attachCompletionCount >= $0.0 }
+            attachCompletedWaiters.removeAll { attachCompletionCount >= $0.0 }
             for waiter in readyWaiters {
                 waiter.1.resume()
             }

@@ -6,7 +6,12 @@ import WebInspectorProxyKitTesting
 func webInspectorDataKitPublicSurfaceIsUsableFromConsumerPackage() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let owner = ContractDataKitActor(runtime: runtime)
-    try await owner.start()
-    try await owner.assertPublicSurfaceIsUsable()
+    do {
+        try await owner.start()
+        try await owner.assertPublicSurfaceIsUsable()
+    } catch {
+        await owner.close()
+        throw error
+    }
     await owner.close()
 }

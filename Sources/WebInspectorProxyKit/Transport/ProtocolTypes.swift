@@ -113,42 +113,6 @@ package extension ProtocolTarget {
             }
         }
 
-        package static func resolved(for kind: Kind, domainNames: [String]?) -> Self {
-            guard let domainNames else {
-                return protocolDefault(for: kind)
-            }
-
-            let advertised = Self(domainNames: domainNames)
-            guard kind == .page else {
-                return advertised
-            }
-            return protocolDefault(for: kind).union(advertised)
-        }
-
-        package init(domainNames: [String]) {
-            var capabilities: Self = []
-            for domainName in domainNames {
-                switch domainName.lowercased() {
-                case "dom":
-                    capabilities.insert(.dom)
-                case "runtime":
-                    capabilities.insert(.runtime)
-                case "target":
-                    capabilities.insert(.target)
-                case "inspector":
-                    capabilities.insert(.inspector)
-                case "network":
-                    capabilities.insert(.network)
-                case "css":
-                    capabilities.insert(.css)
-                case "console":
-                    capabilities.insert(.console)
-                default:
-                    break
-                }
-            }
-            self = capabilities
-        }
     }
 }
 

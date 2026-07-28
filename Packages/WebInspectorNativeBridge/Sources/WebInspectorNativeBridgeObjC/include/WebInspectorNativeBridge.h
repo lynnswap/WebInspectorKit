@@ -6,6 +6,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 typedef void (^WebInspectorNativeMessageHandler)(NSString *message);
 typedef void (^WebInspectorNativeFatalFailureHandler)(NSString *message);
+typedef void (^WebInspectorNativeWebContentProcessTerminationHandler)(void);
 
 typedef struct {
     uint64_t connectFrontendAddress;
@@ -29,6 +30,7 @@ typedef struct {
 
 @property (nonatomic, copy, nullable) WebInspectorNativeMessageHandler messageHandler;
 @property (nonatomic, copy, nullable) WebInspectorNativeFatalFailureHandler fatalFailureHandler;
+@property (nonatomic, copy, nullable) WebInspectorNativeWebContentProcessTerminationHandler webContentProcessTerminationHandler;
 
 - (instancetype)initWithWebView:(WKWebView *)webView NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;

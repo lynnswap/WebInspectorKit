@@ -5,6 +5,59 @@ import WebInspectorProxyKit
 /// Observable model for a Runtime remote object.
 @Observable
 public final class RuntimeObject: WebInspectorPersistentModel {
+    struct Authority: Equatable {
+        struct Context: Equatable {
+            var id: RuntimeContext.ID
+            var identity: ObjectIdentifier
+        }
+
+        var pageGeneration: Int
+        var targetID: WebInspectorTarget.ID
+        var targetRevision: UInt64
+        var context: Context?
+        var frameID: FrameID?
+
+        func merging(_ other: Authority) -> Authority? {
+            guard pageGeneration == other.pageGeneration,
+                  targetID == other.targetID,
+                  targetRevision == other.targetRevision else {
+                return nil
+            }
+
+            let mergedContext: Context?
+            switch (context, other.context) {
+            case let (lhs?, rhs?) where lhs != rhs:
+                return nil
+            case let (lhs?, _):
+                mergedContext = lhs
+            case let (_, rhs?):
+                mergedContext = rhs
+            case (nil, nil):
+                mergedContext = nil
+            }
+
+            let mergedFrameID: FrameID?
+            switch (frameID, other.frameID) {
+            case let (lhs?, rhs?) where lhs != rhs:
+                return nil
+            case let (lhs?, _):
+                mergedFrameID = lhs
+            case let (_, rhs?):
+                mergedFrameID = rhs
+            case (nil, nil):
+                mergedFrameID = nil
+            }
+
+            return Authority(
+                pageGeneration: pageGeneration,
+                targetID: targetID,
+                targetRevision: targetRevision,
+                context: mergedContext,
+                frameID: mergedFrameID
+            )
+        }
+    }
+
     /// Stable identity for a runtime object within a context.
     public struct ID: Hashable, Sendable {
         enum Storage: Hashable, Sendable {
@@ -82,16 +135,18 @@ public final class RuntimeObject: WebInspectorPersistentModel {
     public private(set) var preview: Runtime.ObjectPreview?
 
     @ObservationIgnored weak var modelContext: WebInspectorContext?
-    @ObservationIgnored var proxyID: Runtime.RemoteObject.ID?
+    var proxyID: Runtime.RemoteObject.ID?
+    @ObservationIgnored var authority: Authority
 
     /// A Boolean value indicating whether this object has a live remote handle.
     public var canRequestProperties: Bool {
-        proxyID != nil
+        proxyID != nil && modelContext != nil
     }
 
     init(
         id: ID,
         remoteObject: Runtime.RemoteObject,
+        authority: Authority,
         modelContext: WebInspectorContext
     ) {
         self.id = id
@@ -103,29 +158,35 @@ public final class RuntimeObject: WebInspectorPersistentModel {
         size = remoteObject.size
         preview = remoteObject.preview
         proxyID = remoteObject.id
+        self.authority = authority
         self.modelContext = modelContext
     }
 
     /// Requests own property values for this object.
     public func properties(isolation: isolated (any Actor) = #isolation) async throws -> [Property] {
+        guard let modelContext else {
+            throw WebInspectorProxyError.disconnected("RuntimeObject is not registered in this WebInspectorContext.")
+        }
         guard canRequestProperties else {
             return []
-        }
-        guard let modelContext else {
-            throw WebInspectorProxyError.disconnected("RuntimeObject is not registered in a WebInspectorContext.")
         }
         return try await modelContext.properties(for: self, isolation: isolation)
     }
 
     /// Requests collection entries for this object.
     public func collectionEntries(isolation: isolated (any Actor) = #isolation) async throws -> [Entry] {
+        guard let modelContext else {
+            throw WebInspectorProxyError.disconnected("RuntimeObject is not registered in this WebInspectorContext.")
+        }
         guard canRequestProperties else {
             return []
         }
-        guard let modelContext else {
-            throw WebInspectorProxyError.disconnected("RuntimeObject is not registered in a WebInspectorContext.")
-        }
         return try await modelContext.collectionEntries(for: self, isolation: isolation)
+    }
+
+    func invalidateRemoteHandle() {
+        proxyID = nil
+        modelContext = nil
     }
 
     func update(from remoteObject: Runtime.RemoteObject) {

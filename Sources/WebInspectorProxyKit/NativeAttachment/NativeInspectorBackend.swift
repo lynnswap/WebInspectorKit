@@ -8,18 +8,21 @@ package final class NativeInspectorBackend: TransportBackend {
     private let resolvedSymbols: NativeInspectorResolvedSymbols
     private nonisolated let messageHandler: @Sendable (String) -> Void
     private nonisolated let fatalFailureHandler: @Sendable (String) -> Void
+    private nonisolated let webContentProcessTerminationHandler: @Sendable () -> Void
     private var bridge: NativeInspectorBridge?
 
     package init(
         webView: WKWebView,
         resolvedSymbols: NativeInspectorResolvedSymbols,
         messageHandler: @escaping @Sendable (String) -> Void,
-        fatalFailureHandler: @escaping @Sendable (String) -> Void = { _ in }
+        fatalFailureHandler: @escaping @Sendable (String) -> Void = { _ in },
+        webContentProcessTerminationHandler: @escaping @Sendable () -> Void = {}
     ) {
         self.webView = webView
         self.resolvedSymbols = resolvedSymbols
         self.messageHandler = messageHandler
         self.fatalFailureHandler = fatalFailureHandler
+        self.webContentProcessTerminationHandler = webContentProcessTerminationHandler
     }
 
     package func attach() throws {
@@ -29,6 +32,9 @@ package final class NativeInspectorBackend: TransportBackend {
         }
         bridge.fatalFailureHandler = { [fatalFailureHandler] message in
             fatalFailureHandler(message)
+        }
+        bridge.webContentProcessTerminationHandler = { [webContentProcessTerminationHandler] in
+            webContentProcessTerminationHandler()
         }
         try bridge.attach(with: resolvedSymbols)
         self.bridge = bridge

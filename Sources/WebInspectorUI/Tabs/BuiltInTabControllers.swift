@@ -17,6 +17,7 @@ extension WebInspectorTab {
         func makeViewController(
             for displayItem: WebInspectorTab.DisplayItem,
             session: WebInspectorSession,
+            contentStore: PresentationContentStore,
             layout: WebInspectorTab.HostLayout
         ) -> UIViewController
     }
@@ -76,11 +77,13 @@ extension WebInspectorTab {
         package static func makeViewController(
             for tab: WebInspectorTab,
             session: WebInspectorSession,
+            contentStore: PresentationContentStore,
             hostLayout: WebInspectorTab.HostLayout
         ) -> UIViewController {
             makeViewController(
                 for: .tab(tab.id),
                 session: session,
+                contentStore: contentStore,
                 hostLayout: hostLayout,
                 tabs: session.interface.tabs
             )
@@ -89,11 +92,13 @@ extension WebInspectorTab {
         package static func makeViewController(
             for displayItem: WebInspectorTab.DisplayItem,
             session: WebInspectorSession,
+            contentStore: PresentationContentStore,
             hostLayout: WebInspectorTab.HostLayout
         ) -> UIViewController {
             makeViewController(
                 for: displayItem,
                 session: session,
+                contentStore: contentStore,
                 hostLayout: hostLayout,
                 tabs: session.interface.tabs
             )
@@ -102,6 +107,7 @@ extension WebInspectorTab {
         package static func makeViewController(
             for displayItem: WebInspectorTab.DisplayItem,
             session: WebInspectorSession,
+            contentStore: PresentationContentStore,
             hostLayout: WebInspectorTab.HostLayout,
             tabs: [WebInspectorTab]
         ) -> UIViewController {
@@ -109,6 +115,7 @@ extension WebInspectorTab {
                 return catalog.controller(for: WebInspectorTab.BuiltIn.dom).makeViewController(
                     for: displayItem,
                     session: session,
+                    contentStore: contentStore,
                     layout: hostLayout
                 )
             }
@@ -126,7 +133,10 @@ extension WebInspectorTab {
             }
 
             if case let .custom(content) = tab.content {
-                let viewController = session.interface.viewController(for: customContentKey(for: tab)) {
+                let viewController = contentStore.viewController(
+                    for: customContentKey(for: tab),
+                    contextEpoch: session.interface.contextBoundContentRevision
+                ) {
                     content.makeViewController(session)
                 }
                 switch hostLayout {
@@ -145,6 +155,7 @@ extension WebInspectorTab {
             return controller.makeViewController(
                 for: displayItem,
                 session: session,
+                contentStore: contentStore,
                 layout: hostLayout
             )
         }

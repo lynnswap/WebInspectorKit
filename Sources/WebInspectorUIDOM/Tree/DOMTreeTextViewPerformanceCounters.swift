@@ -10,6 +10,7 @@ extension DOMTreeTextView {
         var resetTextFragmentViewsCallCount = 0
         var rowSpanDisplayInvalidationCallCount = 0
         var textSegmentRectsCallCount = 0
+        var updateContentDecorationsCallCount = 0
 
         func reset() {
             reloadTreeCallCount = 0
@@ -19,6 +20,7 @@ extension DOMTreeTextView {
             resetTextFragmentViewsCallCount = 0
             rowSpanDisplayInvalidationCallCount = 0
             textSegmentRectsCallCount = 0
+            updateContentDecorationsCallCount = 0
         }
     }
 }

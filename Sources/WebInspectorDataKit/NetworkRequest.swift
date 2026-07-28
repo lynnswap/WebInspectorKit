@@ -275,6 +275,34 @@ public final class WebSocketState {
 /// Observable request or response body state for a network request.
 @Observable
 public final class NetworkBody {
+    fileprivate final class ResponseFetchIdentity {}
+
+    struct ResponseRevision: Equatable, Sendable {
+        fileprivate let rawValue: UInt64
+    }
+
+    struct ResponseFetchLease {
+        fileprivate let identity: ResponseFetchIdentity
+        fileprivate let revision: ResponseRevision
+        fileprivate let completion: ReplyPromise<Void>
+    }
+
+    enum ResponseFetchAcquisition {
+        case loaded
+        case failed(WebInspectorProxyError)
+        case owner(ResponseFetchLease)
+        case waiter(ResponseFetchLease)
+    }
+
+    private struct ResponseFetch {
+        let lease: ResponseFetchLease
+        var task: Task<Void, Never>?
+    }
+
+    static let invalidatedResponseFetchError = WebInspectorProxyError.disconnected(
+        "NetworkRequest is no longer registered in its WebInspectorContext."
+    )
+
     /// The body side represented by the model.
     public enum Role: CaseIterable, Hashable, Sendable {
         /// A request body.
@@ -395,6 +423,8 @@ public final class NetworkBody {
     public private(set) var textRepresentationSyntaxKind: SyntaxKind
     @ObservationIgnored private var isBatchingTextRepresentationInvalidation: Bool
     @ObservationIgnored private var needsTextRepresentationInvalidation: Bool
+    @ObservationIgnored private var responseRevision: UInt64
+    @ObservationIgnored private var responseFetch: ResponseFetch?
 
     package init(
         role: Role = .response,
@@ -419,7 +449,16 @@ public final class NetworkBody {
         textRepresentationSyntaxKind = .plainText
         isBatchingTextRepresentationInvalidation = false
         needsTextRepresentationInvalidation = false
+        responseRevision = 0
+        responseFetch = nil
         refreshTextRepresentation()
+    }
+
+    deinit {
+        responseFetch?.lease.completion.fulfill(
+            .failure(Self.invalidatedResponseFetchError)
+        )
+        responseFetch?.task?.cancel()
     }
 
     var needsFetch: Bool {
@@ -431,6 +470,12 @@ public final class NetworkBody {
         }
     }
 
+#if DEBUG
+    package var responseFetchWaiterCountForTesting: Int {
+        responseFetch?.lease.completion.bookkeepingCountForTesting() ?? 0
+    }
+#endif
+
     func updateHints(kind: Kind, sourceSyntaxKind: SyntaxKind) {
         withTextRepresentationInvalidationBatch {
             self.kind = kind
@@ -438,8 +483,87 @@ public final class NetworkBody {
         }
     }
 
-    func markFetching() {
-        phase = .fetching
+    func acquireResponseFetch() -> ResponseFetchAcquisition {
+        precondition(role == .response, "Only a response NetworkBody can acquire a response fetch.")
+        switch phase {
+        case .loaded:
+            return .loaded
+        case let .failed(error):
+            return .failed(error)
+        case .fetching:
+            guard let responseFetch,
+                  responseFetch.lease.revision.rawValue == responseRevision else {
+                preconditionFailure("A fetching NetworkBody has no current response-fetch owner.")
+            }
+            return .waiter(responseFetch.lease)
+        case .available:
+            precondition(
+                responseFetch == nil,
+                "An available NetworkBody cannot already own a response fetch."
+            )
+            let lease = ResponseFetchLease(
+                identity: ResponseFetchIdentity(),
+                revision: ResponseRevision(rawValue: responseRevision),
+                completion: ReplyPromise<Void>()
+            )
+            responseFetch = ResponseFetch(lease: lease, task: nil)
+            phase = .fetching
+            return .owner(lease)
+        }
+    }
+
+    func installResponseFetchTask(
+        _ task: Task<Void, Never>,
+        for lease: ResponseFetchLease
+    ) {
+        guard var responseFetch,
+              responseFetch.lease.identity === lease.identity,
+              responseFetch.lease.revision == lease.revision else {
+            task.cancel()
+            return
+        }
+        precondition(
+            responseFetch.task == nil,
+            "A NetworkBody response fetch can install only one task."
+        )
+        responseFetch.task = task
+        self.responseFetch = responseFetch
+    }
+
+    func finishResponseFetch(
+        _ result: Result<Network.Body, WebInspectorProxyError>,
+        for lease: ResponseFetchLease
+    ) {
+        guard let responseFetch,
+              responseFetch.lease.identity === lease.identity,
+              responseFetch.lease.revision == lease.revision,
+              lease.revision.rawValue == responseRevision else {
+            return
+        }
+        self.responseFetch = nil
+        switch result {
+        case let .success(body):
+            load(body)
+            lease.completion.fulfill(.success(()))
+        case let .failure(error):
+            fail(error)
+            lease.completion.fulfill(.failure(error))
+        }
+    }
+
+    func invalidateResponseFetch(
+        with error: WebInspectorProxyError = NetworkBody.invalidatedResponseFetchError,
+        marksBodyFailed: Bool = true
+    ) {
+        guard let responseFetch else {
+            return
+        }
+        self.responseFetch = nil
+        if marksBodyFailed {
+            fail(error)
+        }
+        responseFetch.lease.completion.fulfill(.failure(error))
+        responseFetch.task?.cancel()
     }
 
     func load(_ body: Network.Body) {
@@ -460,6 +584,37 @@ public final class NetworkBody {
         phase = .failed(error)
     }
 
+    func resetForResponse(
+        _ response: Network.Response? = nil,
+        fallbackURL: String = ""
+    ) {
+        precondition(
+            role == .response,
+            "Only a response NetworkBody can adopt response metadata."
+        )
+        invalidateResponseFetch(marksBodyFailed: false)
+        precondition(
+            responseRevision < UInt64.max,
+            "A NetworkBody exhausted its response revision space."
+        )
+        responseRevision += 1
+        let hints = Self.bodyHints(
+            mimeType: response?.mimeType,
+            headers: response?.headers ?? [:],
+            url: response?.url ?? fallbackURL,
+            role: .response
+        )
+        withTextRepresentationInvalidationBatch {
+            kind = hints.kind
+            full = nil
+            isBase64Encoded = false
+            isTruncated = false
+            sourceSyntaxKind = hints.syntaxKind
+        }
+        size = nil
+        phase = .available
+    }
+
     static func makeRequestBody(for request: Network.Request) -> NetworkBody? {
         guard let postData = request.postData else {
             return nil
@@ -477,21 +632,6 @@ public final class NetworkBody {
             size: postData.utf8.count,
             sourceSyntaxKind: hints.syntaxKind,
             phase: .loaded
-        )
-    }
-
-    static func makeResponseBody(for response: Network.Response, fallbackURL: String = "") -> NetworkBody {
-        let hints = bodyHints(
-            mimeType: response.mimeType,
-            headers: response.headers,
-            url: response.url ?? fallbackURL,
-            role: .response
-        )
-        return NetworkBody(
-            role: .response,
-            kind: hints.kind,
-            sourceSyntaxKind: hints.syntaxKind,
-            phase: .available
         )
     }
 
@@ -642,6 +782,22 @@ public final class NetworkBody {
     }
 }
 
+/// Stable identity for one frame visit within a DataKit context.
+///
+/// WebKit may reuse a loader identifier after a back/forward navigation, so
+/// the frame/loader pair is content, not visit identity.
+package struct NetworkNavigationVisit: Hashable, Sendable {
+    package let attachmentEpoch: UInt64
+    package let frameID: FrameID
+    package let epoch: UInt64
+
+    package init(attachmentEpoch: UInt64, frameID: FrameID, epoch: UInt64) {
+        self.attachmentEpoch = attachmentEpoch
+        self.frameID = frameID
+        self.epoch = epoch
+    }
+}
+
 /// Observable model for one network request.
 @Observable
 public final class NetworkRequest: WebInspectorFetchableModel {
@@ -711,6 +867,21 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     /// The resource type reported by WebKit.
     public private(set) var resourceType: Network.ResourceType?
 
+    /// Information about what initiated the first request in this redirect chain.
+    public private(set) var initiator: Network.Initiator?
+
+    /// Immutable frame-visit membership for the current request chain.
+    package private(set) var navigationVisit: NetworkNavigationVisit?
+
+    /// Increments when WebKit reuses the protocol request ID for a new lifecycle.
+    package private(set) var lifecycleRevision: UInt64
+
+    /// Timestamp when the current request lifecycle first entered the network timeline.
+    package private(set) var logicalStartTimestamp: Double?
+
+    /// Context-local order when the current request lifecycle entered the network timeline.
+    package private(set) var chronologySequence: UInt64
+
     /// The current request lifecycle state.
     public private(set) var state: State
 
@@ -768,11 +939,12 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     /// Request body state, if the request has a body.
     public private(set) var requestBody: NetworkBody?
 
-    /// Response body state.
-    public private(set) var responseBody: NetworkBody
+    /// Response body state. Its identity is stable for this request model.
+    public let responseBody: NetworkBody
 
     @ObservationIgnored weak var modelContext: WebInspectorContext?
     @ObservationIgnored private var currentRequest: Network.Request
+    @ObservationIgnored private var allowsMultipartContinuation: Bool
 
     var proxyID: Network.Request.ID {
         id.proxyID
@@ -795,13 +967,21 @@ public final class NetworkRequest: WebInspectorFetchableModel {
 
     init(
         request: Network.Request,
+        initiator: Network.Initiator?,
+        navigationVisit: NetworkNavigationVisit? = nil,
         resourceType: Network.ResourceType?,
         timestamp: Double?,
+        chronologySequence: UInt64 = 0,
         modelContext: WebInspectorContext
     ) {
         id = ID(request.id)
         url = request.url
         method = request.method
+        self.initiator = initiator
+        self.navigationVisit = navigationVisit
+        lifecycleRevision = 0
+        logicalStartTimestamp = timestamp
+        self.chronologySequence = chronologySequence
         self.resourceType = resourceType
         state = .pending
         status = nil
@@ -822,9 +1002,12 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         redirects = []
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
         requestBody = NetworkBody.makeRequestBody(for: request)
-        responseBody = NetworkBody()
+        let responseBody = NetworkBody()
+        responseBody.resetForResponse(fallbackURL: request.url)
+        self.responseBody = responseBody
         self.modelContext = modelContext
         currentRequest = request
+        allowsMultipartContinuation = false
     }
 
     /// A Boolean value indicating whether the response body can be fetched now.
@@ -863,7 +1046,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
 
     /// Text used by Network list filtering.
     public var searchableText: String {
-        return Self.uniqueNonEmpty([
+        let currentFields: [String?] = [
             url,
             responseURL,
             Self.urlSearchText(url),
@@ -874,7 +1057,20 @@ public final class NetworkRequest: WebInspectorFetchableModel {
             mimeType,
             resourceType?.rawValue,
             resourceCategory.rawValue,
-        ])
+        ]
+        let redirectFields: [String?] = redirects.flatMap { redirect in
+            [
+                redirect.request.url,
+                Self.urlSearchText(redirect.request.url),
+                redirect.request.method,
+                redirect.response.url,
+                redirect.response.url.map(Self.urlSearchText),
+                redirect.response.status.map(String.init),
+                redirect.response.statusText,
+                redirect.response.mimeType,
+            ]
+        }
+        return Self.uniqueNonEmpty(currentFields + redirectFields)
         .joined(separator: "\n")
     }
 
@@ -884,28 +1080,79 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     }
 
     /// Fetches the response body when it is available and not already loaded.
+    ///
+    /// Concurrent callers join one protocol command. Cancelling a caller ends
+    /// only that caller's wait and does not cancel the shared response fetch.
     public func fetchResponseBody(isolation: isolated (any Actor) = #isolation) async {
-        guard canFetchResponseBody else {
-            return
+        let body = responseBody
+        if case .available = body.phase {
+            guard state == .finished else {
+                return
+            }
         }
-        let expectedBody = responseBody
-        expectedBody.markFetching()
-        guard let modelContext else {
-            expectedBody.fail(.disconnected("NetworkRequest is not registered in a WebInspectorContext."))
+
+        let lease: NetworkBody.ResponseFetchLease
+        switch body.acquireResponseFetch() {
+        case .loaded, .failed:
             return
+        case let .waiter(existingLease):
+            lease = existingLease
+        case let .owner(newLease):
+            lease = newLease
+            guard let modelContext else {
+                body.finishResponseFetch(
+                    .failure(.disconnected("NetworkRequest is not registered in a WebInspectorContext.")),
+                    for: newLease
+                )
+                return
+            }
+            let task = Task { [weak self, weak body, weak modelContext] in
+                _ = isolation
+                let result: Result<Network.Body, WebInspectorProxyError>
+                if Task.isCancelled {
+                    result = .failure(NetworkBody.invalidatedResponseFetchError)
+                } else if let self, let modelContext {
+                    result = await modelContext.responseBodyResult(
+                        for: self,
+                        isolation: isolation
+                    )
+                } else {
+                    result = .failure(NetworkBody.invalidatedResponseFetchError)
+                }
+                guard let body else {
+                    newLease.completion.fulfill(.failure(NetworkBody.invalidatedResponseFetchError))
+                    return
+                }
+                body.finishResponseFetch(result, for: newLease)
+            }
+            body.installResponseFetchTask(task, for: newLease)
         }
-        await modelContext.fetchResponseBody(for: self, expectedBody: expectedBody, isolation: isolation)
+
+        _ = try? await lease.completion.value()
+    }
+
+    func invalidateResponseBodyFetch() {
+        responseBody.invalidateResponseFetch()
     }
 
     func applyRequestWillBeSent(
         request: Network.Request,
+        initiator: Network.Initiator?,
+        navigationVisit: NetworkNavigationVisit?,
         resourceType: Network.ResourceType?,
-        timestamp: Double
+        timestamp: Double,
+        chronologySequence: UInt64
     ) {
+        precondition(lifecycleRevision < UInt64.max, "Network request lifecycle revision overflowed.")
+        lifecycleRevision += 1
         currentRequest = request
         url = request.url
         method = request.method
+        self.initiator = initiator
+        self.navigationVisit = navigationVisit
         self.resourceType = resourceType
+        logicalStartTimestamp = timestamp
+        self.chronologySequence = chronologySequence
         requestHeaders = request.headers
         status = nil
         statusText = nil
@@ -924,7 +1171,8 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         redirects = []
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
         requestBody = NetworkBody.makeRequestBody(for: request)
-        responseBody = NetworkBody()
+        responseBody.resetForResponse(fallbackURL: currentRequest.url)
+        allowsMultipartContinuation = false
         state = .pending
     }
 
@@ -961,7 +1209,8 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         encodedDataLength = 0
         metrics = nil
         requestBody = NetworkBody.makeRequestBody(for: request)
-        responseBody = NetworkBody()
+        responseBody.resetForResponse(fallbackURL: currentRequest.url)
+        allowsMultipartContinuation = false
         state = .pending
     }
 
@@ -970,6 +1219,9 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         resourceType: Network.ResourceType?,
         timestamp: Double?
     ) {
+        // WebKit emits loadingFinished only for the first multipart part. Later
+        // response/data events update that same completed request.
+        let preservesFinishedState = state == .finished && allowsMultipartContinuation
         let resolvedResourceType = resourceType ?? self.resourceType
         self.resourceType = resolvedResourceType
         if resolvedResourceType == .webSocket {
@@ -991,8 +1243,12 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         if let timestamp {
             responseReceivedTimestamp = timestamp
         }
-        responseBody = NetworkBody.makeResponseBody(for: response, fallbackURL: currentRequest.url)
-        state = .responded
+        responseBody.resetForResponse(response, fallbackURL: currentRequest.url)
+        allowsMultipartContinuation = allowsMultipartContinuation
+            || Self.isMultipartMixedReplace(response.mimeType)
+        if preservesFinishedState == false {
+            state = .responded
+        }
     }
 
     func applyDataReceived(dataLength: Int, encodedDataLength: Int, timestamp: Double) {
@@ -1022,7 +1278,13 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         state = .failed(errorText: errorText, canceled: canceled)
     }
 
-    func applyMemoryCache(response: Network.Response, resourceType: Network.ResourceType?, timestamp: Double) {
+    func applyMemoryCache(
+        response: Network.Response,
+        initiator: Network.Initiator,
+        resourceType: Network.ResourceType?,
+        timestamp: Double
+    ) {
+        self.initiator = self.initiator ?? initiator
         if let url = response.url {
             self.url = url
         }
@@ -1036,7 +1298,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         statusText = response.statusText
         responseURL = response.url
         mimeType = response.mimeType
-        responseSource = response.source?.rawValue
+        responseSource = "memory-cache"
         sourceMapURL = nil
         responseHeaders = response.headers
         if let requestHeaders = response.requestHeaders {
@@ -1053,30 +1315,25 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         metrics = nil
         redirects = []
         requestBody = NetworkBody.makeRequestBody(for: currentRequest)
-        responseBody = NetworkBody.makeResponseBody(for: response, fallbackURL: currentRequest.url)
+        responseBody.resetForResponse(response, fallbackURL: currentRequest.url)
+        allowsMultipartContinuation = false
         state = .finished
-    }
-
-    func finishResponseBodyFetch(result: Result<Network.Body, WebInspectorProxyError>, expectedBody: NetworkBody) {
-        guard responseBody === expectedBody else {
-            return
-        }
-        switch result {
-        case let .success(body):
-            expectedBody.load(body)
-        case let .failure(error):
-            expectedBody.fail(error)
-        }
     }
 
     func applyWebSocketCreated(url: String) {
         self.url = url
         currentRequest = requestWithURL(url)
         resourceType = .webSocket
+        allowsMultipartContinuation = false
         _ = ensureWebSocketState()
     }
 
-    func applyWebSocketHandshakeRequest(_ request: Network.Request, timestamp: Double?) {
+    func applyWebSocketHandshakeRequest(
+        _ request: Network.Request,
+        timestamp: Double?,
+        chronologySequence: UInt64
+    ) {
+        recordWebSocketLogicalStartIfNeeded(timestamp, chronologySequence: chronologySequence)
         let request = requestPreservingCurrentURLIfNeeded(request)
         currentRequest = request
         url = request.url
@@ -1084,7 +1341,8 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         resourceType = .webSocket
         requestHeaders = request.headers
         requestBody = NetworkBody.makeRequestBody(for: request)
-        responseBody = NetworkBody()
+        responseBody.resetForResponse(fallbackURL: currentRequest.url)
+        allowsMultipartContinuation = false
         status = nil
         statusText = nil
         responseURL = nil
@@ -1097,7 +1355,12 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         ensureWebSocketState().applyHandshakeRequest(request)
     }
 
-    func applyWebSocketHandshakeResponse(_ response: Network.Response, timestamp: Double?) {
+    func applyWebSocketHandshakeResponse(
+        _ response: Network.Response,
+        timestamp: Double?,
+        chronologySequence: UInt64
+    ) {
+        recordWebSocketLogicalStartIfNeeded(timestamp, chronologySequence: chronologySequence)
         applyResponse(response, resourceType: .webSocket, timestamp: timestamp)
         ensureWebSocketState().applyHandshakeResponse(response)
     }
@@ -1105,22 +1368,41 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     func appendWebSocketFrame(
         _ frame: Network.WebSocketFrame,
         direction: WebSocketState.FrameDirection,
-        timestamp: Double
+        timestamp: Double,
+        chronologySequence: UInt64
     ) {
+        recordWebSocketLogicalStartIfNeeded(timestamp, chronologySequence: chronologySequence)
         decodedDataLength += max(0, frame.payloadLength)
         lastDataReceivedTimestamp = timestamp
         ensureWebSocketState().appendFrame(frame, direction: direction, timestamp: timestamp)
     }
 
-    func appendWebSocketError(_ message: String, timestamp: Double) {
+    func appendWebSocketError(
+        _ message: String,
+        timestamp: Double,
+        chronologySequence: UInt64
+    ) {
+        recordWebSocketLogicalStartIfNeeded(timestamp, chronologySequence: chronologySequence)
         lastDataReceivedTimestamp = timestamp
         ensureWebSocketState().appendError(message, timestamp: timestamp)
     }
 
-    func closeWebSocket(timestamp: Double) {
+    func closeWebSocket(timestamp: Double, chronologySequence: UInt64) {
+        recordWebSocketLogicalStartIfNeeded(timestamp, chronologySequence: chronologySequence)
         ensureWebSocketState().markClosed()
         finishedOrFailedTimestamp = timestamp
         state = .finished
+    }
+
+    private func recordWebSocketLogicalStartIfNeeded(
+        _ timestamp: Double?,
+        chronologySequence: UInt64
+    ) {
+        guard logicalStartTimestamp == nil, let timestamp else {
+            return
+        }
+        logicalStartTimestamp = timestamp
+        self.chronologySequence = chronologySequence
     }
 
     private func requestPreservingCurrentURLIfNeeded(_ request: Network.Request) -> Network.Request {
@@ -1135,7 +1417,8 @@ public final class NetworkRequest: WebInspectorFetchableModel {
             postData: request.postData,
             referrerPolicy: request.referrerPolicy,
             integrity: request.integrity,
-            backendResourceIdentifier: request.backendResourceIdentifier
+            backendResourceIdentifier: request.backendResourceIdentifier,
+            origin: request.origin
         )
     }
 
@@ -1148,7 +1431,8 @@ public final class NetworkRequest: WebInspectorFetchableModel {
             postData: currentRequest.postData,
             referrerPolicy: currentRequest.referrerPolicy,
             integrity: currentRequest.integrity,
-            backendResourceIdentifier: currentRequest.backendResourceIdentifier
+            backendResourceIdentifier: currentRequest.backendResourceIdentifier,
+            origin: currentRequest.origin
         )
     }
 
@@ -1170,7 +1454,8 @@ public final class NetworkRequest: WebInspectorFetchableModel {
             postData: currentRequest.postData,
             referrerPolicy: currentRequest.referrerPolicy,
             integrity: currentRequest.integrity,
-            backendResourceIdentifier: currentRequest.backendResourceIdentifier
+            backendResourceIdentifier: currentRequest.backendResourceIdentifier,
+            origin: currentRequest.origin
         )
     }
 
@@ -1282,6 +1567,19 @@ public final class NetworkRequest: WebInspectorFetchableModel {
             .first?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() ?? ""
+    }
+
+    private static func isMultipartMixedReplace(_ mimeType: String?) -> Bool {
+        guard let mimeType else {
+            return false
+        }
+        return mimeType.utf8.elementsEqual(
+            "multipart/x-mixed-replace".utf8,
+            by: { lhs, rhs in
+                let folded = lhs >= 65 && lhs <= 90 ? lhs + 32 : lhs
+                return folded == rhs
+            }
+        )
     }
 
     private static func isPreviewableImage(mimeType: String, pathExtension: String) -> Bool {

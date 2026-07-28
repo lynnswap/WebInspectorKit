@@ -98,6 +98,12 @@ struct TransportReplyStore: Sendable {
             .compactMap { removeTargetReply(for: $0) }
     }
 
+    mutating func removeAllReplies() -> [TransportSession.PendingReply] {
+        let replies = pendingReplies
+        removeAll()
+        return replies
+    }
+
     mutating func removeTargetReplyForTimeout(_ key: TransportSession.ReplyKey) -> TransportSession.PendingReply? {
         if let record = targetReplies[key] {
             guard !record.pending.hasBufferedProvisionalResponse else {
@@ -135,6 +141,12 @@ struct TransportReplyStore: Sendable {
         from oldTargetID: ProtocolTarget.ID,
         to newTargetID: ProtocolTarget.ID
     ) {
+        let rootCommandIDs = rootReplies.keys.filter {
+            rootReplies[$0]?.targetID == oldTargetID
+        }
+        for commandID in rootCommandIDs {
+            rootReplies[commandID]?.targetID = newTargetID
+        }
         let oldKeys = targetReplies.keys.filter { $0.targetID == oldTargetID }
         for oldKey in oldKeys {
             guard var record = targetReplies.removeValue(forKey: oldKey) else {

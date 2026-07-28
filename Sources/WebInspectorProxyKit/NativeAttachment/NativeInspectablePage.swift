@@ -1,3 +1,4 @@
+import Dispatch
 import WebKit
 import WebInspectorNativeBridge
 
@@ -23,7 +24,7 @@ package struct NativeInspectorConnection: Sendable {
     }
 
     package func close() async {
-        receiver.close()
+        await receiver.close()
         await transport.detach()
         await restoreInspectabilityIfNeeded()
     }
@@ -41,6 +42,7 @@ package enum NativeInspectorConnectionFactory {
         responseTimeout: Duration?,
         fatalFailureHandler: @escaping @Sendable (String) -> Void = { _ in }
     ) async throws -> NativeInspectorConnection {
+        let protocolProfile = try WebInspectorProtocolProfile.currentWebKit()
         let resolvedSymbols = try await NativeInspectorBackendFactory.resolvedSymbolsDetached()
         return try await attach(
             to: webView,
@@ -48,6 +50,7 @@ package enum NativeInspectorConnectionFactory {
             makeTransportSession: { backend in
                 TransportSession(
                     backend: backend,
+                    protocolProfile: protocolProfile,
                     responseTimeout: responseTimeout
                 )
             },
@@ -73,13 +76,20 @@ package enum NativeInspectorConnectionFactory {
                 messageHandler: { message in
                     receiver.receive(message)
                 },
-                fatalFailureHandler: fatalFailureHandler
+                fatalFailureHandler: fatalFailureHandler,
+                webContentProcessTerminationHandler: {
+                    receiver.currentPageProcessDidTerminate()
+                }
             )
             let createdTransport = makeTransportSession(backend)
             transport = createdTransport
             receiver.setTransport(createdTransport)
 
             try backend.attach()
+            try await awaitInitialTargetDiscovery(
+                receiver: receiver,
+                transport: createdTransport
+            )
 
             return NativeInspectorConnection(
                 transport: createdTransport,
@@ -96,11 +106,32 @@ package enum NativeInspectorConnectionFactory {
                 }
             )
         } catch {
-            receiver.close()
-            page.restoreInspectabilityIfNeeded()
+            await receiver.close()
             await transport?.detach()
+            page.restoreInspectabilityIfNeeded()
             throw error
         }
+    }
+
+    /// Waits for the initial target messages queued by WebKit while attaching.
+    ///
+    /// `connectFrontend` synchronously enumerates targets but delivers its
+    /// frontend callbacks through the main queue. The queue barrier observes
+    /// that complete callback prefix. The receiver ordinal then waits for
+    /// exactly that prefix to finish mutating `TransportSession`; later live
+    /// messages do not extend attachment completion.
+    @MainActor
+    package static func awaitInitialTargetDiscovery(
+        receiver: TransportReceiver,
+        transport: TransportSession
+    ) async throws {
+        let initialTailOrdinal: UInt64 = await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                continuation.resume(returning: receiver.tailOrdinal())
+            }
+        }
+        await receiver.waitUntilDrained(through: initialTailOrdinal)
+        try await transport.requireOpen()
     }
 }
 

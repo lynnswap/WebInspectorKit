@@ -3,6 +3,26 @@
 This standalone guide records source changes that are likely to affect app code
 when upgrading WebInspectorKit. Sections are grouped by release, newest first.
 
+## Unreleased
+
+### Read Network request initiators from request events
+
+`Network.Event.requestWillBeSent` and
+`Network.Event.requestServedFromMemoryCache` now include a
+`Network.Initiator` associated value. The initiator exposes WebKit's kind and
+source location together with an optional, target-scoped `DOM.Node.ID`:
+
+```swift
+case let .requestWillBeSent(_, request, initiator, _, _, _):
+    if let nodeID = initiator.nodeID {
+        associate(request, with: nodeID)
+    }
+```
+
+WebKit can omit the node association. In particular, an unbound protocol
+`nodeId` of zero is normalized to `nil` rather than exposed as a usable DOM
+identity.
+
 ## v0.2.0
 
 These notes apply when upgrading from `v0.1.5` or earlier to `v0.2.0`.

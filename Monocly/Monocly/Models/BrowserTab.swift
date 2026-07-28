@@ -36,6 +36,7 @@ let logger = Logger(
     private var refreshControl: UIRefreshControl?
 
     @ObservationIgnored private var cancellables: Set<AnyCancellable> = []
+    @ObservationIgnored let javaScriptDialogPresenter: any BrowserJavaScriptDialogPresenting
     @ObservationIgnored private var hasLoadedInitialRequest = false
     @ObservationIgnored private(set) var initialRequestLoadCount = 0
     @ObservationIgnored var isHoldingRestoredTitle: Bool
@@ -88,7 +89,8 @@ let logger = Logger(
         createdAt: Date = Date(),
         lastUsedAt: Date = Date(),
         restoredInteractionState: Data? = nil,
-        automaticallyLoadsInitialRequest: Bool = true
+        automaticallyLoadsInitialRequest: Bool = true,
+        javaScriptDialogPresenter: any BrowserJavaScriptDialogPresenting = BrowserJavaScriptDialogPresenter()
     ) {
         self.id = id
         initialURL = url
@@ -98,6 +100,7 @@ let logger = Logger(
         self.lastUsedAt = lastUsedAt
         isHoldingRestoredTitle = title?.isEmpty == false
         self.restoredInteractionState = restoredInteractionState
+        self.javaScriptDialogPresenter = javaScriptDialogPresenter
 
         let configuration = WKWebViewConfiguration()
         configuration.allowsPictureInPictureMediaPlayback = true

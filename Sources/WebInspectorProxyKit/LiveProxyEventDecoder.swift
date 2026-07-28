@@ -1,7 +1,7 @@
 import Foundation
 
-enum LiveProxyEventDecoder {
-    static func proxyEvent(
+package enum LiveProxyEventDecoder {
+    package static func proxyEvent(
         from event: ProtocolEvent,
         targetID: WebInspectorTarget.ID,
         lifecycleTarget: WebInspectorLifecycleTarget? = nil
@@ -48,7 +48,10 @@ enum LiveProxyEventDecoder {
             ))
         case "Target.targetDestroyed":
             _ = try decode(TargetDestroyedParams.self, from: event)
-            return .targetDestroyed(targetID: targetID)
+            let destroyedTargetID = event.destroyedProvisionalTargetInCurrentPageHierarchy
+                ? event.targetID.map { WebInspectorTarget.ID($0.rawValue) } ?? targetID
+                : targetID
+            return .targetDestroyed(targetID: destroyedTargetID)
         default:
             return .unknown(rawEvent(from: event))
         }
@@ -58,7 +61,9 @@ enum LiveProxyEventDecoder {
         switch event.method {
         case "Page.frameNavigated":
             let params = try decode(PageFrameNavigatedParams.self, from: event)
-            return .frameNavigated(params.frame.proxyFrame)
+            return .frameNavigated(params.frame.proxyFrame(
+                pageBindingID: event.pageBindingTargetID?.rawValue
+            ))
         case "Page.frameDetached":
             let params = try decode(PageFrameDetachedParams.self, from: event)
             return .frameDetached(frameID: FrameID(params.frameId))
@@ -85,7 +90,7 @@ enum LiveProxyEventDecoder {
             let params = try decode(ChildNodeInsertedParams.self, from: event)
             return try .childNodeInserted(
                 parent: DOM.Node.ID(params.parentNodeId),
-                previous: params.previousNodeId.map(DOM.Node.ID.init),
+                previous: params.previousNodeID,
                 node: params.node.proxyNode()
             )
         case "DOM.childNodeRemoved":
@@ -130,13 +135,7 @@ enum LiveProxyEventDecoder {
         switch event.method {
         case "Inspector.inspect":
             let params = try decode(InspectorInspectParams.self, from: event)
-            let origin = event.targetID.map {
-                Inspector.EventOrigin(
-                    targetID: WebInspectorTarget.ID($0.rawValue),
-                    route: RoutingTargetID($0.rawValue)
-                )
-            }
-            return .inspect(params.object.proxyObject, hints: params.hints?.proxyValue, origin: origin)
+            return .inspect(params.object.proxyObject, hints: params.hints?.proxyValue)
         default:
             return .unknown(rawEvent(from: event))
         }
@@ -171,8 +170,14 @@ enum LiveProxyEventDecoder {
                 id: Network.Request.ID(params.requestId),
                 request: params.request.proxyRequest(
                     id: params.requestId,
-                    backendResourceIdentifier: params.backendResourceIdentifier?.proxyIdentifier
+                    backendResourceIdentifier: params.backendResourceIdentifier?.proxyIdentifier,
+                    origin: Network.Request.Origin(
+                        frameID: FrameID(params.frameId),
+                        loaderID: params.loaderId,
+                        targetID: event.networkOriginTargetID?.rawValue
+                    )
                 ),
+                initiator: params.initiator.proxyInitiator,
                 resourceType: params.type.map(Network.ResourceType.init(rawValue:)),
                 redirectResponse: params.redirectResponse?.proxyResponse(fallbackURL: params.request.url),
                 timestamp: params.timestamp
@@ -181,7 +186,14 @@ enum LiveProxyEventDecoder {
             let params = try decode(ResponseReceivedParams.self, from: event)
             return .responseReceived(
                 id: Network.Request.ID(params.requestId),
-                response: params.response.proxyResponse(fallbackURL: nil),
+                response: params.response.proxyResponse(
+                    fallbackURL: nil,
+                    origin: Network.Request.Origin(
+                        frameID: FrameID(params.frameId),
+                        loaderID: params.loaderId,
+                        targetID: event.networkOriginTargetID?.rawValue
+                    )
+                ),
                 resourceType: params.type.map(Network.ResourceType.init(rawValue:)),
                 timestamp: params.timestamp
             )
@@ -211,9 +223,15 @@ enum LiveProxyEventDecoder {
             )
         case "Network.requestServedFromMemoryCache":
             let params = try decode(RequestServedFromMemoryCacheParams.self, from: event)
+            let origin = Network.Request.Origin(
+                frameID: FrameID(params.frameId),
+                loaderID: params.loaderId,
+                targetID: event.networkOriginTargetID?.rawValue
+            )
             return .requestServedFromMemoryCache(
                 id: Network.Request.ID(params.requestId),
-                response: params.resource.proxyResponse,
+                response: params.resource.proxyResponse(origin: origin),
+                initiator: params.initiator.proxyInitiator,
                 resourceType: Network.ResourceType(rawValue: params.resource.type),
                 timestamp: params.timestamp
             )
@@ -333,10 +351,11 @@ private struct PageFramePayload: Decodable {
     var securityOrigin: String?
     var mimeType: String?
 
-    var proxyFrame: WebInspectorPageFrameLifecycle {
+    func proxyFrame(pageBindingID: String?) -> WebInspectorPageFrameLifecycle {
         WebInspectorPageFrameLifecycle(
             id: FrameID(id),
             parentID: parentId.map(FrameID.init),
+            pageBindingID: pageBindingID,
             loaderID: loaderId,
             name: name,
             url: url,
@@ -377,8 +396,12 @@ private struct SetChildNodesParams: Decodable {
 
 private struct ChildNodeInsertedParams: Decodable {
     var parentNodeId: String
-    var previousNodeId: String?
+    var previousNodeId: String
     var node: ProtocolDOMNodePayload
+
+    var previousNodeID: DOM.Node.ID? {
+        previousNodeId == "0" ? nil : DOM.Node.ID(previousNodeId)
+    }
 
     private enum CodingKeys: String, CodingKey {
         case parentNodeId
@@ -389,7 +412,7 @@ private struct ChildNodeInsertedParams: Decodable {
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         parentNodeId = try container.decodeStringOrInteger(forKey: .parentNodeId)
-        previousNodeId = try container.decodeStringOrIntegerIfPresent(forKey: .previousNodeId)
+        previousNodeId = try container.decodeStringOrInteger(forKey: .previousNodeId)
         node = try container.decode(ProtocolDOMNodePayload.self, forKey: .node)
     }
 }
@@ -639,7 +662,10 @@ private struct StyleSheetHeaderPayload: Decodable {
 
 private struct RequestWillBeSentParams: Decodable {
     var requestId: String
+    var frameId: String
+    var loaderId: String
     var request: RequestPayload
+    var initiator: InitiatorPayload
     var type: String?
     var redirectResponse: ResponsePayload?
     var timestamp: Double
@@ -657,6 +683,8 @@ private struct BackendResourceIdentifierPayload: Decodable {
 
 private struct ResponseReceivedParams: Decodable {
     var requestId: String
+    var frameId: String
+    var loaderId: String
     var type: String?
     var response: ResponsePayload
     var timestamp: Double
@@ -685,8 +713,55 @@ private struct LoadingFailedParams: Decodable {
 
 private struct RequestServedFromMemoryCacheParams: Decodable {
     var requestId: String
+    var frameId: String
+    var loaderId: String
+    var documentURL: String
     var timestamp: Double
+    var initiator: InitiatorPayload
     var resource: CachedResourcePayload
+}
+
+private struct InitiatorPayload: Decodable {
+    var type: String
+    var url: String?
+    var lineNumber: Double?
+    var nodeId: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case url
+        case lineNumber
+        case nodeId
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        type = try container.decode(String.self, forKey: .type)
+        url = try container.decodeIfPresent(String.self, forKey: .url)
+        lineNumber = try container.decodeIfPresent(Double.self, forKey: .lineNumber)
+        guard container.contains(.nodeId) else {
+            nodeId = nil
+            return
+        }
+        let rawNodeID = try container.decodeStringOrInteger(forKey: .nodeId)
+        guard let numericNodeID = Int64(rawNodeID) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .nodeId,
+                in: container,
+                debugDescription: "Network initiator nodeId must be an integer."
+            )
+        }
+        nodeId = numericNodeID > 0 ? rawNodeID : nil
+    }
+
+    var proxyInitiator: Network.Initiator {
+        Network.Initiator(
+            kind: type,
+            url: url,
+            line: lineNumber.map(Int.init),
+            nodeID: nodeId.map(DOM.Node.ID.init)
+        )
+    }
 }
 
 private struct RequestPayload: Decodable {
@@ -699,7 +774,8 @@ private struct RequestPayload: Decodable {
 
     func proxyRequest(
         id: String,
-        backendResourceIdentifier: Network.BackendResourceID? = nil
+        backendResourceIdentifier: Network.BackendResourceID? = nil,
+        origin: Network.Request.Origin? = nil
     ) -> Network.Request {
         Network.Request(
             id: Network.Request.ID(id),
@@ -709,7 +785,8 @@ private struct RequestPayload: Decodable {
             postData: postData,
             referrerPolicy: referrerPolicy.map(Network.ReferrerPolicy.init(rawValue:)),
             integrity: integrity,
-            backendResourceIdentifier: backendResourceIdentifier
+            backendResourceIdentifier: backendResourceIdentifier,
+            origin: origin
         )
     }
 }
@@ -723,7 +800,11 @@ private struct ResponsePayload: Decodable {
     var source: String?
     var requestHeaders: [String: String]?
 
-    func proxyResponse(fallbackURL: String?, bodySize: Int? = nil) -> Network.Response {
+    func proxyResponse(
+        fallbackURL: String?,
+        bodySize: Int? = nil,
+        origin: Network.Request.Origin? = nil
+    ) -> Network.Response {
         Network.Response(
             url: url ?? fallbackURL,
             status: status,
@@ -732,7 +813,8 @@ private struct ResponsePayload: Decodable {
             headers: headers ?? [:],
             source: source.map(Network.Source.init(rawValue:)),
             requestHeaders: requestHeaders,
-            bodySize: bodySize
+            bodySize: bodySize,
+            origin: origin
         )
     }
 }
@@ -767,9 +849,9 @@ private struct CachedResourcePayload: Decodable {
     var bodySize: Int?
     var response: ResponsePayload?
 
-    var proxyResponse: Network.Response {
-        response?.proxyResponse(fallbackURL: url, bodySize: bodySize)
-            ?? Network.Response(url: url, bodySize: bodySize)
+    func proxyResponse(origin: Network.Request.Origin) -> Network.Response {
+        response?.proxyResponse(fallbackURL: url, bodySize: bodySize, origin: origin)
+            ?? Network.Response(url: url, bodySize: bodySize, origin: origin)
     }
 }
 

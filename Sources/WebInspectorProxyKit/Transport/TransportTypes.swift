@@ -121,12 +121,40 @@ package struct ProtocolCommand: Equatable, Sendable {
     }
 }
 
+package struct ProtocolOrderedEventFeed: Sendable {
+    package var initialSequence: UInt64
+    package var events: AsyncStream<ProtocolEvent>
+}
+
+package enum ProtocolNetworkPageMembership: Equatable, Sendable {
+    case currentPage
+    case otherPage
+    case unresolved
+}
+
 package struct ProtocolEvent: Equatable, Sendable {
     package var sequence: UInt64
     package var domain: ProtocolDomain
     package var method: String
     package var targetID: ProtocolTarget.ID?
+    package var targetRecord: ProtocolTarget.Record?
+    package var belongedToCurrentPage: Bool
+    package var agentScopeTargetID: ProtocolTarget.ID?
     package var sourceTargetID: ProtocolTarget.ID?
+    package var pageBindingTargetID: ProtocolTarget.ID?
+    package var networkOriginTargetID: ProtocolTarget.ID?
+    /// Stable request scope captured when a root Network request first
+    /// arrives. `targetID` may move to a committed target so routing remains
+    /// live, while this scope keeps the externally projected request ID stable.
+    package var networkScopeTargetID: ProtocolTarget.ID?
+    /// Event-time current-page membership for latest root Network delivery.
+    /// Target commits can remove the original record before a subscriber
+    /// evaluates the event, so membership cannot be reconstructed later.
+    package var networkPageMembership: ProtocolNetworkPageMembership?
+    /// Root Page events in WebKit 625 are emitted by a page-bound
+    /// `ProxyingPageAgent`, so current-page membership is known even when the
+    /// corresponding frame target has not arrived yet.
+    package var rootPageBelongedToCurrentPage: Bool?
     package var receivedDomainSequences: [ProtocolDomain: UInt64]
     package var paramsData: Data
     /// Event-time fact for `Target.targetDestroyed`: whether the destroyed
@@ -134,25 +162,52 @@ package struct ProtocolEvent: Equatable, Sendable {
     /// registry forgets the destroyed record before subscribers consume the
     /// event, so consumers cannot reconstruct this from a snapshot.
     package var destroyedCurrentMainPageTarget: Bool
+    /// Event-time fact for a destroyed provisional target. This lets the
+    /// semantic page route retire navigation state after the registry removes
+    /// the target record.
+    package var destroyedProvisionalTargetInCurrentPageHierarchy: Bool
+    /// Event-time fact for `Page.frameDetached`: whether the detached frame
+    /// target belonged to the current page before topology was removed.
+    package var detachedCurrentPageFrameTarget: Bool
 
     package init(
         sequence: UInt64,
         domain: ProtocolDomain,
         method: String,
         targetID: ProtocolTarget.ID?,
+        targetRecord: ProtocolTarget.Record? = nil,
+        belongedToCurrentPage: Bool = false,
+        agentScopeTargetID: ProtocolTarget.ID? = nil,
         sourceTargetID: ProtocolTarget.ID? = nil,
+        pageBindingTargetID: ProtocolTarget.ID? = nil,
+        networkOriginTargetID: ProtocolTarget.ID? = nil,
+        networkScopeTargetID: ProtocolTarget.ID? = nil,
+        networkPageMembership: ProtocolNetworkPageMembership? = nil,
+        rootPageBelongedToCurrentPage: Bool? = nil,
         receivedDomainSequences: [ProtocolDomain: UInt64] = [:],
         paramsData: Data,
-        destroyedCurrentMainPageTarget: Bool = false
+        destroyedCurrentMainPageTarget: Bool = false,
+        destroyedProvisionalTargetInCurrentPageHierarchy: Bool = false,
+        detachedCurrentPageFrameTarget: Bool = false
     ) {
         self.sequence = sequence
         self.domain = domain
         self.method = method
         self.targetID = targetID
+        self.targetRecord = targetRecord
+        self.belongedToCurrentPage = belongedToCurrentPage
+        self.agentScopeTargetID = agentScopeTargetID
         self.sourceTargetID = sourceTargetID
+        self.pageBindingTargetID = pageBindingTargetID
+        self.networkOriginTargetID = networkOriginTargetID
+        self.networkScopeTargetID = networkScopeTargetID
+        self.networkPageMembership = networkPageMembership
+        self.rootPageBelongedToCurrentPage = rootPageBelongedToCurrentPage
         self.receivedDomainSequences = receivedDomainSequences
         self.paramsData = paramsData
         self.destroyedCurrentMainPageTarget = destroyedCurrentMainPageTarget
+        self.destroyedProvisionalTargetInCurrentPageHierarchy = destroyedProvisionalTargetInCurrentPageHierarchy
+        self.detachedCurrentPageFrameTarget = detachedCurrentPageFrameTarget
     }
 
     package func receivedSequence(for domain: ProtocolDomain) -> UInt64 {
@@ -165,6 +220,7 @@ package extension TransportSession {
         package var currentMainPageTargetID: ProtocolTarget.ID?
         package var targetsByID: [ProtocolTarget.ID: ProtocolTarget.Record]
         package var frameTargetIDsByFrameID: [ProtocolFrame.ID: ProtocolTarget.ID]
+        package var parentFrameIDsByFrameID: [ProtocolFrame.ID: ProtocolFrame.ID]
         package var executionContextsByKey: [RuntimeContext.Key: RuntimeContext.Record]
         package var pendingRootReplyIDs: [UInt64]
         package var pendingTargetReplyKeys: [ReplyKey]
@@ -173,6 +229,7 @@ package extension TransportSession {
             currentMainPageTargetID: ProtocolTarget.ID?,
             targetsByID: [ProtocolTarget.ID: ProtocolTarget.Record],
             frameTargetIDsByFrameID: [ProtocolFrame.ID: ProtocolTarget.ID],
+            parentFrameIDsByFrameID: [ProtocolFrame.ID: ProtocolFrame.ID],
             executionContextsByKey: [RuntimeContext.Key: RuntimeContext.Record],
             pendingRootReplyIDs: [UInt64],
             pendingTargetReplyKeys: [ReplyKey]
@@ -180,6 +237,7 @@ package extension TransportSession {
             self.currentMainPageTargetID = currentMainPageTargetID
             self.targetsByID = targetsByID
             self.frameTargetIDsByFrameID = frameTargetIDsByFrameID
+            self.parentFrameIDsByFrameID = parentFrameIDsByFrameID
             self.executionContextsByKey = executionContextsByKey
             self.pendingRootReplyIDs = pendingRootReplyIDs
             self.pendingTargetReplyKeys = pendingTargetReplyKeys
@@ -217,8 +275,10 @@ package extension TransportSession {
         case malformedMessage
         case missingTarget(ProtocolTarget.ID)
         case missingMainPageTarget
+        case unsupportedDomain(ProtocolDomain, targetID: ProtocolTarget.ID)
         case replyTimeout(method: String, targetID: ProtocolTarget.ID?)
         case remoteError(method: String, targetID: ProtocolTarget.ID?, message: String)
+        case inspectedPageProcessTerminated
         case transportClosed
     }
 }

@@ -31,6 +31,42 @@ func transportCommandBackendDispatchesPageReloadThroughTargetRoute() async throw
 }
 
 @Test
+func transportCommandBackendDispatchesPageLifecycleCommandsThroughTargetRoute() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+
+    let enableTask = Task {
+        try await target.page.enable()
+    }
+    let enable = try await waitForTargetMessage(backend, method: "Page.enable")
+    #expect(enable.targetIdentifier == ProtocolTarget.ID("page-main"))
+    #expect(try messageParameters(enable.message).isEmpty)
+    await receiveTargetReply(
+        transport,
+        targetID: enable.targetIdentifier,
+        messageID: try messageID(enable.message),
+        result: "{}"
+    )
+    try await enableTask.value
+
+    let disableTask = Task {
+        try await target.page.disable()
+    }
+    let disable = try await waitForTargetMessage(backend, method: "Page.disable")
+    #expect(disable.targetIdentifier == ProtocolTarget.ID("page-main"))
+    #expect(try messageParameters(disable.message).isEmpty)
+    await receiveTargetReply(
+        transport,
+        targetID: disable.targetIdentifier,
+        messageID: try messageID(disable.message),
+        result: "{}"
+    )
+    try await disableTask.value
+}
+
+@Test
 func transportCommandBackendDecodesDOMRequestNodeResult() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
@@ -542,7 +578,7 @@ func transportBackedProxyMaterializesCurrentPageFromTransportRegistry() async th
         Issue.record("Expected current page target.")
         return
     }
-    #expect(target.frameID == FrameID("main-frame"))
+    #expect(target.frameID == nil)
     #expect(target.route == .currentPage)
 }
 
@@ -727,8 +763,7 @@ func transportBackendDeliversCurrentPageTargetCommitLifecycleAfterRetarget() asy
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(
         in: transport,
-        targetID: ProtocolTarget.ID("page-old"),
-        frameID: nil
+        targetID: ProtocolTarget.ID("page-old")
     )
     let proxy = try await WebInspectorProxy(transport: transport)
     let target = try await proxy.waitForCurrentPage()
@@ -747,8 +782,7 @@ func transportBackendDeliversCurrentPageTargetCommitLifecycleAfterRetarget() asy
     await waitForEventSubscription(target, domain: .target)
     await installPageTarget(
         in: transport,
-        targetID: ProtocolTarget.ID("page-new"),
-        frameID: "new-main-frame"
+        targetID: ProtocolTarget.ID("page-new")
     )
     await transport.receiveRootMessage(
         #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-old","newTargetId":"page-new"}}"#
@@ -765,12 +799,114 @@ func transportBackendDeliversCurrentPageTargetCommitLifecycleAfterRetarget() asy
         Issue.record("Expected committed target to remain a page.")
         return
     }
-    #expect(commit.newTarget.frameID == FrameID("new-main-frame"))
+    #expect(commit.newTarget.frameID == nil)
     #expect(commit.newTarget.isProvisional == false)
     let cachedTarget = try await proxy.waitForCurrentPage()
-    #expect(cachedTarget.frameID == FrameID("new-main-frame"))
+    #expect(cachedTarget.frameID == nil)
     #expect(cachedTarget.isProvisional == false)
     #expect(await transport.snapshot().currentMainPageTargetID == ProtocolTarget.ID("page-new"))
+}
+
+@Test
+func orderedCurrentPageFeedUsesEventTimeRoutingAcrossDelayedCommitDrain() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
+    let oldTargetID = ProtocolTarget.ID("page-old")
+    let newTargetID = ProtocolTarget.ID("page-new")
+    let frameTargetID = ProtocolTarget.ID("frame-42-7")
+    await installPageTarget(in: transport, targetID: oldTargetID)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-42-7","type":"frame","isProvisional":false,"isPaused":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+    let feed = await target.orderedEventFeed()
+
+    await receiveTargetEvent(
+        transport,
+        targetID: oldTargetID,
+        method: "DOM.attributeModified",
+        params: #"{"nodeId":1,"name":"old","value":"1"}"#
+    )
+    await receiveTargetEvent(
+        transport,
+        targetID: oldTargetID,
+        method: "Runtime.executionContextCreated",
+        params: #"{"context":{"id":1,"name":"Old","type":"normal"}}"#
+    )
+    await receiveTargetEvent(
+        transport,
+        targetID: oldTargetID,
+        method: "Network.requestWillBeSent",
+        params: #"{"requestId":"old-request","frameId":"old-frame","loaderId":"old-loader","request":{"url":"https://example.test/old","method":"GET"},"initiator":{"type":"other"},"type":"Fetch","timestamp":1}"#
+    )
+    await receiveTargetEvent(
+        transport,
+        targetID: frameTargetID,
+        method: "DOM.attributeModified",
+        params: #"{"nodeId":2,"name":"frame","value":"1"}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-new","type":"page","isProvisional":true,"isPaused":false}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-old","newTargetId":"page-new"}}"#
+    )
+    await receiveTargetEvent(
+        transport,
+        targetID: newTargetID,
+        method: "DOM.attributeModified",
+        params: #"{"nodeId":3,"name":"new","value":"1"}"#
+    )
+    await receiveTargetEvent(
+        transport,
+        targetID: newTargetID,
+        method: "Runtime.executionContextCreated",
+        params: #"{"context":{"id":2,"name":"New","type":"normal"}}"#
+    )
+    await receiveTargetEvent(
+        transport,
+        targetID: newTargetID,
+        method: "Network.requestWillBeSent",
+        params: #"{"requestId":"new-request","frameId":"new-frame","loaderId":"new-loader","request":{"url":"https://example.test/new","method":"GET"},"initiator":{"type":"other"},"type":"Fetch","timestamp":2}"#
+    )
+
+    var tokens: [String] = []
+    for await sequencedEvent in feed.events {
+        guard let event = sequencedEvent.event else {
+            continue
+        }
+        switch event {
+        case let .dom(.attributeModified(id, name, _)):
+            tokens.append("dom:\(name):\(id.targetScopeRawValue ?? "page")")
+        case let .runtime(.executionContextCreated(context)):
+            tokens.append("runtime:\(context.name):\(context.id.targetScopeRawValue ?? "page")")
+        case let .network(.requestWillBeSent(id, _, _, _, _, _)):
+            tokens.append("network:\(id.unscopedRawValue)")
+        case .targetLifecycle(.didCommitProvisionalTarget):
+            tokens.append("commit")
+        default:
+            continue
+        }
+        if tokens.count == 8 {
+            break
+        }
+    }
+
+    #expect(tokens == [
+        "dom:old:page",
+        "runtime:Old:page",
+        "network:old-request",
+        "dom:frame:frame-42-7",
+        "commit",
+        "dom:new:page",
+        "runtime:New:page",
+        "network:new-request",
+    ])
 }
 
 @Test
@@ -811,14 +947,104 @@ func transportBackendDeliversCurrentPageTargetDestroyedLifecycle() async throws 
 }
 
 @Test
+func transportBackendDeliversProvisionalPageDestroyedBeforePageTopology() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-provisional","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let eventTask = Task {
+        var iterator = target.lifecycleEvents.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    await waitForEventSubscription(target, domain: .target)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-provisional"}}"#
+    )
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .targetDestroyed(targetID) = event else {
+        Issue.record("Expected provisional Target.targetDestroyed lifecycle event.")
+        return
+    }
+    #expect(targetID == WebInspectorTarget.ID("page-provisional"))
+    #expect(await transport.snapshot().currentMainPageTargetID == ProtocolTarget.ID("page-main"))
+    #expect(await proxy.currentPage != nil)
+}
+
+@Test
+func transportBackendDeliversProvisionalFrameDestroyedBeforePageTopology() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-provisional","type":"frame","frameId":"child-frame","isProvisional":true}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let eventTask = Task {
+        var iterator = target.lifecycleEvents.makeAsyncIterator()
+        return await iterator.next()
+    }
+    defer { eventTask.cancel() }
+
+    await waitForEventSubscription(target, domain: .target)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"frame-provisional"}}"#
+    )
+
+    let event = try #require(try await value(of: eventTask, timeout: transportCommandBackendWaitTimeout))
+    guard case let .targetDestroyed(targetID) = event else {
+        Issue.record("Expected parentless frame provisional Target.targetDestroyed lifecycle event.")
+        return
+    }
+    #expect(targetID == WebInspectorTarget.ID("frame-provisional"))
+    #expect(await transport.snapshot().currentMainPageTargetID == ProtocolTarget.ID("page-main"))
+}
+
+@Test
+func transportBackendDoesNotDeliverWorkerTargetDestroyedLifecycleToCurrentPage() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"service-worker","type":"service-worker","isProvisional":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+    let eventProbe = CompletionProbe()
+    let eventTask = Task {
+        var iterator = target.lifecycleEvents.makeAsyncIterator()
+        if await iterator.next() != nil {
+            await eventProbe.finish()
+        }
+    }
+    defer { eventTask.cancel() }
+
+    await waitForEventSubscription(target, domain: .target)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"service-worker"}}"#
+    )
+    try await Task.sleep(for: .milliseconds(100))
+
+    #expect(await eventProbe.isFinished() == false)
+}
+
+@Test
 func transportBackedWaitForCurrentPageRefreshesDestroyedTargetWithoutLifecycleSubscription() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-old"), frameID: "old-frame")
+    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-old"))
     let proxy = try await WebInspectorProxy(transport: transport)
 
     let cachedTarget = try await proxy.waitForCurrentPage()
-    #expect(cachedTarget.frameID == FrameID("old-frame"))
+    #expect(cachedTarget.frameID == nil)
 
     await transport.receiveRootMessage(
         #"{"method":"Target.targetDestroyed","params":{"targetId":"page-old"}}"#
@@ -827,13 +1053,13 @@ func transportBackedWaitForCurrentPageRefreshesDestroyedTargetWithoutLifecycleSu
     let replacementTask = Task {
         try await proxy.waitForCurrentPage()
     }
-    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-new"), frameID: "new-frame")
+    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-new"))
 
     let replacement = try await throwingValue(of: replacementTask)
     #expect(replacement.id == .currentPage)
     #expect(replacement.route == .currentPage)
-    #expect(replacement.frameID == FrameID("new-frame"))
-    #expect(await proxy.currentPage?.frameID == FrameID("new-frame"))
+    #expect(replacement.frameID == nil)
+    #expect(await proxy.currentPage?.frameID == nil)
 }
 
 @Test
@@ -852,11 +1078,17 @@ func transportBackendDeliversCurrentPagePageFrameLifecycle() async throws {
     }
 
     await waitForEventSubscription(target, domain: .page)
-    await transport.receiveRootMessage(
-        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","loaderId":"loader-1","name":"Main","url":"https://example.test/","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Page.frameNavigated",
+        params: #"{"frame":{"id":"main-frame","loaderId":"loader-1","name":"Main","url":"https://example.test/","securityOrigin":"https://example.test","mimeType":"text/html"}}"#
     )
-    await transport.receiveRootMessage(
-        #"{"method":"Page.frameDetached","params":{"frameId":"child-frame"}}"#
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Page.frameDetached",
+        params: #"{"frameId":"child-frame"}"#
     )
 
     let events = try await value(of: eventTask)
@@ -867,6 +1099,7 @@ func transportBackendDeliversCurrentPagePageFrameLifecycle() async throws {
     }
     #expect(frame.id == FrameID("main-frame"))
     #expect(frame.parentID == nil)
+    #expect(frame.pageBindingID == "page-main")
     #expect(frame.loaderID == "loader-1")
     #expect(frame.name == "Main")
     #expect(frame.url == "https://example.test/")
@@ -878,6 +1111,174 @@ func transportBackendDeliversCurrentPagePageFrameLifecycle() async throws {
         return
     }
     #expect(frameID == FrameID("child-frame"))
+}
+
+@Test
+func transportBackendBindsRootSubframeNavigationToExactFrameTarget() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
+    await installMainPageFrame(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-42-7","type":"frame","isProvisional":false,"isPaused":false}}}"#
+    )
+    await installFrame(
+        ProtocolFrame.ID("frame-7.42"),
+        parentFrameID: ProtocolFrame.ID("frame-7.1"),
+        in: transport
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let eventTask = Task {
+        var iterator = target.lifecycleEvents.makeAsyncIterator()
+        return await iterator.next()
+    }
+    await waitForEventSubscription(target, domain: .page)
+    await transport.receiveRootMessage(
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"frame-7.42","parentId":"frame-7.1","loaderId":"child-loader","name":"","url":"https://example.test/frame","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
+    )
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .frameNavigated(frame) = event else {
+        Issue.record("Expected Page.frameNavigated lifecycle event.")
+        return
+    }
+    #expect(frame.id == FrameID("frame-7.42"))
+    #expect(frame.pageBindingID == "frame-42-7")
+}
+
+@Test
+func transportBackendBindsReleasedRootSubframeNavigationToPageAgent() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let eventTask = Task {
+        var iterator = target.lifecycleEvents.makeAsyncIterator()
+        return await iterator.next()
+    }
+    await waitForEventSubscription(target, domain: .page)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Page.frameNavigated",
+        params: #"{"frame":{"id":"child-frame","parentId":"main-frame","loaderId":"child-loader","name":"","url":"https://example.test/frame","securityOrigin":"https://example.test","mimeType":"text/html"}}"#
+    )
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .frameNavigated(frame) = event else {
+        Issue.record("Expected Page.frameNavigated lifecycle event.")
+        return
+    }
+    #expect(frame.pageBindingID == "page-main")
+}
+
+@Test
+func transportLeavesRootMainFrameNavigationUnboundWhilePageTargetsCompete() async throws {
+    let transport = TransportSession(
+        backend: FakeTransportBackend(),
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(
+        in: transport,
+        targetID: ProtocolTarget.ID("page-current"),
+        frameID: "main-frame"
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-provisional","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    let stream = await transport.events(for: .page)
+    var iterator = stream.makeAsyncIterator()
+
+    await transport.receiveRootMessage(
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","loaderId":"provisional-loader"}}}"#
+    )
+
+    let event = try #require(await iterator.next())
+    #expect(event.pageBindingTargetID == nil)
+}
+
+@Test
+func transportBackendDeliversLatestFrameDetachUsingEventTimeAncestry() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(in: transport)
+    await installMainPageFrame(in: transport)
+    await installFrame(
+        ProtocolFrame.ID("frame-7.20"),
+        parentFrameID: ProtocolFrame.ID("frame-7.1"),
+        in: transport
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-42-7","type":"frame","isProvisional":false,"isPaused":false}}}"#
+    )
+    await installFrame(
+        ProtocolFrame.ID("frame-7.42"),
+        parentFrameID: ProtocolFrame.ID("frame-7.20"),
+        in: transport
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+    let eventTask = Task {
+        var iterator = target.lifecycleEvents.makeAsyncIterator()
+        return await iterator.next()
+    }
+    await waitForEventSubscription(target, domain: .page)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Page.frameDetached","params":{"frameId":"frame-7.42"}}"#
+    )
+
+    guard case let .frameDetached(frameID)? = try await value(of: eventTask) else {
+        Issue.record("Expected latest frame detach to retain event-time current-page membership.")
+        return
+    }
+    #expect(frameID == FrameID("frame-7.42"))
+}
+
+@Test
+func transportBackendDeliversLatestRootFrameNavigationToCurrentPage() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(in: transport)
+    await installMainPageFrame(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-42-7","type":"frame","isProvisional":false,"isPaused":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+    let eventTask = Task {
+        var iterator = target.lifecycleEvents.makeAsyncIterator()
+        return await iterator.next()
+    }
+    await waitForEventSubscription(target, domain: .page)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"frame-7.42","parentId":"frame-7.1","loaderId":"child-loader","name":"Child","url":"https://frame.example.test/","securityOrigin":"https://frame.example.test","mimeType":"text/html"}}}"#
+    )
+
+    guard case let .frameNavigated(frame)? = try await value(of: eventTask) else {
+        Issue.record("Expected latest root frame navigation on the current-page route.")
+        return
+    }
+    #expect(frame.id == FrameID("frame-7.42"))
+    #expect(frame.parentID == FrameID("frame-7.1"))
+    #expect(frame.pageBindingID == "frame-42-7")
 }
 
 @Test
@@ -977,7 +1378,11 @@ func transportBackendDecodesDOMShadowAndPseudoEventsForTargetRoute() async throw
 @Test
 func transportBackendNormalizesInspectorInspectToDOMInspectEvent() async throws {
     let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
     await installPageTarget(in: transport)
     let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
 
@@ -1014,35 +1419,40 @@ func transportBackendNormalizesInspectorInspectToDOMInspectEvent() async throws 
 }
 
 @Test
-func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async throws {
+func transportBackendNormalizesLatestRootInspectorInspectToPageDOMInspectEvent() async throws {
     let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport)
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
     )
-    let proxy = try await WebInspectorProxy(transport: transport)
-    let target = try await proxy.waitForCurrentPage()
+    await installPageTarget(in: transport)
+    let target = pageTarget(
+        proxy: WebInspectorProxy(
+            backend: LiveWebInspectorProxyBackend(transport: transport)
+        )
+    )
 
     let eventTask = Task {
         var iterator = target.dom.events.makeAsyncIterator()
-        let first = await iterator.next()
-        let second = await iterator.next()
-        return [first, second].compactMap { $0 }
+        return await iterator.next()
     }
 
     await waitForEventSubscription(target, domain: .dom)
     await waitForEventSubscription(target, domain: .inspector)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("frame-target"),
-        method: "Inspector.inspect",
-        params: #"{"object":{"objectId":"remote-frame-node","type":"object","subtype":"node"},"hints":{}}"#
+    await transport.receiveRootMessage(
+        #"{"method":"Inspector.inspect","params":{"object":{"objectId":"remote-node","type":"object","subtype":"node"},"hints":{}}}"#
     )
 
-    let requestNode = try await waitForTargetMessage(backend, method: "DOM.requestNode")
+    let requestNode = try await waitForTargetMessage(
+        backend,
+        method: "DOM.requestNode"
+    )
     #expect(requestNode.targetIdentifier == ProtocolTarget.ID("page-main"))
-    #expect(try messageParameters(requestNode.message)["objectId"] as? String == "remote-frame-node")
+    #expect(
+        try messageParameters(requestNode.message)["objectId"] as? String
+            == "remote-node"
+    )
     await receiveTargetReply(
         transport,
         targetID: requestNode.targetIdentifier,
@@ -1050,33 +1460,55 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
         result: #"{"nodeId":42}"#
     )
 
+    guard case let .inspect(nodeID)? = try await value(of: eventTask) else {
+        Issue.record("Expected latest root Inspector.inspect on the page DOM route.")
+        return
+    }
+    #expect(nodeID == DOM.Node.ID("42"))
+}
+
+@Test
+func transportBackendProjectsFrameDOMEventsBeforePageTopologyAndRoutesScopedCommands() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-42-7","type":"frame","isProvisional":false,"isPaused":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let eventTask = Task {
+        var iterator = target.dom.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    await waitForEventSubscription(target, domain: .dom)
     await receiveTargetEvent(
         transport,
-        targetID: ProtocolTarget.ID("frame-target"),
+        targetID: ProtocolTarget.ID("frame-42-7"),
         method: "DOM.setChildNodes",
         params: #"{"parentId":42,"nodes":[{"nodeId":43,"nodeType":1,"nodeName":"SPAN","localName":"span","nodeValue":"","childNodeCount":0}]}"#
     )
 
-    let events = try await value(of: eventTask)
-    #expect(events.count == 2)
-    guard case let .inspect(nodeID)? = events.first else {
-        Issue.record("Expected frame Inspector.inspect to normalize to DOM.inspect.")
-        return
-    }
-    #expect(nodeID == DOM.Node.ID("42", scopedToTargetRawValue: "frame-target"))
-    guard case let .setChildNodes(parentID, nodes)? = events.last else {
+    let event = try await value(of: eventTask)
+    guard case let .setChildNodes(parentID, nodes)? = event else {
         Issue.record("Expected frame DOM.setChildNodes to be projected into the current page DOM stream.")
         return
     }
-    #expect(parentID == DOM.Node.ID("42", scopedToTargetRawValue: "frame-target"))
-    #expect(nodes.first?.id == DOM.Node.ID("43", scopedToTargetRawValue: "frame-target"))
+    #expect(parentID == DOM.Node.ID("42", scopedToTargetRawValue: "frame-42-7"))
+    #expect(nodes.first?.id == DOM.Node.ID("43", scopedToTargetRawValue: "frame-42-7"))
 
-    let frameNodeID = DOM.Node.ID("42", scopedToTargetRawValue: "frame-target")
+    let frameNodeID = DOM.Node.ID("42", scopedToTargetRawValue: "frame-42-7")
     let frameAttributesTask = Task {
         try await target.dom.attributes(of: frameNodeID)
     }
     let frameAttributes = try await waitForTargetMessage(backend, method: "DOM.getAttributes")
-    #expect(frameAttributes.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    #expect(frameAttributes.targetIdentifier == ProtocolTarget.ID("frame-42-7"))
     #expect((try messageParameters(frameAttributes.message)["nodeId"] as? NSNumber)?.intValue == 42)
     await receiveTargetReply(
         transport,
@@ -1092,7 +1524,7 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
         try await target.dom.setAttributeValue(frameNodeID, name: "class", value: "frame-card selected")
     }
     let frameSetAttribute = try await waitForTargetMessage(backend, method: "DOM.setAttributeValue")
-    #expect(frameSetAttribute.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    #expect(frameSetAttribute.targetIdentifier == ProtocolTarget.ID("frame-42-7"))
     var parameters = try messageParameters(frameSetAttribute.message)
     #expect((parameters["nodeId"] as? NSNumber)?.intValue == 42)
     #expect(parameters["name"] as? String == "class")
@@ -1109,7 +1541,7 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
         try await target.dom.setAttributesAsText(frameNodeID, text: #"class="frame-card""#, name: "class")
     }
     let frameSetAttributes = try await waitForTargetMessage(backend, method: "DOM.setAttributesAsText")
-    #expect(frameSetAttributes.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    #expect(frameSetAttributes.targetIdentifier == ProtocolTarget.ID("frame-42-7"))
     parameters = try messageParameters(frameSetAttributes.message)
     #expect((parameters["nodeId"] as? NSNumber)?.intValue == 42)
     #expect(parameters["text"] as? String == #"class="frame-card""#)
@@ -1126,7 +1558,7 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
         try await target.dom.removeAttribute(frameNodeID, name: "hidden")
     }
     let frameRemoveAttribute = try await waitForTargetMessage(backend, method: "DOM.removeAttribute")
-    #expect(frameRemoveAttribute.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    #expect(frameRemoveAttribute.targetIdentifier == ProtocolTarget.ID("frame-42-7"))
     parameters = try messageParameters(frameRemoveAttribute.message)
     #expect((parameters["nodeId"] as? NSNumber)?.intValue == 42)
     #expect(parameters["name"] as? String == "hidden")
@@ -1142,7 +1574,7 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
         try await target.dom.setOuterHTML(frameNodeID, html: #"<article class="frame-card"></article>"#)
     }
     let frameSetOuterHTML = try await waitForTargetMessage(backend, method: "DOM.setOuterHTML")
-    #expect(frameSetOuterHTML.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    #expect(frameSetOuterHTML.targetIdentifier == ProtocolTarget.ID("frame-42-7"))
     parameters = try messageParameters(frameSetOuterHTML.message)
     #expect((parameters["nodeId"] as? NSNumber)?.intValue == 42)
     #expect(parameters["outerHTML"] as? String == #"<article class="frame-card"></article>"#)
@@ -1180,7 +1612,7 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
         try await target.css.matchedStyles(for: frameNodeID)
     }
     let matchedStyles = try await waitForTargetMessage(backend, method: "CSS.getMatchedStylesForNode")
-    #expect(matchedStyles.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    #expect(matchedStyles.targetIdentifier == ProtocolTarget.ID("frame-42-7"))
     #expect((try messageParameters(matchedStyles.message)["nodeId"] as? NSNumber)?.intValue == 42)
     await receiveTargetReply(
         transport,
@@ -1211,15 +1643,15 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
     let frameStyles = try await matchedStylesTask.value
     let frameRuleID = try #require(frameStyles.matchedRules.first?.id)
     let frameStyle = try #require(frameStyles.matchedRules.first?.style)
-    #expect(frameRuleID.targetScopeRawValue == "frame-target")
-    #expect(frameStyle.id.targetScopeRawValue == "frame-target")
+    #expect(frameRuleID.targetScopeRawValue == "frame-42-7")
+    #expect(frameStyle.id.targetScopeRawValue == "frame-42-7")
     #expect(frameStyle.id.unscopedRawValue != frameStyle.id.rawValue)
 
     let setStyleTextTask = Task {
         try await target.css.setStyleText(frameStyle.id, text: "color: blue;")
     }
     let setStyleText = try await waitForTargetMessage(backend, method: "CSS.setStyleText")
-    #expect(setStyleText.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    #expect(setStyleText.targetIdentifier == ProtocolTarget.ID("frame-42-7"))
     await receiveTargetReply(
         transport,
         targetID: setStyleText.targetIdentifier,
@@ -1235,13 +1667,13 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
         """
     )
     let updatedFrameStyle = try await setStyleTextTask.value
-    #expect(updatedFrameStyle.id.targetScopeRawValue == "frame-target")
+    #expect(updatedFrameStyle.id.targetScopeRawValue == "frame-42-7")
 
     let frameSetRuleSelectorTask = Task {
         try await target.css.setRuleSelector(frameRuleID, selector: ".frame-card")
     }
     let frameSetRuleSelector = try await waitForTargetMessage(backend, method: "CSS.setRuleSelector")
-    #expect(frameSetRuleSelector.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    #expect(frameSetRuleSelector.targetIdentifier == ProtocolTarget.ID("frame-42-7"))
     parameters = try messageParameters(frameSetRuleSelector.message)
     let frameRuleSelectorPayload = try #require(parameters["ruleId"] as? [String: Any])
     #expect(frameRuleSelectorPayload["styleSheetId"] as? String == "frame-sheet")
@@ -1267,7 +1699,7 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
         """
     )
     let updatedFrameRule = try await frameSetRuleSelectorTask.value
-    #expect(updatedFrameRule.id?.targetScopeRawValue == "frame-target")
+    #expect(updatedFrameRule.id?.targetScopeRawValue == "frame-42-7")
     #expect(updatedFrameRule.selectorList.text == ".frame-card")
 
     let frameSetGroupingHeaderTask = Task {
@@ -1277,7 +1709,7 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
         backend,
         method: "CSS.setGroupingHeaderText"
     )
-    #expect(frameSetGroupingHeader.targetIdentifier == ProtocolTarget.ID("frame-target"))
+    #expect(frameSetGroupingHeader.targetIdentifier == ProtocolTarget.ID("frame-42-7"))
     parameters = try messageParameters(frameSetGroupingHeader.message)
     let frameGroupingRulePayload = try #require(parameters["ruleId"] as? [String: Any])
     #expect(frameGroupingRulePayload["styleSheetId"] as? String == "frame-sheet")
@@ -1298,7 +1730,7 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
     await waitForEventSubscription(target, domain: .css)
     await receiveTargetEvent(
         transport,
-        targetID: ProtocolTarget.ID("frame-target"),
+        targetID: ProtocolTarget.ID("frame-42-7"),
         method: "CSS.styleSheetChanged",
         params: #"{"styleSheetId":"frame-sheet"}"#
     )
@@ -1307,17 +1739,17 @@ func transportBackendNormalizesFrameInspectorInspectForCurrentPageRoute() async 
         Issue.record("Expected frame CSS.styleSheetChanged to be projected into the current page CSS stream.")
         return
     }
-    #expect(styleSheetID.targetScopeRawValue == "frame-target")
+    #expect(styleSheetID.targetScopeRawValue == "frame-42-7")
     #expect(styleSheetID.unscopedRawValue == "frame-sheet")
 }
 
 @Test
-func transportBackendNormalizesParentlessFrameInspectorInspectForCurrentPageRoute() async throws {
+func transportBackendIgnoresImpossibleFrameInspectorOrigin() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
     await installPageTarget(in: transport)
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-page-target","type":"page","frameId":"child-frame","isProvisional":false}}}"#
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
     )
     let proxy = try await WebInspectorProxy(transport: transport)
     let target = try await proxy.waitForCurrentPage()
@@ -1331,14 +1763,20 @@ func transportBackendNormalizesParentlessFrameInspectorInspectForCurrentPageRout
     await waitForEventSubscription(target, domain: .inspector)
     await receiveTargetEvent(
         transport,
-        targetID: ProtocolTarget.ID("frame-page-target"),
+        targetID: ProtocolTarget.ID("frame-target"),
         method: "Inspector.inspect",
         params: #"{"object":{"objectId":"remote-frame-node","type":"object","subtype":"node"},"hints":{}}"#
+    )
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Inspector.inspect",
+        params: #"{"object":{"objectId":"remote-main-node","type":"object","subtype":"node"},"hints":{}}"#
     )
 
     let requestNode = try await waitForTargetMessage(backend, method: "DOM.requestNode")
     #expect(requestNode.targetIdentifier == ProtocolTarget.ID("page-main"))
-    #expect(try messageParameters(requestNode.message)["objectId"] as? String == "remote-frame-node")
+    #expect(try messageParameters(requestNode.message)["objectId"] as? String == "remote-main-node")
     await receiveTargetReply(
         transport,
         targetID: requestNode.targetIdentifier,
@@ -1348,10 +1786,10 @@ func transportBackendNormalizesParentlessFrameInspectorInspectForCurrentPageRout
 
     let event = try #require(try await value(of: eventTask))
     guard case let .inspect(nodeID) = event else {
-        Issue.record("Expected parentless frame Inspector.inspect to normalize to DOM.inspect.")
+        Issue.record("Expected main-page Inspector.inspect to normalize to DOM.inspect.")
         return
     }
-    #expect(nodeID == DOM.Node.ID("42", scopedToTargetRawValue: "frame-page-target"))
+    #expect(nodeID == DOM.Node.ID("42"))
 }
 
 @Test
@@ -1371,7 +1809,7 @@ func transportBackendDecodesNetworkResponseEventForTargetRoute() async throws {
         transport,
         targetID: ProtocolTarget.ID("page-main"),
         method: "Network.responseReceived",
-        params: #"{"requestId":"request-1","type":"Document","response":{"url":"https://example.test/","status":200,"statusText":"OK","mimeType":"text/html","headers":{"content-type":"text/html"},"source":"network"},"timestamp":12.5}"#
+        params: #"{"requestId":"request-1","frameId":"main-frame","loaderId":"main-loader","type":"Document","response":{"url":"https://example.test/","status":200,"statusText":"OK","mimeType":"text/html","headers":{"content-type":"text/html"},"source":"network"},"timestamp":12.5}"#
     )
 
     let event = try #require(try await value(of: eventTask))
@@ -1384,6 +1822,13 @@ func transportBackendDecodesNetworkResponseEventForTargetRoute() async throws {
     #expect(response.status == 200)
     #expect(response.headers["content-type"] == "text/html")
     #expect(response.source == Network.Source(rawValue: "network"))
+    #expect(
+        response.origin == Network.Request.Origin(
+            frameID: FrameID("main-frame"),
+            loaderID: "main-loader",
+            targetID: "page-main"
+        )
+    )
     #expect(resourceType == .document)
     #expect(timestamp == 12.5)
 }
@@ -1405,7 +1850,7 @@ func transportBackendDecodesNetworkResponseEventWithoutType() async throws {
         transport,
         targetID: ProtocolTarget.ID("page-main"),
         method: "Network.responseReceived",
-        params: #"{"requestId":"request-1","response":{"url":"https://example.test/","status":200,"statusText":"OK","mimeType":"text/html","headers":{"content-type":"text/html"},"source":"network"},"timestamp":12.5}"#
+        params: #"{"requestId":"request-1","frameId":"main-frame","loaderId":"main-loader","response":{"url":"https://example.test/","status":200,"statusText":"OK","mimeType":"text/html","headers":{"content-type":"text/html"},"source":"network"},"timestamp":12.5}"#
     )
 
     let event = try #require(try await value(of: eventTask))
@@ -1420,16 +1865,368 @@ func transportBackendDecodesNetworkResponseEventWithoutType() async throws {
 }
 
 @Test
-func transportBackendDeliversFrameNetworkEventsToCurrentPageRoute() async throws {
+func transportBackendLeavesUnknownConcurrentRootNetworkOriginUnattributed() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(
+        in: transport,
+        targetID: ProtocolTarget.ID("page-current"),
+        frameID: "main-frame"
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-provisional","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let eventTask = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    await waitForEventSubscription(target, domain: .network)
+    await transport.receiveRootMessage(
+        #"{"method":"Network.responseReceived","params":{"requestId":"provisional-response","frameId":"main-frame","loaderId":"provisional-loader","response":{"url":"https://example.test/provisional","status":200,"headers":{}},"timestamp":1}}"#
+    )
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .responseReceived(_, response, _, _) = event else {
+        Issue.record("Expected Network.responseReceived.")
+        return
+    }
+    #expect(response.origin?.targetID == nil)
+}
+
+@Test
+func transportDoesNotGuessRootNetworkOriginAcrossSameLoaderPageTargets() async throws {
+    let transport = TransportSession(
+        backend: FakeTransportBackend(),
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(
+        in: transport,
+        targetID: ProtocolTarget.ID("page-current"),
+        frameID: "main-frame"
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","loaderId":"shared-loader"}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-provisional","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    let stream = await transport.events(for: .network)
+    var iterator = stream.makeAsyncIterator()
+
+    await transport.receiveRootMessage(
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"current-exact","frameId":"main-frame","loaderId":"shared-loader","targetId":"page-current"}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"provisional-exact","frameId":"main-frame","loaderId":"shared-loader","targetId":"page-provisional"}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"ambiguous-request","frameId":"main-frame","loaderId":"shared-loader","targetId":""}}"#
+    )
+
+    let current = try #require(await iterator.next())
+    let provisional = try #require(await iterator.next())
+    let ambiguous = try #require(await iterator.next())
+    #expect(current.networkOriginTargetID == ProtocolTarget.ID("page-current"))
+    #expect(provisional.networkOriginTargetID == ProtocolTarget.ID("page-provisional"))
+    #expect(ambiguous.networkOriginTargetID == nil)
+}
+
+@Test
+func transportUsesUniqueFrameLoaderOriginDespiteCompetingFrameTargets() async throws {
+    let transport = TransportSession(
+        backend: FakeTransportBackend(),
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(
+        in: transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        frameID: "main-frame"
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-main","type":"frame","frameId":"main-frame","isProvisional":false}}}"#
+    )
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Page.frameNavigated",
+        params: #"{"frame":{"id":"main-frame","loaderId":"page-loader"}}"#
+    )
+    let stream = await transport.events(for: .network)
+    var iterator = stream.makeAsyncIterator()
+
+    await transport.receiveRootMessage(
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"page-request","frameId":"main-frame","loaderId":"page-loader","targetId":""}}"#
+    )
+
+    let event = try #require(await iterator.next())
+    #expect(event.networkOriginTargetID == ProtocolTarget.ID("page-main"))
+}
+
+@Test
+func transportUsesNonemptyRootNetworkTargetIDAsExactPageOrigin() async throws {
+    let transport = TransportSession(
+        backend: FakeTransportBackend(),
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(
+        in: transport,
+        targetID: ProtocolTarget.ID("page-current"),
+        frameID: "main-frame"
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-provisional","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    let stream = await transport.events(for: .network)
+    var iterator = stream.makeAsyncIterator()
+
+    await transport.receiveRootMessage(
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"current-seed","frameId":"main-frame","loaderId":"shared-loader","targetId":"page-current"}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"provisional-request","frameId":"main-frame","loaderId":"shared-loader","targetId":"page-provisional"}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Network.responseReceived","params":{"requestId":"provisional-request","frameId":"main-frame","loaderId":"shared-loader"}}"#
+    )
+
+    let current = try #require(await iterator.next())
+    let provisional = try #require(await iterator.next())
+    let followUp = try #require(await iterator.next())
+    #expect(current.networkOriginTargetID == ProtocolTarget.ID("page-current"))
+    #expect(provisional.networkOriginTargetID == ProtocolTarget.ID("page-provisional"))
+    #expect(followUp.networkOriginTargetID == ProtocolTarget.ID("page-provisional"))
+}
+
+@Test
+func transportResolvesEmptyRootNetworkTargetIDFromExactFrameTopology() async throws {
+    let transport = TransportSession(
+        backend: FakeTransportBackend(),
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(in: transport)
+    await installMainPageFrame(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-42-7","type":"frame","isProvisional":false,"isPaused":false}}}"#
+    )
+    await installFrame(
+        ProtocolFrame.ID("frame-7.42"),
+        parentFrameID: ProtocolFrame.ID("frame-7.1"),
+        in: transport
+    )
+    let stream = await transport.events(for: .network)
+    var iterator = stream.makeAsyncIterator()
+
+    await transport.receiveRootMessage(
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"frame-request","frameId":"frame-7.42","loaderId":"child-loader","targetId":""}}"#
+    )
+
+    let event = try #require(await iterator.next())
+    #expect(event.networkOriginTargetID == ProtocolTarget.ID("frame-42-7"))
+}
+
+@Test
+func transportResolvesRootWorkerTargetIDToOwningFrameLoader() async throws {
+    let transport = TransportSession(
+        backend: FakeTransportBackend(),
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(
+        in: transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        frameID: "main-frame"
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","loaderId":"main-loader"}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"worker-1","type":"worker","frameId":"main-frame","isProvisional":false}}}"#
+    )
+    let stream = await transport.events(for: .network)
+    var iterator = stream.makeAsyncIterator()
+
+    await transport.receiveRootMessage(
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"worker-request","frameId":"main-frame","loaderId":"main-loader","targetId":"worker-1"}}"#
+    )
+
+    let event = try #require(await iterator.next())
+    #expect(event.networkOriginTargetID == ProtocolTarget.ID("page-main"))
+}
+
+@Test
+func transportRemovesDestroyedTargetFromFrameLoaderOrigins() async throws {
+    let transport = TransportSession(
+        backend: FakeTransportBackend(),
+        responseTimeout: .milliseconds(750)
+    )
     await installPageTarget(in: transport)
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
     )
+    await transport.receiveRootMessage(
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"child-frame","parentId":"main-frame","loaderId":"child-loader"}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"frame-target"}}"#
+    )
+    let stream = await transport.events(for: .network)
+    var iterator = stream.makeAsyncIterator()
+
+    await transport.receiveRootMessage(
+        #"{"method":"Network.responseReceived","params":{"requestId":"late-response","frameId":"child-frame","loaderId":"child-loader"}}"#
+    )
+
+    let event = try #require(await iterator.next())
+    #expect(event.networkOriginTargetID == nil)
+}
+
+@Test
+func transportKeepsRootNetworkOwnersAcrossCurrentAndProvisionalInterleaving() async throws {
+    let transport = TransportSession(
+        backend: FakeTransportBackend(),
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(
+        in: transport,
+        targetID: ProtocolTarget.ID("page-current"),
+        frameID: "main-frame"
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","loaderId":"current-loader"}}}"#
+    )
+    let stream = await transport.events(for: .network)
+    var iterator = stream.makeAsyncIterator()
+
+    await transport.receiveRootMessage(
+        #"{"method":"Network.responseReceived","params":{"requestId":"current-request","frameId":"main-frame","loaderId":"current-loader"}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-provisional","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Network.responseReceived","params":{"requestId":"provisional-request","frameId":"main-frame","loaderId":"provisional-loader"}}"#
+    )
+
+    let currentBeforeCommit = try #require(await iterator.next())
+    let unknownBeforeCommit = try #require(await iterator.next())
+    #expect(currentBeforeCommit.networkOriginTargetID == ProtocolTarget.ID("page-current"))
+    #expect(unknownBeforeCommit.networkOriginTargetID == nil)
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-current","newTargetId":"page-provisional"}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","loaderId":"provisional-loader"}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Network.responseReceived","params":{"requestId":"current-request","frameId":"main-frame","loaderId":"current-loader"}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Network.responseReceived","params":{"requestId":"provisional-request","frameId":"main-frame","loaderId":"provisional-loader"}}"#
+    )
+
+    let currentAfterCommit = try #require(await iterator.next())
+    let provisionalAfterCommit = try #require(await iterator.next())
+    #expect(currentAfterCommit.networkOriginTargetID == ProtocolTarget.ID("page-current"))
+    #expect(provisionalAfterCommit.networkOriginTargetID == ProtocolTarget.ID("page-provisional"))
+}
+
+@Test
+func transportResetsRootNetworkOwnerWhenRequestIDIsReused() async throws {
+    let transport = TransportSession(
+        backend: FakeTransportBackend(),
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(
+        in: transport,
+        targetID: ProtocolTarget.ID("page-current"),
+        frameID: "main-frame"
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","loaderId":"current-loader"}}}"#
+    )
+    let stream = await transport.events(for: .network)
+    var iterator = stream.makeAsyncIterator()
+
+    await transport.receiveRootMessage(
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"reused-request","frameId":"main-frame","loaderId":"current-loader"}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Network.loadingFinished","params":{"requestId":"reused-request"}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-provisional","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"reused-request","frameId":"main-frame","loaderId":"provisional-loader"}}"#
+    )
+
+    let firstLifecycle = try #require(await iterator.next())
+    _ = try #require(await iterator.next())
+    let reusedLifecycle = try #require(await iterator.next())
+    #expect(firstLifecycle.networkOriginTargetID == ProtocolTarget.ID("page-current"))
+    #expect(reusedLifecycle.networkOriginTargetID == nil)
+}
+
+@Test
+func transportResolvesWorkerWrappedNetworkEventToOwningFrame() async throws {
+    let transport = TransportSession(
+        backend: FakeTransportBackend(),
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(
+        in: transport,
+        targetID: ProtocolTarget.ID("page-current"),
+        frameID: "main-frame"
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","loaderId":"current-loader"}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"worker-1","type":"worker","frameId":"main-frame","isProvisional":false}}}"#
+    )
+    let stream = await transport.events(for: .network)
+    var iterator = stream.makeAsyncIterator()
+
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("worker-1"),
+        method: "Network.requestWillBeSent",
+        params: #"{"requestId":"shared-request-id","frameId":"main-frame","loaderId":"current-loader"}"#
+    )
+
+    let workerEvent = try #require(await iterator.next())
+    #expect(workerEvent.networkOriginTargetID == ProtocolTarget.ID("page-current"))
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-provisional","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Network.responseReceived","params":{"requestId":"shared-request-id","frameId":"main-frame","loaderId":"provisional-loader"}}"#
+    )
+
+    let rootEvent = try #require(await iterator.next())
+    #expect(rootEvent.networkOriginTargetID == nil)
+}
+
+@Test
+func transportBackendUsesTargetWrappedNetworkEventSourceAfterFrameMappingChanges() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(
+        in: transport,
+        targetID: ProtocolTarget.ID("page-current"),
+        frameID: "main-frame"
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-provisional","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
     let proxy = try await WebInspectorProxy(transport: transport)
     let target = try await proxy.waitForCurrentPage()
-    #expect(target.route == .currentPage)
 
     let eventTask = Task {
         var iterator = target.network.events.makeAsyncIterator()
@@ -1439,38 +2236,132 @@ func transportBackendDeliversFrameNetworkEventsToCurrentPageRoute() async throws
     await waitForEventSubscription(target, domain: .network)
     await receiveTargetEvent(
         transport,
-        targetID: ProtocolTarget.ID("frame-target"),
-        method: "Network.requestWillBeSent",
-        params: #"{"requestId":"frame-request","frameId":"child-frame","request":{"url":"https://frame.example.test/","method":"GET"},"timestamp":7.5,"type":"Document"}"#
+        targetID: ProtocolTarget.ID("page-current"),
+        method: "Network.responseReceived",
+        params: #"{"requestId":"current-response","frameId":"main-frame","loaderId":"current-loader","response":{"url":"https://example.test/current","status":200,"headers":{}},"timestamp":1}"#
     )
 
     let event = try #require(try await value(of: eventTask))
-    guard case let .requestWillBeSent(id, request, resourceType, _, timestamp) = event else {
+    guard case let .responseReceived(_, response, _, _) = event else {
+        Issue.record("Expected Network.responseReceived.")
+        return
+    }
+    #expect(response.origin?.targetID == "page-current")
+}
+
+@Test
+func transportBackendRoutesProcessQualifiedRequestThroughLatestRootAgent() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(in: transport)
+    await installMainPageFrame(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-42-7","type":"frame","isProvisional":false,"isPaused":false}}}"#
+    )
+    await installFrame(
+        ProtocolFrame.ID("frame-7.42"),
+        parentFrameID: ProtocolFrame.ID("frame-7.1"),
+        in: transport
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+    #expect(target.route == .currentPage)
+
+    let eventTask = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        let requestWillBeSent = await iterator.next()
+        let responseReceived = await iterator.next()
+        return [requestWillBeSent, responseReceived].compactMap { $0 }
+    }
+
+    await waitForEventSubscription(target, domain: .network)
+    await transport.receiveRootMessage(
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-7.99","frameId":"frame-7.42","loaderId":"loader-7.42","targetId":"","request":{"url":"https://frame.example.test/","method":"GET"},"initiator":{"type":"other","nodeId":7},"timestamp":7.5,"type":"Document"}}"#
+    )
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-42-8","type":"frame","isProvisional":true,"isPaused":false}}}"#
+    )
+    await installFrame(
+        ProtocolFrame.ID("frame-8.42"),
+        parentFrameID: ProtocolFrame.ID("frame-7.1"),
+        in: transport
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"frame-42-7","newTargetId":"frame-42-8"}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"frame-42-7"}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Network.responseReceived","params":{"requestId":"request-7.99","frameId":"frame-7.42","loaderId":"loader-7.42","type":"Document","response":{"url":"https://frame.example.test/","status":200,"statusText":"OK","mimeType":"text/html","headers":{},"source":"network"},"timestamp":8}}"#
+    )
+
+    let events = try await value(of: eventTask)
+    #expect(events.count == 2)
+    guard case let .requestWillBeSent(id, request, initiator, resourceType, _, timestamp) = events[0] else {
         Issue.record("Expected current-page route to receive frame Network.requestWillBeSent.")
         return
     }
-    #expect(id == Network.Request.ID("frame-request", scopedToTargetRawValue: "frame-target"))
+    #expect(id == Network.Request.ID("request-7.99"))
     #expect(request.id == id)
     #expect(request.url == "https://frame.example.test/")
     #expect(request.method == "GET")
+    #expect(initiator.nodeID == DOM.Node.ID("7"))
     #expect(resourceType == .document)
     #expect(timestamp == 7.5)
+    guard case let .responseReceived(responseID, _, _, _) = events[1] else {
+        Issue.record("Expected responseReceived after the frame target commit.")
+        return
+    }
+    #expect(responseID == id)
 
     let bodyTask = Task {
         try await target.network.responseBody(for: id)
     }
-    let bodyCommand = try await waitForTargetMessage(backend, method: "Network.getResponseBody")
-    #expect(bodyCommand.targetIdentifier == ProtocolTarget.ID("frame-target"))
-    #expect(try messageParameters(bodyCommand.message)["requestId"] as? String == "frame-request")
-    await receiveTargetReply(
-        transport,
-        targetID: bodyCommand.targetIdentifier,
-        messageID: try messageID(bodyCommand.message),
-        result: #"{"body":"frame body","base64Encoded":false}"#
+    let rootMessage = try await throwingValue(of: Task {
+        try await backend.waitForMessage()
+    })
+    #expect(try messageMethod(rootMessage) == "Network.getResponseBody")
+    #expect(try messageParameters(rootMessage)["requestId"] as? String == "request-7.99")
+    #expect(await backend.sentTargetMessages().isEmpty)
+    await transport.receiveRootMessage(
+        #"{"id":\#(try messageID(rootMessage)),"result":{"body":"frame body","base64Encoded":false}}"#
     )
-    let body = try await bodyTask.value
-    #expect(body.data == "frame body")
-    #expect(body.base64Encoded == false)
+    #expect(try await bodyTask.value.data == "frame body")
+}
+
+@Test
+func transportBackendTreatsUnboundNetworkInitiatorNodeAsMissing() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let eventTask = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    await waitForEventSubscription(target, domain: .network)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Network.requestWillBeSent",
+        params: #"{"requestId":"zero-node","frameId":"main-frame","loaderId":"main-loader","request":{"url":"https://example.test/","method":"GET"},"initiator":{"type":"other","nodeId":0},"timestamp":1}"#
+    )
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .requestWillBeSent(_, _, initiator, _, _, _) = event else {
+        Issue.record("Expected Network.requestWillBeSent.")
+        return
+    }
+    #expect(initiator.nodeID == nil)
 }
 
 @Test
@@ -1582,17 +2473,24 @@ func transportBackendDecodesMemoryCacheResourceType() async throws {
         transport,
         targetID: ProtocolTarget.ID("page-main"),
         method: "Network.requestServedFromMemoryCache",
-        params: #"{"requestId":"cached-1","timestamp":3,"resource":{"url":"https://example.test/app.css","type":"Stylesheet","bodySize":1234,"response":{"url":"https://example.test/app.css","status":200,"mimeType":"text/css","headers":{}}}}"#
+        params: #"{"requestId":"cached-1","frameId":"main-frame","loaderId":"main-loader","documentURL":"https://example.test/","timestamp":3,"initiator":{"type":"other"},"resource":{"url":"https://example.test/app.css","type":"Stylesheet","bodySize":1234,"response":{"url":"https://example.test/app.css","status":200,"mimeType":"text/css","headers":{}}}}"#
     )
 
     let event = try #require(try await value(of: eventTask))
-    guard case let .requestServedFromMemoryCache(id, response, resourceType, timestamp) = event else {
+    guard case let .requestServedFromMemoryCache(id, response, _, resourceType, timestamp) = event else {
         Issue.record("Expected Network.requestServedFromMemoryCache event.")
         return
     }
     #expect(id == Network.Request.ID("cached-1"))
     #expect(response.url == "https://example.test/app.css")
     #expect(response.bodySize == 1234)
+    #expect(
+        response.origin == Network.Request.Origin(
+            frameID: FrameID("main-frame"),
+            loaderID: "main-loader",
+            targetID: "page-main"
+        )
+    )
     #expect(resourceType == .stylesheet)
     #expect(timestamp == 3)
 }
@@ -1600,10 +2498,20 @@ func transportBackendDecodesMemoryCacheResourceType() async throws {
 @Test
 func transportBackendKeepsBackendResourceIdentifierOnScopedFrameRequests() async throws {
     let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
     await installPageTarget(in: transport)
+    await installMainPageFrame(in: transport)
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-42-7","type":"frame","isProvisional":false,"isPaused":false}}}"#
+    )
+    await installFrame(
+        ProtocolFrame.ID("frame-7.42"),
+        parentFrameID: ProtocolFrame.ID("frame-7.1"),
+        in: transport
     )
     let proxy = try await WebInspectorProxy(transport: transport)
     let target = try await proxy.waitForCurrentPage()
@@ -1616,17 +2524,17 @@ func transportBackendKeepsBackendResourceIdentifierOnScopedFrameRequests() async
     await waitForEventSubscription(target, domain: .network)
     await receiveTargetEvent(
         transport,
-        targetID: ProtocolTarget.ID("frame-target"),
+        targetID: ProtocolTarget.ID("frame-42-7"),
         method: "Network.requestWillBeSent",
-        params: #"{"requestId":"frame-cached","request":{"url":"https://frame.example.test/cached","method":"GET"},"timestamp":1,"type":"Image","backendResourceIdentifier":{"sourceProcessID":"9","resourceID":"42"}}"#
+        params: #"{"requestId":"frame-cached","frameId":"child-frame","loaderId":"child-loader","request":{"url":"https://frame.example.test/cached","method":"GET"},"initiator":{"type":"other"},"timestamp":1,"type":"Image","backendResourceIdentifier":{"sourceProcessID":"9","resourceID":"42"}}"#
     )
 
     let event = try #require(try await value(of: eventTask))
-    guard case let .requestWillBeSent(id, request, _, _, _) = event else {
+    guard case let .requestWillBeSent(id, request, _, _, _, _) = event else {
         Issue.record("Expected projected frame Network.requestWillBeSent.")
         return
     }
-    #expect(id.targetScopeRawValue == "frame-target")
+    #expect(id.targetScopeRawValue == "frame-42-7")
     #expect(request.backendResourceIdentifier == Network.BackendResourceID(
         sourceProcessID: "9",
         resourceID: "42"
@@ -1634,23 +2542,27 @@ func transportBackendKeepsBackendResourceIdentifierOnScopedFrameRequests() async
 }
 
 @Test
-func transportBackendRoutesRequestNodeThroughPageDOMAgentAndScopesResult() async throws {
+func transportBackendRoutesFrameOwnedRequestNodeThroughFrameDOMAgent() async throws {
     let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
     await installPageTarget(in: transport)
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-42-7","type":"frame","isProvisional":false,"isPaused":false}}}"#
     )
     let proxy = try await WebInspectorProxy(transport: transport)
     let target = try await proxy.waitForCurrentPage()
 
     let requestNodeTask = Task {
         try await target.dom.requestNode(
-            forRemoteObject: Runtime.RemoteObject.ID("frame-object", scopedToTargetRawValue: "frame-target")
+            forRemoteObject: Runtime.RemoteObject.ID("frame-object", scopedToTargetRawValue: "frame-42-7")
         )
     }
     let requestNode = try await waitForTargetMessage(backend, method: "DOM.requestNode")
-    #expect(requestNode.targetIdentifier == ProtocolTarget.ID("page-main"))
+    #expect(requestNode.targetIdentifier == ProtocolTarget.ID("frame-42-7"))
     #expect(try messageParameters(requestNode.message)["objectId"] as? String == "frame-object")
     await receiveTargetReply(
         transport,
@@ -1659,8 +2571,8 @@ func transportBackendRoutesRequestNodeThroughPageDOMAgentAndScopesResult() async
         result: #"{"nodeId":"frame-node"}"#
     )
     let nodeID = try await requestNodeTask.value
-    #expect(nodeID == DOM.Node.ID("frame-node", scopedToTargetRawValue: "frame-target"))
-    #expect(nodeID.targetScopeRawValue == "frame-target")
+    #expect(nodeID == DOM.Node.ID("frame-node", scopedToTargetRawValue: "frame-42-7"))
+    #expect(nodeID.targetScopeRawValue == "frame-42-7")
 }
 
 @Test
@@ -1681,11 +2593,11 @@ func transportBackendForwardsBackendResourceIdentifierToResponseBodyCommand() as
         transport,
         targetID: ProtocolTarget.ID("page-main"),
         method: "Network.requestWillBeSent",
-        params: #"{"requestId":"cached-request","request":{"url":"https://example.test/cached","method":"GET"},"timestamp":1,"type":"Image","backendResourceIdentifier":{"sourceProcessID":"77","resourceID":"1234"}}"#
+        params: #"{"requestId":"cached-request","frameId":"main-frame","loaderId":"main-loader","request":{"url":"https://example.test/cached","method":"GET"},"initiator":{"type":"other"},"timestamp":1,"type":"Image","backendResourceIdentifier":{"sourceProcessID":"77","resourceID":"1234"}}"#
     )
 
     let event = try #require(try await value(of: eventTask))
-    guard case let .requestWillBeSent(id, request, _, _, _) = event else {
+    guard case let .requestWillBeSent(id, request, _, _, _, _) = event else {
         Issue.record("Expected Network.requestWillBeSent for the current page.")
         return
     }
@@ -1717,12 +2629,27 @@ func transportBackendForwardsBackendResourceIdentifierToResponseBodyCommand() as
 }
 
 @Test
-func transportBackendDeliversParentlessFrameNetworkEventsToCurrentPageRoute() async throws {
+func transportBackendAssociatesFrameTargetCreatedAfterPageTopology() async throws {
     let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
     await installPageTarget(in: transport)
+    await installMainPageFrame(in: transport)
+    await installFrame(
+        ProtocolFrame.ID("frame-7.20"),
+        parentFrameID: ProtocolFrame.ID("frame-7.1"),
+        in: transport
+    )
+    await installFrame(
+        ProtocolFrame.ID("frame-7.42"),
+        parentFrameID: ProtocolFrame.ID("frame-7.20"),
+        in: transport
+    )
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-page-target","type":"page","frameId":"child-frame","isProvisional":false}}}"#
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-42-7","type":"frame","isProvisional":false,"isPaused":false}}}"#
     )
     let proxy = try await WebInspectorProxy(transport: transport)
     let target = try await proxy.waitForCurrentPage()
@@ -1736,17 +2663,17 @@ func transportBackendDeliversParentlessFrameNetworkEventsToCurrentPageRoute() as
     await waitForEventSubscription(target, domain: .network)
     await receiveTargetEvent(
         transport,
-        targetID: ProtocolTarget.ID("frame-page-target"),
+        targetID: ProtocolTarget.ID("frame-42-7"),
         method: "Network.requestWillBeSent",
-        params: #"{"requestId":"frame-request","frameId":"child-frame","request":{"url":"https://frame.example.test/","method":"GET"},"timestamp":7.5,"type":"Document"}"#
+        params: #"{"requestId":"frame-request","frameId":"child-frame","loaderId":"child-loader","request":{"url":"https://frame.example.test/","method":"GET"},"initiator":{"type":"other"},"timestamp":7.5,"type":"Document"}"#
     )
 
     let event = try #require(try await value(of: eventTask))
-    guard case let .requestWillBeSent(id, request, resourceType, _, timestamp) = event else {
-        Issue.record("Expected current-page route to receive parentless frame Network.requestWillBeSent.")
+    guard case let .requestWillBeSent(id, request, _, resourceType, _, timestamp) = event else {
+        Issue.record("Expected current-page route to receive the navigated frame event.")
         return
     }
-    #expect(id == Network.Request.ID("frame-request", scopedToTargetRawValue: "frame-page-target"))
+    #expect(id == Network.Request.ID("frame-request", scopedToTargetRawValue: "frame-42-7"))
     #expect(request.id == id)
     #expect(request.url == "https://frame.example.test/")
     #expect(request.method == "GET")
@@ -1755,47 +2682,135 @@ func transportBackendDeliversParentlessFrameNetworkEventsToCurrentPageRoute() as
 }
 
 @Test
-func transportBackendDoesNotDeliverUnrelatedFrameNetworkEventsToCurrentPageRoute() async throws {
+func transportBackendTreatsLatestRootNetworkTargetAsProcessMetadata() async throws {
     let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
     await installPageTarget(in: transport)
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"other-frame-target","type":"frame","frameId":"other-child-frame","parentFrameId":"other-main-frame","isProvisional":false}}}"#
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-other","type":"page","isProvisional":false,"isPaused":false}}}"#
     )
     let proxy = try await WebInspectorProxy(transport: transport)
     let target = try await proxy.waitForCurrentPage()
     #expect(target.route == .currentPage)
 
-    let eventProbe = CompletionProbe()
     let eventTask = Task {
         var iterator = target.network.events.makeAsyncIterator()
-        if await iterator.next() != nil {
-            await eventProbe.finish()
-        }
-    }
-    defer {
-        eventTask.cancel()
+        return await iterator.next()
     }
 
     await waitForEventSubscription(target, domain: .network)
-    await receiveTargetEvent(
-        transport,
-        targetID: ProtocolTarget.ID("other-frame-target"),
-        method: "Network.requestWillBeSent",
-        params: #"{"requestId":"other-frame-request","frameId":"other-child-frame","request":{"url":"https://other-frame.example.test/","method":"GET"},"timestamp":8.5,"type":"Document"}"#
+    await transport.receiveRootMessage(
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-8.1","frameId":"frame-8.1","loaderId":"loader-8.1","targetId":"page-other","request":{"url":"https://other-page.example.test/","method":"GET"},"initiator":{"type":"other"},"timestamp":8.5,"type":"Document"}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-7.1","frameId":"frame-7.1","loaderId":"loader-7.1","targetId":"page-main","request":{"url":"https://current-page.example.test/","method":"GET"},"initiator":{"type":"other"},"timestamp":9,"type":"Document"}}"#
     )
 
-    try await Task.sleep(for: .milliseconds(100))
-    #expect(await eventProbe.isFinished() == false)
+    let event = try #require(try await value(of: eventTask))
+    guard case let .requestWillBeSent(id, request, _, _, _, _) = event else {
+        Issue.record("Expected inspected-page Network.requestWillBeSent.")
+        return
+    }
+    #expect(id == Network.Request.ID("request-8.1"))
+    #expect(id.targetScopeRawValue == nil)
+    #expect(request.url == "https://other-page.example.test/")
+}
+
+@Test
+func transportBackendDeliversLatestRootNetworkWithoutFrameTopology() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let eventTask = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    await waitForEventSubscription(target, domain: .network)
+    await transport.receiveRootMessage(
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"request-404.1","frameId":"frame-404.1","loaderId":"loader-404.1","targetId":"","request":{"url":"https://unresolved.example.test/","method":"GET"},"initiator":{"type":"other"},"timestamp":9.5,"type":"Document"}}"#
+    )
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .requestWillBeSent(id, request, _, _, _, _) = event else {
+        Issue.record("Expected topology-independent Network.requestWillBeSent.")
+        return
+    }
+    #expect(id == Network.Request.ID("request-404.1"))
+    #expect(id.targetScopeRawValue == nil)
+    #expect(request.url == "https://unresolved.example.test/")
+}
+
+@Test
+func transportBackendPreservesLargeLatestRootNetworkBurstInFIFOOrder() async throws {
+    let eventCount = 2_305
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let eventTask = Task { () -> [Network.Request.ID] in
+        var requestIDs: [Network.Request.ID] = []
+        requestIDs.reserveCapacity(eventCount)
+        for await event in target.network.events {
+            guard case let .requestWillBeSent(id, _, _, _, _, _) = event else {
+                continue
+            }
+            requestIDs.append(id)
+            if requestIDs.count == eventCount {
+                break
+            }
+        }
+        return requestIDs
+    }
+
+    await waitForEventSubscription(target, domain: .network)
+    for index in 0..<eventCount {
+        let requestID = "request-\(index + 1).\(index + 100)"
+        let message = """
+        {"method":"Network.requestWillBeSent","params":{"requestId":"\(requestID)","frameId":"frame-\(index).1","loaderId":"loader-\(index)","targetId":"","request":{"url":"https://example.test/\(index)","method":"GET"},"initiator":{"type":"other"},"timestamp":\(index),"type":"Image"}}
+        """
+        await transport.receiveRootMessage(
+            message
+        )
+    }
+
+    let requestIDs = try await value(of: eventTask, timeout: .seconds(10))
+    #expect(requestIDs.count == eventCount)
+    #expect(requestIDs == (0..<eventCount).map {
+        Network.Request.ID("request-\($0 + 1).\($0 + 100)")
+    })
+    #expect(requestIDs.allSatisfy { $0.targetScopeRawValue == nil })
 }
 
 @Test
 func transportBackendDoesNotDeliverFrameDocumentUpdatedToCurrentPageDOMRoute() async throws {
     let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
     await installPageTarget(in: transport)
+    await installMainPageFrame(in: transport)
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-42-7","type":"frame","isProvisional":false,"isPaused":false}}}"#
     )
     let proxy = try await WebInspectorProxy(transport: transport)
     let target = try await proxy.waitForCurrentPage()
@@ -1815,7 +2830,7 @@ func transportBackendDoesNotDeliverFrameDocumentUpdatedToCurrentPageDOMRoute() a
     await waitForEventSubscription(target, domain: .dom)
     await receiveTargetEvent(
         transport,
-        targetID: ProtocolTarget.ID("frame-target"),
+        targetID: ProtocolTarget.ID("frame-42-7"),
         method: "DOM.documentUpdated",
         params: "{}"
     )
@@ -1825,9 +2840,79 @@ func transportBackendDoesNotDeliverFrameDocumentUpdatedToCurrentPageDOMRoute() a
 }
 
 @Test
+func orderedCurrentPageFeedTreatsFrameDocumentUpdatedAsWatermarkOnly() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(in: transport)
+    await installMainPageFrame(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-42-7","type":"frame","isProvisional":false,"isPaused":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+    let feed = await target.orderedEventFeed()
+
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("frame-42-7"),
+        method: "DOM.documentUpdated",
+        params: "{}"
+    )
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "DOM.attributeModified",
+        params: #"{"nodeId":1,"name":"page","value":"1"}"#
+    )
+
+    var iterator = feed.events.makeAsyncIterator()
+    let frameWatermark = try #require(await iterator.next())
+    #expect(frameWatermark.event == nil)
+    let pageEvent = try #require(await iterator.next())
+    guard case let .dom(.attributeModified(_, name, value)) = pageEvent.event else {
+        Issue.record("Expected the following main-page DOM event.")
+        return
+    }
+    #expect(name == "page")
+    #expect(value == "1")
+}
+
+@Test
+func orderedCurrentPageFeedTreatsProvisionalRootRuntimeEventAsWatermarkOnly() async throws {
+    let transport = TransportSession(
+        backend: FakeTransportBackend(),
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(in: transport)
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-42-8","type":"frame","isProvisional":true,"isPaused":false}}}"#
+    )
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+    let feed = await target.orderedEventFeed()
+
+    await transport.receiveRootMessage(
+        #"{"method":"Runtime.executionContextCreated","params":{"context":{"id":8,"name":"Provisional","type":"normal","frameId":"frame-8.42"}}}"#
+    )
+
+    var iterator = feed.events.makeAsyncIterator()
+    let watermark = try #require(await iterator.next())
+    #expect(watermark.event == nil)
+}
+
+@Test
 func transportBackendDecodesWebSocketHandshakeEventsForTargetRoute() async throws {
     let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
     await installPageTarget(in: transport)
     let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
 
@@ -2158,17 +3243,75 @@ private func pageTarget(proxy: WebInspectorProxy) -> WebInspectorTarget {
     )
 }
 
+@Test
+func transportBackendTreatsZeroPreviousNodeAsTheFirstChild() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+
+    let eventTask = Task {
+        var iterator = target.dom.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+    await waitForEventSubscription(target, domain: .dom)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "DOM.childNodeInserted",
+        params: #"{"parentNodeId":1,"previousNodeId":0,"node":{"nodeId":2,"nodeType":1,"nodeName":"DIV","localName":"div","nodeValue":""}}"#
+    )
+
+    guard case let .childNodeInserted(parent, previous, node)? = try await value(of: eventTask) else {
+        Issue.record("Expected a decoded DOM child insertion event.")
+        return
+    }
+
+    #expect(parent == DOM.Node.ID("1"))
+    #expect(previous == nil)
+    #expect(node.id == DOM.Node.ID("2"))
+}
+
 private func installPageTarget(
     in transport: TransportSession,
     targetID: ProtocolTarget.ID = ProtocolTarget.ID("page-main"),
-    frameID: String? = "main-frame"
+    frameID: String? = nil
 ) async {
-    let targetID = jsonEscapedString(targetID.rawValue)
-    let frameIDField = frameID.map {
-        #","frameId":"\#(jsonEscapedString($0))""#
-    } ?? ""
+    let escapedTargetID = jsonEscapedString(targetID.rawValue)
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"\#(targetID)","type":"page"\#(frameIDField),"isProvisional":false}}}"#
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"\#(escapedTargetID)","type":"page","isProvisional":false,"isPaused":false}}}"#
+    )
+    if let frameID {
+        await receiveTargetEvent(
+            transport,
+            targetID: targetID,
+            method: "Page.frameNavigated",
+            params: #"{"frame":{"id":"\#(jsonEscapedString(frameID))"}}"#
+        )
+    }
+}
+
+private func installMainPageFrame(
+    in transport: TransportSession,
+    frameID: ProtocolFrame.ID = ProtocolFrame.ID("frame-7.1")
+) async {
+    await installFrame(frameID, parentFrameID: nil, in: transport)
+}
+
+private func installFrame(
+    _ frameID: ProtocolFrame.ID,
+    parentFrameID: ProtocolFrame.ID?,
+    in transport: TransportSession
+) async {
+    let frameID = jsonEscapedString(frameID.rawValue)
+    let parent = parentFrameID.map {
+        #","parentId":"\#(jsonEscapedString($0.rawValue))""#
+    } ?? ""
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Page.frameNavigated",
+        params: #"{"frame":{"id":"\#(frameID)"\#(parent)}}"#
     )
 }
 
@@ -2368,23 +3511,34 @@ private actor EventDeliveryProbe {
 
 private struct TimedOut: Error {}
 
+private enum TaskValueRace<Value: Sendable>: Sendable {
+    case value(Value)
+    case timedOut
+}
+
 private func value<T: Sendable>(
     of task: Task<T, Never>,
     timeout: Duration = .seconds(5)
 ) async throws -> T {
-    try await withThrowingTaskGroup(of: T.self) { group in
+    try await withThrowingTaskGroup(of: TaskValueRace<T>.self) { group in
+        defer { group.cancelAll() }
         group.addTask {
-            await task.value
+            .value(await task.value)
         }
         group.addTask {
             try await Task.sleep(for: timeout)
+            return .timedOut
+        }
+        guard let outcome = try await group.next() else {
             throw TimedOut()
         }
-        guard let value = try await group.next() else {
+        switch outcome {
+        case let .value(value):
+            return value
+        case .timedOut:
+            task.cancel()
             throw TimedOut()
         }
-        group.cancelAll()
-        return value
     }
 }
 
@@ -2392,18 +3546,24 @@ private func throwingValue<T: Sendable>(
     of task: Task<T, any Error>,
     timeout: Duration = .seconds(5)
 ) async throws -> T {
-    try await withThrowingTaskGroup(of: T.self) { group in
+    try await withThrowingTaskGroup(of: TaskValueRace<T>.self) { group in
+        defer { group.cancelAll() }
         group.addTask {
-            try await task.value
+            .value(try await task.value)
         }
         group.addTask {
             try await Task.sleep(for: timeout)
+            return .timedOut
+        }
+        guard let outcome = try await group.next() else {
             throw TimedOut()
         }
-        guard let value = try await group.next() else {
+        switch outcome {
+        case let .value(value):
+            return value
+        case .timedOut:
+            task.cancel()
             throw TimedOut()
         }
-        group.cancelAll()
-        return value
     }
 }

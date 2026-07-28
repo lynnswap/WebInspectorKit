@@ -3,7 +3,7 @@ import AVFoundation
 import ObservationBridge
 import Synchronization
 import Testing
-import WebInspectorDataKit
+@testable import WebInspectorDataKit
 import WebInspectorProxyKit
 import UIKit
 @testable import WebInspectorUI
@@ -38,6 +38,22 @@ struct NetworkDetailViewControllerTests {
         #expect(configuration?.secondaryText == nil)
         #expect(configuration?.image == nil)
         #expect(configuration?.textProperties.color == .secondaryLabel)
+    }
+
+    @Test
+    func listUsesNativeInsetGroupedLayout() {
+        let model = NetworkPanelModel(context: makeContext())
+        let viewController = NetworkListViewController(model: model)
+        let window = showInWindow(viewController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        #expect(
+            viewController.collectionViewForTesting.collectionViewLayout
+                is UICollectionViewCompositionalLayout
+        )
+        let configuration = NetworkListViewController.listLayoutConfigurationForTesting
+        #expect(configuration.appearance == .insetGrouped)
+        #expect(configuration.showsSeparators)
     }
 
     @Test
@@ -261,6 +277,90 @@ struct NetworkDetailViewControllerTests {
                 && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
         }
         #expect(didRenderRequestPreview)
+    }
+
+    @Test
+    func headersRenderRedirectChainBeforeFinalRequestAndResponse() async throws {
+        let context = makeContext()
+        let requestID = Network.Request.ID("redirect-chain")
+        await context.apply(
+            .requestWillBeSent(
+                id: requestID,
+                request: Network.Request(
+                    id: requestID,
+                    url: "https://example.com/start",
+                    method: "POST",
+                    headers: ["x-start": "one"]
+                ),
+                resourceType: .document,
+                redirectResponse: nil,
+                timestamp: 1
+            )
+        )
+        await context.apply(
+            .requestWillBeSent(
+                id: requestID,
+                request: Network.Request(
+                    id: requestID,
+                    url: "https://example.com/final",
+                    method: "GET",
+                    headers: ["x-final-request": "two"]
+                ),
+                resourceType: .document,
+                redirectResponse: Network.Response(
+                    url: "https://example.com/start",
+                    status: 302,
+                    statusText: "Found",
+                    headers: ["location": "https://example.com/final"]
+                ),
+                timestamp: 2
+            )
+        )
+        await context.apply(
+            .responseReceived(
+                id: requestID,
+                response: Network.Response(
+                    url: "https://example.com/final",
+                    status: 200,
+                    statusText: "OK",
+                    headers: ["x-final-response": "three"]
+                ),
+                resourceType: .document,
+                timestamp: 3
+            )
+        )
+
+        let request = try #require(context.registeredRequest(forProxyID: requestID))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(request)
+        let viewController = makeNetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderChain = await waitUntilRendered(in: viewController) {
+            let text = viewController.headersTextViewForTesting.renderedTextForTesting
+            return text.contains("POST /start")
+                && text.contains("302 Found")
+                && text.contains("GET /final")
+                && text.contains("200 OK")
+                && text.contains("x-start: one")
+                && text.contains("location: https://example.com/final")
+                && text.contains("x-final-request: two")
+                && text.contains("x-final-response: three")
+        }
+        #expect(didRenderChain)
+
+        let text = viewController.headersTextViewForTesting.renderedTextForTesting
+        let redirectRequest = try #require(text.range(of: "POST /start"))
+        let redirectResponse = try #require(text.range(of: "302 Found"))
+        let finalRequest = try #require(text.range(of: "GET /final"))
+        let finalResponse = try #require(text.range(
+            of: "200 OK",
+            range: finalRequest.upperBound..<text.endIndex
+        ))
+        #expect(redirectRequest.lowerBound < redirectResponse.lowerBound)
+        #expect(redirectResponse.lowerBound < finalRequest.lowerBound)
+        #expect(finalRequest.lowerBound < finalResponse.lowerBound)
     }
 
     @Test
@@ -589,6 +689,64 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func groupedPreviewTreatsNonMediaErrorResponseAsInspectable() async throws {
+        let context = makeContext()
+        let frameID = FrameID("main-frame")
+        let nodeID = DOM.Node.ID("grouped-error-response")
+        installNavigationVisit(in: context, frameID: frameID)
+        let successfulRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "successful-json",
+            url: "https://example.com/success.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "application/json"],
+            responseMIMEType: "application/json",
+            resourceType: .xhr,
+            timestamp: 1
+        ))
+        let errorRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "error-json",
+            url: "https://example.com/error.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "application/json"],
+            responseMIMEType: "application/json",
+            responseStatus: 404,
+            resourceType: .xhr,
+            timestamp: 4
+        ))
+        applyResponseBody(
+            to: context,
+            request: successfulRequest,
+            body: #"{"result":"success"}"#,
+            base64Encoded: false
+        )
+        applyResponseBody(
+            to: context,
+            request: errorRequest,
+            body: #"{"error":"not found"}"#,
+            base64Encoded: false
+        )
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(errorRequest)
+        let viewController = makeNetworkDetailViewController(
+            model: model,
+            initialMode: .preview
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(await waitUntilPreparedTextPreviewRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == errorRequest.id
+                && viewController.syntaxBodyViewControllerForTesting
+                    .syntaxViewForTesting.text.contains(#""error" : "not found""#)
+        })
+        #expect(model.selectedRequests.map(\.id) == [successfulRequest.id, errorRequest.id])
+    }
+
+    @Test
     func hiddenDetailDoesNotFetchResponseBodyUntilAppearingAgain() async throws {
         let context = makeContext()
         let request = try #require(
@@ -758,17 +916,20 @@ struct NetworkDetailViewControllerTests {
             for: body,
             metadata: NetworkMediaPreviewMetadata(
                 mimeType: "application/vnd.apple.mpegurl",
-                url: playlistURL
+                url: playlistURL,
+                sourcePolicy: .preferredRemotePlayback(try #require(URL(string: playlistURL))),
+                remotePlaybackHTTPUserAgent: "Inspector Fixture"
             )
         ) { _ in
             Issue.record("HLS response preview should not require body payload preparation")
         }
 
-        guard case .remoteMovie(let url) = action else {
+        guard case .remoteMovie(let preview) = action else {
             Issue.record("Expected HLS response preview to use the remote playlist URL")
             return
         }
-        #expect(url.absoluteString == playlistURL)
+        #expect(preview.url.absoluteString == playlistURL)
+        #expect(preview.httpUserAgent == "Inspector Fixture")
     }
 
     @Test
@@ -786,17 +947,509 @@ struct NetworkDetailViewControllerTests {
             for: body,
             metadata: NetworkMediaPreviewMetadata(
                 mimeType: "application/vnd.apple.mpegurl",
-                url: playlistURL
+                url: playlistURL,
+                sourcePolicy: .preferredRemotePlayback(try #require(URL(string: playlistURL)))
             )
         ) { _ in
             Issue.record("HLS response preview should not fetch or prepare body payloads")
         }
 
-        guard case .remoteMovie(let url) = action else {
+        guard case .remoteMovie(let preview) = action else {
             Issue.record("Expected HLS response preview to use the remote playlist URL before the body loads")
             return
         }
-        #expect(url.absoluteString == playlistURL)
+        #expect(preview.url.absoluteString == playlistURL)
+    }
+
+    @Test
+    func remoteHLSPreviewShowsPlayerWithoutFetchingResponseBody() async throws {
+        let context = makeContext()
+        let playlistURL = "https://media.example.com/live/master.m3u8"
+        let request = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "playlist",
+                url: playlistURL,
+                requestHeaders: ["User-Agent": "Inspector Fixture"],
+                responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+                responseMimeType: "application/vnd.apple.mpegurl"
+            )
+        )
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(request)
+        let viewController = makeNetworkDetailViewController(model: model)
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+            playerFactory.makePlayer
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didShowPlayer = await waitUntilRendered(in: viewController) {
+            viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString
+                == playlistURL
+        }
+        await Task.yield()
+
+        #expect(didShowPlayer)
+        #expect(playerFactory.players.count == 1)
+        #expect(request.responseBody.phase == .available)
+        #expect(viewController.responseBodyFetchObservationDeliveryForTesting == nil)
+    }
+
+    @Test
+    func hlsPlaybackFailureKeepsPlayerSurfaceUntilSurfaceTeardown() async throws {
+        let playlistURL = "https://media.example.com/live/failing.m3u8"
+        let body = NetworkBody(
+            role: .response,
+            kind: .binary,
+            sourceSyntaxKind: .plainText,
+            phase: .available
+        )
+        let viewController = NetworkBodyViewController()
+        viewController.setSurface(.body(
+            body,
+            metadata: NetworkMediaPreviewMetadata(
+                mimeType: "application/vnd.apple.mpegurl",
+                url: playlistURL,
+                sourcePolicy: .preferredRemotePlayback(
+                    try #require(URL(string: playlistURL))
+                )
+            )
+        ))
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.resumeRendering()
+
+        let item = try #require(viewController.mediaPlayerItemForTesting)
+        #expect(viewController.mediaPlayerURLForTesting?.absoluteString == playlistURL)
+        #expect(viewController.hasMoviePreviewObservationForTesting)
+        let playerViewControllerIdentity = try #require(
+            viewController.mediaPlayerViewControllerIdentityForTesting
+        )
+        let observation = try #require(viewController.previewRenderObservationDeliveryForTesting)
+        let renderedFailure = await observation.values {
+            viewController.isMoviePreviewStatusVisibleForTesting
+                && viewController.mediaPlayerStatusConfigurationForTesting?.secondaryText
+                    == "Simulated HLS playback failure."
+        }
+        defer { renderedFailure.cancel() }
+
+        viewController.suspendKeepingSurface()
+        NotificationCenter.default.post(
+            name: AVPlayerItem.failedToPlayToEndTimeNotification,
+            object: item,
+            userInfo: [
+                AVPlayerItemFailedToPlayToEndTimeErrorKey: NSError(
+                    domain: "WebInspectorUITests",
+                    code: 1,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "Simulated HLS playback failure."
+                    ]
+                )
+            ]
+        )
+
+        for _ in 0..<100 {
+            if viewController.hasMoviePreviewFailureForTesting {
+                break
+            }
+            await Task.yield()
+        }
+        #expect(viewController.hasMoviePreviewFailureForTesting)
+        #expect(viewController.isMoviePreviewStatusVisibleForTesting == false)
+        #expect(viewController.mediaPlayerViewControllerIdentityForTesting == playerViewControllerIdentity)
+
+        viewController.resumeRendering()
+        #expect(await renderedFailure.waitUntil { $0 } != nil)
+        #expect(viewController.mediaPlayerViewControllerIdentityForTesting == playerViewControllerIdentity)
+        #expect(viewController.mediaPlayerItemForTesting == nil)
+        #expect(viewController.hasMoviePreviewObservationForTesting == false)
+        #expect(viewController.isMoviePreviewStatusHostedInPlayerOverlayForTesting)
+
+        viewController.setSurface(.unavailableBodyPlaceholder)
+
+        #expect(viewController.mediaPlayerViewControllerIdentityForTesting == nil)
+        #expect(viewController.mediaPlayerItemForTesting == nil)
+        #expect(viewController.hasMoviePreviewObservationForTesting == false)
+    }
+
+    @Test
+    func nonBodyMediaResponseDoesNotStartPlaybackOrFetch() async throws {
+        let inputs: [(
+            name: String,
+            pathExtension: String,
+            mimeType: String,
+            method: String,
+            status: Int,
+            finishes: Bool
+        )] = [
+            ("HLS HEAD", "m3u8", "application/vnd.apple.mpegurl", "HEAD", 200, true),
+            ("HLS 204", "m3u8", "application/vnd.apple.mpegurl", "GET", 204, true),
+            ("HLS 404", "m3u8", "application/vnd.apple.mpegurl", "GET", 404, true),
+            ("MP4 HEAD", "mp4", "video/mp4", "HEAD", 200, true),
+            ("MP4 204", "mp4", "video/mp4", "GET", 204, true),
+            ("MP4 404", "mp4", "video/mp4", "GET", 404, true),
+            ("MP4 incomplete", "mp4", "video/mp4", "GET", 200, false),
+        ]
+
+        for (index, input) in inputs.enumerated() {
+            let context = makeContext()
+            let request = try #require(await applyRequest(
+                to: context,
+                requestID: "unavailable-media-\(index)",
+                url: "https://media.example.com/unavailable-\(index).\(input.pathExtension)",
+                responseHeaders: ["content-type": input.mimeType],
+                responseMimeType: input.mimeType,
+                responseStatus: input.status,
+                resourceType: .media,
+                method: input.method,
+                finishes: input.finishes
+            ))
+            let model = NetworkPanelModel(context: context)
+            model.selectRequest(request)
+            let viewController = makeNetworkDetailViewController(
+                model: model,
+                initialMode: .preview
+            )
+            var playerCreationCount = 0
+            viewController.syntaxBodyViewControllerForTesting
+                .setMoviePreviewPlayerFactoryForTesting {
+                    playerCreationCount += 1
+                    return StubMoviePreviewPlayer()
+                }
+            let window = showInWindow(viewController)
+            defer { window.isHidden = true }
+
+            #expect(await waitUntilRendered(in: viewController) {
+                viewController.currentModeForTesting == .preview
+                    && viewController.syntaxBodyViewControllerForTesting
+                        .syntaxViewForTesting.text.isEmpty == false
+                    && viewController.responseBodyFetchObservationDeliveryForTesting == nil
+            }, Comment(rawValue: input.name))
+            #expect(
+                viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == nil,
+                Comment(rawValue: input.name)
+            )
+            #expect(playerCreationCount == 0, Comment(rawValue: input.name))
+            #expect(request.responseBody.phase == .available, Comment(rawValue: input.name))
+        }
+    }
+
+    @Test
+    func unsafeHLSRequestShowsFetchedPlaylistTextInsteadOfRemotePlayer() async throws {
+        let context = makeContext()
+        let playlistURL = "https://media.example.com/live/master.m3u8"
+        let request = try #require(await applyRequest(
+            to: context,
+            requestID: "unsafe-playlist",
+            url: playlistURL,
+            requestHeaders: ["Referer": "https://media.example.com/player"],
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMimeType: "application/vnd.apple.mpegurl"
+        ))
+        let playlist = """
+        #EXTM3U
+        #EXTINF:1.0,
+        segment.ts
+        """
+        let encodedPlaylist = Data(playlist.utf8).base64EncodedString()
+        applyResponseBody(
+            to: context,
+            request: request,
+            body: encodedPlaylist,
+            base64Encoded: true
+        )
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(request)
+        let viewController = makeNetworkDetailViewController(model: model)
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+            playerFactory.makePlayer
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didShowPlaylistText = await waitUntilPreparedTextPreviewRendered(in: viewController) {
+            viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == playlist
+        }
+
+        #expect(didShowPlaylistText)
+        guard case .loaded = request.responseBody.phase else {
+            Issue.record("Unsafe HLS should fetch its response body for syntax display")
+            return
+        }
+        #expect(viewController.responseBodyFetchObservationDeliveryForTesting != nil)
+        #expect(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == nil)
+        #expect(playerFactory.players.isEmpty)
+    }
+
+    @Test
+    func partialMoviePreviewUsesRemoteURLWithoutFetchingResponseBody() async throws {
+        let context = makeContext()
+        let movieURL = "https://media.example.com/segment.mp4"
+        let request = try #require(await applyRequest(
+            to: context,
+            requestID: "partial-movie",
+            url: movieURL,
+            responseHeaders: [
+                "content-type": "video/mp4",
+                "content-range": "bytes 0-1023/4096",
+            ],
+            responseMimeType: "video/mp4",
+            responseStatus: 206,
+            resourceType: .media
+        ))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(request)
+        let viewController = makeNetworkDetailViewController(model: model)
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+            playerFactory.makePlayer
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.setModeForTesting(.preview)
+
+        let didShowRemoteMovie = await waitUntilRendered(in: viewController) {
+            viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString
+                == movieURL
+        }
+
+        #expect(didShowRemoteMovie)
+        #expect(request.responseBody.phase == .available)
+        #expect(viewController.responseBodyFetchObservationDeliveryForTesting == nil)
+    }
+
+    @Test
+    func partialMoviePreviewDoesNotReplayUnrepeatableOrUnsatisfiedRequests() async throws {
+        let inputs: [(
+            id: String,
+            requestHeaders: [String: String],
+            postData: String?,
+            responseHeaders: [String: String],
+            responseStatus: Int
+        )] = [
+            (
+                id: "partial-post",
+                requestHeaders: [:],
+                postData: "media request body",
+                responseHeaders: ["content-type": "video/mp4"],
+                responseStatus: 206
+            ),
+            (
+                id: "partial-authorization",
+                requestHeaders: ["Authorization": "Bearer fixture"],
+                postData: nil,
+                responseHeaders: ["content-type": "video/mp4"],
+                responseStatus: 206
+            ),
+            (
+                id: "partial-custom-header",
+                requestHeaders: ["X-Media-Token": "fixture"],
+                postData: nil,
+                responseHeaders: ["content-type": "video/mp4"],
+                responseStatus: 206
+            ),
+            (
+                id: "unsatisfied-range",
+                requestHeaders: [:],
+                postData: nil,
+                responseHeaders: [
+                    "content-type": "video/mp4",
+                    "content-range": "bytes */1024",
+                ],
+                responseStatus: 416
+            ),
+        ]
+
+        for input in inputs {
+            let context = makeContext()
+            let request = try #require(await applyRequest(
+                to: context,
+                requestID: input.id,
+                url: "https://media.example.com/\(input.id).mp4",
+                requestHeaders: input.requestHeaders,
+                postData: input.postData,
+                responseHeaders: input.responseHeaders,
+                responseMimeType: "video/mp4",
+                responseStatus: input.responseStatus,
+                resourceType: .media
+            ))
+            let model = NetworkPanelModel(context: context)
+            model.selectRequest(request)
+            let viewController = makeNetworkDetailViewController(model: model)
+            let window = showInWindow(viewController)
+            defer { window.isHidden = true }
+            viewController.setModeForTesting(.preview)
+
+            let didSettleWithoutRemotePlayback = await waitUntilRendered(in: viewController) {
+                guard viewController.currentModeForTesting == .preview,
+                      viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == nil,
+                      viewController.responseBodyFetchObservationDeliveryForTesting == nil else {
+                    return false
+                }
+                if input.responseStatus == 416 {
+                    return request.responseBody.phase == .available
+                }
+                if case .failed = request.responseBody.phase {
+                    return true
+                }
+                return false
+            }
+
+            #expect(didSettleWithoutRemotePlayback, Comment(rawValue: input.id))
+            #expect(
+                viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == nil,
+                Comment(rawValue: input.id)
+            )
+        }
+    }
+
+    @Test
+    func failedMoviePayloadPreparationRemainsMemoized() async throws {
+        let body = NetworkBody(
+            role: .response,
+            kind: .binary,
+            full: "not valid base64",
+            isBase64Encoded: true,
+            sourceSyntaxKind: .plainText,
+            phase: .loaded
+        )
+        let metadata = NetworkMediaPreviewMetadata(
+            mimeType: "video/mp4",
+            url: "https://media.example.com/movie.mp4",
+            sourcePolicy: .body
+        )
+        let coordinator = NetworkMediaPreviewCoordinator()
+        var resultCount = 0
+
+        let firstAction = coordinator.preparePreview(for: body, metadata: metadata) { action in
+            guard case .fallback = action else {
+                Issue.record("Invalid movie payload preparation should fail")
+                return
+            }
+            resultCount += 1
+        }
+        guard case .loadingMovie = firstAction else {
+            Issue.record("A movie payload should install its loading surface before preparation")
+            return
+        }
+        await coordinator.waitUntilPreparationFinishedForTesting()
+        #expect(resultCount == 1)
+
+        for _ in 0..<2 {
+            let repeatedAction = coordinator.preparePreview(
+                for: body,
+                metadata: metadata
+            ) { _ in
+                resultCount += 1
+            }
+            guard case .unavailableMovie = repeatedAction else {
+                Issue.record("A failed movie payload should remain unavailable without re-preparation")
+                return
+            }
+        }
+        await coordinator.waitUntilPreparationFinishedForTesting()
+        #expect(resultCount == 1)
+    }
+
+    @Test
+    func movieBodySurfaceKeepsPlayerIdentityWhileBodyLoads() async throws {
+        let context = makeContext()
+        let request = try #require(await applyRequest(
+            to: context,
+            requestID: "loading-movie",
+            url: "https://media.example.com/movie.mp4",
+            responseHeaders: ["content-type": "video/mp4"],
+            responseMimeType: "video/mp4",
+            resourceType: .media
+        ))
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        let viewController = NetworkBodyViewController(
+            moviePreviewPlayerFactory: playerFactory.makePlayer
+        )
+        viewController.setSurface(.body(
+            request.responseBody,
+            metadata: NetworkMediaPreviewMetadata(
+                mimeType: "video/mp4",
+                url: request.url,
+                sourcePolicy: .body
+            )
+        ))
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        viewController.resumeRendering()
+
+        let playerViewControllerIdentity = try #require(
+            viewController.mediaPlayerViewControllerIdentityForTesting
+        )
+        let loadingPlayerIdentity = try #require(viewController.mediaPlayerIdentityForTesting)
+        #expect(viewController.mediaPlayerItemForTesting == nil)
+        #expect(viewController.isMoviePreviewStatusVisibleForTesting)
+        #expect(viewController.moviePreviewStatusForTesting == .loading)
+        #expect(viewController.isMoviePreviewStatusHostedInPlayerOverlayForTesting)
+        let renderObservation = try #require(viewController.previewRenderObservationDeliveryForTesting)
+        let renderedMovie = await renderObservation.values {
+            viewController.mediaPlayerItemForTesting != nil
+                && viewController.moviePreviewStatusForTesting == nil
+        }
+        defer { renderedMovie.cancel() }
+        applyResponseBody(
+            to: context,
+            request: request,
+            body: "movie payload",
+            base64Encoded: false
+        )
+
+        #expect(await renderedMovie.waitUntil { $0 } != nil)
+        #expect(viewController.mediaPlayerViewControllerIdentityForTesting == playerViewControllerIdentity)
+        #expect(viewController.mediaPlayerIdentityForTesting == loadingPlayerIdentity)
+        #expect(viewController.mediaPlayerItemForTesting != nil)
+        #expect(viewController.mediaPlayerURLForTesting?.pathExtension == "mp4")
+        #expect(viewController.isMoviePreviewStatusVisibleForTesting == false)
+        #expect(playerFactory.players.count == 1)
+
+        let renderedLoading = await renderObservation.values {
+            viewController.mediaPlayerItemForTesting == nil
+                && viewController.isMoviePreviewStatusVisibleForTesting
+                && viewController.moviePreviewStatusForTesting == .loading
+        }
+        defer { renderedLoading.cancel() }
+        await applyResponseReceived(
+            to: context,
+            requestID: "loading-movie",
+            url: request.url,
+            responseHeaders: ["content-type": "video/mp4"],
+            responseMimeType: "video/mp4",
+            timestamp: 4
+        )
+
+        #expect(await renderedLoading.waitUntil { $0 } != nil)
+        #expect(viewController.mediaPlayerViewControllerIdentityForTesting == playerViewControllerIdentity)
+        #expect(viewController.mediaPlayerIdentityForTesting == loadingPlayerIdentity)
+        #expect(playerFactory.players.count == 1)
+
+        let renderedUnavailable = await renderObservation.values {
+            viewController.mediaPlayerItemForTesting == nil
+                && viewController.isMoviePreviewStatusVisibleForTesting
+                && viewController.moviePreviewStatusForTesting == .unavailable
+        }
+        defer { renderedUnavailable.cancel() }
+        applyResponseBody(
+            to: context,
+            request: request,
+            body: "",
+            base64Encoded: false
+        )
+        await viewController.waitUntilMediaPreviewPreparationFinishedForTesting()
+
+        #expect(await renderedUnavailable.waitUntil { $0 } != nil)
+        #expect(viewController.mediaPlayerViewControllerIdentityForTesting == playerViewControllerIdentity)
+        #expect(viewController.mediaPlayerIdentityForTesting == loadingPlayerIdentity)
+        #expect(playerFactory.players.count == 1)
     }
 
     @Test
@@ -817,7 +1470,8 @@ struct NetworkDetailViewControllerTests {
             for: body,
             metadata: NetworkMediaPreviewMetadata(
                 mimeType: nil,
-                url: "https://media.example.com/upload.m3u8"
+                url: "https://media.example.com/upload.m3u8",
+                sourcePolicy: .body
             )
         ) { _ in
             Issue.record("HLS request bodies should stay on the syntax preview path")
@@ -847,7 +1501,7 @@ struct NetworkDetailViewControllerTests {
         let viewController = makeNetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
         viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
-            playerFactory.makePlayer(for:)
+            playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -859,7 +1513,7 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRenderMediaPreview)
         let temporaryFileURL = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
-        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(playerFactory.players.count == 1)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
         viewController.setModeForTesting(.headers)
@@ -870,7 +1524,7 @@ struct NetworkDetailViewControllerTests {
                 && FileManager.default.fileExists(atPath: temporaryFileURL.path) == false
         }
         #expect(didReleaseMediaPreview)
-        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(playerFactory.players.count == 1)
 
         viewController.setModeForTesting(.preview)
         await waitUntilMediaPreviewPrepared(in: viewController)
@@ -880,8 +1534,7 @@ struct NetworkDetailViewControllerTests {
                 && viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
         }
         #expect(didRestoreMediaPreview)
-        #expect(playerFactory.requestedURLs.count == 2)
-        #expect(playerFactory.requestedURLs.allSatisfy { $0.pathExtension == "mp4" })
+        #expect(playerFactory.players.count == 2)
     }
 
     @Test
@@ -893,8 +1546,7 @@ struct NetworkDetailViewControllerTests {
                 requestID: "1",
                 url: "https://media.example.com/download.php",
                 responseHeaders: ["content-type": "video/mp4"],
-                responseMimeType: "video/mp4",
-                finishes: false
+                responseMimeType: "video/mp4"
             )
         )
         applyResponseBody(to: context, request: request, body: "not a real movie", base64Encoded: false)
@@ -903,7 +1555,7 @@ struct NetworkDetailViewControllerTests {
         let viewController = makeNetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
         viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
-            playerFactory.makePlayer(for:)
+            playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -917,7 +1569,7 @@ struct NetworkDetailViewControllerTests {
         #expect(didRenderMediaPreview)
         let temporaryFileURL = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
         let playerIdentity = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting)
-        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(playerFactory.players.count == 1)
 
         await applyDataReceived(
             to: context,
@@ -931,7 +1583,55 @@ struct NetworkDetailViewControllerTests {
         #expect(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == temporaryFileURL)
         #expect(viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting == playerIdentity)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
-        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(playerFactory.players.count == 1)
+    }
+
+    @Test
+    func mediaPreviewCoordinatorReusesTemporaryFileForEquivalentBodyPublication() async throws {
+        let body = NetworkBody(
+            role: .response,
+            kind: .binary,
+            full: "not a real movie",
+            isBase64Encoded: false,
+            sourceSyntaxKind: .plainText,
+            phase: .loaded
+        )
+        let metadata = NetworkMediaPreviewMetadata(
+            mimeType: "video/mp4",
+            url: "https://media.example.com/download.php",
+            sourcePolicy: .body
+        )
+        let coordinator = NetworkMediaPreviewCoordinator()
+        var publishedPreviews: [NetworkMoviePreview] = []
+
+        let firstAction = coordinator.preparePreview(for: body, metadata: metadata) { result in
+            guard case .showMovie(let preview) = result else {
+                Issue.record("Movie preparation should publish a temporary-file preview")
+                return
+            }
+            publishedPreviews.append(preview)
+        }
+        guard case .loadingMovie = firstAction else {
+            Issue.record("The first movie body publication should start preparation")
+            return
+        }
+        await coordinator.waitUntilPreparationFinishedForTesting()
+
+        let firstPreview = try #require(publishedPreviews.first)
+        #expect(FileManager.default.fileExists(atPath: firstPreview.url.path))
+
+        let equivalentAction = coordinator.preparePreview(for: body, metadata: metadata) { _ in
+            Issue.record("An equivalent body publication should reuse the prepared preview")
+        }
+        guard case .active = equivalentAction else {
+            Issue.record("An equivalent body publication should keep the active preview")
+            return
+        }
+        #expect(publishedPreviews.count == 1)
+        #expect(FileManager.default.fileExists(atPath: firstPreview.url.path))
+
+        coordinator.cancel()
+        #expect(FileManager.default.fileExists(atPath: firstPreview.url.path) == false)
     }
 
     @Test
@@ -952,7 +1652,7 @@ struct NetworkDetailViewControllerTests {
         let viewController = makeNetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
         viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
-            playerFactory.makePlayer(for:)
+            playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -1003,7 +1703,7 @@ struct NetworkDetailViewControllerTests {
         let viewController = makeNetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
         viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
-            playerFactory.makePlayer(for:)
+            playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -1015,7 +1715,7 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRenderMediaPreview)
         let temporaryFileURL = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
-        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(playerFactory.players.count == 1)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
         model.selectRequest(nil)
@@ -1027,7 +1727,7 @@ struct NetworkDetailViewControllerTests {
                 && FileManager.default.fileExists(atPath: temporaryFileURL.path) == false
         }
         #expect(didReleaseMediaPreview)
-        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(playerFactory.players.count == 1)
     }
 
     @Test
@@ -1048,7 +1748,7 @@ struct NetworkDetailViewControllerTests {
         let viewController = makeNetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
         viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
-            playerFactory.makePlayer(for:)
+            playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -1060,7 +1760,7 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRenderMediaPreview)
         let temporaryFileURL = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
-        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(playerFactory.players.count == 1)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
         viewController.beginAppearanceTransition(false, animated: false)
@@ -1080,7 +1780,7 @@ struct NetworkDetailViewControllerTests {
                 && FileManager.default.fileExists(atPath: temporaryFileURL.path) == false
         }
         #expect(didReleaseMediaPreview)
-        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(playerFactory.players.count == 1)
     }
 
     @Test
@@ -1665,6 +2365,115 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func compactContainerDoesNotReplayDeferredDetailAfterUserPop() async throws {
+        let context = makeContext()
+        let request = try #require(
+            await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js")
+        )
+        let model = NetworkPanelModel(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectRequest(request)
+        navigationController.syncStackForTesting()
+        #expect(navigationController.viewControllers == [listViewController, detailViewController])
+
+        let poppedViewController = navigationController.popDetailFromUserNavigationForTesting {
+            navigationController.syncStackForTesting()
+        }
+
+        #expect(poppedViewController === detailViewController)
+        #expect(model.selectedRequest == nil)
+        #expect(navigationController.viewControllers == [listViewController])
+    }
+
+    @Test
+    func compactContainerDoesNotRepushDetailWhenUserPopOvertakesPushCompletion() async throws {
+        let context = makeContext()
+        let request = try #require(
+            await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js")
+        )
+        let model = NetworkPanelModel(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectRequest(request)
+        navigationController.syncStackForTesting()
+        #expect(navigationController.viewControllers == [listViewController, detailViewController])
+
+        let poppedViewController =
+            navigationController.popDetailWhilePushTransitionIsStillTrackedForTesting()
+        navigationController.syncStackForTesting()
+
+        #expect(poppedViewController === detailViewController)
+        #expect(model.selectedRequest == nil)
+        #expect(navigationController.viewControllers == [listViewController])
+    }
+
+    @Test
+    func compactContainerKeepsDetailAfterCancelledUserPop() async throws {
+        let context = makeContext()
+        let request = try #require(
+            await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js")
+        )
+        let model = NetworkPanelModel(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectRequest(request)
+        navigationController.syncStackForTesting()
+
+        navigationController.cancelDetailPopFromUserNavigationForTesting {
+            navigationController.syncStackForTesting()
+        }
+
+        #expect(model.selectedRequest === request)
+        #expect(navigationController.viewControllers == [listViewController, detailViewController])
+    }
+
+    @Test
+    func compactContainerConvergesToReplacementSelectionAfterUserPop() async throws {
+        let context = makeContext()
+        let firstRequest = try #require(
+            await applyRequest(to: context, requestID: "1", url: "https://example.com/first.js")
+        )
+        let secondRequest = try #require(
+            await applyRequest(to: context, requestID: "2", url: "https://example.com/second.js")
+        )
+        let model = NetworkPanelModel(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectRequest(firstRequest)
+        navigationController.syncStackForTesting()
+
+        let poppedViewController = navigationController.popDetailFromUserNavigationForTesting {
+            model.selectRequest(secondRequest)
+            navigationController.syncStackForTesting()
+        }
+
+        #expect(poppedViewController === detailViewController)
+        #expect(model.selectedRequest === secondRequest)
+        #expect(navigationController.viewControllers == [listViewController, detailViewController])
+    }
+
+    @Test
     func compactContainerReleasesDetailMediaPreviewResourcesWhenDetailIsRemoved() async throws {
         let context = makeContext()
         let request = try #require(
@@ -1683,7 +2492,7 @@ struct NetworkDetailViewControllerTests {
         detailViewController.setModeForTesting(.preview)
         let playerFactory = MoviePreviewPlayerFactorySpy()
         detailViewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
-            playerFactory.makePlayer(for:)
+            playerFactory.makePlayer
         )
         let navigationController = NetworkCompactNavigationController(
             model: model,
@@ -1706,7 +2515,7 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRenderMediaPreview)
         let temporaryFileURL = try #require(detailViewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
-        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(playerFactory.players.count == 1)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
         model.selectRequest(nil)
@@ -1718,7 +2527,7 @@ struct NetworkDetailViewControllerTests {
                 && FileManager.default.fileExists(atPath: temporaryFileURL.path) == false
         }
         #expect(didReturnToListAndReleasePreview)
-        #expect(playerFactory.requestedURLs == [temporaryFileURL])
+        #expect(playerFactory.players.count == 1)
     }
 
     @Test
@@ -1742,12 +2551,13 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didPush)
         await waitForNavigationTransitionToFinish(in: navigationController)
+        let rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
 
         withUIKitAnimationsDisabled {
             context.clearNetworkRequests()
         }
-        #expect(model.selectedRequestID == request.id)
-        #expect(model.selectedRequest == nil)
+        #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+        #expect(model.selectedRequestID == nil)
 
         let didPop = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers == [listViewController]
@@ -1786,8 +2596,698 @@ struct NetworkDetailViewControllerTests {
             afterTransactionDeliveryCount: transactionDeliveryCountBeforeInsert
         )
         #expect(didRenderInsert)
-        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeInsert)
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeInsert + 1)
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeInsert + 1)
+    }
+
+    @Test
+    func visibleListCoalescesContinuousTopologyTransactionsAtDisplayUpdateBoundary() async throws {
+        let context = makeContext()
+        let selectedRequestID = context.seedNetworkRequest(
+            requestID: "selected-request",
+            url: "https://example.test/selected.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: -1
+        )
+        let model = NetworkPanelModel(context: context)
+        let selectedRequest = try #require(context.registeredRequest(for: selectedRequestID))
+        model.selectRequest(selectedRequest)
+        let frameScheduler = ManualNetworkListFrameScheduler()
+        let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
+        let listViewController = NetworkListViewController(
+            model: model,
+            listFrameScheduler: frameScheduler,
+            listSnapshotBuilderFactory: snapshotBuilder
+        )
+        let window = showInWindow(listViewController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(1)
+        await snapshotBuilder.releaseBuild(1)
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        #expect(listViewController.displayedRequestIDsForTesting == [selectedRequest.id])
+        let snapshotApplyBaseline = listViewController.snapshotApplyCountForTesting
+        let projectionFlushBaseline = listViewController.listProjectionFlushCountForTesting
+        let targetCaptureBaseline = listViewController.displayRequestIDsEvaluationCountForTesting
+        let scheduledFrameBaseline = frameScheduler.scheduledFrameCount
+        let insertedRequestCount = 2_305
+        let frameRequestDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        let rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+        for index in 0..<insertedRequestCount {
+            context.seedNetworkRequest(
+                requestID: "request-\(index)",
+                url: "https://example.test/\(index).json",
+                resourceTypeRawValue: "Fetch",
+                responseMIMEType: "application/json",
+                responseStatus: 200,
+                responseStatusText: "OK",
+                timestamp: Double(index)
+            )
+        }
+
+        #expect(await model.waitForRawTransactionDeliveryForTesting(
+            after: rawTransactionBaseline + insertedRequestCount - 1,
+            timeout: .seconds(10)
+        ))
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: frameRequestDeliveryBaseline
+        ))
+        #expect(frameScheduler.scheduledFrameCount == scheduledFrameBaseline + 1)
+        #expect(frameScheduler.hasScheduledFrame)
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyBaseline)
+
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(2)
+        let buildStatistics = await snapshotBuilder.statistics()
+        #expect(buildStatistics.startedBuildCount == 2)
+        #expect(buildStatistics.maximumActiveBuildCount == 1)
+        await snapshotBuilder.releaseBuild(2)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyBaseline)
+        #expect(frameScheduler.scheduledFrameCount == scheduledFrameBaseline + 2)
+        #expect(frameScheduler.hasScheduledFrame)
+
+        frameScheduler.fireScheduledFrame()
+        await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
+
+        let finalEntryIDs = model.displayEntryIDs
+        #expect(listViewController.displayedEntryIDsForTesting == finalEntryIDs)
+        #expect(finalEntryIDs.count == insertedRequestCount + 1)
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyBaseline + 1)
+        #expect(listViewController.listProjectionFlushCountForTesting == projectionFlushBaseline + 1)
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == targetCaptureBaseline + 1)
+        #expect(model.selectedRequest === selectedRequest)
+        let selectedEntryID = try #require(model.selectedEntryID)
+        #expect(
+            listViewController.collectionViewForTesting.indexPathsForSelectedItems
+                == [IndexPath(
+                    item: try #require(finalEntryIDs.firstIndex(of: selectedEntryID)),
+                    section: 0
+                )]
+        )
+    }
+
+    @Test
+    func completedListSnapshotBuildWaitsForDisplayFrameBeforeApplying() async throws {
+        let context = makeContext()
+        let requestID = context.seedNetworkRequest(
+            requestID: "frame-admission",
+            url: "https://example.test/frame-admission.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 0
+        )
+        let model = NetworkPanelModel(context: context)
+        let request = try #require(context.registeredRequest(for: requestID))
+        let frameScheduler = ManualNetworkListFrameScheduler()
+        let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
+        let listViewController = NetworkListViewController(
+            model: model,
+            listFrameScheduler: frameScheduler,
+            listSnapshotBuilderFactory: snapshotBuilder
+        )
+        let window = showInWindow(listViewController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        #expect(listViewController.snapshotApplyCountForTesting == 0)
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(1)
+        await snapshotBuilder.releaseBuild(1)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+
+        try #require(listViewController.snapshotApplyCountForTesting == 0)
+        try #require(frameScheduler.hasScheduledFrame)
+
+        frameScheduler.fireScheduledFrame()
+        await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
+
+        #expect(listViewController.snapshotApplyCountForTesting == 1)
+        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+    }
+
+    @Test
+    func concreteListSnapshotBuilderFactoryMakesDedicatedActors() async throws {
+        let context = makeContext()
+        context.seedNetworkRequest(
+            requestID: "actor-builder",
+            url: "https://example.test/actor-builder.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 0
+        )
+        let model = NetworkPanelModel(context: context)
+        let target = NetworkPanelListProjection(
+            version: NetworkPanelListVersion(revision: 41, entryIdentityGeneration: 0),
+            entryIDs: model.displayEntryIDs
+        )
+        let input = makeNetworkListSnapshotBuildInput(target: target)
+        let builderFactory = NetworkListSnapshotBuilderFactory()
+        let builder = builderFactory.makeBuilder()
+        let nextBuilder = builderFactory.makeBuilder()
+
+        let artifact = try await builder.build(input)
+
+        #expect(ObjectIdentifier(builder) != ObjectIdentifier(nextBuilder))
+        #expect(artifact.input == input)
+        #expect(artifact.snapshot.sectionIdentifiers == [.main])
+        #expect(artifact.snapshot.itemIdentifiers == input.target.entryIDs)
+        #expect(artifact.changeCounts.inserted == 1)
+    }
+
+    @Test
+    func concreteListSnapshotBuilderRetainsEveryEntryAcrossCooperativeBatches() async throws {
+        let context = makeContext()
+        let entryCount = 769
+        for index in 0..<entryCount {
+            context.seedNetworkRequest(
+                requestID: "cooperative-builder-\(index)",
+                url: "https://example.test/cooperative-builder-\(index).json",
+                resourceTypeRawValue: "Fetch",
+                responseMIMEType: "application/json",
+                responseStatus: 200,
+                responseStatusText: "OK",
+                timestamp: Double(index)
+            )
+        }
+        let target = NetworkPanelListProjection(
+            version: NetworkPanelListVersion(revision: 42, entryIdentityGeneration: 0),
+            entryIDs: NetworkPanelModel(context: context).displayEntryIDs
+        )
+        let input = makeNetworkListSnapshotBuildInput(target: target)
+        let builder = NetworkListSnapshotBuilderFactory().makeBuilder()
+
+        let artifact = try await builder.build(input)
+
+        #expect(input.target.entryIDs.count == entryCount)
+        #expect(artifact.input == input)
+        #expect(artifact.snapshot.itemIdentifiers == input.target.entryIDs)
+        #expect(artifact.changeCounts.inserted == entryCount)
+    }
+
+    @Test
+    func listInvalidationAccumulatorCoalescesBurstAndRetainsEntryIdentityGeneration() async {
+        let accumulator = NetworkListInvalidationAccumulator()
+
+        for revision in 1...2_305 {
+            await accumulator.receiveForTesting(NetworkPanelListInvalidation(
+                version: NetworkPanelListVersion(
+                    revision: UInt64(revision),
+                    entryIdentityGeneration: revision >= 1_024 ? 1 : 0
+                )
+            ))
+        }
+
+        var state = await accumulator.stateForTesting
+        #expect(state.latestVersion == NetworkPanelListVersion(
+            revision: 2_305,
+            entryIdentityGeneration: 1
+        ))
+        #expect(state.frameRequestPublicationCount == 1)
+        #expect(state.frameRequestOutstanding)
+
+        await accumulator.didCapture(NetworkPanelListVersion(
+            revision: 2_305,
+            entryIdentityGeneration: 1
+        ))
+        state = await accumulator.stateForTesting
+        #expect(state.frameRequestPublicationCount == 1)
+        #expect(state.frameRequestOutstanding == false)
+    }
+
+    @Test
+    func displayCriteriaChangesDoNotAdvanceEntryIdentityGeneration() async throws {
+        let context = makeContext()
+        for name in ["alpha", "beta"] {
+            context.seedNetworkRequest(
+                requestID: "criteria-\(name)",
+                url: "https://example.test/criteria-\(name).json",
+                resourceTypeRawValue: "Fetch",
+                responseMIMEType: "application/json",
+                responseStatus: 200,
+                responseStatusText: "OK",
+                timestamp: 0
+            )
+        }
+        let model = NetworkPanelModel(context: context)
+        let baselineProjection = model.captureListProjection()
+        let baseline = makeNetworkListSnapshotBaseline(
+            entryIDs: baselineProjection.entryIDs,
+            version: baselineProjection.version,
+            generation: 5
+        )
+
+        model.setSearchText("alpha")
+        let filteredProjection = model.captureListProjection()
+        let artifact = try await NetworkListSnapshotBuilder().build(
+            makeNetworkListSnapshotBuildInput(
+                baseline: baseline,
+                target: filteredProjection
+            )
+        )
+
+        #expect(filteredProjection.entryIDs.count == 1)
+        #expect(
+            filteredProjection.version.entryIdentityGeneration
+                == baselineProjection.version.entryIdentityGeneration
+        )
+        #expect(artifact.changeCounts.reconfigured == 0)
+        #expect(artifact.snapshot.reconfiguredItemIdentifiers.isEmpty)
+
+        model.setSearchText("no-match")
+        let emptyProjection = model.captureListProjection()
+        #expect(emptyProjection.entryIDs.isEmpty)
+        #expect(emptyProjection.version.revision > filteredProjection.version.revision)
+        #expect(
+            emptyProjection.version.entryIdentityGeneration
+                == baselineProjection.version.entryIdentityGeneration
+        )
+    }
+
+    @Test
+    func concreteListSnapshotBuilderReconfiguresStableRowsAfterReset() async throws {
+        let context = makeContext()
+        for index in 0..<3 {
+            context.seedNetworkRequest(
+                requestID: "reset-rebind-\(index)",
+                url: "https://example.test/reset-rebind-\(index).json",
+                resourceTypeRawValue: "Fetch",
+                responseMIMEType: "application/json",
+                responseStatus: 200,
+                responseStatusText: "OK",
+                timestamp: Double(index)
+            )
+        }
+        let entryIDs = NetworkPanelModel(context: context).displayEntryIDs
+        let baseline = makeNetworkListSnapshotBaseline(
+            entryIDs: entryIDs,
+            version: NetworkPanelListVersion(revision: 7, entryIdentityGeneration: 0),
+            generation: 3
+        )
+        let input = makeNetworkListSnapshotBuildInput(
+            baseline: baseline,
+            target: NetworkPanelListProjection(
+                version: NetworkPanelListVersion(revision: 8, entryIdentityGeneration: 1),
+                entryIDs: entryIDs
+            )
+        )
+
+        let artifact = try await NetworkListSnapshotBuilder().build(input)
+
+        #expect(artifact.snapshot.itemIdentifiers == entryIDs)
+        #expect(Set(artifact.snapshot.reconfiguredItemIdentifiers) == Set(entryIDs))
+        #expect(artifact.cleanSnapshot.reconfiguredItemIdentifiers.isEmpty)
+        #expect(artifact.changeCounts == NetworkListSnapshotChangeCounts(
+            inserted: 0,
+            deleted: 0,
+            moved: 0,
+            reconfigured: entryIDs.count
+        ))
+    }
+
+    @Test
+    func visibleStableRowRebindsToRebuiltEntryAfterModelReset() async throws {
+        let context = makeContext()
+        let request = try #require(await applyRequest(
+            to: context,
+            requestID: "stable-reset-rebind",
+            url: "https://example.test/stable-reset-rebind.json"
+        ))
+        let model = NetworkPanelModel(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(listViewController, makeVisible: true)
+        defer { window.isHidden = true }
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        listViewController.collectionViewForTesting.layoutIfNeeded()
+
+        let entryID = try #require(model.entryID(containing: request.id))
+        let originalEntry = try #require(model.entry(for: entryID))
+        let indexPath = try #require(listViewController.collectionViewForTesting.indexPathsForVisibleItems.first)
+        let cell = try #require(listViewController.networkListCellForTesting(at: indexPath))
+        #expect(cell.observedEntryForTesting === originalEntry)
+        let frameRequestBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+
+        model.rebuildEntriesForTesting()
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: frameRequestBaseline
+        ))
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        listViewController.collectionViewForTesting.layoutIfNeeded()
+
+        let rebuiltEntry = try #require(model.entry(for: entryID))
+        #expect(rebuiltEntry !== originalEntry)
+        #expect(cell.observedEntryForTesting === rebuiltEntry)
+    }
+
+    @Test
+    func concreteListSnapshotBuilderAppliesExactTenThousandRowDelta() async throws {
+        let context = makeContext()
+        let entryCount = 10_000
+        for index in 0..<entryCount {
+            context.seedNetworkRequest(
+                requestID: "ten-thousand-\(index)",
+                url: "https://example.test/ten-thousand-\(index).json",
+                resourceTypeRawValue: "Fetch",
+                responseMIMEType: "application/json",
+                responseStatus: 200,
+                responseStatusText: "OK",
+                timestamp: Double(index)
+            )
+        }
+        let allEntryIDs = NetworkPanelModel(context: context).displayEntryIDs
+        let baselineEntryIDs = Array(allEntryIDs.prefix(entryCount - 10))
+        let deletedEntryIDs = Set(allEntryIDs[200..<210])
+        let rotatedEntryIDs = Array(allEntryIDs[100..<5_000])
+            + Array(allEntryIDs[0..<100])
+            + Array(allEntryIDs[5_000..<entryCount])
+        let targetEntryIDs = rotatedEntryIDs.filter { deletedEntryIDs.contains($0) == false }
+        let baseline = makeNetworkListSnapshotBaseline(
+            entryIDs: baselineEntryIDs,
+            version: NetworkPanelListVersion(revision: 11, entryIdentityGeneration: 0),
+            generation: 4
+        )
+        let input = makeNetworkListSnapshotBuildInput(
+            baseline: baseline,
+            target: NetworkPanelListProjection(
+                version: NetworkPanelListVersion(revision: 12, entryIdentityGeneration: 0),
+                entryIDs: targetEntryIDs
+            )
+        )
+
+        let artifact = try await NetworkListSnapshotBuilder().build(input)
+
+        #expect(artifact.snapshot.itemIdentifiers == targetEntryIDs)
+        #expect(artifact.cleanSnapshot.itemIdentifiers == targetEntryIDs)
+        #expect(artifact.changeCounts.inserted == 10)
+        #expect(artifact.changeCounts.deleted == 10)
+        #expect(artifact.changeCounts.moved > 0)
+        #expect(artifact.changeCounts.reconfigured == 0)
+    }
+
+    @Test
+    func concreteListSnapshotBuilderObservesCancellationBeforeConstruction() async throws {
+        let context = makeContext()
+        for index in 0..<769 {
+            context.seedNetworkRequest(
+                requestID: "cancel-builder-\(index)",
+                url: "https://example.test/cancel-builder-\(index).json",
+                resourceTypeRawValue: "Fetch",
+                responseMIMEType: "application/json",
+                responseStatus: 200,
+                responseStatusText: "OK",
+                timestamp: Double(index)
+            )
+        }
+        let target = NetworkPanelListProjection(
+            version: NetworkPanelListVersion(revision: 13, entryIdentityGeneration: 0),
+            entryIDs: NetworkPanelModel(context: context).displayEntryIDs
+        )
+        let input = makeNetworkListSnapshotBuildInput(target: target)
+        let gate = NetworkListBuilderStartGate()
+        let builder = NetworkListSnapshotBuilder()
+        let task = Task {
+            await gate.waitForRelease()
+            return try await builder.build(input)
+        }
+
+        await gate.waitUntilWaiting()
+        task.cancel()
+        await gate.release()
+
+        await #expect(throws: CancellationError.self) {
+            try await task.value
+        }
+    }
+
+    @Test
+    func staleReadySnapshotNeverAppliesAfterNewerTransactionArrives() async throws {
+        let context = makeContext()
+        let initialRequestID = context.seedNetworkRequest(
+            requestID: "applying-a",
+            url: "https://example.test/applying-a.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 0
+        )
+        let model = NetworkPanelModel(context: context)
+        _ = try #require(context.registeredRequest(for: initialRequestID))
+        let frameScheduler = ManualNetworkListFrameScheduler()
+        let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
+        let applyCompletionScheduler = ManualNetworkListSnapshotApplyCompletionScheduler()
+        let listViewController = NetworkListViewController(
+            model: model,
+            listFrameScheduler: frameScheduler,
+            listSnapshotBuilderFactory: snapshotBuilder,
+            snapshotApplyCompletionScheduler: applyCompletionScheduler
+        )
+        let window = showInWindow(listViewController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(1)
+        await snapshotBuilder.releaseBuild(1)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await applyCompletionScheduler.waitUntilScheduledCompletionCount(1)
+        #expect(listViewController.snapshotApplyCountForTesting == 1)
+
+        var transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        context.seedNetworkRequest(
+            requestID: "ready-b",
+            url: "https://example.test/ready-b.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 1
+        )
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: transactionDeliveryBaseline
+        ))
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(2)
+        await snapshotBuilder.releaseBuild(2)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        #expect(listViewController.hasPendingSnapshotUpdateForTesting)
+        #expect(listViewController.snapshotApplyCountForTesting == 1)
+        try #require(frameScheduler.hasScheduledFrame)
+
+        transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        context.seedNetworkRequest(
+            requestID: "latest-c",
+            url: "https://example.test/latest-c.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 2
+        )
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: transactionDeliveryBaseline
+        ))
+
+        applyCompletionScheduler.runNextCompletion()
+        #expect(listViewController.snapshotApplyCountForTesting == 1)
+        #expect(frameScheduler.hasScheduledFrame)
+
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(3)
+        #expect(listViewController.hasPendingSnapshotUpdateForTesting == false)
+        #expect(listViewController.snapshotApplyCountForTesting == 1)
+
+        await snapshotBuilder.releaseBuild(3)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        #expect(listViewController.snapshotApplyCountForTesting == 1)
+        try #require(frameScheduler.hasScheduledFrame)
+
+        frameScheduler.fireScheduledFrame()
+        await applyCompletionScheduler.waitUntilScheduledCompletionCount(2)
+
+        #expect(listViewController.snapshotApplyCountForTesting == 2)
+        #expect(listViewController.displayedEntryIDsForTesting == model.displayEntryIDs)
+
+        applyCompletionScheduler.runNextCompletion()
+        await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
+
+        #expect(listViewController.displayedEntryIDsForTesting == model.displayEntryIDs)
+        #expect(listViewController.snapshotApplyCountForTesting == 2)
+        #expect(applyCompletionScheduler.pendingCompletionCount == 0)
+    }
+
+    @Test
+    func listSnapshotBuildSerializesRunningWorkAndKeepsLatestReplacement() async throws {
+        let context = makeContext()
+        let selectedRequestID = context.seedNetworkRequest(
+            requestID: "selected-request",
+            url: "https://example.test/selected.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 0
+        )
+        let model = NetworkPanelModel(context: context)
+        let selectedRequest = try #require(context.registeredRequest(for: selectedRequestID))
+        model.selectRequest(selectedRequest)
+        let frameScheduler = ManualNetworkListFrameScheduler()
+        let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
+        let listViewController = NetworkListViewController(
+            model: model,
+            listFrameScheduler: frameScheduler,
+            listSnapshotBuilderFactory: snapshotBuilder
+        )
+        let window = showInWindow(listViewController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(1)
+        await snapshotBuilder.releaseBuild(1)
+        await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
+        #expect(listViewController.displayedRequestIDsForTesting == [selectedRequest.id])
+        let snapshotApplyBaseline = listViewController.snapshotApplyCountForTesting
+        let projectionFlushBaseline = listViewController.listProjectionFlushCountForTesting
+        let scheduledFrameBaseline = frameScheduler.scheduledFrameCount
+
+        var transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        context.seedNetworkRequest(
+            requestID: "first-replacement",
+            url: "https://example.test/first.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 1
+        )
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: transactionDeliveryBaseline
+        ))
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(2)
+
+        transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        context.seedNetworkRequest(
+            requestID: "superseded-replacement",
+            url: "https://example.test/superseded.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 2
+        )
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: transactionDeliveryBaseline
+        ))
+        frameScheduler.fireScheduledFrame()
+
+        transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        context.seedNetworkRequest(
+            requestID: "latest-replacement",
+            url: "https://example.test/latest.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 3
+        )
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: transactionDeliveryBaseline
+        ))
+        frameScheduler.fireScheduledFrame()
+
+        var buildStatistics = await snapshotBuilder.statistics()
+        #expect(buildStatistics.startedBuildCount == 2)
+        #expect(buildStatistics.activeBuildCount == 1)
+        #expect(buildStatistics.maximumActiveBuildCount == 1)
+
+        await snapshotBuilder.releaseBuild(2)
+        await snapshotBuilder.waitUntilStartedBuildCount(3)
+        buildStatistics = await snapshotBuilder.statistics()
+        #expect(buildStatistics.startedBuildCount == 3)
+        #expect(buildStatistics.activeBuildCount == 1)
+        #expect(buildStatistics.maximumActiveBuildCount == 1)
+
+        await snapshotBuilder.releaseBuild(3)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        #expect(frameScheduler.scheduledFrameCount == scheduledFrameBaseline + 4)
+        #expect(frameScheduler.hasScheduledFrame)
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyBaseline)
+
+        frameScheduler.fireScheduledFrame()
+        await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
+
+        let finalEntryIDs = model.displayEntryIDs
+        #expect(listViewController.displayedEntryIDsForTesting == finalEntryIDs)
+        #expect(finalEntryIDs.count == 4)
+        #expect(listViewController.listProjectionFlushCountForTesting == projectionFlushBaseline + 3)
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyBaseline + 1)
+        #expect(model.selectedRequest === selectedRequest)
+        let selectedEntryID = try #require(model.selectedEntryID)
+        #expect(
+            listViewController.collectionViewForTesting.indexPathsForSelectedItems
+                == [IndexPath(
+                    item: try #require(finalEntryIDs.firstIndex(of: selectedEntryID)),
+                    section: 0
+                )]
+        )
+    }
+
+    @Test
+    func visibleListContentUpdateSkipsSnapshotAndRendersObservedCell() async throws {
+        let context = makeContext()
+        let request = try #require(await applyRequestWithoutResponse(
+            to: context,
+            requestID: "content-update",
+            url: "https://example.test/content-update"
+        ))
+        let model = NetworkPanelModel(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(listViewController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        listViewController.collectionViewForTesting.layoutIfNeeded()
+        let cell = try #require(listViewController.networkListCellForTesting(
+            at: IndexPath(item: 0, section: 0)
+        ))
+        let entryObservation = try #require(cell.entryObservationForTesting)
+        let renderedFileType = await entryObservation.values {
+            cell.fileTypeLabelForTesting
+        }
+        defer { renderedFileType.cancel() }
+        let snapshotApplyBaseline = listViewController.snapshotApplyCountForTesting
+        let transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+
+        await applyResponseReceived(
+            to: context,
+            requestID: "content-update",
+            url: request.url,
+            responseHeaders: ["content-type": "text/css"],
+            responseMimeType: "text/css",
+            timestamp: 4
+        )
+
+        #expect(await renderedFileType.waitUntilValue("css"))
+        #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyBaseline)
+        #expect(
+            listViewController.fetchedResultsTransactionDeliveryCountForTesting
+                == transactionDeliveryBaseline
+        )
+        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
     }
 
     @Test
@@ -1823,7 +3323,7 @@ struct NetworkDetailViewControllerTests {
         #expect(didRenderReset)
         #expect(model.displayRequestIDs.isEmpty)
         #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
-        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeUpdate)
+        #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeUpdate + 1)
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyCountBeforeUpdate + 1)
     }
 
@@ -1864,7 +3364,202 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func hiddenListDefersQueuedSnapshotApplyUntilAppearingAgain() async throws {
+    func repeatedHideShowBoundsRetiredSnapshotBuildsAndAppliesLatestRevision() async throws {
+        let context = makeContext()
+        let firstRequestID = context.seedNetworkRequest(
+            requestID: "first",
+            url: "https://example.test/first.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 0
+        )
+        let model = NetworkPanelModel(context: context)
+        let firstRequest = try #require(context.registeredRequest(for: firstRequestID))
+        let frameScheduler = ManualNetworkListFrameScheduler()
+        let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
+        let listViewController = NetworkListViewController(
+            model: model,
+            listFrameScheduler: frameScheduler,
+            listSnapshotBuilderFactory: snapshotBuilder
+        )
+        let window = showInWindow(listViewController, makeVisible: true)
+        defer { window.isHidden = true }
+
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(1)
+        await snapshotBuilder.releaseBuild(1)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
+        #expect(listViewController.displayedRequestIDsForTesting == [firstRequest.id])
+        var transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        let secondRequestID = context.seedNetworkRequest(
+            requestID: "second",
+            url: "https://example.test/second.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 1
+        )
+        let secondRequest = try #require(context.registeredRequest(for: secondRequestID))
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: transactionDeliveryBaseline
+        ))
+
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(2)
+        #expect(listViewController.hasActiveListSnapshotBuildForTesting)
+
+        listViewController.suspendRenderingForTesting()
+        #expect(listViewController.hasActiveListSnapshotBuildForTesting == false)
+        #expect(frameScheduler.hasScheduledFrame == false)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 1)
+        await snapshotBuilder.waitUntilCancellationObservedCount(1)
+
+        listViewController.resumeRenderingForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        #expect(listViewController.hasDeferredListSnapshotBuildForTesting)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 1)
+        var statistics = await snapshotBuilder.statistics()
+        #expect(statistics.startedBuildCount == 2)
+        await snapshotBuilder.releaseBuild(2)
+        await snapshotBuilder.waitUntilCancelledBuildCount(1)
+        await snapshotBuilder.waitUntilStartedBuildCount(3)
+        await snapshotBuilder.releaseBuild(3)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
+
+        #expect(listViewController.displayedRequestIDsForTesting == [secondRequest.id, firstRequest.id])
+        statistics = await snapshotBuilder.statistics()
+        #expect(statistics.activeBuildCount == 0)
+        #expect(statistics.cancellationObservedCount == 1)
+        #expect(statistics.cancelledBuildCount == 1)
+        #expect(statistics.finishedBuildIDs.contains(3))
+        #expect(statistics.maximumActiveBuildCount == 1)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 0)
+
+        transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        let thirdRequestID = context.seedNetworkRequest(
+            requestID: "third",
+            url: "https://example.test/third.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 2
+        )
+        let thirdRequest = try #require(context.registeredRequest(for: thirdRequestID))
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: transactionDeliveryBaseline
+        ))
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(4)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 1)
+
+        listViewController.suspendRenderingForTesting()
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 1)
+        #expect(frameScheduler.hasScheduledFrame == false)
+        await snapshotBuilder.waitUntilCancellationObservedCount(2)
+
+        listViewController.resumeRenderingForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        #expect(listViewController.hasDeferredListSnapshotBuildForTesting)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 1)
+        statistics = await snapshotBuilder.statistics()
+        #expect(statistics.startedBuildCount == 4)
+
+        await snapshotBuilder.releaseBuild(4)
+        await snapshotBuilder.waitUntilCancelledBuildCount(2)
+        await snapshotBuilder.waitUntilStartedBuildCount(5)
+        #expect(listViewController.hasDeferredListSnapshotBuildForTesting == false)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 1)
+        await snapshotBuilder.releaseBuild(5)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
+        #expect(
+            listViewController.displayedRequestIDsForTesting
+                == [thirdRequest.id, secondRequest.id, firstRequest.id]
+        )
+
+        transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        let fourthRequestID = context.seedNetworkRequest(
+            requestID: "fourth",
+            url: "https://example.test/fourth.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 3
+        )
+        let fourthRequest = try #require(context.registeredRequest(for: fourthRequestID))
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: transactionDeliveryBaseline
+        ))
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(6)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 1)
+
+        listViewController.suspendRenderingForTesting()
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 1)
+        #expect(frameScheduler.hasScheduledFrame == false)
+        await snapshotBuilder.waitUntilCancellationObservedCount(3)
+
+        listViewController.resumeRenderingForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        #expect(listViewController.hasDeferredListSnapshotBuildForTesting)
+        statistics = await snapshotBuilder.statistics()
+        #expect(statistics.startedBuildCount == 6)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 1)
+
+        await snapshotBuilder.releaseBuild(6)
+        await snapshotBuilder.waitUntilCancelledBuildCount(3)
+        await snapshotBuilder.waitUntilStartedBuildCount(7)
+        #expect(listViewController.hasDeferredListSnapshotBuildForTesting == false)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 1)
+        await snapshotBuilder.releaseBuild(7)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
+
+        #expect(
+            listViewController.displayedRequestIDsForTesting
+                == [fourthRequest.id, thirdRequest.id, secondRequest.id, firstRequest.id]
+        )
+        #expect(listViewController.displayedEntryIDsForTesting == model.displayEntryIDs)
+        statistics = await snapshotBuilder.statistics()
+        #expect(statistics.activeBuildCount == 0)
+        #expect(statistics.maximumActiveBuildCount == 1)
+        #expect(statistics.cancellationObservedCount == 3)
+        #expect(statistics.cancelledBuildCount == 3)
+        #expect(statistics.finishedBuildIDs.isSuperset(of: [3, 5, 7]))
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 0)
+
+        await listViewController.waitForTrackedListSnapshotBuildTasksForTesting()
+        statistics = await snapshotBuilder.statistics()
+        #expect(statistics.activeBuildCount == 0)
+        #expect(statistics.cancelledBuildCount == 3)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 0)
+        #expect(statistics.startedBuildPriorities.allSatisfy { $0 == .userInitiated })
+    }
+
+    @Test
+    func hiddenListReconcilesAfterInFlightApplyCompletesWhileHidden() async throws {
         let context = makeContext()
         let request = try #require(await applyRequest(
             to: context,
@@ -1874,31 +3569,78 @@ struct NetworkDetailViewControllerTests {
             responseMimeType: "video/mp4"
         ))
         let model = NetworkPanelModel(context: context)
-        let listViewController = NetworkListViewController(model: model)
-        let window = showInWindow(listViewController)
+        let frameScheduler = ManualNetworkListFrameScheduler()
+        let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
+        let applyCompletionScheduler = ManualNetworkListSnapshotApplyCompletionScheduler()
+        let listViewController = NetworkListViewController(
+            model: model,
+            listFrameScheduler: frameScheduler,
+            listSnapshotBuilderFactory: snapshotBuilder,
+            snapshotApplyCompletionScheduler: applyCompletionScheduler
+        )
+        let window = showInWindow(listViewController, makeVisible: true)
         defer { window.isHidden = true }
-        await listViewController.flushPendingSnapshotUpdateForTesting()
+
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(1)
+        await snapshotBuilder.releaseBuild(1)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await applyCompletionScheduler.waitUntilScheduledCompletionCount(1)
+        applyCompletionScheduler.runNextCompletion()
+        await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
         #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+
+        var transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        model.setSearchText("does-not-match")
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: transactionDeliveryBaseline
+        ))
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(2)
+        await snapshotBuilder.releaseBuild(2)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await applyCompletionScheduler.waitUntilScheduledCompletionCount(2)
+
+        #expect(listViewController.snapshotApplyCountForTesting == 2)
+        #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
 
         let evaluationCountBeforeHiddenUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
-        listViewController.beginSnapshotApplyForTesting(requestIDs: [request.id])
-        listViewController.queueSnapshotUpdateForTesting(requestIDs: [])
-        #expect(listViewController.hasPendingSnapshotUpdateForTesting)
-
         listViewController.suspendRenderingForTesting()
         #expect(listViewController.hasPendingSnapshotUpdateForTesting == false)
+        #expect(frameScheduler.hasScheduledFrame == false)
 
-        model.setSearchText("does-not-match")
-        listViewController.finishSnapshotApplyForTesting(requestIDs: [request.id])
-        await listViewController.flushPendingSnapshotUpdateForTesting()
+        transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        model.setSearchText("")
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: transactionDeliveryBaseline
+        ))
+        applyCompletionScheduler.runNextCompletion()
 
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate)
-        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
+        #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
+        #expect(frameScheduler.hasScheduledFrame == false)
 
         listViewController.resumeRenderingForTesting()
-        await listViewController.flushPendingSnapshotUpdateForTesting()
-        #expect(listViewController.displayedRequestIDsForTesting.isEmpty)
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(3)
+        await snapshotBuilder.releaseBuild(3)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await applyCompletionScheduler.waitUntilScheduledCompletionCount(3)
+        applyCompletionScheduler.runNextCompletion()
+        await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
+
+        #expect(listViewController.displayedRequestIDsForTesting == [request.id])
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
+        #expect(applyCompletionScheduler.pendingCompletionCount == 0)
     }
 
     @Test
@@ -1959,10 +3701,16 @@ struct NetworkDetailViewControllerTests {
             responseHeaders: ["content-type": "video/mp4"],
             responseMimeType: "video/mp4"
         ))
+        let model = NetworkPanelModel(context: context)
+        let entry = try #require(model.displayEntries.first)
         let cell = NetworkListCell(frame: CGRect(x: 0, y: 0, width: 390, height: 44))
-        cell.bind(request: request, renderingActive: true)
+        cell.bind(entry: entry, renderingActive: true)
         #expect(cell.fileTypeLabelForTesting == "mp4")
         #expect(cell.hasActiveRequestObservationForTesting)
+        let content = try #require(
+            cell.contentConfiguration as? UIListContentConfiguration
+        )
+        #expect(content.textProperties.adjustsFontForContentSizeCategory)
 
         cell.setRenderingActive(false)
         #expect(cell.hasActiveRequestObservationForTesting == false)
@@ -1982,6 +3730,493 @@ struct NetworkDetailViewControllerTests {
 
         #expect(cell.hasActiveRequestObservationForTesting)
         #expect(cell.fileTypeLabelForTesting == "css")
+    }
+
+    @Test
+    func groupedHeadersRenderEveryMemberInChronologicalOrder() async throws {
+        let context = makeContext()
+        let frameID = FrameID("main-frame")
+        let nodeID = DOM.Node.ID("grouped-loader")
+        installNavigationVisit(in: context, frameID: frameID)
+        let firstRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "first",
+            url: "https://example.com/first.js",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            requestHeaders: ["x-member": "first"],
+            responseHeaders: ["content-type": "text/javascript"],
+            responseMIMEType: "text/javascript",
+            timestamp: 1
+        ))
+        let secondRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "second",
+            url: "https://example.com/second.js",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            requestHeaders: ["x-member": "second"],
+            responseHeaders: ["content-type": "text/javascript"],
+            responseMIMEType: "text/javascript",
+            timestamp: 4
+        ))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(secondRequest)
+        let viewController = makeNetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didRenderAllMembers = await waitUntilRendered(in: viewController) {
+            let text = viewController.headersTextViewForTesting.renderedTextForTesting
+            return text.contains("1. first.js")
+                && text.contains("2. second.js")
+                && text.contains("x-member: first")
+                && text.contains("x-member: second")
+        }
+        #expect(didRenderAllMembers)
+        let renderedText = viewController.headersTextViewForTesting.renderedTextForTesting
+        let firstHeading = try #require(renderedText.range(of: "1. first.js"))
+        let secondHeading = try #require(renderedText.range(of: "2. second.js"))
+        #expect(firstHeading.lowerBound < secondHeading.lowerBound)
+        #expect(model.selectedRequest === firstRequest)
+        #expect(model.selectedRequests.map(\.id) == [firstRequest.id, secondRequest.id])
+    }
+
+    @Test
+    func groupedPreviewKeepsMasterPlaylistAheadOfNewerPartialSegment() async throws {
+        let context = makeContext()
+        let frameID = FrameID("main-frame")
+        let nodeID = DOM.Node.ID("grouped-player")
+        installNavigationVisit(in: context, frameID: frameID)
+        let hlsRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "playlist",
+            url: "https://media.example.com/live/master.m3u8",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMIMEType: "application/vnd.apple.mpegurl",
+            resourceType: .media,
+            timestamp: 1
+        ))
+        let partialSegmentRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "partial-segment",
+            url: "https://media.example.com/segment.mp4",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: [
+                "content-type": "video/mp4",
+                "content-range": "bytes 0-1023/4096",
+            ],
+            responseMIMEType: "video/mp4",
+            responseStatus: 206,
+            resourceType: .media,
+            timestamp: 4
+        ))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(partialSegmentRequest)
+        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didSelectHLSPreview = await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == hlsRequest.id
+                && viewController.currentModeForTesting == .preview
+                && viewController.previewViewForTesting.isHidden == false
+        }
+        #expect(didSelectHLSPreview)
+        #expect(model.selectedRequest?.id == hlsRequest.id)
+        #expect(model.selectedRequests.map(\.id) == [hlsRequest.id, partialSegmentRequest.id])
+    }
+
+    @Test
+    func groupedHLSPreviewUsesLatestRequestWhenURLsMatch() async throws {
+        let context = makeContext()
+        let frameID = FrameID("main-frame")
+        let nodeID = DOM.Node.ID("grouped-shared-playlist")
+        let playlistURL = "https://media.example.com/shared.m3u8"
+        installNavigationVisit(in: context, frameID: frameID)
+        let firstRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "first-shared-playlist",
+            url: playlistURL,
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMIMEType: "application/vnd.apple.mpegurl",
+            resourceType: .media,
+            timestamp: 1
+        ))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(firstRequest)
+        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+            playerFactory.makePlayer
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == firstRequest.id
+                && playerFactory.players.count == 1
+        })
+        let firstPlayerID = try #require(
+            viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting
+        )
+
+        let secondRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "second-shared-playlist",
+            url: playlistURL,
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMIMEType: "application/vnd.apple.mpegurl",
+            resourceType: .media,
+            timestamp: 4
+        ))
+
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == secondRequest.id
+                && playerFactory.players.count == 2
+        })
+        #expect(
+            viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting
+                != firstPlayerID
+        )
+        #expect(model.selectedRequests.map(\.id) == [firstRequest.id, secondRequest.id])
+    }
+
+    @Test
+    func groupedPreviewFollowsNewerPlaylist() async throws {
+        let context = makeContext()
+        let frameID = FrameID("main-frame")
+        let nodeID = DOM.Node.ID("grouped-changing-playlist")
+        installNavigationVisit(in: context, frameID: frameID)
+        let firstRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "first-playlist",
+            url: "https://media.example.com/first.m3u8",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMIMEType: "application/vnd.apple.mpegurl",
+            resourceType: .media,
+            timestamp: 1
+        ))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(firstRequest)
+        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+            playerFactory.makePlayer
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == firstRequest.id
+                && viewController.syntaxBodyViewControllerForTesting
+                    .mediaPlayerURLForTesting?.absoluteString == firstRequest.url
+                && playerFactory.players.count == 1
+        })
+
+        let secondRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "second-playlist",
+            url: "https://media.example.com/second.m3u8",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMIMEType: "application/vnd.apple.mpegurl",
+            resourceType: .media,
+            timestamp: 4
+        ))
+
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == secondRequest.id
+                && viewController.syntaxBodyViewControllerForTesting
+                    .mediaPlayerURLForTesting?.absoluteString == secondRequest.url
+                && playerFactory.players.count == 2
+        })
+        #expect(model.selectedRequests.map(\.id) == [firstRequest.id, secondRequest.id])
+    }
+
+    @Test
+    func groupedPreviewTreatsPartialMediaAsAnOrdinaryMovieCandidate() async throws {
+        let context = makeContext()
+        let frameID = FrameID("main-frame")
+        let nodeID = DOM.Node.ID("grouped-partial-movie")
+        installNavigationVisit(in: context, frameID: frameID)
+        let fullRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "full",
+            url: "https://media.example.com/full.mp4",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "video/mp4"],
+            responseMIMEType: "video/mp4",
+            resourceType: .media,
+            timestamp: 1
+        ))
+        let ignoredRangeRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "ignored-range",
+            url: "https://media.example.com/ignored-range.mp4",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            requestHeaders: ["range": "bytes=0-1023"],
+            responseHeaders: ["content-type": "video/mp4"],
+            responseMIMEType: "video/mp4",
+            resourceType: .media,
+            timestamp: 2
+        ))
+        let partialRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "partial",
+            url: "https://media.example.com/partial.mp4",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            requestHeaders: ["range": "bytes=0-1023"],
+            responseHeaders: [
+                "content-type": "video/mp4",
+                "content-range": "bytes 0-1023/4096",
+            ],
+            responseMIMEType: "video/mp4",
+            responseStatus: 206,
+            resourceType: .media,
+            timestamp: 3
+        ))
+        for request in [fullRequest, ignoredRangeRequest, partialRequest] {
+            applyResponseBody(
+                to: context,
+                request: request,
+                body: "AAAA",
+                base64Encoded: true
+            )
+        }
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(partialRequest)
+        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+            playerFactory.makePlayer
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == partialRequest.id
+                && playerFactory.players.count == 1
+        })
+    }
+
+    @Test
+    func groupedPreviewSkipsFailedAndNoContentHLSMembers() async throws {
+        let context = makeContext()
+        let frameID = FrameID("main-frame")
+        let nodeID = DOM.Node.ID("grouped-player")
+        installNavigationVisit(in: context, frameID: frameID)
+        let healthyRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "healthy-playlist",
+            url: "https://media.example.com/healthy.m3u8",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMIMEType: "application/vnd.apple.mpegurl",
+            resourceType: .media,
+            timestamp: 1
+        ))
+        let failedRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "failed-playlist",
+            url: "https://media.example.com/failed.m3u8",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMIMEType: "application/vnd.apple.mpegurl",
+            resourceType: .media,
+            finishes: false,
+            timestamp: 4
+        ))
+        await context.apply(.loadingFailed(
+            id: Network.Request.ID("failed-playlist"),
+            errorText: "Cancelled",
+            canceled: true,
+            timestamp: 5
+        ))
+        let noContentRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "no-content-playlist",
+            url: "https://media.example.com/no-content.m3u8",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMIMEType: "application/vnd.apple.mpegurl",
+            responseStatus: 204,
+            resourceType: .media,
+            timestamp: 7
+        ))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(noContentRequest)
+        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let didSelectHealthyPreview = await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == healthyRequest.id
+                && viewController.currentModeForTesting == .preview
+                && viewController.previewViewForTesting.isHidden == false
+        }
+        #expect(didSelectHealthyPreview)
+        #expect(model.selectedRequests.map(\.id) == [healthyRequest.id, failedRequest.id, noContentRequest.id])
+    }
+
+    @Test
+    func groupedPreviewPrefersUsableStandardBodyOverUnavailableMedia() async throws {
+        let context = makeContext()
+        let frameID = FrameID("main-frame")
+        let nodeID = DOM.Node.ID("grouped-mixed-preview")
+        installNavigationVisit(in: context, frameID: frameID)
+        let standardRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "metadata",
+            url: "https://media.example.com/metadata.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            postData: #"{"kind":"metadata"}"#,
+            responseHeaders: ["content-type": "application/json"],
+            responseMIMEType: "application/json",
+            resourceType: .xhr,
+            timestamp: 1
+        ))
+        let unavailableMediaRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "no-content-playlist",
+            url: "https://media.example.com/no-content.m3u8",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMIMEType: "application/vnd.apple.mpegurl",
+            responseStatus: 204,
+            resourceType: .media,
+            timestamp: 4
+        ))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(unavailableMediaRequest)
+        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == standardRequest.id
+        })
+        viewController.selectPreviewRoleForTesting(.request)
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.currentPreviewRoleForTesting == .request
+                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text
+                    .contains("metadata")
+        })
+    }
+
+    @Test
+    func visibleGroupedListKeepsEntryIdentityWhenMemberArrives() async throws {
+        let context = makeContext()
+        let frameID = FrameID("main-frame")
+        let nodeID = DOM.Node.ID("grouped-loader")
+        installNavigationVisit(in: context, frameID: frameID)
+        let firstRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "first",
+            url: "https://example.com/first.js",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 1
+        ))
+        let model = NetworkPanelModel(context: context)
+        let stableEntryID = try #require(model.entryID(containing: firstRequest.id))
+        let stableEntry = try #require(model.entry(for: stableEntryID))
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(listViewController, makeVisible: true)
+        defer { window.isHidden = true }
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        #expect(listViewController.displayedEntryIDsForTesting == [stableEntryID])
+
+        let transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        let entryObservation = withPortableContinuousObservation { _ in
+            _ = stableEntry.requests
+        }
+        let groupedRequestIDs = await entryObservation.values {
+            stableEntry.requests.map(\.id)
+        }
+        defer {
+            groupedRequestIDs.cancel()
+            entryObservation.cancel()
+        }
+        let secondRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "second",
+            url: "https://example.com/second.js",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 4
+        ))
+        let didUpdateStableEntry = await groupedRequestIDs.waitUntilValue([
+            firstRequest.id,
+            secondRequest.id,
+        ])
+
+        #expect(didUpdateStableEntry)
+        #expect(listViewController.fetchedResultsTransactionDeliveryCountForTesting == transactionDeliveryBaseline)
+        #expect(listViewController.displayedEntryIDsForTesting == [stableEntryID])
+        #expect(model.entry(for: stableEntryID) === stableEntry)
+        #expect(stableEntry.requests.map(\.id) == [firstRequest.id, secondRequest.id])
+    }
+
+    @Test
+    func filteredOutSelectionRendersLaterMembersFromSameGroup() async throws {
+        let context = makeContext()
+        let frameID = FrameID("main-frame")
+        let nodeID = DOM.Node.ID("filtered-group")
+        installNavigationVisit(in: context, frameID: frameID)
+        let firstRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "first",
+            url: "https://example.com/first.js",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 1
+        ))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(firstRequest)
+        let viewController = makeNetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.headersTextViewForTesting.renderedTextForTesting.contains("first.js")
+        })
+
+        model.setSearchText("does-not-match")
+        #expect(model.displayEntryIDs.isEmpty)
+
+        let secondRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "second",
+            url: "https://example.com/second.js",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 4
+        ))
+
+        #expect(await waitUntilRendered(in: viewController) {
+            let text = viewController.headersTextViewForTesting.renderedTextForTesting
+            return text.contains("first.js") && text.contains("second.js")
+        })
+        #expect(model.displayEntryIDs.isEmpty)
+        #expect(model.selectedRequests.map(\.id) == [firstRequest.id, secondRequest.id])
     }
 
     @Test
@@ -2008,6 +4243,82 @@ struct NetworkDetailViewControllerTests {
         WebInspectorContext.preview(isolation: MainActor.shared)
     }
 
+    private func installNavigationVisit(
+        in context: WebInspectorContext,
+        frameID: FrameID
+    ) {
+        context.apply(WebInspectorTargetLifecycleEvent.frameNavigated(WebInspectorPageFrameLifecycle(
+            id: frameID,
+            parentID: nil,
+            pageBindingID: "page",
+            loaderID: "loader",
+            name: "Main",
+            url: "https://example.com",
+            securityOrigin: "https://example.com",
+            mimeType: "text/html"
+        )))
+    }
+
+    private func applyGroupedRequest(
+        to context: WebInspectorContext,
+        requestID rawRequestID: String,
+        url: String,
+        frameID: FrameID,
+        initiatorNodeID: DOM.Node.ID,
+        requestHeaders: [String: String] = [:],
+        postData: String? = nil,
+        responseHeaders: [String: String] = ["content-type": "text/javascript"],
+        responseMIMEType: String = "text/javascript",
+        responseStatus: Int = 200,
+        resourceType: Network.ResourceType = .script,
+        finishes: Bool = true,
+        timestamp: Double
+    ) async -> NetworkRequest? {
+        let requestID = Network.Request.ID(rawRequestID)
+        await context.apply(.requestWillBeSent(
+            id: requestID,
+            request: Network.Request(
+                id: requestID,
+                url: url,
+                method: postData == nil ? "GET" : "POST",
+                headers: requestHeaders,
+                postData: postData,
+                origin: Network.Request.Origin(
+                    frameID: frameID,
+                    loaderID: "loader",
+                    targetID: "page"
+                )
+            ),
+            initiator: Network.Initiator(kind: "script", nodeID: initiatorNodeID),
+            resourceType: resourceType,
+            redirectResponse: nil,
+            timestamp: timestamp
+        ))
+        await context.apply(.responseReceived(
+            id: requestID,
+            response: Network.Response(
+                url: url,
+                status: responseStatus,
+                statusText: responseStatus == 206 ? "Partial Content" : "OK",
+                mimeType: responseMIMEType,
+                headers: responseHeaders,
+                source: Network.Source(rawValue: "network"),
+                requestHeaders: requestHeaders
+            ),
+            resourceType: resourceType,
+            timestamp: timestamp + 1
+        ))
+        if finishes {
+            await context.apply(.loadingFinished(
+                id: requestID,
+                timestamp: timestamp + 2,
+                sourceMapURL: nil,
+                metrics: nil
+            ))
+        }
+        return context.registeredRequest(forProxyID: requestID)
+    }
+
     private func applyRequest(
         to context: WebInspectorContext,
         requestID rawRequestID: String,
@@ -2016,6 +4327,9 @@ struct NetworkDetailViewControllerTests {
         postData: String? = nil,
         responseHeaders: [String: String] = ["content-type": "text/javascript"],
         responseMimeType: String = "text/javascript",
+        responseStatus: Int = 200,
+        resourceType: Network.ResourceType = .script,
+        method: String? = nil,
         finishes: Bool = true
     ) async -> NetworkRequest? {
         let requestID = Network.Request.ID(rawRequestID)
@@ -2025,11 +4339,11 @@ struct NetworkDetailViewControllerTests {
                 request: Network.Request(
                     id: requestID,
                     url: url,
-                    method: postData == nil ? "GET" : "POST",
+                    method: method ?? (postData == nil ? "GET" : "POST"),
                     headers: requestHeaders,
                     postData: postData
                 ),
-                resourceType: .script,
+                resourceType: resourceType,
                 redirectResponse: nil,
                 timestamp: 1
             )
@@ -2039,14 +4353,14 @@ struct NetworkDetailViewControllerTests {
                 id: requestID,
                 response: Network.Response(
                     url: url,
-                    status: 200,
-                    statusText: "OK",
+                    status: responseStatus,
+                    statusText: responseStatus == 206 ? "Partial Content" : "OK",
                     mimeType: responseMimeType,
                     headers: responseHeaders,
                     source: Network.Source(rawValue: "network"),
                     requestHeaders: requestHeaders
                 ),
-                resourceType: .script,
+                resourceType: resourceType,
                 timestamp: 2
             )
         )
@@ -2373,12 +4687,10 @@ struct NetworkDetailViewControllerTests {
 
     @MainActor
     private final class MoviePreviewPlayerFactorySpy {
-        private(set) var requestedURLs: [URL] = []
         private(set) var players: [StubMoviePreviewPlayer] = []
 
-        func makePlayer(for url: URL) -> AVPlayer {
+        func makePlayer() -> AVPlayer {
             let player = StubMoviePreviewPlayer()
-            requestedURLs.append(url)
             players.append(player)
             return player
         }
@@ -2421,6 +4733,70 @@ private final class StubMoviePreviewPlayer: AVPlayer {
     }
 }
 
+private func makeNetworkListSnapshotBaseline(
+    entryIDs: [NetworkListEntry.ID] = [],
+    version: NetworkPanelListVersion = NetworkPanelListVersion(
+        revision: 0,
+        entryIdentityGeneration: 0
+    ),
+    generation: UInt64 = 0
+) -> NetworkListSnapshotBaseline {
+    var snapshot = NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>()
+    snapshot.appendSections([.main])
+    snapshot.appendItems(entryIDs, toSection: .main)
+    return NetworkListSnapshotBaseline(
+        generation: generation,
+        version: version,
+        entryIDs: entryIDs,
+        snapshot: snapshot
+    )
+}
+
+private func makeNetworkListSnapshotBuildInput(
+    baseline: NetworkListSnapshotBaseline = makeNetworkListSnapshotBaseline(),
+    target: NetworkPanelListProjection
+) -> NetworkListSnapshotBuildInput {
+    NetworkListSnapshotBuildInput(baseline: baseline, target: target)
+}
+
+private actor NetworkListBuilderStartGate {
+    private var isWaiting = false
+    private var isReleased = false
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+    private var waitingContinuations: [CheckedContinuation<Void, Never>] = []
+
+    func waitForRelease() async {
+        isWaiting = true
+        let continuations = waitingContinuations
+        waitingContinuations.removeAll(keepingCapacity: false)
+        for continuation in continuations {
+            continuation.resume()
+        }
+        guard isReleased == false else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            precondition(releaseContinuation == nil)
+            releaseContinuation = continuation
+        }
+    }
+
+    func waitUntilWaiting() async {
+        guard isWaiting == false else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waitingContinuations.append(continuation)
+        }
+    }
+
+    func release() {
+        isReleased = true
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+}
+
 @MainActor
 private final class RecordingNetworkBodyPreviewViewController: UIViewController, NetworkBodyPreviewControlling {
     private var surface = NetworkBodySurface.none
@@ -2440,6 +4816,326 @@ private final class RecordingNetworkBodyPreviewViewController: UIViewController,
 
     func suspendKeepingSurface() {
         isRenderingActiveForTesting = false
+    }
+}
+
+@MainActor
+private final class ManualNetworkListFrameScheduler: NetworkListFrameScheduling {
+    private var pendingAction: (@MainActor () -> Void)?
+    private(set) var scheduledFrameCount = 0
+
+    var hasScheduledFrame: Bool {
+        pendingAction != nil
+    }
+
+    func schedule(_ action: @escaping @MainActor () -> Void) {
+        guard pendingAction == nil else {
+            return
+        }
+        pendingAction = action
+        scheduledFrameCount += 1
+    }
+
+    func cancel() {
+        pendingAction = nil
+    }
+
+    func invalidate() {
+        cancel()
+    }
+
+    func fireScheduledFrame() {
+        guard let action = pendingAction else {
+            preconditionFailure("Expected a scheduled Network list projection frame.")
+        }
+        pendingAction = nil
+        action()
+    }
+}
+
+@MainActor
+private final class ManualNetworkListSnapshotApplyCompletionScheduler:
+    NetworkListSnapshotApplyCompletionScheduling
+{
+    private struct Waiter {
+        var targetCount: Int
+        var continuation: CheckedContinuation<Void, Never>
+    }
+
+    private var scheduledCompletionCount = 0
+    private var pendingCompletions: [@MainActor @Sendable () -> Void] = []
+    private var waiters: [Waiter] = []
+
+    var pendingCompletionCount: Int {
+        pendingCompletions.count
+    }
+
+    func schedule(_ completion: @escaping @MainActor @Sendable () -> Void) {
+        scheduledCompletionCount += 1
+        pendingCompletions.append(completion)
+        resumeWaiters()
+    }
+
+    func waitUntilScheduledCompletionCount(_ targetCount: Int) async {
+        guard scheduledCompletionCount < targetCount else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(
+                Waiter(
+                    targetCount: targetCount,
+                    continuation: continuation
+                )
+            )
+        }
+    }
+
+    func runNextCompletion() {
+        guard pendingCompletions.isEmpty == false else {
+            preconditionFailure("Expected a pending Network list snapshot apply completion.")
+        }
+        pendingCompletions.removeFirst()()
+    }
+
+    private func resumeWaiters() {
+        var remainingWaiters: [Waiter] = []
+        for waiter in waiters {
+            if scheduledCompletionCount >= waiter.targetCount {
+                waiter.continuation.resume()
+            } else {
+                remainingWaiters.append(waiter)
+            }
+        }
+        waiters = remainingWaiters
+    }
+}
+
+private struct BarrierNetworkListSnapshotBuilderFactory: NetworkListSnapshotBuilderMaking {
+    private let state = BarrierNetworkListSnapshotBuildState()
+
+    func makeBuilder() -> any NetworkListSnapshotBuilding {
+        BarrierNetworkListSnapshotBuilder(state: state)
+    }
+
+    func waitUntilStartedBuildCount(_ targetCount: Int) async {
+        await state.waitUntilStartedBuildCount(targetCount)
+    }
+
+    func releaseBuild(_ buildID: Int) async {
+        await state.releaseBuild(buildID)
+    }
+
+    func waitUntilCancellationObservedCount(_ targetCount: Int) async {
+        await state.waitUntilCancellationObservedCount(targetCount)
+    }
+
+    func waitUntilCancelledBuildCount(_ targetCount: Int) async {
+        await state.waitUntilCancelledBuildCount(targetCount)
+    }
+
+    func statistics() async -> BarrierNetworkListSnapshotBuildState.Statistics {
+        await state.statistics()
+    }
+}
+
+private actor BarrierNetworkListSnapshotBuilder: NetworkListSnapshotBuilding {
+    private let state: BarrierNetworkListSnapshotBuildState
+
+    init(state: BarrierNetworkListSnapshotBuildState) {
+        self.state = state
+    }
+
+    func build(
+        _ input: NetworkListSnapshotBuildInput
+    ) async throws(CancellationError) -> NetworkListSnapshotArtifact {
+        let buildID = await state.buildDidStart(priority: Task.currentPriority)
+        await withTaskCancellationHandler {
+            await state.waitForRelease(of: buildID)
+        } onCancel: {
+            Task {
+                await state.buildDidObserveCancellation(buildID)
+            }
+        }
+        guard !Task.isCancelled else {
+            await state.buildDidCancel(buildID)
+            throw CancellationError()
+        }
+
+        let artifact = try await NetworkListSnapshotBuilder().build(input)
+        await state.buildDidFinish(buildID)
+        return artifact
+    }
+}
+
+private actor BarrierNetworkListSnapshotBuildState {
+    struct Statistics: Equatable, Sendable {
+        var startedBuildCount: Int
+        var activeBuildCount: Int
+        var maximumActiveBuildCount: Int
+        var cancellationObservedCount: Int
+        var cancelledBuildCount: Int
+        var finishedBuildIDs: Set<Int>
+        var startedBuildPriorities: [TaskPriority]
+    }
+
+    private struct CountWaiter {
+        var targetCount: Int
+        var continuation: CheckedContinuation<Void, Never>
+    }
+
+    private var startedBuildCount = 0
+    private var activeBuildIDs: Set<Int> = []
+    private var maximumActiveBuildCount = 0
+    private var cancellationObservedBuildIDs: Set<Int> = []
+    private var cancelledBuildCount = 0
+    private var finishedBuildIDs: Set<Int> = []
+    private var startedBuildPriorities: [TaskPriority] = []
+    private var releasedBuilds: Set<Int> = []
+    private var releaseWaiters: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var startedBuildWaiters: [CountWaiter] = []
+    private var cancellationObservedWaiters: [CountWaiter] = []
+    private var cancelledBuildWaiters: [CountWaiter] = []
+
+    func buildDidStart(priority: TaskPriority) -> Int {
+        startedBuildCount += 1
+        let buildID = startedBuildCount
+        precondition(activeBuildIDs.insert(buildID).inserted)
+        maximumActiveBuildCount = Swift.max(maximumActiveBuildCount, activeBuildIDs.count)
+        startedBuildPriorities.append(priority)
+        resumeStartedBuildWaiters()
+        return buildID
+    }
+
+    func buildDidObserveCancellation(_ buildID: Int) {
+        if cancellationObservedBuildIDs.insert(buildID).inserted {
+            resumeCancellationObservedWaiters()
+        }
+    }
+
+    func buildDidCancel(_ buildID: Int) {
+        precondition(
+            activeBuildIDs.remove(buildID) != nil,
+            "A canceled Network list snapshot build must still be active."
+        )
+        cancelledBuildCount += 1
+        resumeCancelledBuildWaiters()
+    }
+
+    func buildDidFinish(_ buildID: Int) {
+        precondition(
+            activeBuildIDs.remove(buildID) != nil && finishedBuildIDs.insert(buildID).inserted,
+            "A Network list snapshot build must finish exactly once."
+        )
+    }
+
+    func waitUntilStartedBuildCount(_ targetCount: Int) async {
+        guard startedBuildCount < targetCount else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            startedBuildWaiters.append(
+                CountWaiter(
+                    targetCount: targetCount,
+                    continuation: continuation
+                )
+            )
+        }
+    }
+
+    func releaseBuild(_ buildID: Int) {
+        if let waiter = releaseWaiters.removeValue(forKey: buildID) {
+            waiter.resume()
+        } else {
+            releasedBuilds.insert(buildID)
+        }
+    }
+
+    func waitUntilCancellationObservedCount(_ targetCount: Int) async {
+        guard cancellationObservedBuildIDs.count < targetCount else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            cancellationObservedWaiters.append(
+                CountWaiter(
+                    targetCount: targetCount,
+                    continuation: continuation
+                )
+            )
+        }
+    }
+
+    func waitUntilCancelledBuildCount(_ targetCount: Int) async {
+        guard cancelledBuildCount < targetCount else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            cancelledBuildWaiters.append(
+                CountWaiter(
+                    targetCount: targetCount,
+                    continuation: continuation
+                )
+            )
+        }
+    }
+
+    func statistics() -> Statistics {
+        Statistics(
+            startedBuildCount: startedBuildCount,
+            activeBuildCount: activeBuildIDs.count,
+            maximumActiveBuildCount: maximumActiveBuildCount,
+            cancellationObservedCount: cancellationObservedBuildIDs.count,
+            cancelledBuildCount: cancelledBuildCount,
+            finishedBuildIDs: finishedBuildIDs,
+            startedBuildPriorities: startedBuildPriorities
+        )
+    }
+
+    func waitForRelease(of buildID: Int) async {
+        if releasedBuilds.remove(buildID) == nil {
+            await withCheckedContinuation { continuation in
+                precondition(
+                    releaseWaiters[buildID] == nil,
+                    "A Network list snapshot build can only wait on one release barrier."
+                )
+                releaseWaiters[buildID] = continuation
+            }
+        }
+    }
+
+    private func resumeStartedBuildWaiters() {
+        var remainingWaiters: [CountWaiter] = []
+        for waiter in startedBuildWaiters {
+            if startedBuildCount >= waiter.targetCount {
+                waiter.continuation.resume()
+            } else {
+                remainingWaiters.append(waiter)
+            }
+        }
+        startedBuildWaiters = remainingWaiters
+    }
+
+    private func resumeCancelledBuildWaiters() {
+        var remainingWaiters: [CountWaiter] = []
+        for waiter in cancelledBuildWaiters {
+            if cancelledBuildCount >= waiter.targetCount {
+                waiter.continuation.resume()
+            } else {
+                remainingWaiters.append(waiter)
+            }
+        }
+        cancelledBuildWaiters = remainingWaiters
+    }
+
+    private func resumeCancellationObservedWaiters() {
+        var remainingWaiters: [CountWaiter] = []
+        for waiter in cancellationObservedWaiters {
+            if cancellationObservedBuildIDs.count >= waiter.targetCount {
+                waiter.continuation.resume()
+            } else {
+                remainingWaiters.append(waiter)
+            }
+        }
+        cancellationObservedWaiters = remainingWaiters
     }
 }
 #endif

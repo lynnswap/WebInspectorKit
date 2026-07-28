@@ -63,37 +63,64 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
     package func makeViewController(
         for displayItem: WebInspectorTab.DisplayItem,
         session: WebInspectorSession,
+        contentStore: PresentationContentStore,
         layout: WebInspectorTab.HostLayout
     ) -> UIViewController {
         switch (layout, displayItem) {
         case (.compact, .tab):
             DOMCompactNavigationController(
-                rootViewController: cachedTreeViewController(session: session),
+                rootViewController: cachedTreeViewController(
+                    session: session,
+                    contentStore: contentStore
+                ),
                 context: session.context
             )
         case (.compact, .domElement):
-            DOMCompactNavigationController(rootViewController: cachedElementViewController(session: session))
+            DOMCompactNavigationController(
+                rootViewController: cachedElementViewController(
+                    session: session,
+                    contentStore: contentStore
+                )
+            )
         case (_, .customTab):
             UIViewController()
         case (.regular, _):
             RegularSplitRootViewController(
                 contentViewController: DOMSplitViewController(
-                    treeViewController: cachedTreeViewController(session: session),
-                    elementViewController: cachedElementViewController(session: session),
+                    treeViewController: cachedTreeViewController(
+                        session: session,
+                        contentStore: contentStore
+                    ),
+                    elementViewController: cachedElementViewController(
+                        session: session,
+                        contentStore: contentStore
+                    ),
                     context: session.context
                 )
             )
         }
     }
 
-    private func cachedTreeViewController(session: WebInspectorSession) -> DOMTreeViewController {
-        session.interface.viewController(for: contentKey(ContentID.tree)) {
+    private func cachedTreeViewController(
+        session: WebInspectorSession,
+        contentStore: PresentationContentStore
+    ) -> DOMTreeViewController {
+        contentStore.viewController(
+            for: contentKey(ContentID.tree),
+            contextEpoch: session.interface.contextBoundContentRevision
+        ) {
             DOMTreeViewController(context: session.context)
         }
     }
 
-    private func cachedElementViewController(session: WebInspectorSession) -> DOMElementViewController {
-        session.interface.viewController(for: contentKey(ContentID.element)) {
+    private func cachedElementViewController(
+        session: WebInspectorSession,
+        contentStore: PresentationContentStore
+    ) -> DOMElementViewController {
+        contentStore.viewController(
+            for: contentKey(ContentID.element),
+            contextEpoch: session.interface.contextBoundContentRevision
+        ) {
             DOMElementViewController(context: session.context)
         }
     }

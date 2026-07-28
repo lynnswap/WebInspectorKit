@@ -12,6 +12,12 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
     package func dispatchCommand<Payload: Sendable, Result: Sendable>(
         _ command: WebInspectorProxyCommand<Payload, Result>
     ) async throws -> Result {
+        try await dispatchCommandWithReplyBoundary(command).value
+    }
+
+    package func dispatchCommandWithReplyBoundary<Payload: Sendable, Result: Sendable>(
+        _ command: WebInspectorProxyCommand<Payload, Result>
+    ) async throws -> WebInspectorProxyCommandReply<Result> {
         let protocolCommand = try LiveProxyCommandEncoder.protocolCommand(for: command)
         let result: ProtocolCommand.Result
         do {
@@ -19,12 +25,60 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         } catch {
             throw mapTransportError(error, domain: command.domain.rawValue, method: command.method)
         }
-        let targetScopeRawValue = await targetScopeRawValue(for: command)
-        return try LiveProxyCommandDecoder.decode(
+        let targetScopeRawValue = await targetScopeRawValue(for: command.route)
+        let value = try LiveProxyCommandDecoder.decode(
             Result.self,
             for: command,
             targetScopeRawValue: targetScopeRawValue,
             from: result
+        )
+        return WebInspectorProxyCommandReply(
+            value: value,
+            receivedSequence: result.receivedSequence
+        )
+    }
+
+    package func orderedEvents(
+        route: RoutingTargetID,
+        targetID: WebInspectorTarget.ID
+    ) async -> WebInspectorProxyOrderedEventFeed {
+        let transportFeed = await transport.orderedEventFeed()
+        let key = LiveProxyEventSubscriptionKey(route: route, targetID: targetID, domain: .ordered)
+        let subscriptionID = LiveProxyEventSubscriptionID()
+        await eventSubscriptions.register(key, id: subscriptionID)
+
+        let stream = AsyncStream<WebInspectorProxyOrderedEvent>(bufferingPolicy: .unbounded) { continuation in
+            let task = Task {
+                for await event in transportFeed.events {
+                    guard Task.isCancelled == false else {
+                        break
+                    }
+                    do {
+                        continuation.yield(WebInspectorProxyOrderedEvent(
+                            sequence: event.sequence,
+                            event: try await projectedOrderedEvent(
+                                event,
+                                route: route,
+                                targetID: targetID
+                            )
+                        ))
+                    } catch {
+                        preconditionFailure("Failed to decode \(event.method): \(error)")
+                    }
+                }
+                await eventSubscriptions.unregister(key, id: subscriptionID)
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+                Task {
+                    await eventSubscriptions.unregister(key, id: subscriptionID)
+                }
+            }
+        }
+        return WebInspectorProxyOrderedEventFeed(
+            initialSequence: transportFeed.initialSequence,
+            events: stream
         )
     }
 
@@ -73,13 +127,13 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
                         continue
                     }
                     do {
-                        let lifecycleTarget = await lifecycleTarget(for: event, route: route, targetID: targetID)
+                        let lifecycleTarget = lifecycleTarget(for: event, route: route, targetID: targetID)
                         let proxyEvent = try LiveProxyEventDecoder.proxyEvent(
                             from: event,
                             targetID: targetID,
                             lifecycleTarget: lifecycleTarget
                         )
-                        continuation.yield(await projectedEvent(proxyEvent, from: event, route: route))
+                        continuation.yield(projectedEvent(proxyEvent, from: event, route: route))
                     } catch {
                         preconditionFailure("Failed to decode \(event.method): \(error)")
                     }
@@ -107,7 +161,11 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
             return WebInspectorProxyError.timeout(domain: domain, method: method)
         case let .remoteError(method, _, message):
             return WebInspectorProxyError.commandFailed(domain: domain, method: method, message: message)
-        case .malformedMessage, .missingMainPageTarget, .missingTarget:
+        case .malformedMessage,
+             .missingMainPageTarget,
+             .missingTarget,
+             .unsupportedDomain,
+             .inspectedPageProcessTerminated:
             return WebInspectorProxyError.commandFailed(
                 domain: domain,
                 method: method,
@@ -116,13 +174,10 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         }
     }
 
-    private nonisolated func targetScopeRawValue<Payload: Sendable, Result: Sendable>(
-        for command: WebInspectorProxyCommand<Payload, Result>
+    private nonisolated func targetScopeRawValue(
+        for route: RoutingTargetID
     ) async -> String? {
-        if let resultTargetScopeRawValue = command.resultTargetScopeRawValue {
-            return resultTargetScopeRawValue
-        }
-        guard case let .target(rawValue) = command.route.storage else {
+        guard case let .target(rawValue) = route.storage else {
             return nil
         }
         let targetID = ProtocolTarget.ID(rawValue)
@@ -147,13 +202,43 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
             let snapshot = await transport.snapshot()
             return snapshot.currentMainPageTargetID?.rawValue == rawValue
         case .currentPage:
+            if event.domain == .network,
+               let membership = event.networkPageMembership {
+                return membership == .currentPage
+            }
+            if event.domain == .page,
+               let belongedToCurrentPage = event.rootPageBelongedToCurrentPage {
+                return belongedToCurrentPage
+            }
+            if event.domain == .dom,
+               event.method == "DOM.documentUpdated",
+               event.targetRecord?.kind == .frame {
+                return false
+            }
+            if event.domain == .inspector,
+               event.targetRecord?.kind == .frame {
+                return false
+            }
+            if event.destroyedCurrentMainPageTarget
+                || event.destroyedProvisionalTargetInCurrentPageHierarchy
+                || event.detachedCurrentPageFrameTarget {
+                return true
+            }
+            if event.belongedToCurrentPage {
+                return true
+            }
             let snapshot = await transport.snapshot()
             if event.domain == .target,
                event.method == "Target.targetDestroyed" {
                 // The registry has already dropped the destroyed record, so
-                // route by the event-time fact: only the destruction of the
-                // then-current main page belongs to the semantic page route.
+                // route by event-time facts retained by the transport.
                 return event.destroyedCurrentMainPageTarget
+                    || event.destroyedProvisionalTargetInCurrentPageHierarchy
+            }
+            if event.domain == .page,
+               event.method == "Page.frameDetached",
+               event.detachedCurrentPageFrameTarget {
+                return true
             }
             guard let currentMainPageTargetID = snapshot.currentMainPageTargetID else {
                 return false
@@ -167,89 +252,124 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
             guard let record = snapshot.targetsByID[targetID] else {
                 return false
             }
-            // WebKit reports subframe picker and request activity on frame
-            // targets while WebInspectorKit exposes a semantic current page.
+            // WebKit may report subframe domain activity on frame targets while
+            // WebInspectorKit exposes a semantic current page.
             switch event.domain {
             case .dom:
                 guard event.method != "DOM.documentUpdated" else {
                     return false
                 }
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+                return isCurrentPageFrameTarget(record)
             case .inspector:
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+                // Inspector excludes frame targets in WebKit's protocol. A
+                // frame-origin inspect event is not rewritten into a page event.
+                return false
             case .network:
                 // WebKit's page/ProxyingNetworkAgent owns process-wide
                 // Network.enable. This branch only projects target-wrapped
                 // frame Network events if WebKit emits them.
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+                return isCurrentPageFrameTarget(record)
             case .css:
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+                return isCurrentPageFrameTarget(record)
             case .console:
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+                return isCurrentPageFrameTarget(record)
             case .runtime:
-                return isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID)
+                return isCurrentPageFrameTarget(record)
+            case .page:
+                return isCurrentPageFrameTarget(record)
             default:
                 return false
             }
         }
     }
 
-    private nonisolated func isCurrentPageFrameTarget(
-        _ record: ProtocolTarget.Record,
-        in snapshot: TransportSession.Snapshot,
-        currentMainPageTargetID: ProtocolTarget.ID
-    ) -> Bool {
-        guard record.kind == .frame,
-              let mainFrameID = snapshot.targetsByID[currentMainPageTargetID]?.frameID else {
-            return false
+    private nonisolated func projectedOrderedEvent(
+        _ event: ProtocolEvent,
+        route: RoutingTargetID,
+        targetID: WebInspectorTarget.ID
+    ) async throws -> WebInspectorProxyEvent? {
+        switch event.domain {
+        case .target, .dom, .inspector, .css, .network, .console, .runtime, .page:
+            break
+        case .storage, .other:
+            return nil
         }
+        guard shouldDeliverOrderedEvent(event, to: route) else {
+            return nil
+        }
+        let lifecycleTarget = lifecycleTarget(for: event, route: route, targetID: targetID)
+        let proxyEvent = try LiveProxyEventDecoder.proxyEvent(
+            from: event,
+            targetID: targetID,
+            lifecycleTarget: lifecycleTarget
+        )
+        return projectedEvent(proxyEvent, from: event, route: route)
+    }
 
-        guard var parentFrameID = record.parentFrameID else {
-            // WebKit may omit parentFrameId for a cross-origin frame target even
-            // though its frameId differs from the current page's main frame.
-            // TransportTargetRegistry already classifies that target as .frame;
-            // the current-page route must preserve the same semantic boundary
-            // or picker, DOM, and Network events are silently filtered.
-            guard let frameID = record.frameID else {
+    private nonisolated func shouldDeliverOrderedEvent(
+        _ event: ProtocolEvent,
+        to route: RoutingTargetID
+    ) -> Bool {
+        switch route.storage {
+        case let .target(rawValue):
+            return event.sourceTargetID?.rawValue == rawValue
+                || event.targetID?.rawValue == rawValue
+        case .currentPage:
+            if event.domain == .target,
+               event.method == "Target.targetCreated" {
                 return false
             }
-            return frameID != mainFrameID
-        }
-
-        var visitedFrameIDs = Set<ProtocolFrame.ID>()
-        while visitedFrameIDs.insert(parentFrameID).inserted {
-            if parentFrameID == mainFrameID {
+            if event.domain == .network,
+               let membership = event.networkPageMembership {
+                return membership == .currentPage
+            }
+            if event.domain == .page,
+               let belongedToCurrentPage = event.rootPageBelongedToCurrentPage {
+                return belongedToCurrentPage
+            }
+            if event.domain == .dom,
+               event.method == "DOM.documentUpdated",
+               event.targetRecord?.kind == .frame {
+                return false
+            }
+            if event.domain == .inspector,
+               event.targetRecord?.kind == .frame {
+                return false
+            }
+            if event.destroyedCurrentMainPageTarget
+                || event.destroyedProvisionalTargetInCurrentPageHierarchy
+                || event.detachedCurrentPageFrameTarget {
                 return true
             }
-            guard let parentTargetID = snapshot.frameTargetIDsByFrameID[parentFrameID],
-                  let parentRecord = snapshot.targetsByID[parentTargetID],
-                  let nextParentFrameID = parentRecord.parentFrameID else {
-                return false
-            }
-            parentFrameID = nextParentFrameID
+            return event.belongedToCurrentPage
         }
-        return false
+    }
+
+    private nonisolated func isCurrentPageFrameTarget(
+        _ record: ProtocolTarget.Record
+    ) -> Bool {
+        // Frame targets are inventoried by the inspected page's
+        // WebPageInspectorController. Page topology is payload state, not the
+        // ownership boundary, and can legitimately arrive after domain events.
+        record.kind == .frame && !record.isProvisional
     }
 
     private nonisolated func projectedEvent(
         _ proxyEvent: WebInspectorProxyEvent,
         from event: ProtocolEvent,
         route: RoutingTargetID
-    ) async -> WebInspectorProxyEvent {
-        let snapshot = await transport.snapshot()
-        let scopedProxyEvent = scopedAgentOwnedEvent(proxyEvent, from: event, route: route, snapshot: snapshot)
+    ) -> WebInspectorProxyEvent {
+        if case let .network(networkEvent) = proxyEvent,
+           let stableScopeTargetID = event.networkScopeTargetID {
+            return .network(scopedNetworkEvent(
+                networkEvent,
+                targetRawValue: stableScopeTargetID.rawValue
+            ))
+        }
+        let scopedProxyEvent = scopedAgentOwnedEvent(proxyEvent, from: event)
         guard case .currentPage = route.storage,
-              let targetID = event.targetID else {
-            return scopedProxyEvent
-        }
-        if event.domain == .inspector,
-           targetID == snapshot.currentMainPageTargetID {
-            return mainPageInspectorEvent(scopedProxyEvent)
-        }
-        guard let currentMainPageTargetID = snapshot.currentMainPageTargetID,
-              targetID != currentMainPageTargetID,
-              let record = snapshot.targetsByID[targetID],
-              isCurrentPageFrameTarget(record, in: snapshot, currentMainPageTargetID: currentMainPageTargetID) else {
+              let targetID = event.targetID,
+              event.targetRecord?.kind == .frame else {
             return scopedProxyEvent
         }
         switch scopedProxyEvent {
@@ -258,7 +378,11 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         case let .css(cssEvent):
             return .css(scopedCSSEvent(cssEvent, targetRawValue: targetID.rawValue))
         case let .network(networkEvent):
-            return .network(scopedNetworkEvent(networkEvent, targetRawValue: targetID.rawValue))
+            let stableScopeTargetID = event.networkScopeTargetID ?? targetID
+            return .network(scopedNetworkEvent(
+                networkEvent,
+                targetRawValue: stableScopeTargetID.rawValue
+            ))
         default:
             return scopedProxyEvent
         }
@@ -266,11 +390,9 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
 
     private nonisolated func scopedAgentOwnedEvent(
         _ proxyEvent: WebInspectorProxyEvent,
-        from event: ProtocolEvent,
-        route: RoutingTargetID,
-        snapshot: TransportSession.Snapshot
+        from event: ProtocolEvent
     ) -> WebInspectorProxyEvent {
-        let targetScopeRawValue = runtimeAgentScopeRawValue(for: event, route: route, snapshot: snapshot)
+        let targetScopeRawValue = runtimeAgentScopeRawValue(for: event)
         switch proxyEvent {
         case let .runtime(runtimeEvent):
             return .runtime(scopedRuntimeEvent(runtimeEvent, targetScopeRawValue: targetScopeRawValue))
@@ -285,33 +407,9 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
     }
 
     private nonisolated func runtimeAgentScopeRawValue(
-        for event: ProtocolEvent,
-        route: RoutingTargetID,
-        snapshot: TransportSession.Snapshot
+        for event: ProtocolEvent
     ) -> String? {
-        let agentTargetID = event.sourceTargetID ?? event.targetID
-        guard let agentTargetID else {
-            return nil
-        }
-        if agentTargetID == snapshot.currentMainPageTargetID {
-            return nil
-        }
-        if let record = snapshot.targetsByID[agentTargetID],
-           record.kind == .page,
-           record.parentFrameID == nil {
-            return nil
-        }
-        return agentTargetID.rawValue
-    }
-
-    private nonisolated func mainPageInspectorEvent(
-        _ proxyEvent: WebInspectorProxyEvent
-    ) -> WebInspectorProxyEvent {
-        guard case let .inspector(event) = proxyEvent,
-              case let .inspect(object, hints, _) = event else {
-            return proxyEvent
-        }
-        return .inspector(.inspect(object, hints: hints, origin: nil))
+        event.agentScopeTargetID?.rawValue
     }
 
     private nonisolated func scopedDOMEvent(
@@ -562,10 +660,11 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         targetRawValue: String
     ) -> Network.Event {
         switch event {
-        case let .requestWillBeSent(id, request, resourceType, redirectResponse, timestamp):
+        case let .requestWillBeSent(id, request, initiator, resourceType, redirectResponse, timestamp):
             .requestWillBeSent(
                 id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
                 request: scopedNetworkRequest(request, targetRawValue: targetRawValue),
+                initiator: scopedNetworkInitiator(initiator, targetRawValue: targetRawValue),
                 resourceType: resourceType,
                 redirectResponse: redirectResponse,
                 timestamp: timestamp
@@ -598,10 +697,11 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
                 canceled: canceled,
                 timestamp: timestamp
             )
-        case let .requestServedFromMemoryCache(id, response, resourceType, timestamp):
+        case let .requestServedFromMemoryCache(id, response, initiator, resourceType, timestamp):
             .requestServedFromMemoryCache(
                 id: scopedNetworkRequestID(id, targetRawValue: targetRawValue),
                 response: response,
+                initiator: scopedNetworkInitiator(initiator, targetRawValue: targetRawValue),
                 resourceType: resourceType,
                 timestamp: timestamp
             )
@@ -610,6 +710,19 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         case let .unknown(rawEvent):
             .unknown(rawEvent)
         }
+    }
+
+    private nonisolated func scopedNetworkInitiator(
+        _ initiator: Network.Initiator,
+        targetRawValue: String
+    ) -> Network.Initiator {
+        Network.Initiator(
+            kind: initiator.kind,
+            url: initiator.url,
+            line: initiator.line,
+            column: initiator.column,
+            nodeID: initiator.nodeID.map { scopedDOMNodeID($0, targetRawValue: targetRawValue) }
+        )
     }
 
     private nonisolated func scopedWebSocketEvent(
@@ -656,7 +769,8 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
             postData: request.postData,
             referrerPolicy: request.referrerPolicy,
             integrity: request.integrity,
-            backendResourceIdentifier: request.backendResourceIdentifier
+            backendResourceIdentifier: request.backendResourceIdentifier,
+            origin: request.origin
         )
     }
 
@@ -674,14 +788,10 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         for event: ProtocolEvent,
         route: RoutingTargetID,
         targetID: WebInspectorTarget.ID
-    ) async -> WebInspectorLifecycleTarget? {
+    ) -> WebInspectorLifecycleTarget? {
         guard event.domain == .target,
               event.method == "Target.didCommitProvisionalTarget",
-              let protocolTargetID = event.targetID else {
-            return nil
-        }
-        let snapshot = await transport.snapshot()
-        guard let record = snapshot.targetsByID[protocolTargetID] else {
+              let record = event.targetRecord else {
             return nil
         }
         return WebInspectorLifecycleTarget(
@@ -705,6 +815,8 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
 
 private func protocolDomain(for domain: WebInspectorProxyEventDomain) -> ProtocolDomain {
     switch domain {
+    case .ordered:
+        preconditionFailure("Ordered events are not a protocol domain.")
     case .target:
         .target
     case .dom:
@@ -880,7 +992,9 @@ private enum LiveProxyCommandEncoder {
             let payload = try payload(command.payload, as: Page.ReloadPayload.self, command: command)
             return try data(["ignoreCache": payload.ignoringCache])
 
-        case (.dom, "getDocument"),
+        case (.page, "enable"),
+             (.page, "disable"),
+             (.dom, "getDocument"),
              (.dom, "hideHighlight"),
              (.dom, "markUndoableState"),
              (.dom, "undo"),
@@ -1102,7 +1216,7 @@ private enum LiveProxyCommandEncoder {
         command: WebInspectorProxyCommand<Payload, Result>
     ) throws -> [String: Any] {
         let rawValue = id.unscopedRawValue
-        let components = rawValue.split(separator: CSSStyleIDPayload.separator, omittingEmptySubsequences: false)
+        let components = rawValue.split(separator: CSS.styleIdentifierSeparator, omittingEmptySubsequences: false)
         guard components.count == 2,
               let ordinal = Int(components[1]) else {
             throw WebInspectorProxyError.commandFailed(
@@ -1122,7 +1236,7 @@ private enum LiveProxyCommandEncoder {
         command: WebInspectorProxyCommand<Payload, Result>
     ) throws -> [String: Any] {
         let rawValue = id.unscopedRawValue
-        let components = rawValue.split(separator: CSSStyleIDPayload.separator, omittingEmptySubsequences: false)
+        let components = rawValue.split(separator: CSS.styleIdentifierSeparator, omittingEmptySubsequences: false)
         guard components.count == 2,
               let ordinal = Int(components[1]) else {
             throw WebInspectorProxyError.commandFailed(
@@ -1571,13 +1685,11 @@ private struct CSSStylePayload: Decodable {
 }
 
 private struct CSSStyleIDPayload: Decodable {
-    static let separator: Character = "\u{1F}"
-
     var styleSheetId: String
     var ordinal: Int
 
     var rawValue: String {
-        "\(styleSheetId)\(Self.separator)\(ordinal)"
+        "\(styleSheetId)\(CSS.styleIdentifierSeparator)\(ordinal)"
     }
 }
 
@@ -1586,7 +1698,7 @@ private struct CSSRuleIDPayload: Decodable {
     var ordinal: Int
 
     var rawValue: String {
-        "\(styleSheetId)\(CSSStyleIDPayload.separator)\(ordinal)"
+        "\(styleSheetId)\(CSS.styleIdentifierSeparator)\(ordinal)"
     }
 }
 
@@ -1602,7 +1714,7 @@ private struct CSSPropertyPayload: Decodable {
 
     func proxyProperty(styleID: String, index: Int, isEditable: Bool) -> CSS.Property {
         CSS.Property(
-            id: CSS.Property.ID("\(styleID)\(CSSStyleIDPayload.separator)\(index)"),
+            id: CSS.Property.ID("\(styleID)\(CSS.styleIdentifierSeparator)\(index)"),
             name: name,
             value: value,
             priority: priority,

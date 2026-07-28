@@ -48,6 +48,7 @@ package struct WebInspectorTargetCommitLifecycle: Sendable {
 package struct WebInspectorPageFrameLifecycle: Sendable {
     package let id: FrameID
     package let parentID: FrameID?
+    package let pageBindingID: String?
     package let loaderID: String?
     package let name: String?
     package let url: String
@@ -57,6 +58,7 @@ package struct WebInspectorPageFrameLifecycle: Sendable {
     package init(
         id: FrameID,
         parentID: FrameID?,
+        pageBindingID: String? = nil,
         loaderID: String?,
         name: String?,
         url: String,
@@ -65,6 +67,7 @@ package struct WebInspectorPageFrameLifecycle: Sendable {
     ) {
         self.id = id
         self.parentID = parentID
+        self.pageBindingID = pageBindingID
         self.loaderID = loaderID
         self.name = name
         self.url = url

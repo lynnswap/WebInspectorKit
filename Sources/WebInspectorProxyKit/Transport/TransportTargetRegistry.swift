@@ -3,6 +3,7 @@ import Foundation
 struct TransportTargetRegistry: Sendable {
     private(set) var targetsByID: [ProtocolTarget.ID: ProtocolTarget.Record] = [:]
     private(set) var frameTargetIDsByFrameID: [ProtocolFrame.ID: ProtocolTarget.ID] = [:]
+    private(set) var parentFrameIDsByFrameID: [ProtocolFrame.ID: ProtocolFrame.ID] = [:]
     private(set) var currentMainPageTargetID: ProtocolTarget.ID?
 
     var currentMainFrameID: ProtocolFrame.ID? {
@@ -21,33 +22,48 @@ struct TransportTargetRegistry: Sendable {
         frameTargetIDsByFrameID[frameID]
     }
 
-    func targetKind(
-        protocolType: String,
-        frameID: ProtocolFrame.ID?,
-        parentFrameID: ProtocolFrame.ID?,
-        isProvisional: Bool?
-    ) -> ProtocolTarget.Kind {
-        let protocolKind = ProtocolTarget.Kind(protocolType: protocolType)
-        guard protocolKind == .page else {
-            return protocolKind
+    func soleTargetID(forFrameID frameID: ProtocolFrame.ID) -> ProtocolTarget.ID? {
+        let candidates = targetsByID.values.lazy.filter {
+            $0.frameID == frameID && ($0.kind == .page || $0.kind == .frame)
         }
-        if parentFrameID != nil {
-            return .frame
+        var iterator = candidates.makeIterator()
+        guard let candidate = iterator.next(), iterator.next() == nil else {
+            return nil
         }
-        if let frameID,
-           let existingTargetID = frameTargetIDsByFrameID[frameID],
-           existingTargetID != currentMainPageTargetID {
-            return .frame
+        return candidate.id
+    }
+
+    func targetCount(forFrameID frameID: ProtocolFrame.ID) -> Int {
+        targetsByID.values.lazy.filter {
+            $0.frameID == frameID && ($0.kind == .page || $0.kind == .frame)
+        }.count
+    }
+
+    var hasUnboundProvisionalPageTarget: Bool {
+        targetsByID.values.contains {
+            $0.kind == .page && $0.isProvisional && $0.frameID == nil
         }
-        if isProvisional == true {
-            return .page
+    }
+
+    func isProvisionalTargetInCurrentPage(_ targetID: ProtocolTarget.ID) -> Bool {
+        guard currentMainPageTargetID != nil,
+              let record = targetsByID[targetID],
+              record.isProvisional else {
+            return false
         }
-        if let currentMainFrameID,
-           let frameID,
-           frameID != currentMainFrameID {
-            return .frame
-        }
-        return .page
+        // A root stream is already scoped to one inspected page's
+        // WebPageInspectorController. That controller creates and removes its
+        // provisional page and frame targets before Page topology is available
+        // to the frontend, so topology cannot be their ownership source.
+        return record.kind == .page || record.kind == .frame
+    }
+
+    func isFrameTargetInCurrentPage(_ targetID: ProtocolTarget.ID) -> Bool {
+        // Do not derive membership from Page topology. WebKit creates every
+        // FrameInspectorTargetProxy in the inspected page's own
+        // WebPageInspectorController, and frameNavigated may arrive after the
+        // target starts emitting domain events.
+        targetsByID[targetID]?.kind == .frame
     }
 
     func resolvedTargetIDForRuntimeContext(
@@ -78,6 +94,10 @@ struct TransportTargetRegistry: Sendable {
     }
 
     mutating func recordTargetCreated(_ record: ProtocolTarget.Record) -> TransportFrameTargetResolution? {
+        var record = record
+        if let frameID = record.frameID {
+            record.parentFrameID = parentFrameIDsByFrameID[frameID]
+        }
         targetsByID[record.id] = record
         let resolvedFrameTarget = committedFrameTargetResolution(for: record)
         if let frameID = record.frameID {
@@ -90,6 +110,47 @@ struct TransportTargetRegistry: Sendable {
             currentMainPageTargetID = record.id
         }
         return resolvedFrameTarget
+    }
+
+    mutating func recordFrameNavigated(
+        deliveredTargetID: ProtocolTarget.ID?,
+        frameID: ProtocolFrame.ID,
+        parentFrameID: ProtocolFrame.ID?
+    ) {
+        if let parentFrameID {
+            parentFrameIDsByFrameID[frameID] = parentFrameID
+        } else {
+            parentFrameIDsByFrameID.removeValue(forKey: frameID)
+        }
+
+        if let frameTargetID = frameTargetIDsByFrameID[frameID],
+           targetsByID[frameTargetID]?.kind == .frame {
+            targetsByID[frameTargetID]?.parentFrameID = parentFrameID
+        }
+
+        guard let deliveredTargetID,
+              parentFrameID == nil,
+              targetsByID[deliveredTargetID]?.kind == .page else {
+            return
+        }
+        if let previousFrameID = targetsByID[deliveredTargetID]?.frameID,
+           previousFrameID != frameID,
+           frameTargetIDsByFrameID[previousFrameID] == deliveredTargetID {
+            frameTargetIDsByFrameID.removeValue(forKey: previousFrameID)
+        }
+        targetsByID[deliveredTargetID]?.frameID = frameID
+        if deliveredTargetID == currentMainPageTargetID {
+            frameTargetIDsByFrameID[frameID] = deliveredTargetID
+        }
+    }
+
+    mutating func recordFrameDetached(_ frameID: ProtocolFrame.ID) {
+        parentFrameIDsByFrameID.removeValue(forKey: frameID)
+        guard let frameTargetID = frameTargetIDsByFrameID[frameID],
+              targetsByID[frameTargetID]?.kind == .frame else {
+            return
+        }
+        targetsByID[frameTargetID]?.parentFrameID = nil
     }
 
     mutating func removeTarget(_ targetID: ProtocolTarget.ID) {

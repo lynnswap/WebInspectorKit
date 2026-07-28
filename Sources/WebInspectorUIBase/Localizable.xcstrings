@@ -4604,6 +4604,23 @@
         }
       }
     },
+    "network.headers.summary.redirects" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Redirects"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リダイレクト"
+          }
+        }
+      }
+    },
     "network.headers.summary.source" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -5148,6 +5165,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "ヘッダー"
+          }
+        }
+      }
+    },
+    "network.section.redirect_request" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Redirect Request"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リダイレクトのリクエスト"
+          }
+        }
+      }
+    },
+    "network.section.redirect_response" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Redirect Response"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リダイレクトのレスポンス"
           }
         }
       }

@@ -267,7 +267,7 @@ package final class DOMNavigationItems: NSObject {
                 return
             }
             do {
-                try await context.dom.setInspectMode(enabled: !context.isElementPickerEnabled)
+                try await context.dom.toggleInspectMode()
             } catch {
                 WebInspectorUIDOMLog.debug("DOM picker toggle failed: \(String(describing: error))")
             }

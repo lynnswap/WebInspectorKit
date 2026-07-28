@@ -48,6 +48,32 @@ private final class NetworkResponseBodyFetchObservationBinding {
 
 @MainActor
 package final class NetworkDetailViewController: UIViewController {
+    private enum PreviewCandidate {
+        case remoteHLS(NetworkRequest)
+        case remotePartialMovie(NetworkRequest)
+        case bodyMedia(NetworkRequest)
+        case unavailableMedia(NetworkRequest)
+        case standard(NetworkRequest)
+
+        var request: NetworkRequest {
+            switch self {
+            case .remoteHLS(let request),
+                 .remotePartialMovie(let request),
+                 .bodyMedia(let request),
+                 .unavailableMedia(let request),
+                 .standard(let request):
+                request
+            }
+        }
+
+        var allowsResponseBodySurface: Bool {
+            if case .unavailableMedia = self {
+                return false
+            }
+            return true
+        }
+    }
+
     private let model: NetworkPanelModel
     private var modelObservation: PortableObservationTracking.Token?
     private var selectedRequestRenderObservation: PortableObservationTracking.Token?
@@ -73,7 +99,9 @@ package final class NetworkDetailViewController: UIViewController {
     }()
     private var previewRoles: [NetworkBody.Role] = []
     private var hasBoundSelectedRequest = false
+    private weak var observedEntry: NetworkListEntry?
     private weak var observedRequest: NetworkRequest?
+    private var observedRequests: [NetworkRequest] = []
     private var bodyTopToPreviewContainerConstraint: NSLayoutConstraint?
     private var bodyTopToPreviewRoleControlConstraint: NSLayoutConstraint?
 #if DEBUG
@@ -154,8 +182,10 @@ package final class NetworkDetailViewController: UIViewController {
         modelObservation?.cancel()
         let token = withPortableContinuousObservation { [weak self] _ in
             guard let self else { return }
-            bindSelectedRequest(
-                model.selectedRequest,
+            let selectedEntry = model.selectedEntry
+            _ = selectedEntry?.requests
+            bindSelectedEntry(
+                selectedEntry,
                 force: selectedRequestRenderObservation == nil
             )
         }
@@ -167,12 +197,12 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func resumeRendering() {
         guard isRenderingActive == false else {
-            bindSelectedRequest(model.selectedRequest, force: selectedRequestRenderObservation == nil)
+            bindSelectedEntry(model.selectedEntry, force: selectedRequestRenderObservation == nil)
             updateBodyRenderingActiveForCurrentSurface()
             return
         }
         isRenderingActive = true
-        bindSelectedRequest(model.selectedRequest, force: true)
+        bindSelectedEntry(model.selectedEntry, force: true)
         startObservingModel()
         updateBodyRenderingActiveForCurrentSurface()
     }
@@ -284,16 +314,21 @@ package final class NetworkDetailViewController: UIViewController {
         renderModeControl()
     }
 
-    private func bindSelectedRequest(_ request: NetworkRequest?, force: Bool = false) {
+    private func bindSelectedEntry(_ entry: NetworkListEntry?, force: Bool = false) {
         guard isRenderingActive else {
             return
         }
-        guard force || hasBoundSelectedRequest == false || observedRequest !== request else {
-            renderModeControl(selectedRequest: request)
+        let requests = entry?.requests ?? []
+        guard force
+            || hasBoundSelectedRequest == false
+            || observedEntry !== entry
+            || observedRequests.map(\.id) != requests.map(\.id) else {
+            renderModeControl(selectedRequest: requests.first)
             return
         }
 
-        guard let request else {
+        guard let entry,
+              let request = requests.first else {
             clearSelectedRequestPresentation(bodySurface: .none)
             return
         }
@@ -302,7 +337,9 @@ package final class NetworkDetailViewController: UIViewController {
         selectedRequestRenderObservation?.cancel()
         selectedRequestRenderObservation = nil
         unbindResponseBodyFetchObservation()
+        observedEntry = entry
         observedRequest = request
+        observedRequests = requests
 #if DEBUG
         selectedRequestRenderObservationDelivery = nil
 #endif
@@ -311,7 +348,7 @@ package final class NetworkDetailViewController: UIViewController {
             contentUnavailableConfiguration = nil
         }
         renderModeControl(selectedRequest: request)
-        bindSelectedRequestRendering(request)
+        bindSelectedRequestRendering(requests)
     }
 
     private func rebindSelectedRequestRendering() {
@@ -324,22 +361,23 @@ package final class NetworkDetailViewController: UIViewController {
         guard isRenderingActive else {
             return
         }
-        guard let observedRequest else {
+        guard observedRequests.isEmpty == false else {
             return
         }
-        bindSelectedRequestRendering(observedRequest)
+        bindSelectedRequestRendering(observedRequests)
     }
 
-    private func bindSelectedRequestRendering(_ request: NetworkRequest) {
+    private func bindSelectedRequestRendering(_ requests: [NetworkRequest]) {
         guard isRenderingActive else {
             return
         }
-        let token = withPortableContinuousObservation { [weak self, weak request] _ in
-            guard let request,
-                  self?.observedRequest === request else {
+        let requestIDs = requests.map(\.id)
+        let token = withPortableContinuousObservation { [weak self] _ in
+            guard let self,
+                  observedRequests.map(\.id) == requestIDs else {
                 return
             }
-            self?.renderSelectedRequest(request)
+            renderSelectedRequests(observedRequests)
         }
         selectedRequestRenderObservation = token
 #if DEBUG
@@ -347,29 +385,38 @@ package final class NetworkDetailViewController: UIViewController {
 #endif
     }
 
-    private func renderSelectedRequest(_ request: NetworkRequest) {
+    private func renderSelectedRequests(_ requests: [NetworkRequest]) {
         guard isRenderingActive else {
             return
         }
         switch mode {
         case .preview:
-            renderPreviewSurface(selectedRequest: request)
+            guard let candidate = previewCandidate(in: requests) else {
+                return
+            }
+            renderPreviewSurface(candidate: candidate)
         case .headers:
-            renderHeadersSurface(selectedRequest: request)
+            renderHeadersSurface(selectedRequests: requests)
         }
     }
 
-    private func renderPreviewSurface(selectedRequest request: NetworkRequest) {
+    private func renderPreviewSurface(candidate: PreviewCandidate) {
+        let request = candidate.request
+        observedRequest = request
         title = request.displayName
         showPreview()
-        renderPreview(selectedRequest: request)
+        renderPreview(candidate: candidate)
         updateBodyRenderingActiveForCurrentSurface()
     }
 
-    private func renderHeadersSurface(selectedRequest request: NetworkRequest) {
-        title = request.displayName
+    private func renderHeadersSurface(selectedRequests requests: [NetworkRequest]) {
+        guard let representativeRequest = requests.first else {
+            preconditionFailure("A selected Network entry must contain at least one request.")
+        }
+        observedRequest = representativeRequest
+        title = representativeRequest.displayName
         showHeaders()
-        headersTextView.render(request: request)
+        headersTextView.render(requests: requests)
     }
 
     private func setMode(_ nextMode: NetworkDetailViewController.Mode) {
@@ -410,7 +457,9 @@ package final class NetworkDetailViewController: UIViewController {
         selectedRequestRenderObservation?.cancel()
         selectedRequestRenderObservation = nil
         unbindResponseBodyFetchObservation()
+        observedEntry = nil
         observedRequest = nil
+        observedRequests = []
 #if DEBUG
         selectedRequestRenderObservationDelivery = nil
 #endif
@@ -455,7 +504,8 @@ package final class NetworkDetailViewController: UIViewController {
         scrollEdgeController.contentScrollView = headersTextView.contentScrollView
     }
 
-    private func renderPreview(selectedRequest request: NetworkRequest) {
+    private func renderPreview(candidate: PreviewCandidate) {
+        let request = candidate.request
         let roles = availablePreviewRoles(in: request)
         let selectedRole = selectedPreviewRole(from: roles)
         renderPreviewRoleControl(roles: roles, selectedRole: selectedRole)
@@ -465,8 +515,17 @@ package final class NetworkDetailViewController: UIViewController {
             unbindResponseBodyFetchObservation()
             return
         }
-        bodyViewController.setSurface(bodySurface(in: request, for: role))
-        bindResponseBodyFetchObservationIfNeeded(for: request, role: role)
+        let surface = bodySurface(in: candidate, for: role)
+        bodyViewController.setSurface(surface)
+        guard role != .response || candidate.allowsResponseBodySurface else {
+            unbindResponseBodyFetchObservation()
+            return
+        }
+        bindResponseBodyFetchObservationIfNeeded(
+            for: request,
+            role: role,
+            metadata: surface.metadata
+        )
     }
 
     private func availablePreviewRoles(in request: NetworkRequest) -> [NetworkBody.Role] {
@@ -506,13 +565,19 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func bindResponseBodyFetchObservationIfNeeded(
         for request: NetworkRequest,
-        role: NetworkBody.Role
+        role: NetworkBody.Role,
+        metadata: NetworkMediaPreviewMetadata?
     ) {
         guard isRenderingActive else {
             unbindResponseBodyFetchObservation()
             return
         }
         guard role == .response else {
+            unbindResponseBodyFetchObservation()
+            return
+        }
+        if let metadata,
+           case .preferredRemotePlayback = metadata.sourcePolicy {
             unbindResponseBodyFetchObservation()
             return
         }
@@ -530,6 +595,7 @@ package final class NetworkDetailViewController: UIViewController {
               mode == .preview,
               observedRequest === request,
               selectedPreviewRole(from: availablePreviewRoles(in: request)) == .response,
+              (previewCandidate(for: request)?.allowsResponseBodySurface ?? true),
               request.canFetchResponseBody else {
             return
         }
@@ -546,9 +612,14 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func bodySurface(
-        in request: NetworkRequest,
+        in candidate: PreviewCandidate,
         for role: NetworkBody.Role
     ) -> NetworkBodySurface {
+        let request = candidate.request
+        if role == .response,
+           candidate.allowsResponseBodySurface == false {
+            return .unavailableBodyPlaceholder
+        }
         guard let body = body(in: request, for: role) else {
             return .unavailableBodyPlaceholder
         }
@@ -566,12 +637,30 @@ package final class NetworkDetailViewController: UIViewController {
         case .request:
             return NetworkMediaPreviewMetadata(
                 mimeType: mimeType(from: nil, headers: request.requestHeaders),
-                url: request.url
+                url: request.url,
+                sourcePolicy: .body
             )
         case .response:
+            let mimeType = mimeType(from: request.mimeType, headers: request.responseHeaders)
+            let url = request.responseURL ?? request.url
+            let remotePlaybackURL = preferredRemotePlaybackURL(
+                for: request,
+                mimeType: mimeType,
+                url: url
+            )
+            let previewKind = NetworkDisplay.MediaPreviewSupport.previewKind(
+                mimeType: mimeType,
+                url: url
+            )
             return NetworkMediaPreviewMetadata(
-                mimeType: mimeType(from: request.mimeType, headers: request.responseHeaders),
-                url: request.responseURL ?? request.url
+                mimeType: mimeType,
+                url: url,
+                sourcePolicy: remotePlaybackURL.map(
+                    NetworkMediaPreviewSourcePolicy.preferredRemotePlayback
+                ) ?? (previewKind == .hlsPlaylist ? .syntax : .body),
+                remotePlaybackHTTPUserAgent: remotePlaybackURL.flatMap { _ in
+                    headerValue(named: "user-agent", in: request.requestHeaders)
+                }
             )
         }
     }
@@ -594,6 +683,200 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func headerValue(named name: String, in headers: [String: String]) -> String? {
         headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
+    }
+
+    private func previewCandidate(in requests: [NetworkRequest]) -> PreviewCandidate? {
+        var latestBodyMedia: PreviewCandidate?
+        var latestStandard: PreviewCandidate?
+        var latestUnavailableMedia: PreviewCandidate?
+        for request in requests.reversed() {
+            guard let candidate = previewCandidate(for: request) else {
+                continue
+            }
+            switch candidate {
+            case .remoteHLS:
+                return candidate
+            case .remotePartialMovie, .bodyMedia:
+                if latestBodyMedia == nil {
+                    latestBodyMedia = candidate
+                }
+            case .unavailableMedia:
+                if latestUnavailableMedia == nil {
+                    latestUnavailableMedia = candidate
+                }
+            case .standard:
+                if latestStandard == nil {
+                    latestStandard = candidate
+                }
+            }
+        }
+        return latestBodyMedia
+            ?? latestStandard
+            ?? latestUnavailableMedia
+            ?? requests.first.map(PreviewCandidate.standard)
+    }
+
+    private func previewCandidate(for request: NetworkRequest) -> PreviewCandidate? {
+        guard let kind = responseMediaPreviewKind(for: request) else {
+            return hasInspectableStandardPreview(for: request)
+                ? .standard(request)
+                : nil
+        }
+        guard request.hasResponse,
+              request.method.caseInsensitiveCompare("HEAD") != .orderedSame,
+              request.status.map({ status in
+                  (200..<300).contains(status)
+                      && status != 204
+                      && status != 205
+              }) ?? true else {
+            return .unavailableMedia(request)
+        }
+        if case .failed = request.state {
+            return .unavailableMedia(request)
+        }
+        if preferredRemotePlaybackURL(
+            for: request,
+            mimeType: responseMIMEType(for: request),
+            url: request.responseURL ?? request.url
+        ) != nil,
+           request.state == .responded || request.state == .finished {
+            return kind == .hlsPlaylist
+                ? .remoteHLS(request)
+                : .remotePartialMovie(request)
+        }
+        if case .failed = request.responseBody.phase {
+            return .unavailableMedia(request)
+        }
+        guard request.state == .finished,
+              request.hasResponseBody else {
+            return .unavailableMedia(request)
+        }
+        switch request.responseBody.phase {
+        case .loaded, .fetching:
+            return .bodyMedia(request)
+        case .available:
+            return request.canFetchResponseBody
+                ? .bodyMedia(request)
+                : .unavailableMedia(request)
+        case .failed:
+            return .unavailableMedia(request)
+        }
+    }
+
+    private func hasInspectableStandardPreview(for request: NetworkRequest) -> Bool {
+        if request.requestBody != nil {
+            return true
+        }
+        guard request.hasResponseBody,
+              request.method.caseInsensitiveCompare("HEAD") != .orderedSame,
+              request.status.map({ status in
+                  (100..<200).contains(status) == false
+                      && status != 204
+                      && status != 205
+                      && status != 304
+              }) ?? true else {
+            return false
+        }
+        if case .failed = request.state {
+            return false
+        }
+        return true
+    }
+
+    private func responseMediaPreviewKind(
+        for request: NetworkRequest
+    ) -> NetworkDisplay.MediaPreviewKind? {
+        NetworkDisplay.MediaPreviewSupport.previewKind(
+            mimeType: responseMIMEType(for: request),
+            url: request.responseURL ?? request.url
+        )
+    }
+
+    private func responseMIMEType(for request: NetworkRequest) -> String? {
+        mimeType(from: request.mimeType, headers: request.responseHeaders)
+    }
+
+    private func preferredRemotePlaybackURL(
+        for request: NetworkRequest,
+        mimeType: String?,
+        url: String
+    ) -> URL? {
+        let previewKind = NetworkDisplay.MediaPreviewSupport.previewKind(
+            mimeType: mimeType,
+            url: url
+        )
+        guard canReplayRequestAsRemoteMedia(request) else {
+            return nil
+        }
+        if previewKind == .hlsPlaylist {
+            return NetworkDisplay.MediaPreviewSupport.remoteHLSURL(
+                mimeType: mimeType,
+                url: url
+            )
+        }
+        guard previewKind == .movie,
+              request.status == 206 || hasSatisfiableContentRange(request.responseHeaders),
+              let remoteURL = URL(string: url),
+              let scheme = remoteURL.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              remoteURL.host?.isEmpty == false else {
+            return nil
+        }
+        return remoteURL
+    }
+
+    private func canReplayRequestAsRemoteMedia(_ request: NetworkRequest) -> Bool {
+        guard request.method.caseInsensitiveCompare("GET") == .orderedSame,
+              request.requestBody == nil else {
+            return false
+        }
+        // AVURLAsset can reproduce User-Agent through public API. AVPlayer owns
+        // its Range requests; every other captured header may change semantics.
+        return request.requestHeaders.allSatisfy { name, _ in
+            switch name.lowercased() {
+            case "range", "user-agent":
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    private func hasSatisfiableContentRange(_ headers: [String: String]) -> Bool {
+        guard let value = headerValue(named: "content-range", in: headers) else {
+            return false
+        }
+        let components = value.split(whereSeparator: { $0.isWhitespace })
+        guard components.count == 2,
+              components[0].caseInsensitiveCompare("bytes") == .orderedSame else {
+            return false
+        }
+        let rangeAndLength = components[1].split(
+            separator: "/",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )
+        guard rangeAndLength.count == 2 else {
+            return false
+        }
+        let bounds = rangeAndLength[0].split(
+            separator: "-",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )
+        guard bounds.count == 2,
+              let first = Int(bounds[0]),
+              let last = Int(bounds[1]),
+              first <= last else {
+            return false
+        }
+        if rangeAndLength[1] == "*" {
+            return true
+        }
+        guard let completeLength = Int(rangeAndLength[1]) else {
+            return false
+        }
+        return last < completeLength
     }
 
 }
@@ -646,6 +929,10 @@ extension NetworkDetailViewController {
 
     var responseBodyFetchObservationDeliveryForTesting: PortableObservationTracking.Token? {
         responseBodyFetchObservationBinding.observationDelivery
+    }
+
+    var previewRequestIDForTesting: NetworkRequest.ID? {
+        observedRequest?.id
     }
 
     func isDetailModeEnabledForTesting(_ mode: NetworkDetailViewController.Mode) -> Bool {
