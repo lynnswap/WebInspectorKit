@@ -171,6 +171,54 @@ package actor TransportSession {
         return eventSequences.current.sequence
     }
 
+    package func currentPageProcessDidTerminate() async {
+        guard !closed else {
+            return
+        }
+        let currentMainPageTargetID = targetRegistry.currentMainPageTargetID
+
+        if let currentMainPageTargetID {
+            transportLogger.error(
+                "Current page process terminated target=\(currentMainPageTargetID.rawValue, privacy: .private)"
+            )
+        } else {
+            transportLogger.error("Current page process terminated after its target was destroyed")
+        }
+
+        let pendingReplies = replyStore.removeAllReplies()
+        targetRegistry = TransportTargetRegistry()
+        provisionalTargetMessageStore.removeAll()
+        styleSheetRouting = TransportStyleSheetRouting()
+        networkRouting.removeAll()
+        runtimeContextRegistry = RuntimeContextRegistry()
+        networkOriginRegistry = TransportNetworkOriginRegistry()
+
+        for pending in pendingReplies {
+            pending.promise.fulfill(.failure(TransportSession.Error.inspectedPageProcessTerminated))
+        }
+
+        guard let currentMainPageTargetID else {
+            return
+        }
+
+        let paramsData: Data
+        do {
+            paramsData = try JSONEncoder().encode(
+                TargetDestroyedParams(targetId: currentMainPageTargetID)
+            )
+        } catch {
+            preconditionFailure("Failed to encode a synthetic Target.targetDestroyed event: \(error)")
+        }
+
+        await emit(
+            domain: .target,
+            method: "Target.targetDestroyed",
+            targetID: currentMainPageTargetID,
+            paramsData: paramsData,
+            destroyedCurrentMainPageTarget: true
+        )
+    }
+
     package func detach() async {
         guard !closed else {
             return
@@ -1392,7 +1440,7 @@ private struct TargetInfoPayload: Decodable {
     var isPaused: Bool?
 }
 
-private struct TargetDestroyedParams: Decodable {
+private struct TargetDestroyedParams: Codable {
     var targetId: ProtocolTarget.ID
 }
 

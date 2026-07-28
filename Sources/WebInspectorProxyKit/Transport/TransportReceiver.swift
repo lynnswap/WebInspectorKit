@@ -1,9 +1,14 @@
 import Synchronization
 
 package final class TransportReceiver: Sendable {
-    private struct QueuedMessage: Sendable {
+    private enum Input: Sendable {
+        case message(String)
+        case currentPageProcessTerminated
+    }
+
+    private struct QueuedInput: Sendable {
         let ordinal: UInt64
-        let payload: String
+        let input: Input
     }
 
     private struct DrainWaiter: Sendable {
@@ -13,8 +18,8 @@ package final class TransportReceiver: Sendable {
 
     private struct State: Sendable {
         var transport: TransportSession?
-        var messages: [QueuedMessage] = []
-        var messageStartIndex = 0
+        var inputs: [QueuedInput] = []
+        var inputStartIndex = 0
         var isDraining = false
         var generation: UInt64 = 0
         var tailOrdinal: UInt64 = 0
@@ -25,7 +30,7 @@ package final class TransportReceiver: Sendable {
     }
 
     private enum DrainStep: Sendable {
-        case deliver(transport: TransportSession, message: QueuedMessage)
+        case deliver(transport: TransportSession, input: QueuedInput)
         case stop(closeWaiters: [CheckedContinuation<Void, Never>])
     }
 
@@ -39,7 +44,7 @@ package final class TransportReceiver: Sendable {
                 return nil as UInt64?
             }
             $0.transport = transport
-            guard $0.messages.isEmpty == false, !$0.isDraining else {
+            guard $0.inputs.isEmpty == false, !$0.isDraining else {
                 return nil
             }
             $0.isDraining = true
@@ -55,13 +60,21 @@ package final class TransportReceiver: Sendable {
     }
 
     package func receive(_ message: String) {
+        receive(.message(message))
+    }
+
+    package func currentPageProcessDidTerminate() {
+        receive(.currentPageProcessTerminated)
+    }
+
+    private func receive(_ input: Input) {
         let drainGeneration = state.withLock {
             guard !$0.isClosed else {
                 return nil as UInt64?
             }
             precondition($0.tailOrdinal < UInt64.max, "TransportReceiver exhausted its message ordinal space.")
             $0.tailOrdinal += 1
-            $0.messages.append(QueuedMessage(ordinal: $0.tailOrdinal, payload: message))
+            $0.inputs.append(QueuedInput(ordinal: $0.tailOrdinal, input: input))
             guard $0.transport != nil else {
                 return nil
             }
@@ -141,9 +154,14 @@ package final class TransportReceiver: Sendable {
     private func drain(generation: UInt64) async {
         while true {
             switch nextDrainStep(generation: generation) {
-            case let .deliver(transport, message):
-                await transport.receiveRootMessage(message.payload)
-                complete(message.ordinal)
+            case let .deliver(transport, input):
+                switch input.input {
+                case let .message(message):
+                    await transport.receiveRootMessage(message)
+                case .currentPageProcessTerminated:
+                    await transport.currentPageProcessDidTerminate()
+                }
+                complete(input.ordinal)
             case let .stop(closeWaiters):
                 Self.resume(closeWaiters)
                 return
@@ -157,9 +175,9 @@ package final class TransportReceiver: Sendable {
                 $0.isDraining = false
                 return .stop(closeWaiters: Self.takeCloseWaitersIfQuiescent(from: &$0))
             }
-            guard $0.messageStartIndex < $0.messages.count else {
-                $0.messages.removeAll(keepingCapacity: true)
-                $0.messageStartIndex = 0
+            guard $0.inputStartIndex < $0.inputs.count else {
+                $0.inputs.removeAll(keepingCapacity: true)
+                $0.inputStartIndex = 0
                 $0.isDraining = false
                 return .stop(closeWaiters: Self.takeCloseWaitersIfQuiescent(from: &$0))
             }
@@ -168,10 +186,10 @@ package final class TransportReceiver: Sendable {
                 return .stop(closeWaiters: Self.takeCloseWaitersIfQuiescent(from: &$0))
             }
 
-            let message = $0.messages[$0.messageStartIndex]
-            $0.messageStartIndex += 1
-            compactMessagesIfNeeded(in: &$0)
-            return .deliver(transport: transport, message: message)
+            let input = $0.inputs[$0.inputStartIndex]
+            $0.inputStartIndex += 1
+            compactInputsIfNeeded(in: &$0)
+            return .deliver(transport: transport, input: input)
         }
     }
 
@@ -194,8 +212,8 @@ package final class TransportReceiver: Sendable {
         state.isClosed = true
         state.generation &+= 1
         state.transport = nil
-        state.messages.removeAll(keepingCapacity: false)
-        state.messageStartIndex = 0
+        state.inputs.removeAll(keepingCapacity: false)
+        state.inputStartIndex = 0
         let drainWaiters = state.drainWaiters
         state.drainWaiters.removeAll(keepingCapacity: false)
         return drainWaiters
@@ -240,13 +258,13 @@ package final class TransportReceiver: Sendable {
         }
     }
 
-    private func compactMessagesIfNeeded(in state: inout State) {
-        if state.messageStartIndex == state.messages.count {
-            state.messages.removeAll(keepingCapacity: true)
-            state.messageStartIndex = 0
-        } else if state.messageStartIndex >= 64 && state.messageStartIndex * 2 >= state.messages.count {
-            state.messages.removeFirst(state.messageStartIndex)
-            state.messageStartIndex = 0
+    private func compactInputsIfNeeded(in state: inout State) {
+        if state.inputStartIndex == state.inputs.count {
+            state.inputs.removeAll(keepingCapacity: true)
+            state.inputStartIndex = 0
+        } else if state.inputStartIndex >= 64 && state.inputStartIndex * 2 >= state.inputs.count {
+            state.inputs.removeFirst(state.inputStartIndex)
+            state.inputStartIndex = 0
         }
     }
 }

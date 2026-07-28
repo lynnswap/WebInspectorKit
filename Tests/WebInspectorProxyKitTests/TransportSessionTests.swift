@@ -1026,6 +1026,161 @@ func targetDestroyFailsPendingTargetReplies() async throws {
 }
 
 @Test
+func currentPageProcessTerminationRetiresTargetsAndPendingReplies() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: nil
+    )
+    let pageTargetID = ProtocolTarget.ID("page-main")
+    let frameTargetID = ProtocolTarget.ID("frame-42-7")
+
+    await session.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#
+    )
+    await session.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-42-7","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    )
+    let lifecycleEvents = await session.events(for: .target)
+    let lifecycleEventTask = Task {
+        var iterator = lifecycleEvents.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    let pageCommandTask = Task {
+        try await session.send(
+            ProtocolCommand(
+                domain: .css,
+                method: "CSS.enable",
+                routing: .target(pageTargetID)
+            )
+        )
+    }
+    _ = try await waitForBackendValue(timeout: testWaitTimeout) {
+        try await backend.waitForTargetMessage(method: "CSS.enable")
+    }
+    let frameCommandTask = Task {
+        try await session.send(
+            ProtocolCommand(
+                domain: .dom,
+                method: "DOM.getDocument",
+                routing: .target(frameTargetID)
+            )
+        )
+    }
+    _ = try await waitForBackendValue(timeout: testWaitTimeout) {
+        try await backend.waitForTargetMessage(method: "DOM.getDocument")
+    }
+
+    await session.currentPageProcessDidTerminate()
+
+    await #expect(throws: TransportSession.Error.inspectedPageProcessTerminated) {
+        try await pageCommandTask.value
+    }
+    await #expect(throws: TransportSession.Error.inspectedPageProcessTerminated) {
+        try await frameCommandTask.value
+    }
+    let event = try #require(await lifecycleEventTask.value)
+    #expect(event.method == "Target.targetDestroyed")
+    #expect(event.targetID == pageTargetID)
+    #expect(event.destroyedCurrentMainPageTarget)
+
+    let terminatedSnapshot = await session.snapshot()
+    #expect(terminatedSnapshot.currentMainPageTargetID == nil)
+    #expect(terminatedSnapshot.targetsByID.isEmpty)
+    #expect(terminatedSnapshot.frameTargetIDsByFrameID.isEmpty)
+    #expect(terminatedSnapshot.parentFrameIDsByFrameID.isEmpty)
+    #expect(terminatedSnapshot.pendingTargetReplyKeys.isEmpty)
+
+    await session.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#
+    )
+    let recoveredCommandTask = Task {
+        try await session.send(
+            ProtocolCommand(
+                domain: .dom,
+                method: "DOM.getDocument",
+                routing: .target(pageTargetID)
+            )
+        )
+    }
+    let recoveredCommand = try await waitForBackendValue(timeout: testWaitTimeout) {
+        try await backend.waitForTargetMessage(
+            method: "DOM.getDocument",
+            ordinal: 1
+        )
+    }
+    #expect(recoveredCommand.targetIdentifier == pageTargetID)
+    await receiveTargetDispatch(
+        session,
+        targetID: pageTargetID,
+        message: ##"{"id":\##(try messageID(recoveredCommand.message)),"result":{"root":{"nodeId":"document","nodeType":9,"nodeName":"#document"}}}"##
+    )
+    _ = try await recoveredCommandTask.value
+}
+
+@Test
+func processTerminationClearsRemainingTargetsAfterPageTargetWasDestroyed() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: nil
+    )
+    let frameTargetID = ProtocolTarget.ID("frame-42-7")
+
+    await session.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-destroyed-first","type":"page","frameId":"main-frame","isProvisional":false}}}"#
+    )
+    await session.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-42-7","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
+    )
+    let rootCommandTask = Task {
+        try await session.send(
+            ProtocolCommand(
+                domain: .target,
+                method: "Target.setPauseOnStart",
+                routing: .root
+            )
+        )
+    }
+    _ = try await waitForRootMessage(backend)
+    let frameCommandTask = Task {
+        try await session.send(
+            ProtocolCommand(
+                domain: .dom,
+                method: "DOM.getDocument",
+                routing: .target(frameTargetID)
+            )
+        )
+    }
+    _ = try await waitForBackendValue(timeout: testWaitTimeout) {
+        try await backend.waitForTargetMessage(method: "DOM.getDocument")
+    }
+
+    await session.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-destroyed-first"}}"#
+    )
+    let targetDestroyedSnapshot = await session.snapshot()
+    #expect(targetDestroyedSnapshot.currentMainPageTargetID == nil)
+    #expect(targetDestroyedSnapshot.targetsByID[frameTargetID] != nil)
+
+    await session.currentPageProcessDidTerminate()
+
+    await #expect(throws: TransportSession.Error.inspectedPageProcessTerminated) {
+        try await frameCommandTask.value
+    }
+    await #expect(throws: TransportSession.Error.inspectedPageProcessTerminated) {
+        try await rootCommandTask.value
+    }
+    let terminatedSnapshot = await session.snapshot()
+    #expect(terminatedSnapshot.targetsByID.isEmpty)
+    #expect(terminatedSnapshot.pendingTargetReplyKeys.isEmpty)
+    #expect(terminatedSnapshot.pendingRootReplyIDs.isEmpty)
+}
+
+@Test
 func remoteErrorAndTimeoutFailPendingReplies() async throws {
     let errorBackend = FakeTransportBackend()
     let errorSession = TransportSession(backend: errorBackend, responseTimeout: nil)

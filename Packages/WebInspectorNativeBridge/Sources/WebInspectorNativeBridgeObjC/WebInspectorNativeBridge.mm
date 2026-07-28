@@ -602,9 +602,23 @@ static NSError *selectorFailureError(
 
 @property (nonatomic, weak, readonly) WKWebView *webView;
 - (void)handleFrontendMessageString:(NSString *)messageString;
+- (void)handleWebContentProcessTermination;
+- (void)reconnectFrontendAfterWebContentProcessRelaunch;
 - (void)reportFatalFailure:(NSString *)message;
 
 @end
+
+@interface WebInspectorNativeNavigationDelegateProxy : NSObject <WKNavigationDelegate>
+
+- (instancetype)initWithWebView:(WKWebView *)webView
+                          bridge:(WebInspectorNativeBridge *)bridge
+                          client:(nullable id<WKNavigationDelegate>)client;
+- (void)installAsNavigationDelegate;
+- (void)restoreClientAndInvalidate;
+
+@end
+
+static uint8_t navigationDelegateObservationContext;
 
 class WebInspectorNativeFrontendChannel final : public Inspector::FrontendChannel {
 public:
@@ -641,6 +655,132 @@ private:
     uint64_t m_stringImplToNSStringAddress { 0 };
 };
 
+@implementation WebInspectorNativeNavigationDelegateProxy {
+    __weak WKWebView *_webView;
+    __weak WebInspectorNativeBridge *_bridge;
+    __weak id<WKNavigationDelegate> _client;
+    BOOL _isObservingNavigationDelegate;
+    BOOL _isUpdatingNavigationDelegate;
+}
+
+- (instancetype)initWithWebView:(WKWebView *)webView
+                          bridge:(WebInspectorNativeBridge *)bridge
+                          client:(id<WKNavigationDelegate>)client
+{
+    self = [super init];
+    if (!self)
+        return nil;
+
+    _webView = webView;
+    _bridge = bridge;
+    _client = client;
+    return self;
+}
+
+- (void)installAsNavigationDelegate
+{
+    WKWebView *webView = _webView;
+    if (!webView || _isObservingNavigationDelegate)
+        return;
+
+    webView.navigationDelegate = self;
+    [webView addObserver:self
+              forKeyPath:@"navigationDelegate"
+                 options:0
+                 context:&navigationDelegateObservationContext];
+    _isObservingNavigationDelegate = YES;
+}
+
+- (void)restoreClientAndInvalidate
+{
+    WKWebView *webView = _webView;
+    if (_isObservingNavigationDelegate) {
+        [webView removeObserver:self
+                    forKeyPath:@"navigationDelegate"
+                       context:&navigationDelegateObservationContext];
+        _isObservingNavigationDelegate = NO;
+    }
+    if (webView.navigationDelegate == self)
+        webView.navigationDelegate = _client;
+
+    _webView = nil;
+    _bridge = nil;
+    _client = nil;
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath
+                      ofObject:(id)object
+                        change:(NSDictionary<NSKeyValueChangeKey, id> *)change
+                       context:(void *)context
+{
+    if (context != &navigationDelegateObservationContext) {
+        [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+        return;
+    }
+    if (_isUpdatingNavigationDelegate)
+        return;
+
+    WKWebView *webView = _webView;
+    if (!webView || webView.navigationDelegate == self)
+        return;
+
+    _client = webView.navigationDelegate;
+    _isUpdatingNavigationDelegate = YES;
+    webView.navigationDelegate = self;
+    _isUpdatingNavigationDelegate = NO;
+}
+
+- (BOOL)respondsToSelector:(SEL)selector
+{
+    return [super respondsToSelector:selector] || [_client respondsToSelector:selector];
+}
+
+- (id)forwardingTargetForSelector:(SEL)selector
+{
+    id<WKNavigationDelegate> client = _client;
+    if ([client respondsToSelector:selector])
+        return client;
+    return [super forwardingTargetForSelector:selector];
+}
+
+- (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView
+{
+    [_bridge handleWebContentProcessTermination];
+
+    id<WKNavigationDelegate> client = _client;
+    if ([client respondsToSelector:_cmd])
+        [client webViewWebContentProcessDidTerminate:webView];
+}
+
+- (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation
+{
+    [_bridge reconnectFrontendAfterWebContentProcessRelaunch];
+
+    id<WKNavigationDelegate> client = _client;
+    if ([client respondsToSelector:_cmd])
+        [client webView:webView didStartProvisionalNavigation:navigation];
+}
+
+- (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation
+{
+    [_bridge reconnectFrontendAfterWebContentProcessRelaunch];
+
+    id<WKNavigationDelegate> client = _client;
+    if ([client respondsToSelector:_cmd])
+        [client webView:webView didCommitNavigation:navigation];
+}
+
+- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation
+{
+    [_bridge reconnectFrontendAfterWebContentProcessRelaunch];
+
+    id<WKNavigationDelegate> client = _client;
+    if ([client respondsToSelector:_cmd])
+        [client webView:webView didFinishNavigation:navigation];
+}
+
+@end
+
 @implementation WebInspectorNativeBridge {
     __weak WKWebView *_webView;
     id _inspector;
@@ -651,7 +791,9 @@ private:
     uint64_t _disconnectFrontendAddress;
     WebInspectorNativeResolvedSymbols _resolvedSymbols;
     std::unique_ptr<WebInspectorNativeFrontendChannel> _frontendChannel;
+    WebInspectorNativeNavigationDelegateProxy *_navigationDelegateProxy;
     BOOL _frontendAttached;
+    BOOL _isAwaitingWebProcessRelaunch;
 }
 
 - (instancetype)initWithWebView:(WKWebView *)webView
@@ -701,6 +843,66 @@ private:
     _controllerOffset = WebInspectorNativeBridgePrivate::invalidControllerOffset;
 }
 
+- (void)disconnectFrontendPreservingAttachmentState
+{
+    BOOL canDisconnectFrontend = NO;
+    if (_frontendAttached && _frontendChannel && _controller && _frontendConnectionTarget && _disconnectFrontendAddress)
+        canDisconnectFrontend = [self attachedControllerIsStillValid];
+
+    if (canDisconnectFrontend) {
+        auto *disconnectFrontend = reinterpret_cast<WebInspectorNativeBridgePrivate::DisconnectFrontendFn>(
+            static_cast<uintptr_t>(_disconnectFrontendAddress)
+        );
+        disconnectFrontend(_frontendConnectionTarget, *_frontendChannel);
+    }
+
+    _frontendAttached = NO;
+    _frontendChannel.reset();
+}
+
+- (BOOL)connectFrontendToCurrentWebProcess
+{
+    if (!WebInspectorNativeBridgePrivate::resolvedSymbolsAreComplete(_resolvedSymbols)
+        || !_controller
+        || !_frontendConnectionTarget
+        || ![self attachedControllerIsStillValid])
+        return NO;
+
+    _frontendChannel = std::make_unique<WebInspectorNativeFrontendChannel>(
+        self,
+        _resolvedSymbols.stringImplToNSStringAddress
+    );
+    auto *connectFrontend = reinterpret_cast<WebInspectorNativeBridgePrivate::ConnectFrontendFn>(
+        static_cast<uintptr_t>(_resolvedSymbols.connectFrontendAddress)
+    );
+    connectFrontend(_frontendConnectionTarget, *_frontendChannel, false, false);
+    _frontendAttached = YES;
+    return YES;
+}
+
+- (void)installNavigationDelegateProxy
+{
+    WKWebView *webView = self.webView;
+    if (!webView)
+        return;
+
+    _navigationDelegateProxy = [[WebInspectorNativeNavigationDelegateProxy alloc]
+        initWithWebView:webView
+                 bridge:self
+                 client:webView.navigationDelegate];
+    [_navigationDelegateProxy installAsNavigationDelegate];
+}
+
+- (void)removeNavigationDelegateProxy
+{
+    WebInspectorNativeNavigationDelegateProxy *proxy = _navigationDelegateProxy;
+    if (!proxy)
+        return;
+
+    [proxy restoreClientAndInvalidate];
+    _navigationDelegateProxy = nil;
+}
+
 - (void)dealloc
 {
     [self detach];
@@ -715,6 +917,17 @@ private:
         NSError *transportError = WebInspectorNativeBridgePrivate::makeError(
             WebInspectorNativeBridgePrivate::ErrorCodeAttachFailed,
             @"WKWebView was released before attach."
+        );
+        if (error)
+            *error = transportError;
+        [self reportFatalFailure:transportError.localizedDescription];
+        return NO;
+    }
+
+    if ([self.webView.navigationDelegate isKindOfClass:WebInspectorNativeNavigationDelegateProxy.class]) {
+        NSError *transportError = WebInspectorNativeBridgePrivate::makeError(
+            WebInspectorNativeBridgePrivate::ErrorCodeAttachFailed,
+            @"This WKWebView already has an attached native inspector."
         );
         if (error)
             *error = transportError;
@@ -794,12 +1007,19 @@ private:
     WebInspectorNativeBridgePrivate::invokeVoid(_inspector, connectSelector);
 #endif
 
-    _frontendChannel = std::make_unique<WebInspectorNativeFrontendChannel>(self, resolvedSymbols.stringImplToNSStringAddress);
-    auto *connectFrontend = reinterpret_cast<WebInspectorNativeBridgePrivate::ConnectFrontendFn>(
-        static_cast<uintptr_t>(resolvedSymbols.connectFrontendAddress)
-    );
-    connectFrontend(_frontendConnectionTarget, *_frontendChannel, false, false);
-    _frontendAttached = YES;
+    if (![self connectFrontendToCurrentWebProcess]) {
+        NSError *transportError = WebInspectorNativeBridgePrivate::makeError(
+            WebInspectorNativeBridgePrivate::ErrorCodeAttachFailed,
+            @"The inspector frontend could not connect to the current WebContent process."
+        );
+        if (error)
+            *error = transportError;
+        [self reportFatalFailure:transportError.localizedDescription];
+        [self detach];
+        return NO;
+    }
+    _isAwaitingWebProcessRelaunch = NO;
+    [self installNavigationDelegateProxy];
 #if DEBUG
     os_log_info(WebInspectorNativeBridgePrivate::nativeBridgeLog(), "native inspector attach succeeded mode=controller-wrapper");
 #endif
@@ -865,19 +1085,39 @@ private:
 
 - (void)detach
 {
-    BOOL canDisconnectFrontend = NO;
-    if (_frontendAttached && _frontendChannel && _controller && _frontendConnectionTarget && _disconnectFrontendAddress) {
-        canDisconnectFrontend = [self attachedControllerIsStillValid];
-    }
-
-    if (canDisconnectFrontend) {
-        auto *disconnectFrontend = reinterpret_cast<WebInspectorNativeBridgePrivate::DisconnectFrontendFn>(
-            static_cast<uintptr_t>(_disconnectFrontendAddress)
-        );
-        disconnectFrontend(_frontendConnectionTarget, *_frontendChannel);
-    }
-
+    [self removeNavigationDelegateProxy];
+    [self disconnectFrontendPreservingAttachmentState];
+    _isAwaitingWebProcessRelaunch = NO;
     [self invalidateAttachmentState];
+}
+
+- (void)handleWebContentProcessTermination
+{
+    if (_isAwaitingWebProcessRelaunch)
+        return;
+
+    _isAwaitingWebProcessRelaunch = YES;
+    [self disconnectFrontendPreservingAttachmentState];
+    WebInspectorNativeWebContentProcessTerminationHandler handler = self.webContentProcessTerminationHandler;
+    if (handler)
+        handler();
+#if DEBUG
+    os_log_info(WebInspectorNativeBridgePrivate::nativeBridgeLog(), "web content process terminated; inspector frontend disconnected");
+#endif
+}
+
+- (void)reconnectFrontendAfterWebContentProcessRelaunch
+{
+    if (!_isAwaitingWebProcessRelaunch)
+        return;
+
+    if (![self connectFrontendToCurrentWebProcess])
+        return;
+
+    _isAwaitingWebProcessRelaunch = NO;
+#if DEBUG
+    os_log_info(WebInspectorNativeBridgePrivate::nativeBridgeLog(), "web content process relaunched; inspector frontend reconnected");
+#endif
 }
 
 - (void)handleFrontendMessageString:(NSString *)messageString

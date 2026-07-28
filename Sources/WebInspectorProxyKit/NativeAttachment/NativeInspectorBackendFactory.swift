@@ -7,13 +7,15 @@ package enum NativeInspectorBackendFactory {
         webView: WKWebView,
         resolvedSymbols: NativeInspectorResolvedSymbols,
         messageHandler: @escaping @Sendable (String) -> Void,
-        fatalFailureHandler: @escaping @Sendable (String) -> Void = { _ in }
+        fatalFailureHandler: @escaping @Sendable (String) -> Void = { _ in },
+        webContentProcessTerminationHandler: @escaping @Sendable () -> Void = {}
     ) -> NativeInspectorBackend {
         NativeInspectorBackend(
             webView: webView,
             resolvedSymbols: resolvedSymbols,
             messageHandler: messageHandler,
-            fatalFailureHandler: fatalFailureHandler
+            fatalFailureHandler: fatalFailureHandler,
+            webContentProcessTerminationHandler: webContentProcessTerminationHandler
         )
     }
 

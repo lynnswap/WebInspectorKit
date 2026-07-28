@@ -76,7 +76,10 @@ package enum NativeInspectorConnectionFactory {
                 messageHandler: { message in
                     receiver.receive(message)
                 },
-                fatalFailureHandler: fatalFailureHandler
+                fatalFailureHandler: fatalFailureHandler,
+                webContentProcessTerminationHandler: {
+                    receiver.currentPageProcessDidTerminate()
+                }
             )
             let createdTransport = makeTransportSession(backend)
             transport = createdTransport

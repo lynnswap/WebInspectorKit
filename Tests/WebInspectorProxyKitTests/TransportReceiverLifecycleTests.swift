@@ -132,6 +132,50 @@ func receiverDrainWatermarkDoesNotWaitForNewerLiveCallback() async {
     await graph.close()
 }
 
+@Test
+func receiverOrdersProcessTerminationBeforeRelaunchedTargetDiscovery() async throws {
+    let graph = ReceiverTransportGraph()
+    let targetID = ProtocolTarget.ID("page-main")
+
+    graph.receiver.receive(
+        targetCreatedMessage(
+            id: targetID.rawValue,
+            type: "page"
+        )
+    )
+    await graph.receiver.waitUntilDrained(through: graph.receiver.tailOrdinal())
+
+    let commandTask = Task {
+        try await graph.transport.send(
+            ProtocolCommand(
+                domain: .css,
+                method: "CSS.enable",
+                routing: .target(targetID)
+            )
+        )
+    }
+    _ = try await graph.backend.waitForTargetMessage(method: "CSS.enable")
+
+    graph.receiver.currentPageProcessDidTerminate()
+    graph.receiver.receive(
+        targetCreatedMessage(
+            id: targetID.rawValue,
+            type: "page"
+        )
+    )
+    await graph.receiver.waitUntilDrained(through: graph.receiver.tailOrdinal())
+
+    await #expect(throws: TransportSession.Error.inspectedPageProcessTerminated) {
+        try await commandTask.value
+    }
+    let snapshot = await graph.transport.snapshot()
+    #expect(snapshot.currentMainPageTargetID == targetID)
+    #expect(Set(snapshot.targetsByID.keys) == [targetID])
+    #expect(snapshot.pendingTargetReplyKeys.isEmpty)
+
+    await graph.close()
+}
+
 @MainActor
 @Test
 func nativeConnectionCloseAwaitsActiveReceiverTurnBeforeBackendDetach() async {

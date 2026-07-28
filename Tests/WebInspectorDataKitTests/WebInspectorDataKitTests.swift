@@ -3007,7 +3007,7 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
 
 @MainActor
 @Test
-func currentPageTargetDestroyedDuringRetargetDoesNotDetachOrClearNetwork() async throws {
+func currentPageProcessTerminationInterruptsPickerAndRetargetsWithoutClearingNetwork() async throws {
     let oldTargetID = ProtocolTarget.ID("page-old")
     let newTargetID = ProtocolTarget.ID("page-new-after-destroy")
     let retainedRequestID = Network.Request.ID("destroy-retained-request")
@@ -3030,11 +3030,26 @@ func currentPageTargetDestroyedDuringRetargetDoesNotDetachOrClearNetwork() async
         networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)]
     }
 
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-old"}}"#
+    let interruptedPickerMessageCount = await backend.sentTargetMessages().count
+    let interruptedPickerTask = Task { @MainActor in
+        try await context.setElementPickerEnabled(true)
+    }
+    let interruptedInspectMode = try await waitForTransportTargetMessage(
+        backend,
+        method: "DOM.setInspectModeEnabled",
+        after: interruptedPickerMessageCount
     )
+    #expect(interruptedInspectMode.targetIdentifier == oldTargetID)
+
+    await transport.currentPageProcessDidTerminate()
+    do {
+        try await interruptedPickerTask.value
+        Issue.record("Expected the in-flight picker command to fail when its WebContent process terminated.")
+    } catch {}
+
     #expect(context.state == .attached)
     #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("destroyed-root")))
+    #expect(context.isElementPickerEnabled == false)
     #expect(networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)])
     await installTransportPageTarget(in: transport, targetID: newTargetID)
 

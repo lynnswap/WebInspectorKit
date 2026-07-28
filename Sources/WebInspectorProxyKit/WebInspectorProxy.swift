@@ -977,6 +977,8 @@ public actor WebInspectorProxy {
             return WebInspectorProxyError.disconnected(
                 "Target \(targetID.rawValue) does not support \(domain.description) during bootstrap."
             )
+        case .inspectedPageProcessTerminated:
+            return WebInspectorProxyError.disconnected("Inspected page process terminated during bootstrap.")
         case .malformedMessage:
             return WebInspectorProxyError.disconnected("Malformed target bootstrap message.")
         }
@@ -1003,6 +1005,6 @@ public actor WebInspectorProxy {
                 ])
             }
         }
-        return WebInspectorProxyError.attachFailed(String(describing: error))
+        return WebInspectorProxyError.attachFailed((error as NSError).localizedDescription)
     }
 }

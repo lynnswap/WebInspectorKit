@@ -84,6 +84,11 @@ public final class NativeInspectorBridge {
             }
         }
     }
+    public var webContentProcessTerminationHandler: (() -> Void)? {
+        didSet {
+            objcBridge.webContentProcessTerminationHandler = webContentProcessTerminationHandler
+        }
+    }
 
     private let objcBridge: WebInspectorNativeBridgeObjC.WebInspectorNativeBridge
 

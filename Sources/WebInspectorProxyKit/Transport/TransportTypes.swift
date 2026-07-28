@@ -278,6 +278,7 @@ package extension TransportSession {
         case unsupportedDomain(ProtocolDomain, targetID: ProtocolTarget.ID)
         case replyTimeout(method: String, targetID: ProtocolTarget.ID?)
         case remoteError(method: String, targetID: ProtocolTarget.ID?, message: String)
+        case inspectedPageProcessTerminated
         case transportClosed
     }
 }

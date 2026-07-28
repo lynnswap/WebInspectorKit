@@ -161,7 +161,11 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
             return WebInspectorProxyError.timeout(domain: domain, method: method)
         case let .remoteError(method, _, message):
             return WebInspectorProxyError.commandFailed(domain: domain, method: method, message: message)
-        case .malformedMessage, .missingMainPageTarget, .missingTarget, .unsupportedDomain:
+        case .malformedMessage,
+             .missingMainPageTarget,
+             .missingTarget,
+             .unsupportedDomain,
+             .inspectedPageProcessTerminated:
             return WebInspectorProxyError.commandFailed(
                 domain: domain,
                 method: method,
