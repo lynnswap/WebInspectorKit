@@ -8,15 +8,10 @@ import WebInspectorUINetwork
 @MainActor
 package final class PresentationContentStore {
     private let contentCache = WebInspectorTab.ContentCache()
-    private let onElementPickerActivated: @MainActor () -> Void
     private var networkPanelModel: NetworkPanelModel?
     private var contextEpoch: Int?
 
-    package init(
-        onElementPickerActivated: @escaping @MainActor () -> Void = {}
-    ) {
-        self.onElementPickerActivated = onElementPickerActivated
-    }
+    package init() {}
 
     isolated deinit {
         contentCache.removeAll()
@@ -64,10 +59,6 @@ package final class PresentationContentStore {
     package func clear() {
         clearResources()
         contextEpoch = nil
-    }
-
-    package func elementPickerDidActivate() {
-        onElementPickerActivated()
     }
 
     private func clearResources() {

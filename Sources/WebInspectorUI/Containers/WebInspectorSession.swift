@@ -18,19 +18,9 @@ private let webInspectorSessionLifecycleLogger = Logger(
 @MainActor
 @Observable
 public final class WebInspectorSession {
-    package enum RootPresentationEndBehavior: Sendable {
-        case preserveBackendInteraction
-        case suspendBackendInteraction
-        case detachSession
-
-        static func configured(automaticallyDetaches: Bool) -> Self {
-            automaticallyDetaches ? .detachSession : .suspendBackendInteraction
-        }
-    }
-
     private struct RootPresentationRetirement {
         let attachmentGeneration: UInt64
-        var behavior: RootPresentationEndBehavior
+        var detachesSession: Bool
     }
 
     package let interface: InterfaceModel
@@ -178,20 +168,10 @@ public final class WebInspectorSession {
     }
 
     package func retireRootPresentation(id: UUID, detach: Bool) async {
-        await retireRootPresentation(
-            id: id,
-            behavior: .configured(automaticallyDetaches: detach)
-        )
-    }
-
-    package func retireRootPresentation(
-        id: UUID,
-        behavior: RootPresentationEndBehavior
-    ) async {
         guard activeRootPresentationIDs.remove(id) != nil else {
             return
         }
-        recordRootPresentationRetirement(behavior: behavior)
+        recordRootPresentationRetirement(detach: detach)
         guard activeRootPresentationIDs.isEmpty,
               let retirement = takeDeferredRootPresentationRetirement() else {
             return
@@ -200,20 +180,10 @@ public final class WebInspectorSession {
     }
 
     package func abandonRootPresentation(id: UUID, detach: Bool) {
-        abandonRootPresentation(
-            id: id,
-            behavior: .configured(automaticallyDetaches: detach)
-        )
-    }
-
-    package func abandonRootPresentation(
-        id: UUID,
-        behavior: RootPresentationEndBehavior
-    ) {
         guard activeRootPresentationIDs.remove(id) != nil else {
             return
         }
-        recordRootPresentationRetirement(behavior: behavior)
+        recordRootPresentationRetirement(detach: detach)
         guard activeRootPresentationIDs.isEmpty,
               let retirement = takeDeferredRootPresentationRetirement() else {
             return
@@ -230,16 +200,16 @@ public final class WebInspectorSession {
         await completeRootPresentationRetirement(
             RootPresentationRetirement(
                 attachmentGeneration: attachmentGeneration,
-                behavior: .configured(automaticallyDetaches: detach)
+                detachesSession: detach
             )
         )
     }
 
-    private func recordRootPresentationRetirement(behavior: RootPresentationEndBehavior) {
+    private func recordRootPresentationRetirement(detach: Bool) {
         mergeDeferredRootPresentationRetirement(
             RootPresentationRetirement(
                 attachmentGeneration: attachmentGeneration,
-                behavior: behavior
+                detachesSession: detach
             )
         )
     }
@@ -255,16 +225,8 @@ public final class WebInspectorSession {
             deferredRootPresentationRetirement = retirement
             return
         }
-        if deferredRetirement.behavior == .detachSession
-            || retirement.behavior == .detachSession {
-            deferredRetirement.behavior = .detachSession
-        } else {
-            // A detach request is sticky because it owns the attachment. For
-            // borrowed roots, the final presentation's end reason determines
-            // whether backend interaction is suspended or intentionally kept
-            // alive for page-side element picking.
-            deferredRetirement.behavior = retirement.behavior
-        }
+        deferredRetirement.detachesSession = deferredRetirement.detachesSession
+            || retirement.detachesSession
         deferredRootPresentationRetirement = deferredRetirement
     }
 
@@ -283,14 +245,11 @@ public final class WebInspectorSession {
             mergeDeferredRootPresentationRetirement(retirement)
             return
         }
-        switch retirement.behavior {
-        case .preserveBackendInteraction:
-            return
-        case .suspendBackendInteraction:
+        guard retirement.detachesSession else {
             await suspendBackendInteractionForPresentationEnd()
-        case .detachSession:
-            await detachAndReplaceContext()
+            return
         }
+        await detachAndReplaceContext()
     }
 
     /// Mirrors the legacy presentation-end retirement: without tearing down the

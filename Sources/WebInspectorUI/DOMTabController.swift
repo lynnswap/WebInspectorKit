@@ -73,8 +73,7 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
                     session: session,
                     contentStore: contentStore
                 ),
-                context: session.context,
-                onElementPickerActivated: contentStore.elementPickerDidActivate
+                context: session.context
             )
         case (.compact, .domElement):
             DOMCompactNavigationController(
@@ -96,8 +95,7 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
                         session: session,
                         contentStore: contentStore
                     ),
-                    context: session.context,
-                    onElementPickerActivated: contentStore.elementPickerDidActivate
+                    context: session.context
                 )
             )
         }

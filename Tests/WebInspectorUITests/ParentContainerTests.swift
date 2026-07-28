@@ -862,38 +862,44 @@ struct ParentContainerTests {
     }
 
     @Test
-    func elementPickerActivationDismissesPresentationWithoutStoppingPickerOrDetaching() async throws {
+    func elementPickerActivationKeepsPresentationVisible() async throws {
         let fixture = try await makeLiveSession()
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
-        try await fixture.context.setElementPickerEnabled(true)
-        #expect(fixture.context.isElementPickerEnabled)
 
         let presenter = UIViewController()
         let viewController = WebInspectorViewController(session: fixture.session)
+        viewController.horizontalSizeClassOverrideForTesting = .regular
         let window = showInWindow(presenter)
         defer { window.isHidden = true }
 
         presenter.present(viewController, animated: false)
         #expect(presenter.presentedViewController === viewController)
 
-        let retirementBaseline = viewController.rootPresentationRetirementTaskCompletionCountForTesting
-        viewController.presentationContentStoreForTesting.elementPickerDidActivate()
-        #expect(
-            await viewController.waitForRootPresentationRetirementTaskCompletionForTesting(
-                after: retirementBaseline
-            )
+        let host = try #require(
+            viewController.activeHostViewControllerForTesting
+                as? RegularTabContentViewController
         )
+        host.loadViewIfNeeded()
+        let rootViewController = try #require(host.viewControllers.first)
+        rootViewController.loadViewIfNeeded()
+        let splitViewController = try childViewController(
+            ofType: DOMSplitViewController.self,
+            in: rootViewController
+        )
+        splitViewController.loadViewIfNeeded()
+        let navigationItems = try #require(
+            splitViewController.domNavigationItemsForTesting
+        )
+        var statusUpdates = fixture.context.statusUpdates.makeAsyncIterator()
 
-        #expect(presenter.presentedViewController == nil)
-        #expect(fixture.session.detachCountForTesting == 0)
+        navigationItems.performToggleElementPickerCommand()
+        while fixture.context.isElementPickerEnabled == false,
+              let status = await statusUpdates.next(),
+              status.isElementPickerEnabled == false {}
+
         #expect(fixture.context.isElementPickerEnabled)
-        let commands = await fixture.runtime.backend.recordedCommands()
-        #expect(commands.filter {
-            $0.domain == "DOM" && $0.method == "setInspectModeEnabled"
-        }.compactMap {
-            $0.payload.cast(as: DOM.SetInspectModeEnabledPayload.self)?.enabled
-        } == [true])
-        #expect(commands.contains { $0.domain == "DOM" && $0.method == "hideHighlight" } == false)
+        #expect(presenter.presentedViewController === viewController)
+        #expect(fixture.session.detachCountForTesting == 0)
     }
 
     @Test
