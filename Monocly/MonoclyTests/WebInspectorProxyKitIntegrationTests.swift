@@ -7,6 +7,24 @@ import XCTest
 #if os(iOS)
 final class WebInspectorProxyKitIntegrationTests: XCTestCase {
     @MainActor
+    func testNativeInspectablePageRestoresOriginalInspectability() {
+        let webView = WKWebView(frame: .zero)
+        webView.isInspectable = false
+
+        let page = NativeInspectablePage(webView: webView)
+
+        XCTAssertTrue(webView.isInspectable)
+
+        page.restoreInspectabilityIfNeeded()
+
+        XCTAssertFalse(webView.isInspectable)
+
+        page.restoreInspectabilityIfNeeded()
+
+        XCTAssertFalse(webView.isInspectable)
+    }
+
+    @MainActor
     func testNativeInspectorReconnectsAfterWebContentProcessTermination() async throws {
         let fixture = try HostedWebViewFixture()
         defer { fixture.cleanup() }
@@ -54,6 +72,25 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
             await proxy.close()
             throw error
         }
+    }
+
+    @MainActor
+    func testOverlappingNativeInspectablePagesRestoreOnlyAfterLastOwner() {
+        let webView = WKWebView(frame: .zero)
+        webView.isInspectable = false
+
+        let firstPage = NativeInspectablePage(webView: webView)
+        let secondPage = NativeInspectablePage(webView: webView)
+
+        XCTAssertTrue(webView.isInspectable)
+
+        secondPage.restoreInspectabilityIfNeeded()
+
+        XCTAssertTrue(webView.isInspectable)
+
+        firstPage.restoreInspectabilityIfNeeded()
+
+        XCTAssertFalse(webView.isInspectable)
     }
 
     @MainActor
