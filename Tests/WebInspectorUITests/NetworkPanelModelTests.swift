@@ -1076,6 +1076,56 @@ func missingVisitOrInitiatorAlwaysProducesSingletonEntries() async {
 
 @Test
 @MainActor
+func laterRequestStaysNewestWhenProtocolTimestampRestarts() async {
+    let context = makeContext()
+    let retainedID = await applyPendingRequest(
+        to: context,
+        requestID: "retained",
+        url: "https://example.test/before-navigation",
+        resourceType: .fetch,
+        timestamp: 100
+    )
+    let model = NetworkPanelModel(context: context)
+    let transactionBaseline = model.rawTransactionDeliveryCountForTesting
+
+    let navigatedID = await applyPendingRequest(
+        to: context,
+        requestID: "navigated",
+        url: "https://example.test/after-navigation",
+        resourceType: .document,
+        timestamp: 1
+    )
+
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: transactionBaseline))
+    #expect(model.displayRequestIDs == [navigatedID, retainedID])
+}
+
+@Test
+@MainActor
+func panelRebuildPreservesNewestOrderAcrossProtocolTimestampRestart() async {
+    let context = makeContext()
+    let retainedID = await applyPendingRequest(
+        to: context,
+        requestID: "retained",
+        url: "https://example.test/before-navigation",
+        resourceType: .fetch,
+        timestamp: 100
+    )
+    let navigatedID = await applyPendingRequest(
+        to: context,
+        requestID: "navigated",
+        url: "https://example.test/after-navigation",
+        resourceType: .document,
+        timestamp: 1
+    )
+
+    let model = NetworkPanelModel(context: context)
+
+    #expect(model.displayRequestIDs == [navigatedID, retainedID])
+}
+
+@Test
+@MainActor
 func redirectDoesNotReorderLogicalRequestChronologyWhenPanelStartsLater() async throws {
     let context = makeContext()
     let firstID = await applyPendingRequest(

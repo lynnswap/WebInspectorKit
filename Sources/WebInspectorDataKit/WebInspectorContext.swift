@@ -570,6 +570,7 @@ public final class WebInspectorContext {
     private var networkNavigationTimelines: [FrameID: NetworkFrameNavigationTimeline]
     private var pendingNetworkNavigationsByTargetID: [String: [FrameID: String]]
     private let networkRequestIndex: NetworkRequestIndex
+    private var networkChronologySequence: UInt64
     private var networkRequestIndexSequence: UInt64
     private var networkRequestIndexNeedsRebuild: Bool
     private let networkCollectionState: NetworkRequestCollectionState
@@ -661,6 +662,7 @@ public final class WebInspectorContext {
         networkNavigationTimelines = [:]
         pendingNetworkNavigationsByTargetID = [:]
         networkRequestIndex = NetworkRequestIndex()
+        networkChronologySequence = 0
         networkRequestIndexSequence = 0
         networkRequestIndexNeedsRebuild = false
         networkCollectionState = NetworkRequestCollectionState()
@@ -5795,6 +5797,7 @@ extension WebInspectorContext {
             headers: requestHeaders,
             postData: postData
         )
+        let chronologySequence = takeNetworkChronologySequence()
         let id = NetworkRequest.ID(requestID)
         let request: NetworkRequest
         let inserted: Bool
@@ -5805,7 +5808,8 @@ extension WebInspectorContext {
                 initiator: nil,
                 navigationVisit: nil,
                 resourceType: resourceType,
-                timestamp: timestamp
+                timestamp: timestamp,
+                chronologySequence: chronologySequence
             )
             inserted = false
         } else {
@@ -5814,6 +5818,7 @@ extension WebInspectorContext {
                 initiator: nil,
                 resourceType: resourceType,
                 timestamp: timestamp,
+                chronologySequence: chronologySequence,
                 modelContext: self
             )
             requestsByID[id] = request
@@ -5906,6 +5911,7 @@ extension WebInspectorContext {
 
     package func apply(_ event: Network.Event, isolation: isolated (any Actor) = #isolation) async {
         requireOwner(isolation)
+        let chronologySequence = takeNetworkChronologySequence()
         switch event {
         case let .requestWillBeSent(id, request, initiator, resourceType, redirectResponse, timestamp):
             await applyRequestWillBeSent(
@@ -5915,6 +5921,7 @@ extension WebInspectorContext {
                 resourceType: resourceType,
                 redirectResponse: redirectResponse,
                 timestamp: timestamp,
+                chronologySequence: chronologySequence,
                 isolation: isolation
             )
         case let .responseReceived(id, response, resourceType, timestamp):
@@ -5923,6 +5930,7 @@ extension WebInspectorContext {
                 response: response,
                 resourceType: resourceType,
                 timestamp: timestamp,
+                chronologySequence: chronologySequence,
                 isolation: isolation
             )
         case let .dataReceived(id, dataLength, encodedDataLength, timestamp):
@@ -5948,7 +5956,11 @@ extension WebInspectorContext {
             request.fail(errorText: errorText, canceled: canceled, timestamp: timestamp)
             await notifyNetworkRequestMutated(request, isolation: isolation)
         case let .webSocket(event):
-            await apply(event, isolation: isolation)
+            await apply(
+                event,
+                chronologySequence: chronologySequence,
+                isolation: isolation
+            )
         case let .requestServedFromMemoryCache(id, response, initiator, resourceType, timestamp):
             await applyRequestServedFromMemoryCache(
                 id: id,
@@ -5956,6 +5968,7 @@ extension WebInspectorContext {
                 initiator: initiator,
                 resourceType: resourceType,
                 timestamp: timestamp,
+                chronologySequence: chronologySequence,
                 isolation: isolation
             )
         case .unknown:
@@ -5970,6 +5983,7 @@ extension WebInspectorContext {
         resourceType: Network.ResourceType?,
         redirectResponse: Network.Response?,
         timestamp: Double,
+        chronologySequence: UInt64,
         isolation: isolated (any Actor)
     ) async {
         _ = isolation
@@ -5997,7 +6011,8 @@ extension WebInspectorContext {
                     initiator: initiator,
                     navigationVisit: networkNavigationVisit(for: payload),
                     resourceType: resourceType,
-                    timestamp: timestamp
+                    timestamp: timestamp,
+                    chronologySequence: chronologySequence
                 )
                 topologyMayHaveChanged = true
             }
@@ -6008,6 +6023,7 @@ extension WebInspectorContext {
                 navigationVisit: networkNavigationVisit(for: payload),
                 resourceType: resourceType,
                 timestamp: timestamp,
+                chronologySequence: chronologySequence,
                 modelContext: self
             )
             requestsByID[id] = request
@@ -6138,6 +6154,7 @@ extension WebInspectorContext {
         initiator: Network.Initiator,
         resourceType: Network.ResourceType?,
         timestamp: Double,
+        chronologySequence: UInt64,
         isolation: isolated (any Actor)
     ) async {
         _ = isolation
@@ -6166,6 +6183,7 @@ extension WebInspectorContext {
                 navigationVisit: networkNavigationVisit(for: payload),
                 resourceType: resourceType,
                 timestamp: timestamp,
+                chronologySequence: chronologySequence,
                 modelContext: self
             )
             requestsByID[id] = request
@@ -6193,6 +6211,7 @@ extension WebInspectorContext {
         response: Network.Response,
         resourceType: Network.ResourceType?,
         timestamp: Double,
+        chronologySequence: UInt64,
         isolation: isolated (any Actor)
     ) async {
         _ = isolation
@@ -6226,6 +6245,7 @@ extension WebInspectorContext {
                 navigationVisit: networkNavigationVisit(for: payload),
                 resourceType: resourceType,
                 timestamp: timestamp,
+                chronologySequence: chronologySequence,
                 modelContext: self
             )
             requestsByID[id] = request
@@ -6240,46 +6260,80 @@ extension WebInspectorContext {
         }
     }
 
-    private func apply(_ event: Network.WebSocketEvent, isolation: isolated (any Actor)) async {
+    private func apply(
+        _ event: Network.WebSocketEvent,
+        chronologySequence: UInt64,
+        isolation: isolated (any Actor)
+    ) async {
         _ = isolation
         switch event {
         case let .created(id, url):
-            await applyWebSocketCreated(id: id, url: url, isolation: isolation)
+            await applyWebSocketCreated(
+                id: id,
+                url: url,
+                chronologySequence: chronologySequence,
+                isolation: isolation
+            )
         case let .handshakeRequest(id, request, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketWillSendHandshakeRequest") else {
                 return
             }
-            networkRequest.applyWebSocketHandshakeRequest(request, timestamp: timestamp)
+            networkRequest.applyWebSocketHandshakeRequest(
+                request,
+                timestamp: timestamp,
+                chronologySequence: chronologySequence
+            )
             await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
         case let .handshakeResponse(id, response, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketHandshakeResponseReceived") else {
                 return
             }
-            networkRequest.applyWebSocketHandshakeResponse(response, timestamp: timestamp)
+            networkRequest.applyWebSocketHandshakeResponse(
+                response,
+                timestamp: timestamp,
+                chronologySequence: chronologySequence
+            )
             await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
         case let .frameSent(id, frame, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketFrameSent") else {
                 return
             }
-            networkRequest.appendWebSocketFrame(frame, direction: .sent, timestamp: timestamp)
+            networkRequest.appendWebSocketFrame(
+                frame,
+                direction: .sent,
+                timestamp: timestamp,
+                chronologySequence: chronologySequence
+            )
             await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
         case let .frameReceived(id, frame, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketFrameReceived") else {
                 return
             }
-            networkRequest.appendWebSocketFrame(frame, direction: .received, timestamp: timestamp)
+            networkRequest.appendWebSocketFrame(
+                frame,
+                direction: .received,
+                timestamp: timestamp,
+                chronologySequence: chronologySequence
+            )
             await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
         case let .error(id, message, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketFrameError") else {
                 return
             }
-            networkRequest.appendWebSocketError(message, timestamp: timestamp)
+            networkRequest.appendWebSocketError(
+                message,
+                timestamp: timestamp,
+                chronologySequence: chronologySequence
+            )
             await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
         case let .closed(id, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketClosed") else {
                 return
             }
-            networkRequest.closeWebSocket(timestamp: timestamp)
+            networkRequest.closeWebSocket(
+                timestamp: timestamp,
+                chronologySequence: chronologySequence
+            )
             await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
         case .other:
             break
@@ -6289,6 +6343,7 @@ extension WebInspectorContext {
     private func applyWebSocketCreated(
         id proxyID: Network.Request.ID,
         url: String,
+        chronologySequence: UInt64,
         isolation: isolated (any Actor)
     ) async {
         _ = isolation
@@ -6305,6 +6360,7 @@ extension WebInspectorContext {
                 initiator: nil,
                 resourceType: .webSocket,
                 timestamp: nil,
+                chronologySequence: chronologySequence,
                 modelContext: self
             )
             requestsByID[id] = request
@@ -6381,6 +6437,12 @@ extension WebInspectorContext {
 
     private func isCurrentNetworkRequest(_ request: NetworkRequest) -> Bool {
         requestsByID[request.id] === request
+    }
+
+    private func takeNetworkChronologySequence() -> UInt64 {
+        precondition(networkChronologySequence < UInt64.max, "Network chronology sequence exhausted.")
+        defer { networkChronologySequence += 1 }
+        return networkChronologySequence
     }
 
     private func nextNetworkRequestIndexSequence() -> UInt64 {

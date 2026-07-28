@@ -256,7 +256,6 @@ package final class NetworkPanelModel {
     @ObservationIgnored private var orderedEntryIDs: [NetworkListEntry.ID] = []
     @ObservationIgnored private var visibleEntryIDs: [NetworkListEntry.ID] = []
     @ObservationIgnored private var visibleEntryIDSet: Set<NetworkListEntry.ID> = []
-    @ObservationIgnored private var nextCreationSequence: UInt64 = 0
     @ObservationIgnored private var nextListTransactionRevision: UInt64 = 0
     @ObservationIgnored private var listEntryIdentityGeneration: UInt64 = 0
     @ObservationIgnored private var selectedRequestAnchorID: NetworkRequest.ID?
@@ -536,14 +535,13 @@ package final class NetworkPanelModel {
         orderedEntryIDs.removeAll(keepingCapacity: true)
         visibleEntryIDs.removeAll(keepingCapacity: true)
         visibleEntryIDSet.removeAll(keepingCapacity: true)
-        nextCreationSequence = 0
 
         for request in requests {
             insertRequestWithoutPublishing(request)
         }
         for entry in entriesByID.values where entry.requests.count > 1 {
             entry.replaceRequests(sortedRequests(entry.requests))
-            replaceEntryChronologyFromRepresentative(entry)
+            replaceEntryChronologyFromRequests(entry)
         }
         orderedEntryIDs.sort { lhs, rhs in
             guard let lhsEntry = entriesByID[lhs],
@@ -562,10 +560,9 @@ package final class NetworkPanelModel {
     }
 
     private func insertRequestWithoutPublishing(_ request: NetworkRequest) {
-        let sequence = takeCreationSequence()
         requestCreationMetadataByID[request.id] = RequestCreationMetadata(
             timestamp: request.logicalStartTimestamp,
-            sequence: sequence,
+            sequence: request.chronologySequence,
             lifecycleRevision: request.lifecycleRevision
         )
         requestsByID[request.id] = request
@@ -579,7 +576,7 @@ package final class NetworkPanelModel {
                 id: entryID,
                 request: request,
                 chronologyTimestamp: request.logicalStartTimestamp,
-                chronologySequence: sequence
+                chronologySequence: request.chronologySequence
             )
             orderedEntryIDs.append(entryID)
         }
@@ -594,28 +591,25 @@ package final class NetworkPanelModel {
         let previousRequest = requestsByID[request.id]
         let previousStatusSeverity = requestStatusSeverityByID[request.id]
         let lifecycleRestarted: Bool
-        let chronologyTimestampChanged: Bool
+        let chronologyChanged: Bool
         if var metadata = requestCreationMetadataByID[request.id] {
             lifecycleRestarted = metadata.lifecycleRevision != request.lifecycleRevision
-            chronologyTimestampChanged = metadata.timestamp != request.logicalStartTimestamp
-            if lifecycleRestarted {
+            chronologyChanged = metadata.timestamp != request.logicalStartTimestamp
+                || metadata.sequence != request.chronologySequence
+            if lifecycleRestarted || chronologyChanged {
                 metadata = RequestCreationMetadata(
                     timestamp: request.logicalStartTimestamp,
-                    sequence: takeCreationSequence(),
+                    sequence: request.chronologySequence,
                     lifecycleRevision: request.lifecycleRevision
                 )
-            } else if chronologyTimestampChanged {
-                metadata.timestamp = request.logicalStartTimestamp
-            }
-            if lifecycleRestarted || chronologyTimestampChanged {
                 requestCreationMetadataByID[request.id] = metadata
             }
         } else {
             lifecycleRestarted = false
-            chronologyTimestampChanged = false
+            chronologyChanged = false
             requestCreationMetadataByID[request.id] = RequestCreationMetadata(
                 timestamp: request.logicalStartTimestamp,
-                sequence: takeCreationSequence(),
+                sequence: request.chronologySequence,
                 lifecycleRevision: request.lifecycleRevision
             )
         }
@@ -633,7 +627,7 @@ package final class NetworkPanelModel {
                 from: previousStatusSeverity,
                 to: request.statusSeverity
             )
-            if previousRequest !== request || lifecycleRestarted || chronologyTimestampChanged {
+            if previousRequest !== request || lifecycleRestarted || chronologyChanged {
 #if DEBUG
                 memberTraversalCountStorageForTesting += entry.requests.count
 #endif
@@ -643,7 +637,7 @@ package final class NetworkPanelModel {
                 if previousRequest !== request {
                     entry.replaceRequest(at: index, with: request)
                 }
-                if lifecycleRestarted || chronologyTimestampChanged {
+                if lifecycleRestarted || chronologyChanged {
                     repositionRequest(at: index, in: entry)
                     refreshEntryChronologyAndOrdering(
                         entry,
@@ -895,25 +889,21 @@ package final class NetworkPanelModel {
         entry.replaceRequests(requests)
     }
 
-    private func replaceEntryChronologyFromRepresentative(_ entry: NetworkListEntry) {
-        guard let metadata = requestCreationMetadataByID[entry.representativeRequest.id] else {
-            preconditionFailure("A Network entry representative must have creation metadata.")
-        }
-        entry.replaceChronology(timestamp: metadata.timestamp, sequence: metadata.sequence)
+    private func replaceEntryChronologyFromRequests(_ entry: NetworkListEntry) {
+        let chronology = entryChronology(for: entry)
+        entry.replaceChronology(timestamp: chronology.timestamp, sequence: chronology.sequence)
     }
 
     private func refreshEntryChronologyAndOrdering(
         _ entry: NetworkListEntry,
         topologyChangedEntryIDs: inout Set<NetworkListEntry.ID>
     ) {
-        guard let metadata = requestCreationMetadataByID[entry.representativeRequest.id] else {
-            preconditionFailure("A Network entry representative must have creation metadata.")
-        }
-        guard entry.chronologyTimestamp != metadata.timestamp
-                || entry.chronologySequence != metadata.sequence else {
+        let chronology = entryChronology(for: entry)
+        guard entry.chronologyTimestamp != chronology.timestamp
+                || entry.chronologySequence != chronology.sequence else {
             return
         }
-        entry.replaceChronology(timestamp: metadata.timestamp, sequence: metadata.sequence)
+        entry.replaceChronology(timestamp: chronology.timestamp, sequence: chronology.sequence)
 
         orderedEntryIDs.removeAll { $0 == entry.id }
         insertOrderedEntryID(entry.id)
@@ -927,6 +917,22 @@ package final class NetworkPanelModel {
         if visibleEntryIDs != previousVisibleEntryIDs {
             topologyChangedEntryIDs.insert(entry.id)
         }
+    }
+
+    private func entryChronology(
+        for entry: NetworkListEntry
+    ) -> (timestamp: Double?, sequence: UInt64) {
+        guard let representativeMetadata = requestCreationMetadataByID[entry.representativeRequest.id] else {
+            preconditionFailure("A Network entry representative must have creation metadata.")
+        }
+        var sequence = representativeMetadata.sequence
+        for request in entry.requests.dropFirst() {
+            guard let metadata = requestCreationMetadataByID[request.id] else {
+                preconditionFailure("A Network entry member must have creation metadata.")
+            }
+            sequence = min(sequence, metadata.sequence)
+        }
+        return (representativeMetadata.timestamp, sequence)
     }
 
     private func requestOrdersBefore(_ lhs: NetworkRequest, _ rhs: NetworkRequest) -> Bool {
@@ -964,7 +970,10 @@ package final class NetworkPanelModel {
     }
 
     private func entryOrdersBefore(_ lhs: NetworkListEntry, _ rhs: NetworkListEntry) -> Bool {
-        chronologyOrdersBefore(
+        if lhs.chronologySequence != rhs.chronologySequence {
+            return lhs.chronologySequence > rhs.chronologySequence
+        }
+        return chronologyOrdersBefore(
             lhsTimestamp: rhs.chronologyTimestamp,
             lhsSequence: rhs.chronologySequence,
             rhsTimestamp: lhs.chronologyTimestamp,
@@ -997,12 +1006,6 @@ package final class NetworkPanelModel {
         } ?? visibleEntryIDs.endIndex
         visibleEntryIDs.insert(entryID, at: insertionIndex)
         visibleEntryIDSet.insert(entryID)
-    }
-
-    private func takeCreationSequence() -> UInt64 {
-        precondition(nextCreationSequence < UInt64.max, "Network entry creation sequence overflowed.")
-        defer { nextCreationSequence += 1 }
-        return nextCreationSequence
     }
 
     private func publishListTransaction(

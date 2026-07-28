@@ -879,6 +879,9 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     /// Timestamp when the current request lifecycle first entered the network timeline.
     package private(set) var logicalStartTimestamp: Double?
 
+    /// Context-local order when the current request lifecycle entered the network timeline.
+    package private(set) var chronologySequence: UInt64
+
     /// The current request lifecycle state.
     public private(set) var state: State
 
@@ -968,6 +971,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         navigationVisit: NetworkNavigationVisit? = nil,
         resourceType: Network.ResourceType?,
         timestamp: Double?,
+        chronologySequence: UInt64 = 0,
         modelContext: WebInspectorContext
     ) {
         id = ID(request.id)
@@ -977,6 +981,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         self.navigationVisit = navigationVisit
         lifecycleRevision = 0
         logicalStartTimestamp = timestamp
+        self.chronologySequence = chronologySequence
         self.resourceType = resourceType
         state = .pending
         status = nil
@@ -1135,7 +1140,8 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         initiator: Network.Initiator?,
         navigationVisit: NetworkNavigationVisit?,
         resourceType: Network.ResourceType?,
-        timestamp: Double
+        timestamp: Double,
+        chronologySequence: UInt64
     ) {
         precondition(lifecycleRevision < UInt64.max, "Network request lifecycle revision overflowed.")
         lifecycleRevision += 1
@@ -1146,6 +1152,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         self.navigationVisit = navigationVisit
         self.resourceType = resourceType
         logicalStartTimestamp = timestamp
+        self.chronologySequence = chronologySequence
         requestHeaders = request.headers
         status = nil
         statusText = nil
@@ -1321,8 +1328,12 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         _ = ensureWebSocketState()
     }
 
-    func applyWebSocketHandshakeRequest(_ request: Network.Request, timestamp: Double?) {
-        recordWebSocketLogicalStartIfNeeded(timestamp)
+    func applyWebSocketHandshakeRequest(
+        _ request: Network.Request,
+        timestamp: Double?,
+        chronologySequence: UInt64
+    ) {
+        recordWebSocketLogicalStartIfNeeded(timestamp, chronologySequence: chronologySequence)
         let request = requestPreservingCurrentURLIfNeeded(request)
         currentRequest = request
         url = request.url
@@ -1344,8 +1355,12 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         ensureWebSocketState().applyHandshakeRequest(request)
     }
 
-    func applyWebSocketHandshakeResponse(_ response: Network.Response, timestamp: Double?) {
-        recordWebSocketLogicalStartIfNeeded(timestamp)
+    func applyWebSocketHandshakeResponse(
+        _ response: Network.Response,
+        timestamp: Double?,
+        chronologySequence: UInt64
+    ) {
+        recordWebSocketLogicalStartIfNeeded(timestamp, chronologySequence: chronologySequence)
         applyResponse(response, resourceType: .webSocket, timestamp: timestamp)
         ensureWebSocketState().applyHandshakeResponse(response)
     }
@@ -1353,29 +1368,41 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     func appendWebSocketFrame(
         _ frame: Network.WebSocketFrame,
         direction: WebSocketState.FrameDirection,
-        timestamp: Double
+        timestamp: Double,
+        chronologySequence: UInt64
     ) {
-        recordWebSocketLogicalStartIfNeeded(timestamp)
+        recordWebSocketLogicalStartIfNeeded(timestamp, chronologySequence: chronologySequence)
         decodedDataLength += max(0, frame.payloadLength)
         lastDataReceivedTimestamp = timestamp
         ensureWebSocketState().appendFrame(frame, direction: direction, timestamp: timestamp)
     }
 
-    func appendWebSocketError(_ message: String, timestamp: Double) {
-        recordWebSocketLogicalStartIfNeeded(timestamp)
+    func appendWebSocketError(
+        _ message: String,
+        timestamp: Double,
+        chronologySequence: UInt64
+    ) {
+        recordWebSocketLogicalStartIfNeeded(timestamp, chronologySequence: chronologySequence)
         lastDataReceivedTimestamp = timestamp
         ensureWebSocketState().appendError(message, timestamp: timestamp)
     }
 
-    func closeWebSocket(timestamp: Double) {
-        recordWebSocketLogicalStartIfNeeded(timestamp)
+    func closeWebSocket(timestamp: Double, chronologySequence: UInt64) {
+        recordWebSocketLogicalStartIfNeeded(timestamp, chronologySequence: chronologySequence)
         ensureWebSocketState().markClosed()
         finishedOrFailedTimestamp = timestamp
         state = .finished
     }
 
-    private func recordWebSocketLogicalStartIfNeeded(_ timestamp: Double?) {
-        logicalStartTimestamp = logicalStartTimestamp ?? timestamp
+    private func recordWebSocketLogicalStartIfNeeded(
+        _ timestamp: Double?,
+        chronologySequence: UInt64
+    ) {
+        guard logicalStartTimestamp == nil, let timestamp else {
+            return
+        }
+        logicalStartTimestamp = timestamp
+        self.chronologySequence = chronologySequence
     }
 
     private func requestPreservingCurrentURLIfNeeded(_ request: Network.Request) -> Network.Request {
