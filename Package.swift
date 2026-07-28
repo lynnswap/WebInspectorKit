@@ -29,6 +29,10 @@ let package = Package(
             targets: ["WebInspectorDataKit"]
         ),
         .library(
+            name: "WebInspectorDataKitTesting",
+            targets: ["WebInspectorDataKitTesting"]
+        ),
+        .library(
             name: "WebInspectorKit",
             targets: ["WebInspectorKit"]
         )
@@ -74,6 +78,13 @@ let package = Package(
             name: "WebInspectorDataKit",
             dependencies: [
                 "WebInspectorProxyKit"
+            ],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorDataKitTesting",
+            dependencies: [
+                "WebInspectorDataKit"
             ],
             swiftSettings: strictSwiftSettings
         ),

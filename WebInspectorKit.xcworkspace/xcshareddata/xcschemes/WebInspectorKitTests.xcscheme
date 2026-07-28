@@ -49,6 +49,20 @@
                ReferencedContainer = "container:">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "ABA353C72EDFF1EC00489A00"
+               BuildableName = "Monocly.app"
+               BlueprintName = "Monocly"
+               ReferencedContainer = "container:Monocly/Monocly.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -57,6 +71,15 @@
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES"
       shouldAutocreateTestPlan = "YES">
+      <MacroExpansion>
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "ABA353C72EDFF1EC00489A00"
+            BuildableName = "Monocly.app"
+            BlueprintName = "Monocly"
+            ReferencedContainer = "container:Monocly/Monocly.xcodeproj">
+         </BuildableReference>
+      </MacroExpansion>
       <Testables>
          <TestableReference
             skipped = "NO">
@@ -87,6 +110,25 @@
                BlueprintName = "WebInspectorUITests"
                ReferencedContainer = "container:">
             </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "ABA353D42EDFF1ED00489A00"
+               BuildableName = "MonoclyTests.xctest"
+               BlueprintName = "MonoclyTests"
+               ReferencedContainer = "container:Monocly/Monocly.xcodeproj">
+            </BuildableReference>
+            <SelectedTests>
+               <Test
+                  Identifier = "WebInspectorProxyKitIntegrationTests/testNativeInspectorReconnectsAfterWebContentProcessTermination()">
+               </Test>
+               <Test
+                  Identifier = "WebInspectorProxyKitIntegrationTests/testSecondNativeInspectorAttachmentFailsWithoutReplacingDelegate()">
+               </Test>
+            </SelectedTests>
          </TestableReference>
       </Testables>
    </TestAction>

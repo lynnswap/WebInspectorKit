@@ -30,14 +30,8 @@ func webInspectorProxyNetworkEventsMulticastToConsumerSubscribers() async throws
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
 
-    let firstEventTask = Task {
-        var iterator = target.network.events.makeAsyncIterator()
-        return await iterator.next()
-    }
-    let secondEventTask = Task {
-        var iterator = target.network.events.makeAsyncIterator()
-        return await iterator.next()
-    }
+    var firstEvents = target.network.events.makeAsyncIterator()
+    var secondEvents = target.network.events.makeAsyncIterator()
 
     try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 2)
 
@@ -51,8 +45,8 @@ func webInspectorProxyNetworkEventsMulticastToConsumerSubscribers() async throws
         target: target
     )
 
-    let firstEvent = try #require(try await ContractTestSupport.value(of: firstEventTask))
-    let secondEvent = try #require(try await ContractTestSupport.value(of: secondEventTask))
+    let firstEvent = try #require(await firstEvents.next())
+    let secondEvent = try #require(await secondEvents.next())
 
     guard case let .responseReceived(firstID, firstResponse, firstType, firstTimestamp) = firstEvent else {
         Issue.record("Expected the first subscriber to receive Network.responseReceived.")
