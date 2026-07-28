@@ -3,9 +3,11 @@
 This standalone guide records source changes that are likely to affect app code
 when upgrading WebInspectorKit. Sections are grouped by release, newest first.
 
-## Unreleased
+## v0.4.0
 
-### Read Network request initiators from request events
+These notes apply when upgrading from `v0.3.0` to `v0.4.0`.
+
+### 1. Update Network event patterns for request initiators
 
 `Network.Event.requestWillBeSent` and
 `Network.Event.requestServedFromMemoryCache` now include a
@@ -22,6 +24,25 @@ case let .requestWillBeSent(_, request, initiator, _, _, _):
 WebKit can omit the node association. In particular, an unbound protocol
 `nodeId` of zero is normalized to `nil` rather than exposed as a usable DOM
 identity.
+
+### 2. Choose whether proxy operations need finite timeouts
+
+`WebInspectorProxy.Configuration.responseTimeout` and `bootstrapTimeout` are
+now optional. Their default changed from five seconds to `nil`.
+
+With the default configuration, a proxy operation now waits until WebKit
+replies or publishes a target, the connection closes, or the calling task is
+cancelled. If your app owns a finite deadline, pass it explicitly:
+
+```swift
+let proxy = try await WebInspectorProxy(
+    attachingTo: webView,
+    configuration: .init(
+        responseTimeout: .seconds(5),
+        bootstrapTimeout: .seconds(5)
+    )
+)
+```
 
 ## v0.2.0
 

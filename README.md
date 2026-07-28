@@ -31,8 +31,9 @@ UIKit Web Inspector for `WKWebView`.
 | --- | --- |
 | `WebInspectorKit` | You want the built-in UIKit inspector UI. |
 | `WebInspectorDataKit` | You want observable DOM, Network, Console, Runtime, and CSS models for a custom UI. |
+| `WebInspectorDataKitTesting` | You want deterministic `WebInspectorContext` startup synchronization in tests. |
 | `WebInspectorProxyKit` | You want typed Web Inspector protocol commands and events directly over an inspected `WKWebView`. |
-| `WebInspectorProxyKitTesting` | You want a public test runtime for ProxyKit/DataKit consumers without the native WebKit bridge. |
+| `WebInspectorProxyKitTesting` | You want a controllable proxy backend and protocol fixtures without the native WebKit bridge. |
 
 ## Quick Start
 
@@ -117,8 +118,9 @@ to GitHub Pages.
 Sources/
   WebInspectorKit/             Public built-in inspector product.
   WebInspectorDataKit/         Observable inspector model product.
+  WebInspectorDataKitTesting/  Deterministic DataKit consumer test helpers.
   WebInspectorProxyKit/        Typed protocol proxy product.
-  WebInspectorProxyKitTesting/ Test runtime for proxy/model consumers.
+  WebInspectorProxyKitTesting/ Controllable proxy test runtime and fixtures.
   WebInspectorUI*/             Internal UIKit implementation targets.
 Packages/
   WebInspectorNativeBridge/    Local native bridge package for ProxyKit internals.
