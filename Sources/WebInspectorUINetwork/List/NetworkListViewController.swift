@@ -8,8 +8,6 @@ import UIKit
 @MainActor
 package final class NetworkListViewController: UICollectionViewController, UISearchResultsUpdating {
     package typealias EntrySelectionAction = @MainActor (NetworkListEntry.ID?) -> Void
-    package static let horizontalSectionInset: CGFloat = 20
-    package static let bottomSectionInset: CGFloat = 20
 
     @MainActor
     private final class ListSnapshotBuildCoordinator {
@@ -365,18 +363,8 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         collectionView.keyboardDismissMode = .onDrag
         collectionView.accessibilityIdentifier = "WebInspector.Network.List"
         applyBackgroundFromTraits()
-        updateListLayoutMetrics()
-        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) {
-            (viewController: NetworkListViewController, _) in
-            viewController.updateListLayoutMetrics()
-        }
 
         configureNavigationItem()
-    }
-
-    override package func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        updateListLayoutMetrics()
     }
 
     override package func viewWillAppear(_ animated: Bool) {
@@ -399,43 +387,23 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private static func makeListLayout() -> UICollectionViewLayout {
-        let layout = UICollectionViewFlowLayout()
-        layout.scrollDirection = .vertical
-        layout.estimatedItemSize = .zero
-        layout.minimumLineSpacing = 0
-        layout.minimumInteritemSpacing = 0
-        layout.sectionInset = UIEdgeInsets(
-            top: 0,
-            left: horizontalSectionInset,
-            bottom: bottomSectionInset,
-            right: horizontalSectionInset
-        )
-        layout.sectionInsetReference = .fromContentInset
-        layout.itemSize = CGSize(
-            width: 1,
-            height: NetworkListCell.rowHeight(compatibleWith: UITraitCollection.current)
-        )
-        return layout
+        UICollectionViewCompositionalLayout { _, environment in
+            let configuration = makeListConfiguration()
+            let section = NSCollectionLayoutSection.list(
+                using: configuration,
+                layoutEnvironment: environment
+            )
+            var contentInsets = section.contentInsets
+            contentInsets.top = 0
+            section.contentInsets = contentInsets
+            return section
+        }
     }
 
-    private func updateListLayoutMetrics() {
-        guard isViewLoaded,
-              let layout = collectionView.collectionViewLayout as? UICollectionViewFlowLayout else {
-            return
-        }
-        let availableWidth = collectionView.bounds.width
-            - collectionView.adjustedContentInset.left
-            - collectionView.adjustedContentInset.right
-            - layout.sectionInset.left
-            - layout.sectionInset.right
-        let nextItemSize = CGSize(
-            width: max(1, availableWidth),
-            height: NetworkListCell.rowHeight(compatibleWith: traitCollection)
-        )
-        guard layout.itemSize != nextItemSize else {
-            return
-        }
-        layout.itemSize = nextItemSize
+    private static func makeListConfiguration() -> UICollectionLayoutListConfiguration {
+        var configuration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
+        configuration.showsSeparators = true
+        return configuration
     }
 
     private func startObservingModel() {
@@ -637,8 +605,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func makeDataSource() -> UICollectionViewDiffableDataSource<NetworkListSnapshotSection, NetworkListEntry.ID> {
-        let listCellRegistration = UICollectionView.CellRegistration<NetworkListCell, NetworkListEntry.ID> { [weak self] cell, indexPath, id in
-            self?.updateListPosition(of: cell, at: indexPath)
+        let listCellRegistration = UICollectionView.CellRegistration<NetworkListCell, NetworkListEntry.ID> { [weak self] cell, _, id in
             guard let entry = self?.model.entry(for: id) else {
                 cell.unbind()
                 return
@@ -728,7 +695,6 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
 #endif
         snapshotCoordinator.state.finishApplying(appliedRows)
-        updateVisibleListCellPositions()
         guard snapshotCoordinator.isRenderingActive else {
             if snapshotCoordinator.readyArtifact != nil {
                 snapshotCoordinator.readyArtifact = nil
@@ -889,42 +855,6 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
     }
 
-    private func updateVisibleListCellPositions() {
-        for indexPath in collectionView.indexPathsForVisibleItems {
-            guard let cell = collectionView.cellForItem(at: indexPath) as? NetworkListCell else {
-                continue
-            }
-            updateListPosition(of: cell, at: indexPath)
-        }
-    }
-
-    private func updateListPosition(of cell: NetworkListCell, at indexPath: IndexPath) {
-        let count = collectionView.numberOfItems(inSection: indexPath.section)
-        precondition(indexPath.item < count, "A visible Network list cell must belong to its section.")
-        let position: NetworkListCell.ListPosition
-        if count == 1 {
-            position = .single
-        } else if indexPath.item == 0 {
-            position = .first
-        } else if indexPath.item == count - 1 {
-            position = .last
-        } else {
-            position = .middle
-        }
-        cell.setListPosition(position)
-    }
-
-    override package func collectionView(
-        _ collectionView: UICollectionView,
-        willDisplay cell: UICollectionViewCell,
-        forItemAt indexPath: IndexPath
-    ) {
-        guard let cell = cell as? NetworkListCell else {
-            return
-        }
-        updateListPosition(of: cell, at: indexPath)
-    }
-
     override package func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         entrySelectionAction(dataSource.itemIdentifier(for: indexPath))
     }
@@ -932,6 +862,10 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
 #if DEBUG
 extension NetworkListViewController {
+    package static var listLayoutConfigurationForTesting: UICollectionLayoutListConfiguration {
+        makeListConfiguration()
+    }
+
     package var collectionViewForTesting: UICollectionView {
         collectionView
     }
