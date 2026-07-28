@@ -524,7 +524,7 @@ jobs:
     env:
       XCODE_MAJOR: '26'
       TEST_SCHEME: WebInspectorKitTests
-      DESTINATION: platform=iOS Simulator,name=iPhone 17 Pro,OS=latest
+      SIMULATOR_DEVICE: iPhone 17 Pro
       TEST_DERIVED_DATA: ${{ github.workspace }}/.ci/derived-data/WebInspectorKitTests
     steps:
       - name: Check out repository
@@ -575,6 +575,37 @@ jobs:
           end
           puts "Resolved Xcode: #{selected}"
           puts version_output
+          RUBY
+
+      - name: Resolve owned simulator
+        run: |
+          ruby <<'RUBY'
+          require "json"
+
+          requested_device = ENV.fetch("SIMULATOR_DEVICE")
+          runtimes = JSON.parse(`xcrun simctl list devices available --json`).fetch("devices")
+          candidates = runtimes.flat_map do |runtime, devices|
+            match = runtime.match(/SimRuntime\.iOS-(\d+(?:-\d+)*)$/)
+            next [] unless match
+
+            version = match[1].tr("-", ".")
+            devices.filter_map do |device|
+              next unless device.fetch("isAvailable", true)
+              next unless device.fetch("name") == requested_device
+
+              [version.split(".").map(&:to_i), version, device.fetch("udid")]
+            end
+          end
+
+          selected = candidates.max_by(&:first)
+          abort("No available #{requested_device} simulator found") unless selected
+
+          _, version, udid = selected
+          File.open(ENV.fetch("GITHUB_ENV"), "a") do |env|
+            env.puts "DESTINATION=platform=iOS Simulator,id=#{udid}"
+            env.puts "WATCHDOG_SIMULATOR_UDID=#{udid}"
+          end
+          puts "Owned simulator: #{requested_device} iOS #{version} (#{udid})"
           RUBY
 
       - name: Restore built workspace tests

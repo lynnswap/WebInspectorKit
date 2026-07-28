@@ -6,7 +6,14 @@ stall_seconds="${STALL_SECONDS:-120}"
 poll_seconds="${POLL_SECONDS:-1}"
 resume_recheck_seconds="${RESUME_RECHECK_SECONDS:-5}"
 sample_seconds="${SAMPLE_SECONDS:-5}"
+simulator_udid="${WATCHDOG_SIMULATOR_UDID:-}"
 log="$(mktemp -t ci-command-watchdog)"
+
+if [ -n "${simulator_udid}" ] \
+    && [[ ! "${simulator_udid}" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]; then
+    echo "Invalid WATCHDOG_SIMULATOR_UDID: ${simulator_udid}" >&2
+    exit 64
+fi
 
 cleanup() {
     rm -f "${log}"
@@ -64,6 +71,19 @@ descendant_process_ids() {
     done
 }
 
+simulator_test_process_ids() {
+    [ -n "${simulator_udid}" ] || return
+
+    xcrun simctl spawn "${simulator_udid}" launchctl print user/501 2>/dev/null \
+        | awk '
+            /^[[:space:]]*[0-9]+[[:space:]]/ &&
+            $1 != "0" &&
+            $0 ~ /(xctest|Monocly|WebContent)/ {
+                print $1
+            }
+        '
+}
+
 dump_stall_diagnostics() {
     echo "::error::xcodebuild produced no output for ${stall_seconds}s; dumping process state"
 
@@ -71,10 +91,16 @@ dump_stall_diagnostics() {
     for pid in $(descendant_process_ids "${runner}"); do
         sample_process "${pid}"
     done
+    for pid in $(simulator_test_process_ids); do
+        sample_process "${pid}"
+    done
     sample_process "${runner}"
 }
 
 terminate_test_processes() {
+    if [ -n "${simulator_udid}" ]; then
+        xcrun simctl shutdown "${simulator_udid}" 2>/dev/null || true
+    fi
     terminate_process_tree "${runner}"
 }
 
