@@ -7,10 +7,6 @@ poll_seconds="${POLL_SECONDS:-1}"
 resume_recheck_seconds="${RESUME_RECHECK_SECONDS:-5}"
 sample_seconds="${SAMPLE_SECONDS:-5}"
 log="$(mktemp -t ci-command-watchdog)"
-process_pattern='xcodebuild|xctest|Monocly|WebContent'
-# A developer may already have simulator tests running locally. Diagnostics and
-# termination must remain scoped to processes created after this command starts.
-baseline_process_ids=" $(pgrep -f "${process_pattern}" 2>/dev/null | tr '\n' ' ') "
 
 cleanup() {
     rm -f "${log}"
@@ -59,15 +55,12 @@ wait_for_output_or_exit() {
     return 1
 }
 
-test_process_ids() {
-    local pid
-    for pid in $(pgrep -f "${process_pattern}" 2>/dev/null); do
-        case "${baseline_process_ids}" in
-            *" ${pid} "*)
-                continue
-                ;;
-        esac
-        echo "${pid}"
+descendant_process_ids() {
+    local root_pid=$1
+    local child_pid
+    for child_pid in $(pgrep -P "${root_pid}" 2>/dev/null); do
+        descendant_process_ids "${child_pid}"
+        echo "${child_pid}"
     done
 }
 
@@ -75,20 +68,14 @@ dump_stall_diagnostics() {
     echo "::error::xcodebuild produced no output for ${stall_seconds}s; dumping process state"
 
     local pid
-    for pid in $(test_process_ids); do
-        [ "${pid}" -eq "${runner}" ] && continue
+    for pid in $(descendant_process_ids "${runner}"); do
         sample_process "${pid}"
     done
     sample_process "${runner}"
 }
 
 terminate_test_processes() {
-    local pid
     terminate_process_tree "${runner}"
-    for pid in $(test_process_ids); do
-        [ "${pid}" -eq "$$" ] && continue
-        kill -9 "${pid}" 2>/dev/null || true
-    done
 }
 
 terminate_process_tree() {
