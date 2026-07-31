@@ -62,6 +62,15 @@ wait_for_output_or_exit() {
     return 1
 }
 
+terminate_process_tree() {
+    local root_pid=$1
+    local child_pid
+    for child_pid in $(pgrep -P "${root_pid}" 2>/dev/null); do
+        terminate_process_tree "${child_pid}"
+    done
+    kill -9 "${root_pid}" 2>/dev/null || true
+}
+
 descendant_process_ids() {
     local root_pid=$1
     local child_pid
@@ -71,19 +80,6 @@ descendant_process_ids() {
     done
 }
 
-simulator_test_process_ids() {
-    [ -n "${simulator_udid}" ] || return
-
-    xcrun simctl spawn "${simulator_udid}" launchctl print user/501 2>/dev/null \
-        | awk '
-            /^[[:space:]]*[0-9]+[[:space:]]/ &&
-            $1 != "0" &&
-            $0 ~ /(xctest|Monocly|WebContent)/ {
-                print $1
-            }
-        '
-}
-
 dump_stall_diagnostics() {
     echo "::error::xcodebuild produced no output for ${stall_seconds}s; dumping process state"
 
@@ -91,26 +87,33 @@ dump_stall_diagnostics() {
     for pid in $(descendant_process_ids "${runner}"); do
         sample_process "${pid}"
     done
-    for pid in $(simulator_test_process_ids); do
-        sample_process "${pid}"
-    done
     sample_process "${runner}"
 }
 
-terminate_test_processes() {
-    if [ -n "${simulator_udid}" ]; then
-        xcrun simctl shutdown "${simulator_udid}" 2>/dev/null || true
+shutdown_owned_simulator() {
+    [ -n "${simulator_udid}" ] || return
+
+    local shutdown_pid
+    local timeout_seconds=5
+    local remaining=${timeout_seconds}
+    xcrun simctl shutdown "${simulator_udid}" >/dev/null 2>&1 &
+    shutdown_pid=$!
+
+    while kill -0 "${shutdown_pid}" 2>/dev/null && [ "${remaining}" -gt 0 ]; do
+        sleep 1
+        remaining=$((remaining - 1))
+    done
+
+    if kill -0 "${shutdown_pid}" 2>/dev/null; then
+        echo "::warning::simulator shutdown did not finish within ${timeout_seconds}s; terminating simctl"
+        terminate_process_tree "${shutdown_pid}"
     fi
-    terminate_process_tree "${runner}"
+    wait "${shutdown_pid}" 2>/dev/null || true
 }
 
-terminate_process_tree() {
-    local root_pid=$1
-    local child_pid
-    for child_pid in $(pgrep -P "${root_pid}" 2>/dev/null); do
-        terminate_process_tree "${child_pid}"
-    done
-    kill -9 "${root_pid}" 2>/dev/null || true
+terminate_test_processes() {
+    terminate_process_tree "${runner}"
+    shutdown_owned_simulator
 }
 
 last_size=-1
