@@ -183,8 +183,6 @@ jobs:
             ${{ env.SPM_CACHE_DIR }}
             ~/Library/Caches/org.swift.swiftpm
           key: spm-${{ runner.os }}-${{ runner.arch }}-xcode-${{ matrix.xcode_major }}-${{ matrix.test_scheme }}-${{ hashFiles('Package.resolved', 'WebInspectorKit.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'ContractTests/Package.resolved', 'Packages/WebInspectorNativeBridge/Package.resolved') }}
-          restore-keys: |
-            spm-${{ runner.os }}-${{ runner.arch }}-xcode-${{ matrix.xcode_major }}-${{ matrix.test_scheme }}-
 
       - name: Resolve iOS simulator destination
         run: |
@@ -452,8 +450,6 @@ jobs:
             ${{ env.SPM_CACHE_DIR }}
             ~/Library/Caches/org.swift.swiftpm
           key: spm-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.cache-id }}-${{ hashFiles('Package.resolved', 'WebInspectorKit.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
-          restore-keys: |
-            spm-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.cache-id }}-
 
       - name: Restore test build cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
