@@ -86,11 +86,7 @@ final class NetworkDetailRequestPickerViewController: UICollectionViewController
 
     func updateSearchResults(for searchController: UISearchController) {
         let nextSearchText = searchController.searchBar.text ?? ""
-        guard searchText != nextSearchText else {
-            return
-        }
-        searchText = nextSearchText
-        renderCurrentEntry(animatingDifferences: true)
+        setSearchText(nextSearchText)
     }
 
     override func collectionView(
@@ -150,6 +146,17 @@ final class NetworkDetailRequestPickerViewController: UICollectionViewController
         setVisibleCellRenderingActive(false)
         modelObservation?.cancel()
         modelObservation = nil
+    }
+
+    private func setSearchText(_ text: String) {
+        guard searchText != text else {
+            return
+        }
+        searchText = text
+        guard isRenderingActive else {
+            return
+        }
+        startObservingSelection()
     }
 
     private func renderCurrentEntry(animatingDifferences: Bool) {
@@ -301,8 +308,7 @@ extension NetworkDetailRequestPickerViewController {
     }
 
     func setSearchTextForTesting(_ text: String) {
-        searchText = text
-        renderCurrentEntry(animatingDifferences: false)
+        setSearchText(text)
     }
 }
 #endif

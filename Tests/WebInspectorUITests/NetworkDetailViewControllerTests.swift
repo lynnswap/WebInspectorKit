@@ -4032,6 +4032,83 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func requestPickerSearchRestartsObservationAndTracksContentMembership() async throws {
+        let context = makeContext()
+        let frameID = FrameID("main-frame")
+        let nodeID = DOM.Node.ID("picker-search")
+        installNavigationVisit(in: context, frameID: frameID)
+        let firstRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "picker-search-first",
+            url: "https://example.com/alpha.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 1
+        ))
+        let secondRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "picker-search-second",
+            url: "https://example.com/beta.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 4
+        ))
+        let model = NetworkPanelModel(context: context)
+        let entryID = try #require(model.entryID(containing: firstRequest.id))
+        let entry = try #require(model.entry(for: entryID))
+        let originalRequestIDs = entry.requests.map(\.id)
+        model.selectEntry(entryID)
+        let picker = NetworkDetailRequestPickerViewController(model: model, entryID: entryID)
+        picker.resumeRenderingForTesting()
+        let emptyQueryObservation = try #require(picker.modelObservationDeliveryForTesting)
+
+        picker.setSearchTextForTesting("needle")
+
+        #expect(emptyQueryObservation.isActive == false)
+        #expect(picker.itemIDsForTesting == [.entry(entryID)])
+        let searchObservation = try #require(picker.modelObservationDeliveryForTesting)
+        let includesFirstRequest = await searchObservation.values {
+            picker.itemIDsForTesting.contains(.request(firstRequest.id))
+        }
+        defer {
+            includesFirstRequest.cancel()
+            picker.suspendRenderingForTesting()
+        }
+
+        await applyResponseReceived(
+            to: context,
+            requestID: "picker-search-first",
+            url: "https://example.com/needle.json",
+            responseHeaders: ["content-type": "application/json"],
+            responseMimeType: "application/json",
+            timestamp: 10
+        )
+
+        #expect(await includesFirstRequest.waitUntilValue(true))
+        #expect(picker.itemIDsForTesting == [
+            .entry(entryID),
+            .request(firstRequest.id),
+        ])
+        #expect(model.entry(for: entryID) === entry)
+        #expect(entry.requests.map(\.id) == originalRequestIDs)
+
+        await applyResponseReceived(
+            to: context,
+            requestID: "picker-search-first",
+            url: "https://example.com/miss.json",
+            responseHeaders: ["content-type": "application/json"],
+            responseMimeType: "application/json",
+            timestamp: 11
+        )
+
+        #expect(await includesFirstRequest.waitUntilValue(false))
+        #expect(picker.itemIDsForTesting == [.entry(entryID)])
+        #expect(picker.itemIDsForTesting.contains(.request(secondRequest.id)) == false)
+        #expect(model.entry(for: entryID) === entry)
+        #expect(entry.requests.map(\.id) == originalRequestIDs)
+    }
+
+    @Test
     func requestPickerUsesStableEntryAndRequestItemsWithSearch() async throws {
         let context = makeContext()
         let frameID = FrameID("main-frame")
