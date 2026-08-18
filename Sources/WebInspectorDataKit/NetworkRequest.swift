@@ -842,6 +842,44 @@ package struct NetworkNavigationVisit: Hashable, Sendable {
     }
 }
 
+package enum NetworkRequestHeaderSource: Equatable, Sendable {
+    case unavailable
+    case requestWillBeSent
+    case response
+    case metrics
+}
+
+package struct NetworkCookieSections: Equatable, Sendable {
+    package let request: NetworkRequestCookieSection
+    package let response: NetworkResponseCookieSection
+
+    package init(
+        request: NetworkRequestCookieSection,
+        response: NetworkResponseCookieSection
+    ) {
+        self.request = request
+        self.response = response
+    }
+}
+
+package enum NetworkRequestCookieSection: Equatable, Sendable {
+    case unavailable(NetworkRequestCookieUnavailableReason)
+    case empty
+    case values(NetworkRequestCookieParseReport)
+}
+
+package enum NetworkRequestCookieUnavailableReason: Equatable, Sendable {
+    case notCaptured
+    case servedFromMemoryCache
+}
+
+package enum NetworkResponseCookieSection: Equatable, Sendable {
+    case loading
+    case noResponse
+    case empty
+    case values(NetworkResponseCookieParseReport)
+}
+
 /// Observable model for one network request.
 @Observable
 public final class NetworkRequest: WebInspectorFetchableModel {
@@ -950,6 +988,9 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     /// Request headers keyed by header name.
     public private(set) var requestHeaders: [String: String]
 
+    /// The most authoritative protocol source for ``requestHeaders``.
+    package private(set) var requestHeaderSource: NetworkRequestHeaderSource
+
     /// Response headers keyed by header name.
     public private(set) var responseHeaders: [String: String]
 
@@ -1023,6 +1064,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         resourceType: Network.ResourceType?,
         timestamp: Double?,
         chronologySequence: UInt64 = 0,
+        requestHeaderSource: NetworkRequestHeaderSource = .requestWillBeSent,
         modelContext: WebInspectorContext
     ) {
         id = ID(request.id)
@@ -1042,6 +1084,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         responseSource = nil
         sourceMapURL = nil
         requestHeaders = request.headers
+        self.requestHeaderSource = requestHeaderSource
         responseHeaders = [:]
         requestSentTimestamp = timestamp
         responseReceivedTimestamp = nil
@@ -1084,6 +1127,40 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     /// A Boolean value indicating whether the request can have a response body.
     public var hasResponseBody: Bool {
         hasResponse && resourceType != .webSocket
+    }
+
+    package var cookieSections: NetworkCookieSections {
+        NetworkCookieSections(
+            request: requestCookieSection,
+            response: responseCookieSection
+        )
+    }
+
+    private var requestCookieSection: NetworkRequestCookieSection {
+        if responseSource == "memory-cache" {
+            return .unavailable(.servedFromMemoryCache)
+        }
+        guard requestHeaderSource != .unavailable else {
+            return .unavailable(.notCaptured)
+        }
+        guard let report = NetworkCookieParser.parseRequestHeaders(requestHeaders) else {
+            return .empty
+        }
+        return report.cookies.isEmpty && report.diagnostics.isEmpty
+            ? .empty
+            : .values(report)
+    }
+
+    private var responseCookieSection: NetworkResponseCookieSection {
+        guard hasResponse else {
+            return isActive ? .loading : .noResponse
+        }
+        guard let report = NetworkCookieParser.parseResponseHeaders(responseHeaders) else {
+            return .empty
+        }
+        return report.cookies.isEmpty && report.diagnostics.isEmpty
+            ? .empty
+            : .values(report)
     }
 
     /// The coarse category inferred for filtering and display.
@@ -1205,7 +1282,12 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         self.resourceType = resourceType
         logicalStartTimestamp = timestamp
         self.chronologySequence = chronologySequence
-        requestHeaders = request.headers
+        requestBody = NetworkBody.makeRequestBody(for: request)
+        updateRequestHeaders(
+            request.headers,
+            source: .requestWillBeSent,
+            resetsPrecedence: true
+        )
         status = nil
         statusText = nil
         responseURL = nil
@@ -1223,7 +1305,6 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         security = nil
         redirects = []
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
-        requestBody = NetworkBody.makeRequestBody(for: request)
         responseBody.resetForResponse(fallbackURL: currentRequest.url)
         allowsMultipartContinuation = false
         state = .pending
@@ -1246,7 +1327,12 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         let resolvedResourceType = resourceType ?? self.resourceType
         self.resourceType = resolvedResourceType
         webSocket = resolvedResourceType == .webSocket ? webSocket ?? WebSocketState() : nil
-        requestHeaders = request.headers
+        requestBody = NetworkBody.makeRequestBody(for: request)
+        updateRequestHeaders(
+            request.headers,
+            source: .requestWillBeSent,
+            resetsPrecedence: true
+        )
         status = nil
         statusText = nil
         responseURL = nil
@@ -1262,7 +1348,6 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         encodedDataLength = 0
         metrics = nil
         security = nil
-        requestBody = NetworkBody.makeRequestBody(for: request)
         responseBody.resetForResponse(fallbackURL: currentRequest.url)
         allowsMultipartContinuation = false
         state = .pending
@@ -1291,9 +1376,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         responseHeaders = response.headers
         security = response.security
         if let requestHeaders = response.requestHeaders {
-            self.requestHeaders = requestHeaders
-            currentRequest = requestWithHeaders(requestHeaders)
-            refreshRequestBodyHints()
+            updateRequestHeaders(requestHeaders, source: .response)
         }
         if let timestamp {
             responseReceivedTimestamp = timestamp
@@ -1318,6 +1401,9 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     func finish(timestamp: Double, sourceMapURL: String?, metrics: Network.Metrics?) {
         self.sourceMapURL = sourceMapURL
         self.metrics = metrics
+        if let requestHeaders = metrics?.requestHeaders {
+            updateRequestHeaders(requestHeaders, source: .metrics)
+        }
         if let securityConnection = metrics?.securityConnection {
             security = security?.merging(connection: securityConnection)
                 ?? Network.Security(connection: securityConnection)
@@ -1361,9 +1447,12 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         sourceMapURL = nil
         responseHeaders = response.headers
         if let requestHeaders = response.requestHeaders {
-            self.requestHeaders = requestHeaders
+            updateRequestHeaders(
+                requestHeaders,
+                source: .response,
+                resetsPrecedence: true
+            )
         }
-        currentRequest = requestWithHeaders(requestHeaders)
         requestSentTimestamp = timestamp
         responseReceivedTimestamp = timestamp
         lastDataReceivedTimestamp = nil
@@ -1399,8 +1488,12 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         url = request.url
         method = request.method
         resourceType = .webSocket
-        requestHeaders = request.headers
         requestBody = NetworkBody.makeRequestBody(for: request)
+        updateRequestHeaders(
+            request.headers,
+            source: .requestWillBeSent,
+            resetsPrecedence: true
+        )
         responseBody.resetForResponse(fallbackURL: currentRequest.url)
         allowsMultipartContinuation = false
         status = nil
@@ -1518,6 +1611,34 @@ public final class NetworkRequest: WebInspectorFetchableModel {
             backendResourceIdentifier: currentRequest.backendResourceIdentifier,
             origin: currentRequest.origin
         )
+    }
+
+    private func updateRequestHeaders(
+        _ headers: [String: String],
+        source: NetworkRequestHeaderSource,
+        resetsPrecedence: Bool = false
+    ) {
+        guard resetsPrecedence
+            || Self.requestHeaderPrecedence(source) >= Self.requestHeaderPrecedence(requestHeaderSource) else {
+            return
+        }
+        requestHeaders = headers
+        currentRequest = requestWithHeaders(headers)
+        requestHeaderSource = source
+        refreshRequestBodyHints()
+    }
+
+    private static func requestHeaderPrecedence(_ source: NetworkRequestHeaderSource) -> Int {
+        switch source {
+        case .unavailable:
+            0
+        case .requestWillBeSent:
+            1
+        case .response:
+            2
+        case .metrics:
+            3
+        }
     }
 
     private func refreshRequestBodyHints() {

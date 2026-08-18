@@ -83,6 +83,7 @@ package final class NetworkDetailViewController: UIViewController {
     private var isRenderingActive = false
     private var isBodyRenderingActive = false
     private lazy var bodyViewController = makeBodyViewController(scrollEdgeController)
+    private lazy var cookiesViewController = NetworkCookiesViewController()
     private lazy var modeControlController: NetworkDetailModeControlController = {
         let controller = NetworkDetailModeControlController(initialMode: mode)
         controller.selectionHandler = { [weak self] mode in
@@ -282,18 +283,24 @@ package final class NetworkDetailViewController: UIViewController {
         view.backgroundColor = backgroundColor
         bodyViewController.view.backgroundColor = backgroundColor
         headersTextView.backgroundColor = backgroundColor
+        cookiesViewController.view.backgroundColor = backgroundColor
     }
 
     private func installContentViews() {
         addChild(bodyViewController)
+        addChild(cookiesViewController)
         view.addSubview(bodyViewController.view)
         view.addSubview(previewRoleControlController.containerView)
         view.addSubview(headersTextView)
+        view.addSubview(cookiesViewController.view)
         bodyViewController.view.translatesAutoresizingMaskIntoConstraints = false
         bodyViewController.view.isHidden = true
         bodyViewController.view.accessibilityIdentifier = "WebInspector.Network.DetailPreview"
+        cookiesViewController.view.translatesAutoresizingMaskIntoConstraints = false
+        cookiesViewController.view.isHidden = true
         previewRoleControlController.containerView.translatesAutoresizingMaskIntoConstraints = false
         bodyViewController.didMove(toParent: self)
+        cookiesViewController.didMove(toParent: self)
 
         let bodyTopToPreviewContainerConstraint = bodyViewController.view.topAnchor.constraint(
             equalTo: view.topAnchor
@@ -322,6 +329,10 @@ package final class NetworkDetailViewController: UIViewController {
             headersTextView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
             headersTextView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
             headersTextView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            cookiesViewController.view.topAnchor.constraint(equalTo: view.topAnchor),
+            cookiesViewController.view.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            cookiesViewController.view.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            cookiesViewController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
     }
 
@@ -485,6 +496,22 @@ package final class NetworkDetailViewController: UIViewController {
                 }
                 renderHeadersSurface(request: request)
             }
+        case .cookies:
+            let request: NetworkRequest
+            switch selection {
+            case .entry:
+                guard let representativeRequest = requests.first else {
+                    preconditionFailure("A selected Network entry must contain at least one request.")
+                }
+                request = representativeRequest
+            case .request:
+                guard requests.count == 1,
+                      let selectedRequest = requests.first else {
+                    preconditionFailure("An explicit Network request selection must render exactly one request.")
+                }
+                request = selectedRequest
+            }
+            renderCookiesSurface(request: request)
         }
     }
 
@@ -512,6 +539,16 @@ package final class NetworkDetailViewController: UIViewController {
         title = request.displayName
         showHeaders()
         headersTextView.render(request: request)
+    }
+
+    private func renderCookiesSurface(request: NetworkRequest) {
+        observedRequest = request
+        title = request.displayName
+        showCookies()
+        cookiesViewController.render(
+            request.cookieSections,
+            requestEpoch: NetworkCookiesViewController.RequestEpoch(request: request)
+        )
     }
 
     private func setMode(_ nextMode: NetworkDetailViewController.Mode) {
@@ -621,6 +658,8 @@ package final class NetworkDetailViewController: UIViewController {
         previewRoleControlController.containerView.isHidden = true
         headersTextView.isHidden = true
         headersTextView.clear()
+        cookiesViewController.view.isHidden = true
+        cookiesViewController.clear()
         renderPreviewRoleControl(roles: [], selectedRole: nil)
         scrollEdgeController.contentScrollView = nil
 
@@ -636,6 +675,7 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func showPreview() {
         headersTextView.isHidden = true
+        cookiesViewController.view.isHidden = true
         bodyViewController.view.isHidden = false
     }
 
@@ -647,7 +687,20 @@ package final class NetworkDetailViewController: UIViewController {
         scrollEdgeController.isPreviewRoleControlVisible = false
         bodyViewController.setSurface(.none)
         headersTextView.isHidden = false
+        cookiesViewController.view.isHidden = true
         scrollEdgeController.contentScrollView = headersTextView.contentScrollView
+    }
+
+    private func showCookies() {
+        setBodyRenderingActive(false)
+        bodyViewController.view.isHidden = true
+        previewRoleControlController.containerView.isHidden = true
+        updatePreviewRoleControlLayout(isVisible: false)
+        scrollEdgeController.isPreviewRoleControlVisible = false
+        bodyViewController.setSurface(.none)
+        headersTextView.isHidden = true
+        cookiesViewController.view.isHidden = false
+        scrollEdgeController.contentScrollView = cookiesViewController.collectionView
     }
 
     private func renderPreview(candidate: PreviewCandidate) {
@@ -1039,6 +1092,10 @@ extension NetworkDetailViewController {
 
     var headersTextViewForTesting: NetworkHeadersTextView {
         headersTextView
+    }
+
+    var cookiesViewControllerForTesting: NetworkCookiesViewController {
+        cookiesViewController
     }
 
     var bodyViewControllerForTesting: NetworkBodyPreviewViewController {

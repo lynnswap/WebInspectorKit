@@ -6190,6 +6190,7 @@ extension WebInspectorContext {
                 resourceType: resourceType,
                 timestamp: timestamp,
                 chronologySequence: chronologySequence,
+                requestHeaderSource: .unavailable,
                 modelContext: self
             )
             requestsByID[id] = request
@@ -6252,6 +6253,7 @@ extension WebInspectorContext {
                 resourceType: resourceType,
                 timestamp: timestamp,
                 chronologySequence: chronologySequence,
+                requestHeaderSource: .unavailable,
                 modelContext: self
             )
             requestsByID[id] = request
@@ -6367,6 +6369,7 @@ extension WebInspectorContext {
                 resourceType: .webSocket,
                 timestamp: nil,
                 chronologySequence: chronologySequence,
+                requestHeaderSource: .unavailable,
                 modelContext: self
             )
             requestsByID[id] = request

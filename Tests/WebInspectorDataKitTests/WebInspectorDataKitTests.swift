@@ -12565,6 +12565,291 @@ func runtimeEventsPopulateContextsAndFallbackSelection() async throws {
 }
 
 @MainActor
+@Test
+func networkRequestHeadersUseWholeSnapshotPrecedence() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let requestID = Network.Request.ID("cookie-header-precedence")
+
+    await context.apply(.requestWillBeSent(
+        id: requestID,
+        request: Network.Request(
+            id: requestID,
+            url: "https://example.test/cookies",
+            method: "POST",
+            headers: [
+                "Cookie": "request=1",
+                "Content-Type": "text/plain",
+            ],
+            postData: "body"
+        ),
+        resourceType: .fetch,
+        redirectResponse: nil,
+        timestamp: 1
+    ))
+    let request = try #require(context.registeredRequest(forProxyID: requestID))
+    #expect(request.requestHeaderSource == .requestWillBeSent)
+    #expect(request.requestHeaders["Cookie"] == "request=1")
+
+    await context.apply(.responseReceived(
+        id: requestID,
+        response: Network.Response(
+            status: 200,
+            requestHeaders: [:]
+        ),
+        resourceType: .fetch,
+        timestamp: 2
+    ))
+    #expect(request.requestHeaderSource == .response)
+    #expect(request.requestHeaders == [:])
+    #expect(request.cookieSections.request == .empty)
+
+    await context.apply(.responseReceived(
+        id: requestID,
+        response: Network.Response(
+            status: 200,
+            requestHeaders: [
+                "Cookie": "response=2",
+                "Content-Type": "application/json",
+            ]
+        ),
+        resourceType: .fetch,
+        timestamp: 3
+    ))
+    #expect(request.requestHeaders["Cookie"] == "response=2")
+    #expect(request.requestBody?.sourceSyntaxKind == .json)
+
+    await context.apply(.loadingFinished(
+        id: requestID,
+        timestamp: 4,
+        sourceMapURL: nil,
+        metrics: Network.Metrics()
+    ))
+    #expect(request.requestHeaderSource == .response)
+    #expect(request.requestHeaders["Cookie"] == "response=2")
+
+    await context.apply(.loadingFinished(
+        id: requestID,
+        timestamp: 5,
+        sourceMapURL: nil,
+        metrics: Network.Metrics()
+            .reporting(
+                securityConnection: Network.Security.Connection(tlsProtocol: "TLS 1.3")
+            )
+            .reporting(requestHeaders: [:])
+    ))
+    #expect(request.requestHeaderSource == .metrics)
+    #expect(request.requestHeaders == [:])
+    #expect(request.security?.connection?.tlsProtocol == "TLS 1.3")
+
+    await context.apply(.responseReceived(
+        id: requestID,
+        response: Network.Response(
+            status: 200,
+            requestHeaders: ["Cookie": "late-response=3"]
+        ),
+        resourceType: .fetch,
+        timestamp: 6
+    ))
+    #expect(request.requestHeaderSource == .metrics)
+    #expect(request.requestHeaders == [:])
+}
+
+@MainActor
+@Test
+func networkRequestHeaderSourceResetsForReusedAndRedirectedLifecycles() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let requestID = Network.Request.ID("cookie-header-reset")
+
+    await context.apply(.requestWillBeSent(
+        id: requestID,
+        request: Network.Request(
+            id: requestID,
+            url: "https://example.test/first",
+            method: "GET",
+            headers: ["Cookie": "first=1"]
+        ),
+        resourceType: .document,
+        redirectResponse: nil,
+        timestamp: 1
+    ))
+    await context.apply(.loadingFinished(
+        id: requestID,
+        timestamp: 2,
+        sourceMapURL: nil,
+        metrics: Network.Metrics().reporting(requestHeaders: ["Cookie": "final=2"])
+    ))
+    let request = try #require(context.registeredRequest(forProxyID: requestID))
+    #expect(request.requestHeaderSource == .metrics)
+
+    await context.apply(.requestWillBeSent(
+        id: requestID,
+        request: Network.Request(
+            id: requestID,
+            url: "https://example.test/reused",
+            method: "GET",
+            headers: ["Cookie": "reused=3"]
+        ),
+        resourceType: .document,
+        redirectResponse: Network.Response(status: 302),
+        timestamp: 3
+    ))
+    #expect(request.requestHeaderSource == .requestWillBeSent)
+    #expect(request.requestHeaders["Cookie"] == "reused=3")
+    #expect(request.redirects.isEmpty)
+
+    await context.apply(.responseReceived(
+        id: requestID,
+        response: Network.Response(
+            status: 302,
+            requestHeaders: ["Cookie": "refined=4"]
+        ),
+        resourceType: .document,
+        timestamp: 4
+    ))
+    await context.apply(.requestWillBeSent(
+        id: requestID,
+        request: Network.Request(
+            id: requestID,
+            url: "https://example.test/redirected",
+            method: "GET",
+            headers: ["Cookie": "redirected=5"]
+        ),
+        resourceType: .document,
+        redirectResponse: Network.Response(status: 302),
+        timestamp: 5
+    ))
+    #expect(request.requestHeaderSource == .requestWillBeSent)
+    #expect(request.requestHeaders["Cookie"] == "redirected=5")
+    #expect(request.redirects.count == 1)
+}
+
+@MainActor
+@Test
+func networkCookieRequestAvailabilityFollowsCaptureBoundary() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+
+    let responseFirstID = Network.Request.ID("cookie-response-first")
+    await context.apply(.responseReceived(
+        id: responseFirstID,
+        response: Network.Response(
+            url: "https://example.test/response-first",
+            status: 200
+        ),
+        resourceType: .fetch,
+        timestamp: 1
+    ))
+    let responseFirst = try #require(context.registeredRequest(forProxyID: responseFirstID))
+    #expect(responseFirst.requestHeaderSource == .unavailable)
+    #expect(responseFirst.cookieSections.request == .unavailable(.notCaptured))
+
+    let cachedID = Network.Request.ID("cookie-memory-cache")
+    await context.apply(.requestServedFromMemoryCache(
+        id: cachedID,
+        response: Network.Response(
+            url: "https://example.test/cached",
+            status: 200,
+            requestHeaders: ["Cookie": "cached=1"]
+        ),
+        resourceType: .fetch,
+        timestamp: 2
+    ))
+    let cached = try #require(context.registeredRequest(forProxyID: cachedID))
+    #expect(cached.responseSource == "memory-cache")
+    #expect(cached.cookieSections.request == .unavailable(.servedFromMemoryCache))
+
+    let webSocketID = Network.Request.ID("cookie-websocket")
+    await context.apply(.webSocket(.created(
+        id: webSocketID,
+        url: "wss://example.test/socket"
+    )))
+    let webSocket = try #require(context.registeredRequest(forProxyID: webSocketID))
+    #expect(webSocket.requestHeaderSource == .unavailable)
+    #expect(webSocket.cookieSections.request == .unavailable(.notCaptured))
+
+    await context.apply(.webSocket(.handshakeRequest(
+        id: webSocketID,
+        request: Network.Request(
+            id: webSocketID,
+            url: "wss://example.test/socket",
+            method: "GET",
+            headers: ["Cookie": "socket=2"]
+        ),
+        timestamp: 3
+    )))
+    #expect(webSocket.requestHeaderSource == .requestWillBeSent)
+    guard case let .values(report) = webSocket.cookieSections.request else {
+        Issue.record("Expected WebSocket handshake request cookies.")
+        return
+    }
+    #expect(report.cookies.map(\.name) == ["socket"])
+    #expect(report.cookies.map(\.value) == ["2"])
+}
+
+@MainActor
+@Test
+func networkResponseCookieSectionDistinguishesLoadingNoResponseEmptyAndValues() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let requestID = Network.Request.ID("cookie-response-states")
+
+    await context.apply(.requestWillBeSent(
+        id: requestID,
+        request: Network.Request(
+            id: requestID,
+            url: "https://example.test/states",
+            method: "GET"
+        ),
+        resourceType: .fetch,
+        redirectResponse: nil,
+        timestamp: 1
+    ))
+    let request = try #require(context.registeredRequest(forProxyID: requestID))
+    #expect(request.cookieSections.response == .loading)
+
+    await context.apply(.loadingFailed(
+        id: requestID,
+        errorText: "failed",
+        canceled: false,
+        timestamp: 2
+    ))
+    #expect(request.cookieSections.response == .noResponse)
+
+    await context.apply(.requestWillBeSent(
+        id: requestID,
+        request: Network.Request(
+            id: requestID,
+            url: "https://example.test/empty",
+            method: "GET"
+        ),
+        resourceType: .fetch,
+        redirectResponse: nil,
+        timestamp: 3
+    ))
+    await context.apply(.responseReceived(
+        id: requestID,
+        response: Network.Response(status: 200),
+        resourceType: .fetch,
+        timestamp: 4
+    ))
+    #expect(request.cookieSections.response == .empty)
+
+    await context.apply(.responseReceived(
+        id: requestID,
+        response: Network.Response(
+            status: 200,
+            headers: ["Set-Cookie": "session=abc; HttpOnly"]
+        ),
+        resourceType: .fetch,
+        timestamp: 5
+    ))
+    guard case let .values(report) = request.cookieSections.response else {
+        Issue.record("Expected response cookies.")
+        return
+    }
+    #expect(report.cookies.map(\.name) == ["session"])
+    #expect(report.cookies.first?.isHTTPOnly == true)
+}
+
+@MainActor
 private func startContext(
     runtime: WebInspectorProxyTestRuntime,
     document: DOM.Node = DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document")
