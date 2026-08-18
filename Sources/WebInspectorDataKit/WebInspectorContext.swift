@@ -728,6 +728,7 @@ public final class WebInspectorContext {
         let previousStartupTask = startupTask
         let previousCurrentPageCleanupTask = currentPageCleanupTask
         previousStartupTask?.cancel()
+        stopEventPumps()
         currentPageRetargetTask?.cancel()
         currentPageRetargetTask = nil
         documentReloadTask?.cancel()
@@ -2366,6 +2367,11 @@ public final class WebInspectorContext {
 
         do {
             let target = try await proxy.waitForCurrentPage()
+            guard Task.isCancelled == false,
+                  isCurrentPageGeneration(generation, isolation: isolation),
+                  domDocumentLoad?.id == documentLoadID else {
+                return
+            }
             currentPage = target
             await subscribe(to: target, isolation: isolation)
             await waitForCurrentPageEventSubscriptions(target, isolation: isolation)
