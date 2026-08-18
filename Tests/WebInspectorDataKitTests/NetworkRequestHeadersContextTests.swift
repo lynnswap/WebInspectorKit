@@ -507,6 +507,40 @@ struct NetworkRequestHeadersContextTests {
         }
         #expect(capturedEmptyParameters.parameters.isEmpty)
 
+        let misleadingFormHint = NetworkBody(
+            role: .request,
+            kind: .form,
+            full: "raw=body",
+            phase: .loaded
+        )
+        #expect(
+            NetworkRequestHeadersContext.makeRequestData(
+                requestBody: misleadingFormHint,
+                requestHeaders: ["Content-Type": "application/json"]
+            )
+                == .body(
+                    contentType: .value(NetworkContentTypeParser.parse("application/json"))
+                )
+        )
+
+        let staleTextHint = NetworkBody(
+            role: .request,
+            kind: .text,
+            full: "fresh=form",
+            phase: .loaded
+        )
+        guard
+            case let .form(_, staleHintParameters) = NetworkRequestHeadersContext.makeRequestData(
+                requestBody: staleTextHint,
+                requestHeaders: ["Content-Type": "application/x-www-form-urlencoded"]
+            )
+        else {
+            Issue.record("Expected Content-Type to own URL-encoded form classification.")
+            return
+        }
+        #expect(staleHintParameters.parameters.first?.name.decodedValue == "fresh")
+        #expect(staleHintParameters.parameters.first?.value.decodedValue == "form")
+
         let multipart = NetworkRequest(
             request: Network.Request(
                 id: Network.Request.ID("multipart-post-data"),

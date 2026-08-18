@@ -626,7 +626,8 @@ package struct NetworkRequestHeadersContext: Hashable, Sendable {
             return nil
         }
         let contentType = NetworkContentTypeParser.parseHeader(in: requestHeaders)
-        if requestBody.kind == .form,
+        if contentType.contentType?.normalizedMediaType
+            == "application/x-www-form-urlencoded",
             requestBody.isBase64Encoded == false
         {
             return .form(
