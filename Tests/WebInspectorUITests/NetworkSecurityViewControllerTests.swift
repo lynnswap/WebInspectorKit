@@ -170,7 +170,14 @@ struct NetworkSecurityViewControllerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         let longHostname = String(repeating: "unbroken-hostname-", count: 12) + ".example"
-        var dnsNames = ["one.example", "duplicate.example", "duplicate.example", "", longHostname, "six.example", "seven.example"]
+        var dnsNames = [
+            "one.example",
+            "duplicate.example",
+            "duplicate.example",
+            "",
+            longHostname,
+            "six.example",
+        ]
         let ipAddresses = [
             "192.0.2.1",
             "192.0.2.2",
@@ -178,7 +185,6 @@ struct NetworkSecurityViewControllerTests {
             "192.0.2.4",
             "192.0.2.5",
             "192.0.2.6",
-            "192.0.2.7",
         ]
 
         await render(
@@ -209,12 +215,34 @@ struct NetworkSecurityViewControllerTests {
         )
         #expect(
             viewController.rowContentForTesting(dnsDisclosureID)?.label
-                == String.localizedStringWithFormat(showMoreDNSFormat, Int64(2))
+                == String.localizedStringWithFormat(showMoreDNSFormat, Int64(1))
         )
         #expect(
             viewController.rowContentForTesting(ipDisclosureID)?.label
-                == String.localizedStringWithFormat(showMoreIPFormat, Int64(2))
+                == String.localizedStringWithFormat(showMoreIPFormat, Int64(1))
         )
+        let englishShowMoreDNSFormat = try #require(localized(
+            "network.security.action.show_more_dns_names",
+            defaultValue: "Show %lld More DNS Names",
+            locale: "en"
+        ))
+        let englishShowMoreIPFormat = try #require(localized(
+            "network.security.action.show_more_ip_addresses",
+            defaultValue: "Show %lld More IP Addresses",
+            locale: "en"
+        ))
+        let englishDNSLabel = unsafe String(
+            format: englishShowMoreDNSFormat,
+            locale: Locale(identifier: "en"),
+            arguments: [Int64(1)]
+        )
+        let englishIPLabel = unsafe String(
+            format: englishShowMoreIPFormat,
+            locale: Locale(identifier: "en"),
+            arguments: [Int64(1)]
+        )
+        #expect(englishDNSLabel == "Show 1 More DNS Name")
+        #expect(englishIPLabel == "Show 1 More IP Address")
         let disclosureCell = try #require(visibleCell(dnsDisclosureID, in: viewController))
         let dnsAccessibilityLabel = disclosureCell.accessibilityLabel
         #expect(disclosureCell.accessibilityTraits.contains(.button))
@@ -227,11 +255,11 @@ struct NetworkSecurityViewControllerTests {
         #expect(dnsAccessibilityLabel != ipDisclosureCell.accessibilityLabel)
         #expect(dnsAccessibilityLabel == String.localizedStringWithFormat(
             showMoreDNSFormat,
-            Int64(2)
+            Int64(1)
         ))
         #expect(ipDisclosureCell.accessibilityLabel == String.localizedStringWithFormat(
             showMoreIPFormat,
-            Int64(2)
+            Int64(1)
         ))
 
         let longHostnameID = try #require(itemID(.dnsName(4), in: viewController))
@@ -243,7 +271,7 @@ struct NetworkSecurityViewControllerTests {
         #expect(longHostnameContent.secondaryTextProperties.lineBreakMode == .byCharWrapping)
 
         await toggle(.dnsNames, in: viewController)
-        #expect(itemIDs(prefix: .dnsName, in: viewController).count == 7)
+        #expect(itemIDs(prefix: .dnsName, in: viewController).count == 6)
         #expect(itemIDs(prefix: .ipAddress, in: viewController).count == 5)
         #expect(Set(collapsedDNSIDs).isSubset(of: Set(viewController.snapshotForTesting.itemIdentifiers)))
         #expect(viewController.expandedListsForTesting == [.dnsNames])
@@ -261,17 +289,17 @@ struct NetworkSecurityViewControllerTests {
             defaultValue: "Expanded"
         ))
 
-        dnsNames.append("eight.example")
+        dnsNames.append("seven.example")
         await render(
             reportedSecurity(dnsNames: dnsNames, ipAddresses: ipAddresses),
             epoch: epoch,
             in: viewController
         )
-        #expect(itemIDs(prefix: .dnsName, in: viewController).count == 8)
+        #expect(itemIDs(prefix: .dnsName, in: viewController).count == 7)
         #expect(viewController.expandedListsForTesting == [.dnsNames])
 
         await toggle(.ipAddresses, in: viewController)
-        #expect(itemIDs(prefix: .ipAddress, in: viewController).count == 7)
+        #expect(itemIDs(prefix: .ipAddress, in: viewController).count == 6)
         #expect(viewController.expandedListsForTesting == [.dnsNames, .ipAddresses])
         #expect(
             viewController.rowContentForTesting(ipDisclosureID)?.label
@@ -513,6 +541,20 @@ struct NetworkSecurityViewControllerTests {
 
     private func localized(_ key: StaticString, defaultValue: String.LocalizationValue) -> String {
         String(localized: key, defaultValue: defaultValue, bundle: WebInspectorUILocalization.bundle)
+    }
+
+    private func localized(
+        _ key: StaticString,
+        defaultValue: String.LocalizationValue,
+        locale: String
+    ) -> String? {
+        guard let bundleURL = WebInspectorUILocalization.bundle.url(
+            forResource: locale,
+            withExtension: "lproj"
+        ), let bundle = Bundle(url: bundleURL) else {
+            return nil
+        }
+        return String(localized: key, defaultValue: defaultValue, bundle: bundle)
     }
 
     private enum NetworkSecurityItemKindPrefix {
