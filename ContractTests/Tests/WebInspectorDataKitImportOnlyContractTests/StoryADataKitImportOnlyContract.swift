@@ -6,6 +6,23 @@ func webInspectorDataKitBaseSurfaceDoesNotRequireProxyKitImport() {
     _ = DataKitImportOnlyActor()
 }
 
+@Test
+func dataKitLegacyNetworkResponseSnapshotInitializerFunctionReferenceRemainsUsable() {
+    let makeResponseSnapshot: (
+        String?,
+        Int?,
+        String?,
+        String?,
+        [String: String],
+        String?,
+        [String: String]?
+    ) -> NetworkResponseSnapshot = NetworkResponseSnapshot.init
+    let response = makeResponseSnapshot(nil, 204, nil, nil, [:], nil, nil)
+
+    #expect(response.status == 204)
+    #expect(response.security == nil)
+}
+
 private actor DataKitImportOnlyActor {
     func consume(_ context: WebInspectorContext) async throws {
         let requests: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()

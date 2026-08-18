@@ -900,7 +900,7 @@ private struct CachedResourcePayload: Decodable {
 
     func proxyResponse(origin: Network.Request.Origin) -> Network.Response {
         response?.proxyResponse(fallbackURL: url, bodySize: bodySize, origin: origin)
-            ?? Network.Response(url: url, bodySize: bodySize, origin: origin)
+            ?? Network.Response(url: url, bodySize: bodySize, security: nil, origin: origin)
     }
 }
 

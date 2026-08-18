@@ -85,8 +85,30 @@ public struct NetworkResponseSnapshot: Equatable, Sendable {
         mimeType: String? = nil,
         headers: [String: String] = [:],
         source: String? = nil,
+        requestHeaders: [String: String]? = nil
+    ) {
+        self.init(
+            url: url,
+            status: status,
+            statusText: statusText,
+            mimeType: mimeType,
+            headers: headers,
+            source: source,
+            requestHeaders: requestHeaders,
+            security: nil
+        )
+    }
+
+    /// Creates a response snapshot with security metadata.
+    public init(
+        url: String? = nil,
+        status: Int? = nil,
+        statusText: String? = nil,
+        mimeType: String? = nil,
+        headers: [String: String] = [:],
+        source: String? = nil,
         requestHeaders: [String: String]? = nil,
-        security: Network.Security? = nil
+        security: Network.Security?
     ) {
         self.url = url
         self.status = status

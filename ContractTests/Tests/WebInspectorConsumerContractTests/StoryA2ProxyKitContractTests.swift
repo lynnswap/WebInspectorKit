@@ -100,3 +100,32 @@ func webInspectorProxySecurityMetadataIsConstructibleAndReadableByConsumers() {
     #expect(response.security?.certificate?.ipAddresses == [])
     #expect(metrics.securityConnection?.tlsProtocol == "TLS 1.3")
 }
+
+@Test
+func webInspectorProxyLegacyNetworkInitializerFunctionReferencesRemainUsable() {
+    let makeResponse: (
+        String?,
+        Int?,
+        String?,
+        String?,
+        [String: String],
+        Network.Source?,
+        [String: String]?,
+        Int?
+    ) -> Network.Response = Network.Response.init
+    let response = makeResponse(nil, 204, nil, nil, [:], nil, nil, nil)
+
+    let makeMetrics: (
+        Double?,
+        String?,
+        String?,
+        Int?,
+        Int?
+    ) -> Network.Metrics = Network.Metrics.init
+    let metrics = makeMetrics(42, "h2", "203.0.113.10:443", 128, 256)
+
+    #expect(response.status == 204)
+    #expect(response.security == nil)
+    #expect(metrics.networkProtocol == "h2")
+    #expect(metrics.securityConnection == nil)
+}

@@ -311,19 +311,45 @@ public enum Network {
             headers: [String: String] = [:],
             source: Source? = nil,
             requestHeaders: [String: String]? = nil,
-            bodySize: Int? = nil,
-            security: Security? = nil
+            bodySize: Int? = nil
         ) {
-            self.url = url
-            self.status = status
-            self.statusText = statusText
-            self.mimeType = mimeType
-            self.headers = headers
-            self.source = source
-            self.requestHeaders = requestHeaders
-            self.bodySize = bodySize
-            self.security = security
-            origin = nil
+            self.init(
+                url: url,
+                status: status,
+                statusText: statusText,
+                mimeType: mimeType,
+                headers: headers,
+                source: source,
+                requestHeaders: requestHeaders,
+                bodySize: bodySize,
+                security: nil
+            )
+        }
+
+        /// Creates a network response payload with security metadata.
+        public init(
+            url: String? = nil,
+            status: Int? = nil,
+            statusText: String? = nil,
+            mimeType: String? = nil,
+            headers: [String: String] = [:],
+            source: Source? = nil,
+            requestHeaders: [String: String]? = nil,
+            bodySize: Int? = nil,
+            security: Security?
+        ) {
+            self.init(
+                url: url,
+                status: status,
+                statusText: statusText,
+                mimeType: mimeType,
+                headers: headers,
+                source: source,
+                requestHeaders: requestHeaders,
+                bodySize: bodySize,
+                security: security,
+                origin: nil
+            )
         }
 
         package init(
@@ -335,7 +361,7 @@ public enum Network {
             source: Source? = nil,
             requestHeaders: [String: String]? = nil,
             bodySize: Int? = nil,
-            security: Security? = nil,
+            security: Security?,
             origin: Request.Origin?
         ) {
             self.url = url
@@ -399,8 +425,26 @@ public enum Network {
             networkProtocol: String? = nil,
             remoteAddress: String? = nil,
             encodedDataLength: Int? = nil,
+            decodedBodyLength: Int? = nil
+        ) {
+            self.init(
+                timestamp: timestamp,
+                networkProtocol: networkProtocol,
+                remoteAddress: remoteAddress,
+                encodedDataLength: encodedDataLength,
+                decodedBodyLength: decodedBodyLength,
+                securityConnection: nil
+            )
+        }
+
+        /// Creates network transfer metrics with security connection metadata.
+        public init(
+            timestamp: Double? = nil,
+            networkProtocol: String? = nil,
+            remoteAddress: String? = nil,
+            encodedDataLength: Int? = nil,
             decodedBodyLength: Int? = nil,
-            securityConnection: Security.Connection? = nil
+            securityConnection: Security.Connection?
         ) {
             self.timestamp = timestamp
             self.networkProtocol = networkProtocol
