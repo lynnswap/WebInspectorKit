@@ -13,18 +13,15 @@ package final class NetworkCompactNavigationController: UINavigationController, 
 
     private enum SelectionCommit {
         case none
-        case clearIfStillSelected(NetworkListEntry.ID)
+        case clearIfStillSelected(NetworkPanelSelection)
 
         @MainActor
         func apply(to model: NetworkPanelModel) {
             switch self {
             case .none:
                 return
-            case .clearIfStillSelected(let entryID):
-                guard model.selectedEntryID == entryID else {
-                    return
-                }
-                model.selectEntry(nil)
+            case .clearIfStillSelected(let selection):
+                model.clearSelection(ifUnchanged: selection)
             }
         }
     }
@@ -252,7 +249,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
 
     private func finishUntrackedDetailRemovalIfNeeded(shownTarget: StackTarget?) {
         guard shownTarget == .list,
-              model.selectedEntryID != nil else {
+              model.selection != nil else {
             return
         }
         commit(
@@ -273,7 +270,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
     }
 
     private func desiredStackTarget() -> StackTarget {
-        model.selectedRequest == nil ? .list : .detail
+        model.selection == nil ? .list : .detail
     }
 
     private func currentStackTarget() -> StackTarget {
@@ -291,10 +288,10 @@ package final class NetworkCompactNavigationController: UINavigationController, 
     }
 
     private func userPopSelectionCommit() -> SelectionCommit {
-        guard let selectedEntryID = model.selectedEntryID else {
+        guard let selection = model.selection else {
             return .none
         }
-        return .clearIfStillSelected(selectedEntryID)
+        return .clearIfStillSelected(selection)
     }
 
     private func applyBackgroundFromTraits() {

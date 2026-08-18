@@ -1,3 +1,4 @@
+import Foundation
 import ObservationBridge
 import Testing
 @testable import WebInspectorDataKit
@@ -108,6 +109,27 @@ func selectedRequestUsesUnfilteredContextWhenFiltersHideRequest() async throws {
     #expect(model.displayRequestIDs.isEmpty)
     #expect(model.selectedRequestID == requestID)
     #expect(model.selectedRequest === request)
+}
+
+@Test
+@MainActor
+func selectingSingletonEntryUsesEntryScope() async throws {
+    let context = makeContext()
+    let requestID = await applyRequest(
+        to: context,
+        requestID: "singleton",
+        url: "https://example.test/singleton.js",
+        resourceType: .script,
+        mimeType: "text/javascript",
+        timestamp: 1
+    )
+    let model = NetworkPanelModel(context: context)
+    let entryID = try #require(model.entryID(containing: requestID))
+
+    model.selectEntry(entryID)
+
+    #expect(model.selection == .entry(entryID))
+    #expect(model.selectedRequestID == requestID)
 }
 
 @Test
@@ -1284,7 +1306,7 @@ func groupedFilterRequiresOneMemberToMatchSearchAndResourceFilter() async {
 
 @Test
 @MainActor
-func selectingAnyGroupedMemberUsesStableEntryAndOldestRepresentative() async throws {
+func groupedEntryAndExplicitMemberSelectionsHaveDistinctScopes() async throws {
     let context = makeContext()
     let frameID = FrameID("main-frame")
     let nodeID = DOM.Node.ID("player")
@@ -1319,11 +1341,101 @@ func selectingAnyGroupedMemberUsesStableEntryAndOldestRepresentative() async thr
     let model = NetworkPanelModel(context: context)
     let stableID = try #require(model.displayEntryIDs.first)
 
-    model.selectRequest(context.registeredRequest(for: secondID))
+    model.selectEntry(stableID)
 
+    #expect(model.selection == .entry(stableID))
     #expect(model.selectedEntryID == stableID)
     #expect(model.selectedRequest?.id == firstID)
-    #expect(model.selectedRequests.map(\.id) == [firstID, secondID])
+    #expect(model.selectedEntryRequests.map(\.id) == [firstID, secondID])
+
+    model.selectRequest(context.registeredRequest(for: secondID))
+
+    #expect(model.selection == .request(entryID: stableID, requestID: secondID))
+    #expect(model.selectedEntryID == stableID)
+    #expect(model.selectedRequest?.id == secondID)
+    #expect(model.selectedEntryRequests.map(\.id) == [firstID, secondID])
+}
+
+@Test
+@MainActor
+func removedExplicitRequestClearsSelectionInsteadOfSelectingGroupedSibling() async throws {
+    let context = makeContext()
+    let frameID = FrameID("main-frame")
+    let nodeID = DOM.Node.ID("selection-removal")
+    context.apply(WebInspectorTargetLifecycleEvent.frameNavigated(WebInspectorPageFrameLifecycle(
+        id: frameID,
+        parentID: nil,
+        pageBindingID: "page",
+        loaderID: "loader",
+        name: "Main",
+        url: "https://example.test",
+        securityOrigin: "https://example.test",
+        mimeType: "text/html"
+    )))
+    let firstID = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "selection-removal-first",
+        frameID: frameID,
+        loaderID: "loader",
+        pageBindingID: "page",
+        initiatorNodeID: nodeID,
+        timestamp: 1
+    )
+    let secondID = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "selection-removal-second",
+        frameID: frameID,
+        loaderID: "loader",
+        pageBindingID: "page",
+        initiatorNodeID: nodeID,
+        timestamp: 2
+    )
+    await applyLoadingFinished(
+        to: context,
+        requestID: "selection-removal-second",
+        timestamp: 2.5
+    )
+    #expect(context.registeredRequest(for: secondID)?.state == .finished)
+    let model = NetworkPanelModel(context: context)
+    let groupedEntryID = try #require(model.entryID(containing: firstID))
+    var rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    model.requests.updateFetchDescriptor(WebInspectorFetchDescriptor(
+        predicate: #Predicate { request in
+            request.method == "GET"
+        }
+    ))
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+
+    model.selectRequest(context.registeredRequest(for: secondID))
+    let fullRebuildBaseline = model.fullEntryRebuildCountForTesting
+    rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    let secondProxyID = Network.Request.ID("selection-removal-second")
+    await context.apply(.requestWillBeSent(
+        id: secondProxyID,
+        request: Network.Request(
+            id: secondProxyID,
+            url: "https://example.test/selection-removal-second",
+            method: "POST",
+            origin: Network.Request.Origin(
+                frameID: frameID,
+                loaderID: "loader",
+                targetID: "page"
+            )
+        ),
+        initiator: Network.Initiator(kind: "other", nodeID: nodeID),
+        resourceType: .fetch,
+        redirectResponse: nil,
+        timestamp: 3
+    ))
+    #expect(context.registeredRequest(for: secondID)?.method == "POST")
+
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+    #expect(model.fullEntryRebuildCountForTesting == fullRebuildBaseline)
+    #expect(model.entry(for: groupedEntryID)?.requests.map(\.id) == [firstID])
+    #expect(model.entryID(containing: secondID) == nil)
+    #expect(context.registeredRequest(for: secondID) != nil)
+    #expect(model.selection == nil)
+    #expect(model.selectedRequest == nil)
 }
 
 @Test
@@ -1357,6 +1469,7 @@ func liveGroupedInsertionPreservesEntryIdentityRowPositionAndChronologicalMember
     #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
     let stableEntryID = try #require(model.entryID(containing: firstID))
     let stableEntry = try #require(model.entry(for: stableEntryID))
+    model.selectEntry(stableEntryID)
 
     rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
     let newerSingletonID = await applyPendingRequest(
@@ -1412,11 +1525,13 @@ func liveGroupedInsertionPreservesEntryIdentityRowPositionAndChronologicalMember
     #expect(model.entry(for: stableEntryID) === stableEntry)
     #expect(stableEntry.representativeRequest.id == lateOlderID)
     #expect(stableEntry.requests.map(\.id) == [lateOlderID, sameTimestampID, firstID, laterID])
+    #expect(model.selection == .entry(stableEntryID))
+    #expect(model.selectedRequestID == lateOlderID)
 }
 
 @Test
 @MainActor
-func groupedSelectionTracksAnchoredMemberAndPreservesSelectionWhenAnotherMemberLeaves() async throws {
+func entrySelectionPersistsWhenMemberLeavesAndExplicitRequestFollowsRegrouping() async throws {
     let context = makeContext()
     let frameID = FrameID("main-frame")
     let nodeID = DOM.Node.ID("player")
@@ -1461,7 +1576,7 @@ func groupedSelectionTracksAnchoredMemberAndPreservesSelectionWhenAnotherMemberL
     let groupedEntryID = try #require(model.entryID(containing: firstID))
     #expect(model.entry(for: groupedEntryID)?.requests.map(\.id) == [firstID, secondID, thirdID])
 
-    model.selectRequest(context.registeredRequest(for: firstID))
+    model.selectEntry(groupedEntryID)
     var rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
     await applyLoadingFinished(to: context, requestID: "second", timestamp: 4)
     #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
@@ -1474,6 +1589,7 @@ func groupedSelectionTracksAnchoredMemberAndPreservesSelectionWhenAnotherMemberL
         timestamp: 5
     )
     #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+    #expect(model.selection == .entry(groupedEntryID))
     #expect(model.selectedEntryID == groupedEntryID)
     #expect(model.selectedRequestID == firstID)
     #expect(model.entry(for: groupedEntryID)?.requests.map(\.id) == [firstID, thirdID])
@@ -1491,8 +1607,10 @@ func groupedSelectionTracksAnchoredMemberAndPreservesSelectionWhenAnotherMemberL
         timestamp: 7
     )
     #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+    let regroupedEntryID = try #require(model.entryID(containing: thirdID))
     #expect(model.selectedRequestID == thirdID)
-    #expect(model.selectedEntryID == model.entryID(containing: thirdID))
+    #expect(model.selectedEntryID == regroupedEntryID)
+    #expect(model.selection == .request(entryID: regroupedEntryID, requestID: thirdID))
     #expect(model.selectedRequest?.id == thirdID)
     #expect(model.entry(for: groupedEntryID)?.requests.map(\.id) == [firstID])
 }
@@ -1586,6 +1704,7 @@ func selectedSingletonReusedIntoGroupPreservesSelection() async throws {
     let groupedEntryID = try #require(model.entryID(containing: reusedID))
     #expect(model.selectedRequestID == reusedID)
     #expect(model.selectedEntryID == groupedEntryID)
+    #expect(model.selection == .request(entryID: groupedEntryID, requestID: reusedID))
     #expect(model.selectedRequest?.id == reusedID)
     #expect(model.selectedRequest?.url == "https://example.test/reused")
 }
