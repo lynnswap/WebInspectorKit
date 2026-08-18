@@ -6135,6 +6135,40 @@
         }
       }
     },
+    "network.websocket.handshake.rejected" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "WebSocket Handshake Rejected"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebSocketハンドシェイクを拒否"
+          }
+        }
+      }
+    },
+    "network.websocket.handshake.response" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "WebSocket Handshake Response"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebSocketハンドシェイク応答"
+          }
+        }
+      }
+    },
     "network.websocket.opcode" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -6148,6 +6182,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "オペコード"
+          }
+        }
+      }
+    },
+    "network.websocket.status.not_reported" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Status not reported"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ステータスは未報告"
           }
         }
       }

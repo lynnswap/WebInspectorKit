@@ -137,18 +137,62 @@ public struct RedirectHop: Equatable, Sendable {
     }
 }
 
+package struct WebSocketTimelineHandshakeResponse: Equatable, Sendable {
+    package enum Disposition: Equatable, Sendable {
+        case switchingProtocols(statusText: String?)
+        case rejected(statusCode: Int, statusText: String?)
+        case unreported(statusText: String?)
+    }
+
+    package let statusCode: Int?
+    package let statusText: String?
+
+    package var disposition: Disposition {
+        switch statusCode {
+        case 101?:
+            .switchingProtocols(statusText: statusText)
+        case let statusCode?:
+            .rejected(statusCode: statusCode, statusText: statusText)
+        case nil:
+            .unreported(statusText: statusText)
+        }
+    }
+
+    package init(statusCode: Int?, statusText: String?) {
+        self.statusCode = statusCode
+        self.statusText = statusText
+    }
+}
+
 package struct WebSocketTimelineEntry: Identifiable, Equatable, Sendable {
-    package struct ID: Hashable, Sendable {
+    package struct ID: Comparable, Hashable, Sendable {
         package let lifecycleRevision: UInt64
         package let chronologySequence: UInt64
+        package let ordinalWithinEvent: UInt8
 
-        package init(lifecycleRevision: UInt64, chronologySequence: UInt64) {
+        package init(
+            lifecycleRevision: UInt64,
+            chronologySequence: UInt64,
+            ordinalWithinEvent: UInt8 = 0
+        ) {
             self.lifecycleRevision = lifecycleRevision
             self.chronologySequence = chronologySequence
+            self.ordinalWithinEvent = ordinalWithinEvent
+        }
+
+        package static func < (lhs: ID, rhs: ID) -> Bool {
+            if lhs.lifecycleRevision != rhs.lifecycleRevision {
+                return lhs.lifecycleRevision < rhs.lifecycleRevision
+            }
+            if lhs.chronologySequence != rhs.chronologySequence {
+                return lhs.chronologySequence < rhs.chronologySequence
+            }
+            return lhs.ordinalWithinEvent < rhs.ordinalWithinEvent
         }
     }
 
     package enum Kind: Equatable, Sendable {
+        case handshakeResponse(WebSocketTimelineHandshakeResponse)
         case connectionEstablished
         case frame(WebSocketTimelineFrame)
         case error(String)
@@ -213,13 +257,13 @@ package struct WebSocketTimelineFrame: Equatable, Sendable {
 public final class WebSocketState {
     /// WebSocket ready state tracked from network events.
     public enum ReadyState: Equatable, Sendable {
-        /// The WebSocket is connecting.
+        /// No frame has confirmed that the WebSocket connection opened.
         case connecting
 
-        /// The WebSocket handshake completed.
+        /// A WebSocket frame confirmed that the connection opened.
         case open
 
-        /// The WebSocket is closed.
+        /// A WebSocket error or close event was observed.
         case closed
     }
 
@@ -291,7 +335,7 @@ public final class WebSocketState {
     public var frames: [Frame] {
         timelineEntries.compactMap { entry in
             switch entry.kind {
-            case .connectionEstablished, .connectionClosed:
+            case .handshakeResponse, .connectionEstablished, .connectionClosed:
                 return nil
             case let .frame(frame):
                 guard let timestamp = entry.timestamp else {
@@ -352,10 +396,14 @@ public final class WebSocketState {
             return false
         }
         handshakeResponse = NetworkResponseSnapshot(response)
-        readyState = .open
+        // Do not infer an open connection here. WebKit reports this response
+        // before some invalid-101 failure paths and exposes no didConnect event.
         appendTimelineEntry(
             timestamp: timestamp,
-            kind: .connectionEstablished,
+            kind: .handshakeResponse(WebSocketTimelineHandshakeResponse(
+                statusCode: response.status,
+                statusText: response.statusText
+            )),
             lifecycleRevision: lifecycleRevision,
             chronologySequence: chronologySequence
         )
@@ -369,7 +417,25 @@ public final class WebSocketState {
         lifecycleRevision: UInt64,
         chronologySequence: UInt64
     ) {
-        appendTimelineEntry(
+        var entries: [WebSocketTimelineEntry] = []
+        if readyState == .connecting {
+            readyState = .open
+            let switchingProtocolsResponse = timelineEntries.last { entry in
+                guard case let .handshakeResponse(response) = entry.kind,
+                      case .switchingProtocols = response.disposition else {
+                    return false
+                }
+                return true
+            }
+            entries.append(makeTimelineEntry(
+                timestamp: switchingProtocolsResponse?.timestamp ?? timestamp,
+                kind: .connectionEstablished,
+                lifecycleRevision: lifecycleRevision,
+                chronologySequence: chronologySequence,
+                ordinalWithinEvent: 0
+            ))
+        }
+        entries.append(makeTimelineEntry(
             timestamp: timestamp,
             kind: .frame(WebSocketTimelineFrame(
                 direction: direction,
@@ -381,8 +447,10 @@ public final class WebSocketState {
                 isMasked: frame.mask
             )),
             lifecycleRevision: lifecycleRevision,
-            chronologySequence: chronologySequence
-        )
+            chronologySequence: chronologySequence,
+            ordinalWithinEvent: 1
+        ))
+        appendTimelineEntries(entries)
     }
 
     func appendError(
@@ -391,6 +459,7 @@ public final class WebSocketState {
         lifecycleRevision: UInt64,
         chronologySequence: UInt64
     ) {
+        readyState = .closed
         appendTimelineEntry(
             timestamp: timestamp,
             kind: .error(message),
@@ -405,7 +474,12 @@ public final class WebSocketState {
         lifecycleRevision: UInt64,
         chronologySequence: UInt64
     ) -> Bool {
-        guard readyState != .closed else {
+        guard timelineEntries.contains(where: { entry in
+            if case .connectionClosed = entry.kind {
+                return true
+            }
+            return false
+        }) == false else {
             return false
         }
         readyState = .closed
@@ -426,23 +500,65 @@ public final class WebSocketState {
         timestamp: Double?,
         kind: WebSocketTimelineEntry.Kind,
         lifecycleRevision: UInt64,
-        chronologySequence: UInt64
+        chronologySequence: UInt64,
+        ordinalWithinEvent: UInt8 = 0
     ) {
-        let id = WebSocketTimelineEntry.ID(
+        appendTimelineEntries([makeTimelineEntry(
+            timestamp: timestamp,
+            kind: kind,
             lifecycleRevision: lifecycleRevision,
-            chronologySequence: chronologySequence
+            chronologySequence: chronologySequence,
+            ordinalWithinEvent: ordinalWithinEvent
+        )])
+    }
+
+    private func makeTimelineEntry(
+        timestamp: Double?,
+        kind: WebSocketTimelineEntry.Kind,
+        lifecycleRevision: UInt64,
+        chronologySequence: UInt64,
+        ordinalWithinEvent: UInt8
+    ) -> WebSocketTimelineEntry {
+        WebSocketTimelineEntry(
+            id: WebSocketTimelineEntry.ID(
+                lifecycleRevision: lifecycleRevision,
+                chronologySequence: chronologySequence,
+                ordinalWithinEvent: ordinalWithinEvent
+            ),
+            timestamp: timestamp,
+            kind: kind
         )
-        if let lastID = timelineEntries.last?.id {
-            precondition(
-                lastID.lifecycleRevision == lifecycleRevision,
-                "A WebSocketState cannot span multiple request lifecycle revisions."
-            )
-            precondition(
-                lastID.chronologySequence < chronologySequence,
-                "WebSocket timeline entries must follow owner-issued chronology order."
-            )
+    }
+
+    private func appendTimelineEntries(_ entries: [WebSocketTimelineEntry]) {
+        guard let firstEntry = entries.first else {
+            return
         }
-        timelineEntries.append(WebSocketTimelineEntry(id: id, timestamp: timestamp, kind: kind))
+        let lifecycleRevision = firstEntry.id.lifecycleRevision
+        let existingRevisionMatches = timelineEntries.last.map {
+            $0.id.lifecycleRevision == lifecycleRevision
+        } ?? true
+        precondition(
+            entries.allSatisfy { $0.id.lifecycleRevision == lifecycleRevision }
+                && existingRevisionMatches,
+            "A WebSocketState cannot span multiple request lifecycle revisions."
+        )
+        var lastID = timelineEntries.last?.id
+        for entry in entries {
+            let id = entry.id
+            if let lastID {
+                precondition(
+                    lastID < id,
+                    "WebSocket timeline entries must follow owner-issued chronology order."
+                )
+            }
+            lastID = id
+        }
+        precondition(
+            timelineEntries.count <= Int.max - entries.count,
+            "WebSocket timeline entry count overflowed."
+        )
+        timelineEntries.append(contentsOf: entries)
     }
 }
 

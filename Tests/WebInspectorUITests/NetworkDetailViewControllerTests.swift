@@ -937,7 +937,7 @@ struct NetworkDetailViewControllerTests {
         #expect(viewController.collectionView.allowsSelection == false)
         #expect(viewController.snapshotForTesting.sectionIdentifiers == [.timeline])
         let itemIDs = viewController.snapshotForTesting.itemIdentifiers
-        #expect(itemIDs.count == 10)
+        #expect(itemIDs.count == 11)
         let contents = try itemIDs.map { itemID in
             try #require(viewController.rowContentForTesting(itemID))
         }
@@ -953,23 +953,30 @@ struct NetworkDetailViewControllerTests {
             localized: "network.websocket.frame.text",
             bundle: WebInspectorUILocalization.bundle
         )
+        let handshakeResponse = String(
+            localized: "network.websocket.handshake.response",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        #expect(contents[0].title == handshakeResponse)
         #expect(contents[0].style == .lifecycle)
-        #expect(contents[0].subtitle == notReported)
-        #expect(contents[1].title == "hello\nworld")
-        #expect(contents[1].style == .sent)
-        #expect(contents[1].symbolName == "arrow.up")
-        #expect(contents[1].subtitle.contains(sent))
-        #expect(contents[1].subtitle.contains(textFrame))
-        #expect(contents[1].subtitle.contains("+5 ms"))
-        #expect(contents[1].accessibilityLabel == "hello\nworld")
-        #expect(contents[1].accessibilityValue == contents[1].subtitle)
-        #expect(contents[2].style == .received)
-        #expect(contents[2].symbolName == "arrow.down")
-        #expect(contents[2].title.contains(13.formatted()))
-        #expect(contents[7].title.contains("15"))
-        #expect(contents[8].style == .error)
-        #expect(contents[8].title == "decode failed")
-        #expect(contents[9].style == .lifecycle)
+        #expect(contents[0].subtitle.contains("101 Switching Protocols"))
+        #expect(contents[0].subtitle.contains(notReported))
+        #expect(contents[1].style == .lifecycle)
+        #expect(contents[2].title == "hello\nworld")
+        #expect(contents[2].style == .sent)
+        #expect(contents[2].symbolName == "arrow.up")
+        #expect(contents[2].subtitle.contains(sent))
+        #expect(contents[2].subtitle.contains(textFrame))
+        #expect(contents[2].subtitle.contains("+5 ms"))
+        #expect(contents[2].accessibilityLabel == "hello\nworld")
+        #expect(contents[2].accessibilityValue == contents[2].subtitle)
+        #expect(contents[3].style == .received)
+        #expect(contents[3].symbolName == "arrow.down")
+        #expect(contents[3].title.contains(13.formatted()))
+        #expect(contents[8].title.contains("15"))
+        #expect(contents[9].style == .error)
+        #expect(contents[9].title == "decode failed")
+        #expect(contents[10].style == .lifecycle)
         let copiedText = contents.flatMap {
             [$0.title, $0.subtitle, $0.accessibilityLabel, $0.accessibilityValue]
         }.joined(separator: "\n")
@@ -986,7 +993,7 @@ struct NetworkDetailViewControllerTests {
 
         viewController.collectionView.layoutIfNeeded()
         let textCell = try #require(
-            viewController.collectionView.cellForItem(at: IndexPath(item: 1, section: 0))
+            viewController.collectionView.cellForItem(at: IndexPath(item: 2, section: 0))
                 as? UICollectionViewListCell
         )
         let configuration = try #require(
@@ -997,6 +1004,158 @@ struct NetworkDetailViewControllerTests {
         #expect(configuration.secondaryTextProperties.numberOfLines == 0)
         viewController.collectionView.semanticContentAttribute = .forceRightToLeft
         #expect(viewController.collectionView.effectiveUserInterfaceLayoutDirection == .rightToLeft)
+    }
+
+    @Test
+    func webSocketPreviewRendersRejectedHandshakeWithoutEstablishedRow() async throws {
+        let context = makeContext()
+        let requestID = Network.Request.ID("ws-rejected-preview")
+        await context.apply(.webSocket(.created(
+            id: requestID,
+            url: "wss://example.com/rejected-preview"
+        )))
+        await context.apply(.webSocket(.handshakeResponse(
+            id: requestID,
+            response: Network.Response(
+                url: "wss://example.com/rejected-preview",
+                status: 403,
+                statusText: "Forbidden"
+            ),
+            timestamp: 2
+        )))
+        await context.apply(.webSocket(.error(
+            id: requestID,
+            message: "upgrade failed",
+            timestamp: 3
+        )))
+        await context.apply(.webSocket(.closed(id: requestID, timestamp: 4)))
+        let request = try #require(context.registeredRequest(forProxyID: requestID))
+        let viewController = NetworkWebSocketPreviewViewController(
+            frameScheduler: ManualNetworkFrameScheduler()
+        )
+        viewController.bind(to: request)
+        await resumeWebSocketPreview(viewController)
+
+        let itemIDs = viewController.snapshotForTesting.itemIdentifiers
+        #expect(itemIDs.count == 3)
+        let contents = try itemIDs.map { itemID in
+            try #require(viewController.rowContentForTesting(itemID))
+        }
+        let rejectionTitle = String(
+            localized: "network.websocket.handshake.rejected",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let establishedTitle = String(
+            localized: "network.websocket.connection.established",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        #expect(contents[0].title == rejectionTitle)
+        #expect(contents[0].subtitle.contains("403 Forbidden"))
+        #expect(contents[0].style == .error)
+        #expect(contents[0].symbolName == "exclamationmark.shield")
+        #expect(contents[0].accessibilityLabel == rejectionTitle)
+        #expect(contents[0].accessibilityValue.contains("403 Forbidden"))
+        #expect(contents[1].title == "upgrade failed")
+        #expect(contents.contains { $0.title == establishedTitle } == false)
+    }
+
+    @Test
+    func webSocketPreviewKeepsQuietAndUnreportedHandshakeResponsesNeutral() async throws {
+        let handshakeTitle = String(
+            localized: "network.websocket.handshake.response",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let establishedTitle = String(
+            localized: "network.websocket.connection.established",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let statusNotReported = String(
+            localized: "network.websocket.status.not_reported",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        for (suffix, status, statusText) in [
+            ("switching", Optional(101), Optional("Switching Protocols")),
+            ("unreported", Optional<Int>.none, Optional("Opaque Response")),
+        ] {
+            let context = makeContext()
+            let requestID = Network.Request.ID("ws-neutral-\(suffix)")
+            await context.apply(.webSocket(.created(
+                id: requestID,
+                url: "wss://example.com/neutral-\(suffix)"
+            )))
+            await context.apply(.webSocket(.handshakeResponse(
+                id: requestID,
+                response: Network.Response(status: status, statusText: statusText),
+                timestamp: 2
+            )))
+            let request = try #require(context.registeredRequest(forProxyID: requestID))
+            let viewController = NetworkWebSocketPreviewViewController(
+                frameScheduler: ManualNetworkFrameScheduler()
+            )
+            viewController.bind(to: request)
+            await resumeWebSocketPreview(viewController)
+
+            let itemIDs = viewController.snapshotForTesting.itemIdentifiers
+            #expect(itemIDs.count == 1)
+            let content = try #require(viewController.rowContentForTesting(itemIDs[0]))
+            #expect(content.title == handshakeTitle)
+            #expect(content.style == .lifecycle)
+            #expect(content.accessibilityLabel == handshakeTitle)
+            #expect(content.title != establishedTitle)
+            #expect(request.webSocket?.readyState == .connecting)
+            if let status {
+                #expect(content.subtitle.contains(String(status)))
+                #expect(content.subtitle.contains(statusText ?? ""))
+            } else {
+                #expect(content.subtitle.contains(statusNotReported))
+                #expect(content.subtitle.contains(statusText ?? ""))
+            }
+        }
+    }
+
+    @Test
+    func webSocketFirstFramePublishesEstablishedAndFrameInOneObservationDelivery() async throws {
+        let webSocket = WebSocketState()
+        let observation = withPortableContinuousObservation { _ in
+            _ = webSocket.timelineEntries
+            _ = webSocket.frames
+        }
+        defer { observation.cancel() }
+        let values = await observation.values {
+            [webSocket.timelineEntries.count, webSocket.frames.count]
+        }
+        defer { values.cancel() }
+        let deliveryBaseline = values.snapshot().count
+
+        webSocket.appendFrame(
+            Network.WebSocketFrame(
+                opcode: 1,
+                mask: false,
+                payloadData: "first",
+                payloadLength: 5
+            ),
+            direction: .received,
+            timestamp: 4,
+            lifecycleRevision: 3,
+            chronologySequence: 8
+        )
+
+        #expect(await values.waitUntilValue([2, 1]))
+        #expect(values.snapshot().count == deliveryBaseline + 1)
+        #expect(values.snapshot().contains([1, 0]) == false)
+        #expect(webSocket.readyState == .open)
+        #expect(webSocket.timelineEntries.map(\.id) == [
+            .init(
+                lifecycleRevision: 3,
+                chronologySequence: 8,
+                ordinalWithinEvent: 0
+            ),
+            .init(
+                lifecycleRevision: 3,
+                chronologySequence: 8,
+                ordinalWithinEvent: 1
+            ),
+        ])
     }
 
     @Test
@@ -1026,7 +1185,7 @@ struct NetworkDetailViewControllerTests {
         viewController.bind(to: request)
         await resumeWebSocketPreview(viewController)
         let initialIDs = viewController.snapshotForTesting.itemIdentifiers
-        #expect(initialIDs.count == 2)
+        #expect(initialIDs.count == 3)
         let initialCell = try #require(
             viewController.collectionView.cellForItem(at: IndexPath(item: 0, section: 0))
         )
@@ -1052,14 +1211,14 @@ struct NetworkDetailViewControllerTests {
         await fireWebSocketRenderingFrame(frameScheduler, in: viewController)
 
         let renderedIDs = viewController.snapshotForTesting.itemIdentifiers
-        #expect(renderedIDs.count == 5)
+        #expect(renderedIDs.count == 6)
         #expect(Array(renderedIDs.prefix(initialIDs.count)) == initialIDs)
         #expect(
             viewController.collectionView.cellForItem(at: IndexPath(item: 0, section: 0))
                 .map(ObjectIdentifier.init) == initialCellIdentity
         )
-        let renderedSequences = viewController.renderedEntryIDsForTesting.map(\.chronologySequence)
-        #expect(zip(renderedSequences, renderedSequences.dropFirst()).allSatisfy { pair in
+        let renderedEntryIDs = viewController.renderedEntryIDsForTesting
+        #expect(zip(renderedEntryIDs, renderedEntryIDs.dropFirst()).allSatisfy { pair in
             pair.0 < pair.1
         })
     }
@@ -1360,7 +1519,7 @@ struct NetworkDetailViewControllerTests {
         #expect(await waitUntilWebSocketPreviewBound(to: first, in: viewController))
         #expect(await waitUntilRendered(in: viewController) {
             viewController.webSocketPreviewViewControllerForTesting
-                .snapshotForTesting.itemIdentifiers.count == 2
+                .snapshotForTesting.itemIdentifiers.count == 3
         })
         #expect(
             viewController.webSocketPreviewViewControllerForTesting

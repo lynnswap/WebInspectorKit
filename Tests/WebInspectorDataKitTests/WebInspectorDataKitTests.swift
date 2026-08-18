@@ -10143,10 +10143,13 @@ func webSocketCreatedPreservesExistingNetworkLifecycleMetadata() async throws {
         )),
         target: target
     )
-    try await waitUntil { request.webSocket?.readyState == .open }
+    try await waitUntil {
+        request.webSocket?.handshakeResponse?.status == 101 && request.state == .responded
+    }
 
     let currentWebSocket = try #require(request.webSocket)
     #expect(currentWebSocket === webSocket)
+    #expect(currentWebSocket.readyState == .connecting)
     #expect(request.url == "wss://example.com/socket?created")
     #expect(request.method == "GET")
     #expect(request.requestHeaders["Upgrade"] == "websocket")
@@ -10212,7 +10215,7 @@ func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
         target: target
     )
     try await waitUntil {
-        request.webSocket?.readyState == .open && request.state == .responded
+        request.webSocket?.handshakeResponse?.status == 101 && request.state == .responded
     }
     #expect(request.webSocket?.handshakeResponse?.status == 101)
     #expect(request.status == 101)
@@ -10221,6 +10224,7 @@ func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
     #expect(request.responseReceivedTimestamp == 2)
     #expect(request.hasResponse)
     #expect(request.hasResponseBody == false)
+    #expect(request.webSocket?.readyState == .connecting)
 
     await runtime.backend.emit(
         .webSocket(.frameSent(
@@ -10252,6 +10256,30 @@ func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
     #expect(webSocket.frames[1].payloadData == "world")
     #expect(webSocket.frames[2].errorMessage == "boom")
     #expect(webSocket.frames.map(\.timestamp) == [3, 4, 5])
+    #expect(webSocket.timelineEntries.map(\.kind) == [
+        .handshakeResponse(WebSocketTimelineHandshakeResponse(
+            statusCode: 101,
+            statusText: "Switching Protocols"
+        )),
+        .connectionEstablished,
+        .frame(WebSocketTimelineFrame(
+            direction: .sent,
+            kind: .text,
+            payload: .text("hello"),
+            payloadLength: 5,
+            isMasked: true
+        )),
+        .frame(WebSocketTimelineFrame(
+            direction: .received,
+            kind: .text,
+            payload: .text("world"),
+            payloadLength: 5,
+            isMasked: false
+        )),
+        .error("boom"),
+    ])
+    #expect(webSocket.timelineEntries[1].timestamp == 2)
+    #expect(webSocket.readyState == .closed)
     #expect(request.decodedDataLength == 10)
     #expect(request.lastDataReceivedTimestamp == 5)
 
@@ -10357,16 +10385,32 @@ func webSocketTimelinePreservesArrivalOrderStableIDsAndExactFrameSemantics() asy
         target: target
     )
 
-    try await waitUntil { request.webSocket?.timelineEntries.count == 7 }
+    try await waitUntil { request.webSocket?.timelineEntries.count == 8 }
     let webSocket = try #require(request.webSocket)
     let expected = [
         WebSocketTimelineEntry(
             id: .init(lifecycleRevision: 0, chronologySequence: 2),
             timestamp: nil,
+            kind: .handshakeResponse(WebSocketTimelineHandshakeResponse(
+                statusCode: 101,
+                statusText: nil
+            ))
+        ),
+        WebSocketTimelineEntry(
+            id: .init(
+                lifecycleRevision: 0,
+                chronologySequence: 3,
+                ordinalWithinEvent: 0
+            ),
+            timestamp: 7,
             kind: .connectionEstablished
         ),
         WebSocketTimelineEntry(
-            id: .init(lifecycleRevision: 0, chronologySequence: 3),
+            id: .init(
+                lifecycleRevision: 0,
+                chronologySequence: 3,
+                ordinalWithinEvent: 1
+            ),
             timestamp: 7,
             kind: .frame(WebSocketTimelineFrame(
                 direction: .sent,
@@ -10377,7 +10421,11 @@ func webSocketTimelinePreservesArrivalOrderStableIDsAndExactFrameSemantics() asy
             ))
         ),
         WebSocketTimelineEntry(
-            id: .init(lifecycleRevision: 0, chronologySequence: 4),
+            id: .init(
+                lifecycleRevision: 0,
+                chronologySequence: 4,
+                ordinalWithinEvent: 1
+            ),
             timestamp: 7,
             kind: .frame(WebSocketTimelineFrame(
                 direction: .received,
@@ -10398,7 +10446,11 @@ func webSocketTimelinePreservesArrivalOrderStableIDsAndExactFrameSemantics() asy
             kind: .connectionClosed
         ),
         WebSocketTimelineEntry(
-            id: .init(lifecycleRevision: 0, chronologySequence: 7),
+            id: .init(
+                lifecycleRevision: 0,
+                chronologySequence: 7,
+                ordinalWithinEvent: 1
+            ),
             timestamp: 0.5,
             kind: .frame(WebSocketTimelineFrame(
                 direction: .received,
@@ -10409,7 +10461,11 @@ func webSocketTimelinePreservesArrivalOrderStableIDsAndExactFrameSemantics() asy
             ))
         ),
         WebSocketTimelineEntry(
-            id: .init(lifecycleRevision: 0, chronologySequence: 8),
+            id: .init(
+                lifecycleRevision: 0,
+                chronologySequence: 8,
+                ordinalWithinEvent: 1
+            ),
             timestamp: 9,
             kind: .frame(WebSocketTimelineFrame(
                 direction: .sent,
@@ -10421,7 +10477,8 @@ func webSocketTimelinePreservesArrivalOrderStableIDsAndExactFrameSemantics() asy
         ),
     ]
     #expect(webSocket.timelineEntries == expected)
-    #expect(webSocket.timelineEntry(for: expected[3].id) == expected[3])
+    #expect(expected.map(\.id) == expected.map(\.id).sorted())
+    #expect(webSocket.timelineEntry(for: expected[4].id) == expected[4])
     #expect(webSocket.timelineEntry(for: .init(lifecycleRevision: 0, chronologySequence: 99)) == nil)
     #expect(webSocket.readyState == .closed)
     #expect(request.finishedOrFailedTimestamp == 1)
@@ -10491,9 +10548,194 @@ func webSocketFirstCloseAndHandshakeAreTerminalAndDuplicateEventsDoNotNotify() a
     #expect(webSocket.handshakeResponse?.statusText == "First")
     #expect(webSocket.handshakeRequest == nil)
     #expect(webSocket.timelineEntries.count == 2)
-    #expect(webSocket.timelineEntries.map(\.kind) == [.connectionEstablished, .connectionClosed])
+    #expect(webSocket.timelineEntries.map(\.kind) == [
+        .handshakeResponse(WebSocketTimelineHandshakeResponse(
+            statusCode: 101,
+            statusText: "First"
+        )),
+        .connectionClosed,
+    ])
+    guard case let .handshakeResponse(handshakeResponse) = webSocket.timelineEntries[0].kind else {
+        Issue.record("Expected switching-protocols handshake response evidence.")
+        return
+    }
+    #expect(handshakeResponse.disposition == .switchingProtocols(
+        statusText: "First"
+    ))
     #expect(request.finishedOrFailedTimestamp == 3)
     #expect(request.responseReceivedTimestamp == 2)
+}
+
+@MainActor
+@Test
+func webSocketRejectedHandshakePreservesResponseWithoutOpeningAndOrdersTerminalEvidence() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("websocket-rejected-handshake")
+
+    await runtime.backend.emit(
+        .webSocket(.created(id: requestID, url: "wss://example.com/rejected")),
+        target: target
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    try await waitUntil { results.items.count == 1 }
+    let request = try #require(results.items.first)
+    await runtime.backend.emit(
+        .webSocket(.handshakeResponse(
+            id: requestID,
+            response: Network.Response(
+                url: "wss://example.com/rejected",
+                status: 403,
+                statusText: "Forbidden",
+                headers: ["content-type": "text/plain"]
+            ),
+            timestamp: 2
+        )),
+        target: target
+    )
+    try await waitUntil { request.webSocket?.timelineEntries.count == 1 }
+
+    let webSocket = try #require(request.webSocket)
+    #expect(webSocket.readyState == .connecting)
+    #expect(webSocket.handshakeResponse?.status == 403)
+    #expect(webSocket.handshakeResponse?.statusText == "Forbidden")
+    #expect(request.status == 403)
+    #expect(request.statusText == "Forbidden")
+    #expect(request.state == .responded)
+    #expect(webSocket.timelineEntries.map(\.kind) == [
+        .handshakeResponse(WebSocketTimelineHandshakeResponse(
+            statusCode: 403,
+            statusText: "Forbidden"
+        ))
+    ])
+    guard case let .handshakeResponse(handshakeResponse) = webSocket.timelineEntries[0].kind else {
+        Issue.record("Expected rejected handshake response evidence.")
+        return
+    }
+    #expect(handshakeResponse.disposition == .rejected(
+        statusCode: 403,
+        statusText: "Forbidden"
+    ))
+    #expect(webSocket.frames.isEmpty)
+
+    let indexSequence = context.networkRequestIndexSequenceForTesting
+    let eventSequence = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(
+        .webSocket(.handshakeResponse(
+            id: requestID,
+            response: Network.Response(status: 101, statusText: "Late Success"),
+            timestamp: 2.5
+        )),
+        target: target
+    )
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: eventSequence))
+    #expect(context.networkRequestIndexSequenceForTesting == indexSequence)
+    #expect(webSocket.handshakeResponse?.status == 403)
+    #expect(webSocket.timelineEntries.count == 1)
+
+    await runtime.backend.emit(
+        .webSocket(.error(id: requestID, message: "upgrade failed", timestamp: 3)),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.closed(id: requestID, timestamp: 4)),
+        target: target
+    )
+    try await waitUntil { webSocket.timelineEntries.count == 3 }
+    #expect(webSocket.timelineEntries.map(\.kind) == [
+        .handshakeResponse(WebSocketTimelineHandshakeResponse(
+            statusCode: 403,
+            statusText: "Forbidden"
+        )),
+        .error("upgrade failed"),
+        .connectionClosed,
+    ])
+    #expect(webSocket.readyState == .closed)
+    #expect(request.finishedOrFailedTimestamp == 4)
+    #expect(webSocket.frames.map(\.direction) == [.error("upgrade failed")])
+}
+
+@Test
+func webSocketHandshakeWithoutStatusIsUnreportedWithoutInventingMetadata() throws {
+    let webSocket = WebSocketState()
+
+    #expect(webSocket.applyHandshakeResponse(
+        Network.Response(status: nil, statusText: nil),
+        timestamp: nil,
+        lifecycleRevision: 7,
+        chronologySequence: 9
+    ))
+    #expect(webSocket.readyState == .connecting)
+    #expect(webSocket.handshakeResponse?.status == nil)
+    #expect(webSocket.handshakeResponse?.statusText == nil)
+    #expect(webSocket.timelineEntries == [WebSocketTimelineEntry(
+        id: .init(lifecycleRevision: 7, chronologySequence: 9),
+        timestamp: nil,
+        kind: .handshakeResponse(WebSocketTimelineHandshakeResponse(
+            statusCode: nil,
+            statusText: nil
+        ))
+    )])
+    guard case let .handshakeResponse(handshakeResponse) = webSocket.timelineEntries[0].kind else {
+        Issue.record("Expected unreported handshake response evidence.")
+        return
+    }
+    #expect(handshakeResponse.disposition == .unreported(statusText: nil))
+    #expect(webSocket.frames.isEmpty)
+}
+
+@Test
+func webSocketSwitchingProtocolsResponseFollowedByErrorNeverClaimsEstablished() throws {
+    let webSocket = WebSocketState()
+
+    #expect(webSocket.applyHandshakeResponse(
+        Network.Response(status: 101, statusText: "Switching Protocols"),
+        timestamp: 1,
+        lifecycleRevision: 2,
+        chronologySequence: 5
+    ))
+    #expect(webSocket.readyState == .connecting)
+    webSocket.appendError(
+        "Invalid Sec-WebSocket-Accept",
+        timestamp: 2,
+        lifecycleRevision: 2,
+        chronologySequence: 6
+    )
+    #expect(webSocket.readyState == .closed)
+    #expect(webSocket.close(
+        timestamp: 3,
+        lifecycleRevision: 2,
+        chronologySequence: 7
+    ))
+    #expect(webSocket.close(
+        timestamp: 4,
+        lifecycleRevision: 2,
+        chronologySequence: 8
+    ) == false)
+    #expect(webSocket.timelineEntries.map(\.kind) == [
+        .handshakeResponse(WebSocketTimelineHandshakeResponse(
+            statusCode: 101,
+            statusText: "Switching Protocols"
+        )),
+        .error("Invalid Sec-WebSocket-Accept"),
+        .connectionClosed,
+    ])
+    guard case let .handshakeResponse(handshakeResponse) = webSocket.timelineEntries[0].kind else {
+        Issue.record("Expected switching-protocols handshake response evidence.")
+        return
+    }
+    #expect(handshakeResponse.disposition == .switchingProtocols(
+        statusText: "Switching Protocols"
+    ))
+    #expect(webSocket.timelineEntries.contains { entry in
+        if case .connectionEstablished = entry.kind {
+            return true
+        }
+        return false
+    } == false)
+    #expect(webSocket.frames.map(\.direction) == [
+        .error("Invalid Sec-WebSocket-Accept")
+    ])
 }
 
 @MainActor
@@ -10526,7 +10768,7 @@ func activeDuplicateWebSocketCreatedPreservesStateIdentityAndTimeline() async th
         )),
         target: target
     )
-    try await waitUntil { request.webSocket?.timelineEntries.count == 2 }
+    try await waitUntil { request.webSocket?.timelineEntries.count == 3 }
     let originalState = try #require(request.webSocket)
     let originalTimeline = originalState.timelineEntries
 
@@ -10559,7 +10801,11 @@ func webSocketTimelineMapsEveryOpcodeWithoutTreatingNonTextAsText(opcode: Int) t
         chronologySequence: 9
     )
 
-    let entry = try #require(webSocket.timelineEntries.first)
+    #expect(webSocket.timelineEntries.count == 2)
+    #expect(webSocket.timelineEntries[0].kind == .connectionEstablished)
+    #expect(webSocket.timelineEntries[0].id.ordinalWithinEvent == 0)
+    let entry = try #require(webSocket.timelineEntries.last)
+    #expect(entry.id.ordinalWithinEvent == 1)
     guard case let .frame(frame) = entry.kind else {
         Issue.record("Expected a WebSocket frame timeline entry.")
         return
@@ -10573,7 +10819,11 @@ func webSocketTimelineMapsEveryOpcodeWithoutTreatingNonTextAsText(opcode: Int) t
     case 10: .pong
     default: .unknown(opcode)
     }
-    #expect(entry.id == .init(lifecycleRevision: 4, chronologySequence: 9))
+    #expect(entry.id == .init(
+        lifecycleRevision: 4,
+        chronologySequence: 9,
+        ordinalWithinEvent: 1
+    ))
     #expect(frame.kind == expectedKind)
     #expect(frame.payload == (opcode == 1 ? .text("text") : .base64Encoded("AQID")))
     #expect(frame.payloadLength == 3)

@@ -407,6 +407,8 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
                 accessibilityLabel: title,
                 accessibilityValue: time
             )
+        case let .handshakeResponse(response):
+            return handshakeResponseRowContent(response, time: time)
         case .error(let message):
             let error = localized("network.websocket.error", defaultValue: "Error")
             let subtitle = [error, time].joined(separator: " · ")
@@ -459,6 +461,67 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
             accessibilityLabel: title,
             accessibilityValue: subtitle
         )
+    }
+
+    private func handshakeResponseRowContent(
+        _ response: WebSocketTimelineHandshakeResponse,
+        time: String
+    ) -> RowContent {
+        let title: String
+        let symbolName: String
+        let style: RowContent.Style
+        switch response.disposition {
+        case .switchingProtocols, .unreported:
+            title = localized(
+                "network.websocket.handshake.response",
+                defaultValue: "WebSocket Handshake Response"
+            )
+            symbolName = "arrow.left.arrow.right"
+            style = .lifecycle
+        case .rejected:
+            title = localized(
+                "network.websocket.handshake.rejected",
+                defaultValue: "WebSocket Handshake Rejected"
+            )
+            symbolName = "exclamationmark.shield"
+            style = .error
+        }
+        let subtitle = [
+            handshakeStatusText(statusCode: response.statusCode, statusText: response.statusText),
+            time,
+        ].joined(separator: " · ")
+        return RowContent(
+            title: title,
+            subtitle: subtitle,
+            symbolName: symbolName,
+            style: style,
+            accessibilityLabel: title,
+            accessibilityValue: subtitle
+        )
+    }
+
+    private func handshakeStatusText(
+        statusCode: Int?,
+        statusText: String?
+    ) -> String {
+        let statusText = statusText?.isEmpty == false ? statusText : nil
+        switch (statusCode, statusText) {
+        case let (.some(statusCode), .some(statusText)):
+            return "\(statusCode) \(statusText)"
+        case let (.some(statusCode), .none):
+            return String(statusCode)
+        case let (.none, .some(statusText)):
+            let notReported = localized(
+                "network.websocket.status.not_reported",
+                defaultValue: "Status not reported"
+            )
+            return "\(notReported) · \(statusText)"
+        case (.none, .none):
+            return localized(
+                "network.websocket.status.not_reported",
+                defaultValue: "Status not reported"
+            )
+        }
     }
 
     private func directionText(_ direction: WebSocketTimelineFrame.Direction) -> String {
