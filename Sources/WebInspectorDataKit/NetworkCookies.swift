@@ -485,8 +485,10 @@ package enum NetworkCookieParser {
                 attributeName = trimmedAttribute
                 attributeValue = nil
             }
-            guard containsControlCharacter(attributeName) == false,
-                  attributeValue.map(containsControlCharacter) != true else {
+            guard containsProhibitedAttributeControlCharacter(
+                name: attributeName,
+                value: attributeValue
+            ) == false else {
                 return unparsedResponseReport(
                     rawHeaderValues: rawHeaderValues,
                     diagnostic: NetworkCookieParseDiagnostic(
@@ -622,6 +624,22 @@ fileprivate extension NetworkCookieParser {
         value.unicodeScalars.contains { scalar in
             scalar.value <= 0x1F || scalar.value == 0x7F
         }
+    }
+
+    static func containsProhibitedAttributeControlCharacter(
+        name: String,
+        value: String?
+    ) -> Bool {
+        guard containsControlCharacter(name) == false else {
+            return true
+        }
+        guard let value else {
+            return false
+        }
+        if lowercaseASCII(name) == "expires" {
+            return containsNonOWSControlCharacter(value)
+        }
+        return containsControlCharacter(value)
     }
 
     static func containsCombinedCookieCandidate(_ value: String) -> Bool {

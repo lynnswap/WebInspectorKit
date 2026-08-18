@@ -391,6 +391,7 @@ struct NetworkCookieParserTests {
         ("Wed, 09 Jun 69 10:18:14 GMT", 2069),
         ("Wed, 09 Jun 70 10:18:14 GMT", 1970),
         ("Wed, 09 Jun 2021 10:18:14 GMT", 2021),
+        ("Wed,\t09 Jun 2021 10:18:14 GMT", 2021),
         ("09th-Jun-2021 10:18:14GMT", 2021),
     ])
     func cookieDatesUseRFCDateTokens(_ rawValue: String, expectedYear: Int) throws {
