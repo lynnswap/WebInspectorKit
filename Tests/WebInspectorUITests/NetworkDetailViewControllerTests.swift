@@ -3199,7 +3199,7 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(context: context)
         let selectedRequest = try #require(context.registeredRequest(for: selectedRequestID))
         model.selectRequest(selectedRequest)
-        let frameScheduler = ManualNetworkListFrameScheduler()
+        let frameScheduler = ManualNetworkFrameScheduler()
         let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let listViewController = NetworkListViewController(
             model: model,
@@ -3291,7 +3291,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         let request = try #require(context.registeredRequest(for: requestID))
-        let frameScheduler = ManualNetworkListFrameScheduler()
+        let frameScheduler = ManualNetworkFrameScheduler()
         let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let listViewController = NetworkListViewController(
             model: model,
@@ -3627,7 +3627,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         _ = try #require(context.registeredRequest(for: initialRequestID))
-        let frameScheduler = ManualNetworkListFrameScheduler()
+        let frameScheduler = ManualNetworkFrameScheduler()
         let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let applyCompletionScheduler = ManualNetworkListSnapshotApplyCompletionScheduler()
         let listViewController = NetworkListViewController(
@@ -3727,7 +3727,7 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(context: context)
         let selectedRequest = try #require(context.registeredRequest(for: selectedRequestID))
         model.selectRequest(selectedRequest)
-        let frameScheduler = ManualNetworkListFrameScheduler()
+        let frameScheduler = ManualNetworkFrameScheduler()
         let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let listViewController = NetworkListViewController(
             model: model,
@@ -3961,7 +3961,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         let firstRequest = try #require(context.registeredRequest(for: firstRequestID))
-        let frameScheduler = ManualNetworkListFrameScheduler()
+        let frameScheduler = ManualNetworkFrameScheduler()
         let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let listViewController = NetworkListViewController(
             model: model,
@@ -4153,7 +4153,7 @@ struct NetworkDetailViewControllerTests {
             responseMimeType: "video/mp4"
         ))
         let model = NetworkPanelModel(context: context)
-        let frameScheduler = ManualNetworkListFrameScheduler()
+        let frameScheduler = ManualNetworkFrameScheduler()
         let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let applyCompletionScheduler = ManualNetworkListSnapshotApplyCompletionScheduler()
         let listViewController = NetworkListViewController(
@@ -6046,7 +6046,7 @@ private final class RecordingNetworkBodyPreviewViewController: UIViewController,
 }
 
 @MainActor
-private final class ManualNetworkListFrameScheduler: NetworkListFrameScheduling {
+private final class ManualNetworkFrameScheduler: NetworkFrameScheduling {
     private var pendingAction: (@MainActor () -> Void)?
     private(set) var scheduledFrameCount = 0
 
