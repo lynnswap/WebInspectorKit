@@ -7,6 +7,10 @@ import UIKit
 
 @MainActor
 package final class NetworkWebSocketPreviewViewController: UICollectionViewController {
+    private static let maximumRenderedTextPayloadCharacters = 2_048
+    private static let maximumTitleLineCount = 8
+    private static let textPayloadTruncationMarker = "…"
+
     package struct RequestEpoch: Hashable, Sendable {
         private let requestID: NetworkRequest.ID
         private let requestInstance: ObjectIdentifier
@@ -55,6 +59,7 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
     private var rowContents: [ItemID: RowContent] = [:]
     private var isRenderingActive = false
     private var wasFollowingTailWhenSuspended: Bool?
+    private var textPayloadCopyHandler: @MainActor (String) -> Void
     private lazy var dataSource = makeDataSource()
     private lazy var byteCountFormatter: ByteCountFormatter = {
         let formatter = ByteCountFormatter()
@@ -76,6 +81,9 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
 
     package init(frameScheduler: any NetworkFrameScheduling) {
         self.frameScheduler = frameScheduler
+        textPayloadCopyHandler = { payload in
+            UIPasteboard.general.string = payload
+        }
         super.init(collectionViewLayout: Self.makeLayout())
     }
 
@@ -175,6 +183,19 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
         applyEmptySnapshot()
     }
 
+    override package func collectionView(
+        _ collectionView: UICollectionView,
+        contextMenuConfigurationForItemsAt indexPaths: [IndexPath],
+        point: CGPoint
+    ) -> UIContextMenuConfiguration? {
+        guard indexPaths.count == 1,
+              let indexPath = indexPaths.first,
+              let itemID = dataSource.itemIdentifier(for: indexPath) else {
+            return nil
+        }
+        return contextMenuConfiguration(for: itemID)
+    }
+
     private static func makeLayout() -> UICollectionViewLayout {
         UICollectionViewCompositionalLayout.list(using: listLayoutConfiguration)
     }
@@ -198,7 +219,7 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
                 Self.clear(cell)
                 return
             }
-            configure(cell, with: content)
+            configure(cell, with: content, itemID: itemID)
         }
         return UICollectionViewDiffableDataSource<SectionID, ItemID>(
             collectionView: collectionView
@@ -448,7 +469,7 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
             guard case let .text(payload) = frame.payload else {
                 preconditionFailure("A text WebSocket frame must carry a text payload.")
             }
-            title = payload
+            title = Self.renderedTextPayload(payload)
         case .continuation, .binary, .close, .ping, .pong, .unknown:
             title = [frameKind, byteCountText(frame.payloadLength)].joined(separator: " · ")
         }
@@ -572,12 +593,34 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
         return "\(sign)\(magnitude.formatted(.number.precision(.fractionLength(2)))) s"
     }
 
-    private func configure(_ cell: UICollectionViewListCell, with content: RowContent) {
+    private static func renderedTextPayload(_ payload: String) -> String {
+        guard let truncationIndex = textPayloadTruncationIndex(in: payload) else {
+            return payload
+        }
+        return String(payload[..<truncationIndex]) + textPayloadTruncationMarker
+    }
+
+    private static func textPayloadTruncationIndex(in payload: String) -> String.Index? {
+        guard let index = payload.index(
+            payload.startIndex,
+            offsetBy: maximumRenderedTextPayloadCharacters,
+            limitedBy: payload.endIndex
+        ), index != payload.endIndex else {
+            return nil
+        }
+        return index
+    }
+
+    private func configure(
+        _ cell: UICollectionViewListCell,
+        with content: RowContent,
+        itemID: ItemID
+    ) {
         var configuration = UIListContentConfiguration.subtitleCell()
         configuration.text = content.title
         configuration.secondaryText = content.subtitle
         configuration.image = UIImage(systemName: content.symbolName)
-        configuration.textProperties.numberOfLines = 0
+        configuration.textProperties.numberOfLines = Self.maximumTitleLineCount
         configuration.secondaryTextProperties.numberOfLines = 0
         configuration.imageProperties.tintColor = tintColor(for: content.style)
         cell.contentConfiguration = configuration
@@ -586,6 +629,68 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
         cell.accessibilityTraits = .staticText
         cell.accessibilityLabel = content.accessibilityLabel
         cell.accessibilityValue = content.accessibilityValue
+        if copyableTextPayload(for: itemID) != nil {
+            cell.accessibilityCustomActions = [UIAccessibilityCustomAction(
+                name: copyActionTitle,
+                image: UIImage(systemName: "doc.on.doc")
+            ) { [weak self] _ in
+                self?.copyTextPayload(for: itemID) ?? false
+            }]
+        } else {
+            cell.accessibilityCustomActions = nil
+        }
+    }
+
+    private func contextMenuConfiguration(for itemID: ItemID) -> UIContextMenuConfiguration? {
+        guard copyableTextPayload(for: itemID) != nil else {
+            return nil
+        }
+        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
+            guard let self, copyableTextPayload(for: itemID) != nil else {
+                return nil
+            }
+            return UIMenu(children: [copyTextPayloadAction(for: itemID)])
+        }
+    }
+
+    private func copyTextPayloadAction(for itemID: ItemID) -> UIAction {
+        UIAction(
+            title: copyActionTitle,
+            image: UIImage(systemName: "doc.on.doc")
+        ) { [weak self] _ in
+            _ = self?.copyTextPayload(for: itemID)
+        }
+    }
+
+    private var copyActionTitle: String {
+        localized("Copy", defaultValue: "Copy")
+    }
+
+    private func copyTextPayload(for itemID: ItemID) -> Bool {
+        guard isRenderingActive,
+              viewIfLoaded?.window != nil,
+              let payload = copyableTextPayload(for: itemID) else {
+            return false
+        }
+        textPayloadCopyHandler(payload)
+        return true
+    }
+
+    private func copyableTextPayload(for itemID: ItemID) -> String? {
+        guard case let .timeline(epoch, entryID) = itemID,
+              requestEpoch == epoch,
+              let entry = webSocket?.timelineEntry(for: entryID),
+              case let .frame(frame) = entry.kind,
+              frame.kind == .text else {
+            return nil
+        }
+        guard case let .text(payload) = frame.payload else {
+            preconditionFailure("A text WebSocket frame must carry a text payload.")
+        }
+        guard Self.textPayloadTruncationIndex(in: payload) != nil else {
+            return nil
+        }
+        return payload
     }
 
     private func tintColor(for style: RowContent.Style) -> UIColor {
@@ -606,6 +711,7 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
         cell.accessories = []
         cell.accessibilityLabel = nil
         cell.accessibilityValue = nil
+        cell.accessibilityCustomActions = nil
     }
 
     private func localized(
@@ -620,6 +726,14 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
 extension NetworkWebSocketPreviewViewController {
     package static var listLayoutConfigurationForTesting: UICollectionLayoutListConfiguration {
         listLayoutConfiguration
+    }
+
+    package static var maximumRenderedTextPayloadCharactersForTesting: Int {
+        maximumRenderedTextPayloadCharacters
+    }
+
+    package static var maximumTitleLineCountForTesting: Int {
+        maximumTitleLineCount
     }
 
     package var timelineObservationDeliveryForTesting: PortableObservationTracking.Token? {
@@ -640,6 +754,18 @@ extension NetworkWebSocketPreviewViewController {
 
     package func rowContentForTesting(_ itemID: ItemID) -> RowContent? {
         rowContents[itemID]
+    }
+
+    package func contextMenuConfigurationForTesting(
+        _ itemID: ItemID
+    ) -> UIContextMenuConfiguration? {
+        contextMenuConfiguration(for: itemID)
+    }
+
+    package func setTextPayloadCopyHandlerForTesting(
+        _ handler: @escaping @MainActor (String) -> Void
+    ) {
+        textPayloadCopyHandler = handler
     }
 
     package var boundRequestForTesting: NetworkRequest? {
