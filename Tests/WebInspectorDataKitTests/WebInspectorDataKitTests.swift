@@ -11622,6 +11622,97 @@ func legacyWebSocketFramesProjectionPublishesTimelineChangesThroughObservation()
     ])
 }
 
+@Test
+func legacyWebSocketFramesProjectionObservesOnlyIncomingFrameAndErrorEntries() throws {
+    let webSocket = WebSocketState()
+    let firstFrame = WebSocketState.Frame(
+        direction: .received,
+        opcode: 1,
+        mask: false,
+        payloadData: "hello",
+        payloadLength: 5,
+        timestamp: 2
+    )
+    let error = WebSocketState.Frame(
+        direction: .error("boom"),
+        errorMessage: "boom",
+        timestamp: 3
+    )
+
+    let firstFrameObservation = SynchronousObservationProbe()
+    withObservationTracking {
+        _ = webSocket.frames
+    } onChange: {
+        firstFrameObservation.markChanged()
+    }
+    #expect(webSocket.applyHandshakeResponse(
+        Network.Response(status: 101, statusText: "Switching Protocols"),
+        timestamp: 1,
+        lifecycleRevision: 4,
+        chronologySequence: 1
+    ))
+    #expect(firstFrameObservation.hasChanged == false)
+    #expect(webSocket.frames.isEmpty)
+
+    webSocket.appendFrame(
+        Network.WebSocketFrame(
+            opcode: 1,
+            mask: false,
+            payloadData: "hello",
+            payloadLength: 5
+        ),
+        direction: .received,
+        timestamp: 2,
+        lifecycleRevision: 4,
+        chronologySequence: 2
+    )
+    #expect(firstFrameObservation.hasChanged)
+    #expect(webSocket.timelineEntries.map(\.kind) == [
+        .handshakeResponse(WebSocketTimelineHandshakeResponse(
+            statusCode: 101,
+            statusText: "Switching Protocols"
+        )),
+        .connectionEstablished,
+        .frame(WebSocketTimelineFrame(
+            direction: .received,
+            kind: .text,
+            payload: .text("hello"),
+            payloadLength: 5,
+            isMasked: false
+        )),
+    ])
+    #expect(webSocket.frames == [firstFrame])
+
+    let errorObservation = SynchronousObservationProbe()
+    withObservationTracking {
+        _ = webSocket.frames
+    } onChange: {
+        errorObservation.markChanged()
+    }
+    webSocket.appendError(
+        "boom",
+        timestamp: 3,
+        lifecycleRevision: 4,
+        chronologySequence: 3
+    )
+    #expect(errorObservation.hasChanged)
+    #expect(webSocket.frames == [firstFrame, error])
+
+    let closeObservation = SynchronousObservationProbe()
+    withObservationTracking {
+        _ = webSocket.frames
+    } onChange: {
+        closeObservation.markChanged()
+    }
+    #expect(webSocket.close(
+        timestamp: 4,
+        lifecycleRevision: 4,
+        chronologySequence: 4
+    ))
+    #expect(closeObservation.hasChanged == false)
+    #expect(webSocket.frames == [firstFrame, error])
+}
+
 @MainActor
 @Test
 func closedWebSocketCannotFetchResponseBodyOrSendProtocolCommand() async throws {
