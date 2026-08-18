@@ -21,6 +21,7 @@ final class NetworkDetailRequestPickerViewController: UICollectionViewController
     private let model: NetworkPanelModel
     private var boundEntryID: NetworkListEntry.ID
     private var modelObservation: PortableObservationTracking.Token?
+    private var isRenderingActive = false
     private var searchText = ""
     private lazy var dataSource = makeDataSource()
 
@@ -125,6 +126,8 @@ final class NetworkDetailRequestPickerViewController: UICollectionViewController
     }
 
     private func startObservingSelection() {
+        isRenderingActive = true
+        setVisibleCellRenderingActive(true)
         modelObservation?.cancel()
         modelObservation = withPortableContinuousObservation { [weak self] event in
             guard let self else {
@@ -143,6 +146,8 @@ final class NetworkDetailRequestPickerViewController: UICollectionViewController
     }
 
     private func stopObservingSelection() {
+        isRenderingActive = false
+        setVisibleCellRenderingActive(false)
         modelObservation?.cancel()
         modelObservation = nil
     }
@@ -212,44 +217,27 @@ final class NetworkDetailRequestPickerViewController: UICollectionViewController
     }
 
     private func makeDataSource() -> UICollectionViewDiffableDataSource<Section, ItemID> {
-        let registration = UICollectionView.CellRegistration<UICollectionViewListCell, ItemID> {
+        let registration = UICollectionView.CellRegistration<NetworkDetailRequestPickerCell, ItemID> {
             [weak self] cell, _, itemID in
             guard let self else {
-                cell.contentConfiguration = nil
-                cell.accessories = []
+                cell.unbind()
                 return
             }
 
-            var content = UIListContentConfiguration.subtitleCell()
             switch itemID {
             case .entry(let entryID):
                 guard entryID == boundEntryID else {
                     preconditionFailure("The Network request picker received an entry from another binding.")
                 }
-                content.text = String(
-                    localized: "network.filter.all",
-                    bundle: WebInspectorUILocalization.bundle
-                )
-                content.secondaryText = nil
+                cell.bindAllRequests(renderingActive: isRenderingActive)
             case .request(let requestID):
                 guard model.entryID(containing: requestID) == boundEntryID,
                       let request = model.request(for: requestID) else {
-                    cell.contentConfiguration = nil
-                    cell.accessories = []
+                    cell.unbind()
                     return
                 }
-                content.text = request.displayName
-                content.secondaryText = request.url
-                content.secondaryTextProperties.numberOfLines = 1
+                cell.bind(request: request, renderingActive: isRenderingActive)
             }
-            cell.contentConfiguration = content
-            cell.configurationUpdateHandler = { cell, state in
-                guard let cell = cell as? UICollectionViewListCell else {
-                    return
-                }
-                cell.accessories = state.isSelected ? [.checkmark()] : []
-            }
-            cell.setNeedsUpdateConfiguration()
         }
 
         return UICollectionViewDiffableDataSource<Section, ItemID>(
@@ -260,6 +248,12 @@ final class NetworkDetailRequestPickerViewController: UICollectionViewController
                 for: indexPath,
                 item: itemID
             )
+        }
+    }
+
+    private func setVisibleCellRenderingActive(_ isActive: Bool) {
+        for case let cell as NetworkDetailRequestPickerCell in collectionView.visibleCells {
+            cell.setRenderingActive(isActive)
         }
     }
 

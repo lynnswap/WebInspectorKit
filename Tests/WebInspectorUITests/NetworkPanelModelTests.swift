@@ -1,3 +1,4 @@
+import Foundation
 import ObservationBridge
 import Testing
 @testable import WebInspectorDataKit
@@ -1353,6 +1354,88 @@ func groupedEntryAndExplicitMemberSelectionsHaveDistinctScopes() async throws {
     #expect(model.selectedEntryID == stableID)
     #expect(model.selectedRequest?.id == secondID)
     #expect(model.selectedEntryRequests.map(\.id) == [firstID, secondID])
+}
+
+@Test
+@MainActor
+func removedExplicitRequestClearsSelectionInsteadOfSelectingGroupedSibling() async throws {
+    let context = makeContext()
+    let frameID = FrameID("main-frame")
+    let nodeID = DOM.Node.ID("selection-removal")
+    context.apply(WebInspectorTargetLifecycleEvent.frameNavigated(WebInspectorPageFrameLifecycle(
+        id: frameID,
+        parentID: nil,
+        pageBindingID: "page",
+        loaderID: "loader",
+        name: "Main",
+        url: "https://example.test",
+        securityOrigin: "https://example.test",
+        mimeType: "text/html"
+    )))
+    let firstID = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "selection-removal-first",
+        frameID: frameID,
+        loaderID: "loader",
+        pageBindingID: "page",
+        initiatorNodeID: nodeID,
+        timestamp: 1
+    )
+    let secondID = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "selection-removal-second",
+        frameID: frameID,
+        loaderID: "loader",
+        pageBindingID: "page",
+        initiatorNodeID: nodeID,
+        timestamp: 2
+    )
+    await applyLoadingFinished(
+        to: context,
+        requestID: "selection-removal-second",
+        timestamp: 2.5
+    )
+    #expect(context.registeredRequest(for: secondID)?.state == .finished)
+    let model = NetworkPanelModel(context: context)
+    let groupedEntryID = try #require(model.entryID(containing: firstID))
+    var rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    model.requests.updateFetchDescriptor(WebInspectorFetchDescriptor(
+        predicate: #Predicate { request in
+            request.method == "GET"
+        }
+    ))
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+
+    model.selectRequest(context.registeredRequest(for: secondID))
+    let fullRebuildBaseline = model.fullEntryRebuildCountForTesting
+    rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    let secondProxyID = Network.Request.ID("selection-removal-second")
+    await context.apply(.requestWillBeSent(
+        id: secondProxyID,
+        request: Network.Request(
+            id: secondProxyID,
+            url: "https://example.test/selection-removal-second",
+            method: "POST",
+            origin: Network.Request.Origin(
+                frameID: frameID,
+                loaderID: "loader",
+                targetID: "page"
+            )
+        ),
+        initiator: Network.Initiator(kind: "other", nodeID: nodeID),
+        resourceType: .fetch,
+        redirectResponse: nil,
+        timestamp: 3
+    ))
+    #expect(context.registeredRequest(for: secondID)?.method == "POST")
+
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+    #expect(model.fullEntryRebuildCountForTesting == fullRebuildBaseline)
+    #expect(model.entry(for: groupedEntryID)?.requests.map(\.id) == [firstID])
+    #expect(model.entryID(containing: secondID) == nil)
+    #expect(context.registeredRequest(for: secondID) != nil)
+    #expect(model.selection == nil)
+    #expect(model.selectedRequest == nil)
 }
 
 @Test

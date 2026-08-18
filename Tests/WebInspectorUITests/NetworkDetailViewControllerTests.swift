@@ -3962,6 +3962,76 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func requestPickerCellTracksLiveRequestAndDetachesOldBinding() async throws {
+        let context = makeContext()
+        let firstRequest = try #require(await applyRequest(
+            to: context,
+            requestID: "picker-cell-first",
+            url: "https://example.com/first.json"
+        ))
+        let secondRequest = try #require(await applyRequest(
+            to: context,
+            requestID: "picker-cell-second",
+            url: "https://example.com/second.json"
+        ))
+        let cell = NetworkDetailRequestPickerCell(
+            frame: CGRect(x: 0, y: 0, width: 390, height: 44)
+        )
+        cell.bind(request: firstRequest, renderingActive: true)
+        let firstObservation = try #require(cell.requestObservationForTesting)
+        let firstRenderedValue = await firstObservation.values {
+            [cell.titleForTesting, cell.subtitleForTesting]
+        }
+        defer { firstRenderedValue.cancel() }
+
+        _ = await applyRequest(
+            to: context,
+            requestID: "picker-cell-first",
+            url: "https://example.com/first-updated.json"
+        )
+
+        #expect(await firstRenderedValue.waitUntilValue([
+            "first-updated.json",
+            "https://example.com/first-updated.json",
+        ]))
+
+        cell.bind(request: secondRequest, renderingActive: true)
+        #expect(firstObservation.isActive == false)
+        #expect(cell.observedRequestForTesting === secondRequest)
+        #expect(cell.titleForTesting == "second.json")
+        let secondObservation = try #require(cell.requestObservationForTesting)
+        let secondRenderedValue = await secondObservation.values {
+            [cell.titleForTesting, cell.subtitleForTesting]
+        }
+        defer { secondRenderedValue.cancel() }
+
+        _ = await applyRequest(
+            to: context,
+            requestID: "picker-cell-first",
+            url: "https://example.com/stale-first.json"
+        )
+
+        #expect(cell.titleForTesting == "second.json")
+        #expect(cell.subtitleForTesting == "https://example.com/second.json")
+
+        _ = await applyRequest(
+            to: context,
+            requestID: "picker-cell-second",
+            url: "https://example.com/second-updated.json"
+        )
+
+        #expect(await secondRenderedValue.waitUntilValue([
+            "second-updated.json",
+            "https://example.com/second-updated.json",
+        ]))
+
+        cell.prepareForReuse()
+        #expect(secondObservation.isActive == false)
+        #expect(cell.observedRequestForTesting == nil)
+        #expect(cell.titleForTesting == nil)
+    }
+
+    @Test
     func requestPickerUsesStableEntryAndRequestItemsWithSearch() async throws {
         let context = makeContext()
         let frameID = FrameID("main-frame")
