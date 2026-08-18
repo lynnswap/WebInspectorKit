@@ -83,6 +83,7 @@ package final class NetworkDetailViewController: UIViewController {
     private var isRenderingActive = false
     private var isBodyRenderingActive = false
     private lazy var bodyViewController = makeBodyViewController(scrollEdgeController)
+    private lazy var securityViewController = NetworkSecurityViewController()
     private lazy var modeControlController: NetworkDetailModeControlController = {
         let controller = NetworkDetailModeControlController(initialMode: mode)
         controller.selectionHandler = { [weak self] mode in
@@ -159,13 +160,13 @@ package final class NetworkDetailViewController: UIViewController {
 
     override package func viewDidLoad() {
         super.viewDidLoad()
+        installContentViews()
         applyBackgroundFromTraits()
         if #available(iOS 26.0, *) {
             webInspectorRegisterForBackgroundTraitChanges { viewController in
                 viewController.applyBackgroundFromTraits()
             }
         }
-        installContentViews()
         installModeTitleView()
         scrollEdgeController.install(previewRoleControlContainerView: previewRoleControlController.containerView)
     }
@@ -282,18 +283,25 @@ package final class NetworkDetailViewController: UIViewController {
         view.backgroundColor = backgroundColor
         bodyViewController.view.backgroundColor = backgroundColor
         headersTextView.backgroundColor = backgroundColor
+        securityViewController.view.backgroundColor = backgroundColor
+        securityViewController.collectionView.backgroundColor = backgroundColor
     }
 
     private func installContentViews() {
         addChild(bodyViewController)
+        addChild(securityViewController)
         view.addSubview(bodyViewController.view)
         view.addSubview(previewRoleControlController.containerView)
         view.addSubview(headersTextView)
+        view.addSubview(securityViewController.view)
         bodyViewController.view.translatesAutoresizingMaskIntoConstraints = false
         bodyViewController.view.isHidden = true
         bodyViewController.view.accessibilityIdentifier = "WebInspector.Network.DetailPreview"
         previewRoleControlController.containerView.translatesAutoresizingMaskIntoConstraints = false
+        securityViewController.view.translatesAutoresizingMaskIntoConstraints = false
+        securityViewController.view.isHidden = true
         bodyViewController.didMove(toParent: self)
+        securityViewController.didMove(toParent: self)
 
         let bodyTopToPreviewContainerConstraint = bodyViewController.view.topAnchor.constraint(
             equalTo: view.topAnchor
@@ -322,6 +330,14 @@ package final class NetworkDetailViewController: UIViewController {
             headersTextView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
             headersTextView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
             headersTextView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            securityViewController.view.topAnchor.constraint(equalTo: view.topAnchor),
+            securityViewController.view.leadingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.leadingAnchor
+            ),
+            securityViewController.view.trailingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.trailingAnchor
+            ),
+            securityViewController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
     }
 
@@ -485,6 +501,29 @@ package final class NetworkDetailViewController: UIViewController {
                 }
                 renderHeadersSurface(request: request)
             }
+        case .security:
+            renderSecuritySurface(
+                request: activeRequest(for: selection, requests: requests)
+            )
+        }
+    }
+
+    private func activeRequest(
+        for selection: NetworkPanelSelection,
+        requests: [NetworkRequest]
+    ) -> NetworkRequest {
+        switch selection {
+        case .entry:
+            guard let request = requests.first else {
+                preconditionFailure("A selected Network entry must contain at least one request.")
+            }
+            return request
+        case .request:
+            guard requests.count == 1,
+                  let request = requests.first else {
+                preconditionFailure("An explicit Network request selection must render exactly one request.")
+            }
+            return request
         }
     }
 
@@ -512,6 +551,16 @@ package final class NetworkDetailViewController: UIViewController {
         title = request.displayName
         showHeaders()
         headersTextView.render(request: request)
+    }
+
+    private func renderSecuritySurface(request: NetworkRequest) {
+        observedRequest = request
+        title = request.displayName
+        showSecurity()
+        securityViewController.render(
+            request.securitySummary,
+            epoch: NetworkSecurityRequestEpoch(request: request)
+        )
     }
 
     private func setMode(_ nextMode: NetworkDetailViewController.Mode) {
@@ -621,6 +670,8 @@ package final class NetworkDetailViewController: UIViewController {
         previewRoleControlController.containerView.isHidden = true
         headersTextView.isHidden = true
         headersTextView.clear()
+        securityViewController.view.isHidden = true
+        securityViewController.clear()
         renderPreviewRoleControl(roles: [], selectedRole: nil)
         scrollEdgeController.contentScrollView = nil
 
@@ -636,6 +687,7 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func showPreview() {
         headersTextView.isHidden = true
+        securityViewController.view.isHidden = true
         bodyViewController.view.isHidden = false
     }
 
@@ -647,7 +699,22 @@ package final class NetworkDetailViewController: UIViewController {
         scrollEdgeController.isPreviewRoleControlVisible = false
         bodyViewController.setSurface(.none)
         headersTextView.isHidden = false
+        securityViewController.view.isHidden = true
         scrollEdgeController.contentScrollView = headersTextView.contentScrollView
+    }
+
+    private func showSecurity() {
+        setBodyRenderingActive(false)
+        bodyViewController.view.isHidden = true
+        bodyViewController.setSurface(.none)
+        unbindResponseBodyFetchObservation()
+        previewRoleControlController.containerView.isHidden = true
+        renderPreviewRoleControl(roles: [], selectedRole: nil)
+        updatePreviewRoleControlLayout(isVisible: false)
+        scrollEdgeController.isPreviewRoleControlVisible = false
+        headersTextView.isHidden = true
+        securityViewController.view.isHidden = false
+        scrollEdgeController.contentScrollView = securityViewController.collectionView
     }
 
     private func renderPreview(candidate: PreviewCandidate) {
@@ -1041,6 +1108,10 @@ extension NetworkDetailViewController {
         headersTextView
     }
 
+    var securityViewControllerForTesting: NetworkSecurityViewController {
+        securityViewController
+    }
+
     var bodyViewControllerForTesting: NetworkBodyPreviewViewController {
         bodyViewController
     }
@@ -1059,6 +1130,26 @@ extension NetworkDetailViewController {
 
     var isDetailModeControlEnabledForTesting: Bool {
         modeControlController.isEnabledForTesting
+    }
+
+    var detailModeControlViewForTesting: NetworkDetailModeControlView {
+        modeControlController.view
+    }
+
+    var detailModeControlPresentationForTesting: NetworkDetailModeControlView.Presentation {
+        modeControlController.presentationForTesting
+    }
+
+    var detailModeSegmentedControlForTesting: UISegmentedControl {
+        modeControlController.segmentedControlForTesting
+    }
+
+    var detailModeMenuButtonForTesting: UIButton {
+        modeControlController.menuButtonForTesting
+    }
+
+    var detailModeMenuActionTitlesForTesting: [String] {
+        modeControlController.menuActionTitlesForTesting
     }
 
     var isPreviewRoleControlHiddenForTesting: Bool {

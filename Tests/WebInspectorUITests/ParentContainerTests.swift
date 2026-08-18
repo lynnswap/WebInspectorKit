@@ -1308,7 +1308,19 @@ struct ParentContainerTests {
         let compactDetailViewController = try #require(
             compactNavigationController.viewControllers.last as? NetworkDetailViewController
         )
-        compactDetailViewController.setModeForTesting(.preview)
+        compactDetailViewController.setModeForTesting(.security)
+        let compactSecurityViewController = compactDetailViewController.securityViewControllerForTesting
+        #expect(await waitUntilNetworkDetailRendered(in: compactDetailViewController) {
+            compactSecurityViewController.snapshotForTesting.itemIdentifiers.contains(where: {
+                $0.kind == .disclosure(.dnsNames)
+            })
+        })
+        await withCheckedContinuation { continuation in
+            compactSecurityViewController.toggleDisclosureForTesting(.dnsNames) {
+                continuation.resume()
+            }
+        }
+        #expect(compactSecurityViewController.expandedListsForTesting == [.dnsNames])
         let selectedEntryID = try #require(model.entryID(containing: request.id))
         #expect(model.selection == .request(entryID: selectedEntryID, requestID: request.id))
 
@@ -1332,11 +1344,15 @@ struct ParentContainerTests {
         detailViewController.loadViewIfNeeded()
 
         #expect(detailViewController === compactDetailViewController)
-        #expect(detailViewController.currentModeForTesting == .preview)
+        #expect(detailViewController.currentModeForTesting == .security)
+        #expect(detailViewController.securityViewControllerForTesting === compactSecurityViewController)
+        #expect(compactSecurityViewController.expandedListsForTesting == [.dnsNames])
         #expect(model.selection == .request(entryID: selectedEntryID, requestID: request.id))
 
         let didRenderDetail = await waitUntilNetworkDetailRendered(in: detailViewController) {
-            detailViewController.previewRequestIDForTesting == request.id
+            compactSecurityViewController.snapshotForTesting.itemIdentifiers.contains(where: {
+                $0.kind == .dnsName(6)
+            })
         }
         #expect(didRenderDetail)
     }
@@ -1403,6 +1419,13 @@ struct ParentContainerTests {
                     statusText: "OK",
                     mimeType: "text/javascript",
                     headers: ["content-type": "text/javascript"]
+                ).reporting(
+                    security: WebInspectorProxyKit.Network.Security(
+                        certificate: WebInspectorProxyKit.Network.Security.Certificate(
+                            subject: "example.com",
+                            dnsNames: (0..<7).map { "host-\($0).example.com" }
+                        )
+                    )
                 ),
                 resourceType: .script,
                 timestamp: 2
