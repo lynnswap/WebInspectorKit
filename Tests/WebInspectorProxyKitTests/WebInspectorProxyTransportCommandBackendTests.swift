@@ -1809,7 +1809,7 @@ func transportBackendDecodesNetworkResponseEventForTargetRoute() async throws {
         transport,
         targetID: ProtocolTarget.ID("page-main"),
         method: "Network.responseReceived",
-        params: #"{"requestId":"request-1","frameId":"main-frame","loaderId":"main-loader","type":"Document","response":{"url":"https://example.test/","status":200,"statusText":"OK","mimeType":"text/html","headers":{"content-type":"text/html"},"source":"network"},"timestamp":12.5}"#
+        params: #"{"requestId":"request-1","frameId":"main-frame","loaderId":"main-loader","type":"Document","response":{"url":"https://example.test/","status":200,"statusText":"OK","mimeType":"text/html","headers":{"content-type":"text/html"},"source":"network","security":{"connection":{"protocol":"TLS 1.3","cipher":"","futureConnectionField":true},"certificate":{"subject":"","validFrom":1700000000.125,"validUntil":1800000000,"dnsNames":["www.example.test","example.test"],"ipAddresses":[],"futureCertificateField":"ignored"},"futureSecurityField":42}},"timestamp":12.5}"#
     )
 
     let event = try #require(try await value(of: eventTask))
@@ -1822,6 +1822,13 @@ func transportBackendDecodesNetworkResponseEventForTargetRoute() async throws {
     #expect(response.status == 200)
     #expect(response.headers["content-type"] == "text/html")
     #expect(response.source == Network.Source(rawValue: "network"))
+    #expect(response.security?.connection?.tlsProtocol == "TLS 1.3")
+    #expect(response.security?.connection?.cipher == "")
+    #expect(response.security?.certificate?.subject == "")
+    #expect(response.security?.certificate?.validFrom == Date(timeIntervalSince1970: 1_700_000_000.125))
+    #expect(response.security?.certificate?.validUntil == Date(timeIntervalSince1970: 1_800_000_000))
+    #expect(response.security?.certificate?.dnsNames == ["www.example.test", "example.test"])
+    #expect(response.security?.certificate?.ipAddresses == [])
     #expect(
         response.origin == Network.Request.Origin(
             frameID: FrameID("main-frame"),
@@ -1860,8 +1867,85 @@ func transportBackendDecodesNetworkResponseEventWithoutType() async throws {
     }
     #expect(id == Network.Request.ID("request-1"))
     #expect(response.url == "https://example.test/")
+    #expect(response.security == nil)
     #expect(resourceType == nil)
     #expect(timestamp == 12.5)
+}
+
+@Test
+func transportBackendPreservesPresentEmptyNetworkSecurity() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+
+    let eventTask = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        var events: [Network.Event] = []
+        for _ in 0..<3 {
+            guard let event = await iterator.next() else {
+                break
+            }
+            events.append(event)
+        }
+        return events
+    }
+
+    await waitForEventSubscription(target, domain: .network)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Network.responseReceived",
+        params: #"{"requestId":"request-empty-security","frameId":"main-frame","loaderId":"main-loader","response":{"url":"https://example.test/","status":200,"headers":{},"security":{}},"timestamp":12.5}"#
+    )
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Network.responseReceived",
+        params: #"{"requestId":"request-empty-nested-security","frameId":"main-frame","loaderId":"main-loader","response":{"url":"https://example.test/","status":200,"headers":{},"security":{"connection":{},"certificate":{}}},"timestamp":13}"#
+    )
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Network.loadingFinished",
+        params: #"{"requestId":"request-empty-security","timestamp":14,"metrics":{"securityConnection":{}}}"#
+    )
+
+    let events = try await value(of: eventTask)
+    #expect(events.count == 3)
+    guard events.count == 3 else {
+        return
+    }
+    guard case let .responseReceived(_, response, _, _) = events[0] else {
+        Issue.record("Expected Network.responseReceived.")
+        return
+    }
+    let security = try #require(response.security)
+    #expect(security.connection == nil)
+    #expect(security.certificate == nil)
+
+    guard case let .responseReceived(_, nestedResponse, _, _) = events[1] else {
+        Issue.record("Expected a second Network.responseReceived.")
+        return
+    }
+    let nestedSecurity = try #require(nestedResponse.security)
+    let emptyConnection = try #require(nestedSecurity.connection)
+    let emptyCertificate = try #require(nestedSecurity.certificate)
+    #expect(emptyConnection.tlsProtocol == nil)
+    #expect(emptyConnection.cipher == nil)
+    #expect(emptyCertificate.subject == nil)
+    #expect(emptyCertificate.validFrom == nil)
+    #expect(emptyCertificate.validUntil == nil)
+    #expect(emptyCertificate.dnsNames == nil)
+    #expect(emptyCertificate.ipAddresses == nil)
+
+    guard case let .loadingFinished(_, _, _, metrics) = events[2] else {
+        Issue.record("Expected Network.loadingFinished.")
+        return
+    }
+    let emptyMetricsConnection = try #require(metrics?.securityConnection)
+    #expect(emptyMetricsConnection.tlsProtocol == nil)
+    #expect(emptyMetricsConnection.cipher == nil)
 }
 
 @Test
@@ -3000,7 +3084,7 @@ func transportBackendFiltersEventsByRoute() async throws {
         transport,
         targetID: ProtocolTarget.ID("frame-target"),
         method: "Network.loadingFinished",
-        params: #"{"requestId":"frame-request","timestamp":4,"sourceMapURL":"frame.js.map","metrics":{"protocol":"h2","remoteAddress":"203.0.113.10:443","responseBodyBytesReceived":128,"responseBodyDecodedSize":256}}"#
+        params: #"{"requestId":"frame-request","timestamp":4,"sourceMapURL":"frame.js.map","metrics":{"protocol":"h2","remoteAddress":"203.0.113.10:443","responseBodyBytesReceived":128,"responseBodyDecodedSize":256,"securityConnection":{"protocol":"TLS 1.3","cipher":"AES_128_GCM_SHA256","futureConnectionField":true}}}"#
     )
 
     let frameEvent = try #require(try await value(of: frameEventTask))
@@ -3015,6 +3099,8 @@ func transportBackendFiltersEventsByRoute() async throws {
     #expect(metrics?.remoteAddress == "203.0.113.10:443")
     #expect(metrics?.encodedDataLength == 128)
     #expect(metrics?.decodedBodyLength == 256)
+    #expect(metrics?.securityConnection?.tlsProtocol == "TLS 1.3")
+    #expect(metrics?.securityConnection?.cipher == "AES_128_GCM_SHA256")
 
     pageEventTask.cancel()
 }

@@ -74,6 +74,9 @@ public struct NetworkResponseSnapshot: Equatable, Sendable {
     /// Request headers associated with the response, if reported.
     public let requestHeaders: [String: String]?
 
+    /// Security metadata captured with this response, if WebKit reported it.
+    public let security: Network.Security?
+
     /// Creates a response snapshot.
     public init(
         url: String? = nil,
@@ -82,7 +85,8 @@ public struct NetworkResponseSnapshot: Equatable, Sendable {
         mimeType: String? = nil,
         headers: [String: String] = [:],
         source: String? = nil,
-        requestHeaders: [String: String]? = nil
+        requestHeaders: [String: String]? = nil,
+        security: Network.Security? = nil
     ) {
         self.url = url
         self.status = status
@@ -91,6 +95,7 @@ public struct NetworkResponseSnapshot: Equatable, Sendable {
         self.headers = headers
         self.source = source
         self.requestHeaders = requestHeaders
+        self.security = security
     }
 
     init(_ response: Network.Response) {
@@ -101,7 +106,8 @@ public struct NetworkResponseSnapshot: Equatable, Sendable {
             mimeType: response.mimeType,
             headers: response.headers,
             source: response.source?.rawValue,
-            requestHeaders: response.requestHeaders
+            requestHeaders: response.requestHeaders,
+            security: response.security
         )
     }
 }
@@ -930,6 +936,13 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     /// Final transfer metrics, if WebKit reported them.
     public private(set) var metrics: Network.Metrics?
 
+    /// Security metadata reported by WebKit for the current response.
+    ///
+    /// A missing value means WebKit did not report security metadata. It does
+    /// not imply an unencrypted connection, certificate trust, or certificate
+    /// validity.
+    public private(set) var security: Network.Security?
+
     /// Redirect hops that led to the current request.
     public private(set) var redirects: [RedirectHop]
 
@@ -999,6 +1012,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         decodedDataLength = 0
         encodedDataLength = 0
         metrics = nil
+        security = nil
         redirects = []
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
         requestBody = NetworkBody.makeRequestBody(for: request)
@@ -1168,6 +1182,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         decodedDataLength = 0
         encodedDataLength = 0
         metrics = nil
+        security = nil
         redirects = []
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
         requestBody = NetworkBody.makeRequestBody(for: request)
@@ -1208,6 +1223,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         decodedDataLength = 0
         encodedDataLength = 0
         metrics = nil
+        security = nil
         requestBody = NetworkBody.makeRequestBody(for: request)
         responseBody.resetForResponse(fallbackURL: currentRequest.url)
         allowsMultipartContinuation = false
@@ -1235,6 +1251,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         mimeType = response.mimeType
         responseSource = response.source?.rawValue
         responseHeaders = response.headers
+        security = response.security
         if let requestHeaders = response.requestHeaders {
             self.requestHeaders = requestHeaders
             currentRequest = requestWithHeaders(requestHeaders)
@@ -1263,6 +1280,10 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     func finish(timestamp: Double, sourceMapURL: String?, metrics: Network.Metrics?) {
         self.sourceMapURL = sourceMapURL
         self.metrics = metrics
+        if let securityConnection = metrics?.securityConnection {
+            security = security?.merging(connection: securityConnection)
+                ?? Network.Security(connection: securityConnection)
+        }
         if let encodedDataLength = metrics?.encodedDataLength {
             self.encodedDataLength = max(0, encodedDataLength)
         }
@@ -1313,6 +1334,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         decodedDataLength = bodySize
         encodedDataLength = bodySize
         metrics = nil
+        security = response.security
         redirects = []
         requestBody = NetworkBody.makeRequestBody(for: currentRequest)
         responseBody.resetForResponse(response, fallbackURL: currentRequest.url)
@@ -1348,6 +1370,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         responseURL = nil
         mimeType = nil
         responseSource = nil
+        security = nil
         if let timestamp {
             requestSentTimestamp = timestamp
         }

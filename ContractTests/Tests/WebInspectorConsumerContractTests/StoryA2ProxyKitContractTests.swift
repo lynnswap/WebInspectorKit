@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import WebInspectorProxyKit
 import WebInspectorProxyKitTesting
@@ -66,4 +67,36 @@ func webInspectorProxyNetworkEventsMulticastToConsumerSubscribers() async throws
     #expect(secondType == .fetch)
     #expect(firstTimestamp == 42)
     #expect(secondTimestamp == 42)
+}
+
+@Test
+func webInspectorProxySecurityMetadataIsConstructibleAndReadableByConsumers() {
+    let validFrom = Date(timeIntervalSince1970: 1_700_000_000)
+    let validUntil = Date(timeIntervalSince1970: 1_800_000_000)
+    let security = Network.Security(
+        connection: Network.Security.Connection(
+            tlsProtocol: "TLS 1.3",
+            cipher: "AES_128_GCM_SHA256"
+        ),
+        certificate: Network.Security.Certificate(
+            subject: "example.com",
+            validFrom: validFrom,
+            validUntil: validUntil,
+            dnsNames: ["example.com"],
+            ipAddresses: []
+        )
+    )
+    let response = Network.Response(security: security)
+    let metrics = Network.Metrics(
+        securityConnection: Network.Security.Connection(tlsProtocol: "TLS 1.3")
+    )
+
+    #expect(response.security?.connection?.tlsProtocol == "TLS 1.3")
+    #expect(response.security?.connection?.cipher == "AES_128_GCM_SHA256")
+    #expect(response.security?.certificate?.subject == "example.com")
+    #expect(response.security?.certificate?.validFrom == validFrom)
+    #expect(response.security?.certificate?.validUntil == validUntil)
+    #expect(response.security?.certificate?.dnsNames == ["example.com"])
+    #expect(response.security?.certificate?.ipAddresses == [])
+    #expect(metrics.securityConnection?.tlsProtocol == "TLS 1.3")
 }

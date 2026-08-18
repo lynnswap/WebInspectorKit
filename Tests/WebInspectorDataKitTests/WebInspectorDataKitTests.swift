@@ -2051,6 +2051,9 @@ func closeAfterAttachedClearsAttachmentBackedModels() async throws {
     let target = try await runtime.proxy.waitForCurrentPage()
     let documentID = DOM.Node.ID("document")
     let requestID = Network.Request.ID("request-1")
+    let requestSecurity = Network.Security(
+        connection: Network.Security.Connection(tlsProtocol: "TLS 1.3")
+    )
     let runtimeContextID = Runtime.ExecutionContext.ID("main")
     let networkResults: WebInspectorFetchedResults<NetworkRequest>
     let consoleResults: WebInspectorFetchedResults<ConsoleMessage>
@@ -2078,6 +2081,15 @@ func closeAfterAttachedClearsAttachmentBackedModels() async throws {
         target: target
     )
     await runtime.backend.emit(
+        .responseReceived(
+            id: requestID,
+            response: Network.Response(status: 200, security: requestSecurity),
+            resourceType: .script,
+            timestamp: 1.5
+        ),
+        target: target
+    )
+    await runtime.backend.emit(
         .messageAdded(Console.Message(
             source: Console.Source(rawValue: "console-api"),
             level: Console.Level(rawValue: "warning"),
@@ -2092,6 +2104,7 @@ func closeAfterAttachedClearsAttachmentBackedModels() async throws {
     )
     try await waitUntil {
         networkResults.items.count == 1
+            && networkResults.items.first?.security == requestSecurity
             && consoleResults.items.count == 1
             && context.executionContexts.count == 1
     }
@@ -2111,6 +2124,7 @@ func closeAfterAttachedClearsAttachmentBackedModels() async throws {
     #expect(context.node(for: DOMNode.ID(documentID)) == nil)
     #expect(context.registeredRequest(for: request.id) == nil)
     #expect(networkResults.items.isEmpty)
+    #expect(request.security == requestSecurity)
     #expect(context.registeredMessage(for: message.id) == nil)
     #expect(consoleResults.items.isEmpty)
     #expect(context.executionContexts.isEmpty)
@@ -3026,9 +3040,17 @@ func currentPageProcessTerminationInterruptsPickerAndRetargetsWithoutClearingNet
         method: "Network.requestWillBeSent",
         params: #"{"requestId":"destroy-retained-request","frameId":"main-frame","loaderId":"loader-1","request":{"url":"https://example.test/retained","method":"GET"},"initiator":{"type":"other"},"type":"Fetch","timestamp":1}"#
     )
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: oldTargetID,
+        method: "Network.responseReceived",
+        params: #"{"requestId":"destroy-retained-request","frameId":"main-frame","loaderId":"loader-1","type":"Fetch","response":{"url":"https://example.test/retained","status":200,"headers":{},"security":{"connection":{"protocol":"TLS 1.3"},"certificate":{"subject":"retained.example.test"}}},"timestamp":1.5}"#
+    )
     try await waitUntil {
         networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)]
+            && networkResults.items.first?.security?.certificate?.subject == "retained.example.test"
     }
+    let retainedRequest = try #require(networkResults.items.first)
 
     let interruptedPickerMessageCount = await backend.sentTargetMessages().count
     let interruptedPickerTask = Task { @MainActor in
@@ -3051,6 +3073,8 @@ func currentPageProcessTerminationInterruptsPickerAndRetargetsWithoutClearingNet
     #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("destroyed-root")))
     #expect(context.isElementPickerEnabled == false)
     #expect(networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)])
+    #expect(networkResults.items.first === retainedRequest)
+    #expect(retainedRequest.security?.connection?.tlsProtocol == "TLS 1.3")
     await installTransportPageTarget(in: transport, targetID: newTargetID)
 
     try await replyTransportInspectorAndPageInitialization(
@@ -3123,6 +3147,8 @@ func currentPageProcessTerminationInterruptsPickerAndRetargetsWithoutClearingNet
     #expect(context.state == .attached)
     #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("reattached-root")))
     #expect(networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)])
+    #expect(networkResults.items.first === retainedRequest)
+    #expect(retainedRequest.security?.certificate?.subject == "retained.example.test")
 
     let pickerMessageCount = await backend.sentTargetMessages().count
     let pickerTask = Task { @MainActor in
@@ -3751,9 +3777,12 @@ func frameDetachmentRetainsNetworkHistoryAndLateTerminalEvents() async throws {
         transport,
         targetID: targetID,
         method: "Network.responseReceived",
-        params: #"{"requestId":"detached-request","frameId":"child-frame","loaderId":"child-loader","type":"Fetch","response":{"url":"https://example.test/detached-request","status":200,"statusText":"OK","headers":{},"mimeType":"text/plain","source":"network"},"timestamp":1.5}"#
+        params: #"{"requestId":"detached-request","frameId":"child-frame","loaderId":"child-loader","type":"Fetch","response":{"url":"https://example.test/detached-request","status":200,"statusText":"OK","headers":{},"mimeType":"text/plain","source":"network","security":{"connection":{"protocol":"TLS 1.2","cipher":"AES_128_GCM_SHA256"},"certificate":{"subject":"detached.example.test","dnsNames":["detached.example.test"]}}},"timestamp":1.5}"#
     )
-    try await waitUntil { retainedRequest.status == 200 }
+    try await waitUntil {
+        retainedRequest.status == 200
+            && retainedRequest.security?.certificate?.subject == "detached.example.test"
+    }
 
     await receiveTransportTargetEvent(
         transport,
@@ -3765,12 +3794,16 @@ func frameDetachmentRetainsNetworkHistoryAndLateTerminalEvents() async throws {
         transport,
         targetID: targetID,
         method: "Network.loadingFinished",
-        params: #"{"requestId":"detached-request","timestamp":2}"#
+        params: #"{"requestId":"detached-request","timestamp":2,"metrics":{"securityConnection":{"protocol":"TLS 1.3"}}}"#
     )
     try await waitUntil { retainedRequest.state == .finished }
 
     #expect(results.items == [retainedRequest])
     #expect(retainedRequest.navigationVisit == retainedVisit)
+    #expect(retainedRequest.security?.connection?.tlsProtocol == "TLS 1.3")
+    #expect(retainedRequest.security?.connection?.cipher == "AES_128_GCM_SHA256")
+    #expect(retainedRequest.security?.certificate?.subject == "detached.example.test")
+    #expect(retainedRequest.security?.certificate?.dnsNames == ["detached.example.test"])
 
     await emitTransportNetworkRequest(
         id: "reused-detached-frame",
@@ -6297,6 +6330,84 @@ func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
     #expect(reusedRequest.id == firstModelID)
     #expect(reusedRequest.url == "https://example.com/reused")
     #expect(context.registeredRequest(for: firstModelID) === reusedRequest)
+}
+
+@MainActor
+@Test
+func clearNetworkRequestsPreservesRetainedSecurityWithoutLeakingIntoReusedID() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let requestID = Network.Request.ID("clear-security-request")
+    let initialSecurity = Network.Security(
+        connection: Network.Security.Connection(tlsProtocol: "TLS 1.2")
+    )
+
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: requestID,
+            request: Network.Request(
+                id: requestID,
+                url: "https://example.com/before-clear",
+                method: "GET"
+            ),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 1
+        ),
+        target: target
+    )
+    await runtime.backend.emit(
+        .responseReceived(
+            id: requestID,
+            response: Network.Response(status: 200, security: initialSecurity),
+            resourceType: .fetch,
+            timestamp: 2
+        ),
+        target: target
+    )
+    try await waitUntil { results.items.first?.security == initialSecurity }
+    let retainedRequest = try #require(results.items.first)
+
+    context.clearNetworkRequests()
+    #expect(results.items.isEmpty)
+    #expect(retainedRequest.security == initialSecurity)
+
+    let lateEventBaseline = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(
+        .loadingFinished(
+            id: requestID,
+            timestamp: 3,
+            sourceMapURL: nil,
+            metrics: Network.Metrics(
+                securityConnection: Network.Security.Connection(tlsProtocol: "TLS 1.3")
+            )
+        ),
+        target: target
+    )
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: lateEventBaseline))
+    #expect(results.items.isEmpty)
+    #expect(retainedRequest.security == initialSecurity)
+
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: requestID,
+            request: Network.Request(
+                id: requestID,
+                url: "https://example.com/after-clear",
+                method: "GET"
+            ),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 4
+        ),
+        target: target
+    )
+    try await waitUntil { results.items.count == 1 }
+    let reusedRequest = try #require(results.items.first)
+    #expect(reusedRequest !== retainedRequest)
+    #expect(reusedRequest.security == nil)
+    #expect(retainedRequest.security == initialSecurity)
 }
 
 @MainActor
@@ -9419,6 +9530,13 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("request-1")
+    let certificate = Network.Security.Certificate(
+        subject: "example.com",
+        validFrom: Date(timeIntervalSince1970: 1_700_000_000),
+        validUntil: Date(timeIntervalSince1970: 1_800_000_000),
+        dnsNames: ["example.com"],
+        ipAddresses: []
+    )
 
     await runtime.backend.emit(
         .requestWillBeSent(
@@ -9444,7 +9562,14 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
                 statusText: "OK",
                 mimeType: "application/json",
                 headers: ["Content-Type": "application/json"],
-                source: Network.Source(rawValue: "network")
+                source: Network.Source(rawValue: "network"),
+                security: Network.Security(
+                    connection: Network.Security.Connection(
+                        tlsProtocol: "TLS 1.2",
+                        cipher: "AES_128_GCM_SHA256"
+                    ),
+                    certificate: certificate
+                )
             ),
             resourceType: .fetch,
             timestamp: 2
@@ -9456,7 +9581,14 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
         target: target
     )
     await runtime.backend.emit(
-        .loadingFinished(id: requestID, timestamp: 4, sourceMapURL: nil, metrics: nil),
+        .loadingFinished(
+            id: requestID,
+            timestamp: 4,
+            sourceMapURL: nil,
+            metrics: Network.Metrics(
+                securityConnection: Network.Security.Connection(tlsProtocol: "TLS 1.3")
+            )
+        ),
         target: target
     )
 
@@ -9483,6 +9615,9 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
     #expect(request.finishedOrFailedTimestamp == 4)
     #expect(request.decodedDataLength == 12)
     #expect(request.encodedDataLength == 5)
+    #expect(request.security?.connection?.tlsProtocol == "TLS 1.3")
+    #expect(request.security?.connection?.cipher == "AES_128_GCM_SHA256")
+    #expect(request.security?.certificate == certificate)
     #expect(context.registeredRequest(for: request.id) === request)
 }
 
@@ -9492,6 +9627,9 @@ func responseReceivedWithoutRequestWillBeSentCreatesRequest() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("response-first-request")
+    let responseSecurity = Network.Security(
+        connection: Network.Security.Connection(tlsProtocol: "TLS 1.3")
+    )
 
     await runtime.backend.emit(
         .responseReceived(
@@ -9503,7 +9641,8 @@ func responseReceivedWithoutRequestWillBeSentCreatesRequest() async throws {
                 mimeType: "text/css",
                 headers: ["Content-Type": "text/css"],
                 source: Network.Source(rawValue: "network"),
-                requestHeaders: ["Accept": "text/css"]
+                requestHeaders: ["Accept": "text/css"],
+                security: responseSecurity
             ),
             resourceType: .stylesheet,
             timestamp: 2
@@ -9536,6 +9675,7 @@ func responseReceivedWithoutRequestWillBeSentCreatesRequest() async throws {
     #expect(request.finishedOrFailedTimestamp == 4)
     #expect(request.requestHeaders["Accept"] == "text/css")
     #expect(request.responseHeaders["Content-Type"] == "text/css")
+    #expect(request.security == responseSecurity)
     #expect(request.decodedDataLength == 9)
     #expect(request.encodedDataLength == 4)
 }
@@ -9667,6 +9807,89 @@ func loadingFinishedClampsNegativeMetricTotals() async throws {
 
 @MainActor
 @Test
+func loadingFinishedWithoutSecurityConnectionPreservesResponseSecurity() throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let requestID = Network.Request.ID("security-without-completion-connection")
+    let security = Network.Security(
+        connection: Network.Security.Connection(
+            tlsProtocol: "TLS 1.3",
+            cipher: "AES_128_GCM_SHA256"
+        ),
+        certificate: Network.Security.Certificate(subject: "example.com")
+    )
+    let request = NetworkRequest(
+        request: Network.Request(
+            id: requestID,
+            url: "https://example.com/security",
+            method: "GET"
+        ),
+        initiator: nil,
+        resourceType: .fetch,
+        timestamp: 1,
+        modelContext: context
+    )
+
+    request.applyResponse(
+        Network.Response(status: 200, security: security),
+        resourceType: .fetch,
+        timestamp: 2
+    )
+    request.finish(timestamp: 3, sourceMapURL: nil, metrics: Network.Metrics())
+
+    #expect(request.security == security)
+
+    let emptyCompletionRequestID = Network.Request.ID("empty-completion-security-connection")
+    let emptyCompletionRequest = NetworkRequest(
+        request: Network.Request(
+            id: emptyCompletionRequestID,
+            url: "https://example.com/empty-completion-security",
+            method: "GET"
+        ),
+        initiator: nil,
+        resourceType: .fetch,
+        timestamp: 4,
+        modelContext: context
+    )
+    emptyCompletionRequest.finish(
+        timestamp: 5,
+        sourceMapURL: nil,
+        metrics: Network.Metrics(securityConnection: Network.Security.Connection())
+    )
+    let emptyCompletionSecurity = try #require(emptyCompletionRequest.security)
+    let emptyConnection = try #require(emptyCompletionSecurity.connection)
+    #expect(emptyConnection.tlsProtocol == nil)
+    #expect(emptyConnection.cipher == nil)
+    #expect(emptyCompletionSecurity.certificate == nil)
+}
+
+@MainActor
+@Test(arguments: [
+    "https://example.com/security-not-reported",
+    "http://example.com/security-not-reported",
+])
+func networkSecurityDoesNotInferTransportStateFromURLScheme(_ url: String) throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let requestID = Network.Request.ID(url)
+    let request = NetworkRequest(
+        request: Network.Request(id: requestID, url: url, method: "GET"),
+        initiator: nil,
+        resourceType: .fetch,
+        timestamp: 1,
+        modelContext: context
+    )
+
+    #expect(request.security == nil)
+    request.applyResponse(
+        Network.Response(url: url, status: 200),
+        resourceType: .fetch,
+        timestamp: 2
+    )
+    request.finish(timestamp: 3, sourceMapURL: nil, metrics: Network.Metrics())
+    #expect(request.security == nil)
+}
+
+@MainActor
+@Test
 func multipartContinuationPreservesFinishedLifecycleAcrossLaterParts() throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
     let requestID = Network.Request.ID("multipart-continuation")
@@ -9682,18 +9905,23 @@ func multipartContinuationPreservesFinishedLifecycleAcrossLaterParts() throws {
         modelContext: context
     )
     let responseBody = request.responseBody
+    let firstSecurity = Network.Security(
+        connection: Network.Security.Connection(tlsProtocol: "TLS 1.3")
+    )
 
     request.applyResponse(
         Network.Response(
             url: "https://example.com/camera",
             status: 200,
-            mimeType: "MULTIPART/X-MIXED-REPLACE"
+            mimeType: "MULTIPART/X-MIXED-REPLACE",
+            security: firstSecurity
         ),
         resourceType: .image,
         timestamp: 2
     )
     request.finish(timestamp: 3, sourceMapURL: nil, metrics: nil)
     responseBody.load(Network.Body(data: "first part", base64Encoded: false))
+    #expect(request.security == firstSecurity)
 
     request.applyResponse(
         Network.Response(
@@ -9712,6 +9940,7 @@ func multipartContinuationPreservesFinishedLifecycleAcrossLaterParts() throws {
     #expect(request.responseReceivedTimestamp == 4)
     #expect(request.mimeType == "image/jpeg")
     #expect(request.responseHeaders["X-Part"] == "2")
+    #expect(request.security == nil)
     #expect(responseBody.phase == .available)
     #expect(responseBody.full == nil)
     #expect(request.canFetchResponseBody)
@@ -9731,6 +9960,10 @@ func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("redirected-request")
+    let redirectSecurity = Network.Security(
+        connection: Network.Security.Connection(tlsProtocol: "TLS 1.3"),
+        certificate: Network.Security.Certificate(subject: "redirect.example.com")
+    )
 
     await runtime.backend.emit(
         .requestWillBeSent(
@@ -9751,7 +9984,8 @@ func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
                 statusText: "Found",
                 mimeType: "text/html",
                 headers: ["Location": "https://example.com/final"],
-                source: Network.Source(rawValue: "network")
+                source: Network.Source(rawValue: "network"),
+                security: redirectSecurity
             ),
             resourceType: .document,
             timestamp: 2
@@ -9769,7 +10003,7 @@ func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
             id: requestID,
             request: Network.Request(id: requestID, url: "https://example.com/final", method: "GET"),
             resourceType: .document,
-            redirectResponse: Network.Response(status: 302),
+            redirectResponse: Network.Response(status: 302, security: redirectSecurity),
             timestamp: 3
         ),
         target: target
@@ -9785,6 +10019,7 @@ func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
     #expect(request.mimeType == nil)
     #expect(request.responseSource == nil)
     #expect(request.responseHeaders.isEmpty)
+    #expect(request.security == nil)
     #expect(request.requestSentTimestamp == 3)
     #expect(request.responseReceivedTimestamp == nil)
     #expect(request.lastDataReceivedTimestamp == nil)
@@ -9796,6 +10031,7 @@ func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
     #expect(request.redirects.count == 1)
     #expect(request.redirects.first?.request.url == "https://example.com/redirect")
     #expect(request.redirects.first?.response.status == 302)
+    #expect(request.redirects.first?.response.security == redirectSecurity)
     #expect(request.redirects.first?.timestamp == 3)
 }
 
@@ -9884,7 +10120,11 @@ func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws
             id: requestID,
             timestamp: 2,
             sourceMapURL: "first.map",
-            metrics: Network.Metrics(encodedDataLength: 20, decodedBodyLength: 40)
+            metrics: Network.Metrics(
+                encodedDataLength: 20,
+                decodedBodyLength: 40,
+                securityConnection: Network.Security.Connection(tlsProtocol: "TLS 1.3")
+            )
         ),
         target: target
     )
@@ -9893,6 +10133,7 @@ func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws
     try await waitUntil { results.items.first?.state == .finished }
     let request = try #require(results.items.first)
     #expect(request.lifecycleRevision == 0)
+    #expect(request.security?.connection?.tlsProtocol == "TLS 1.3")
 
     await runtime.backend.emit(
         .requestWillBeSent(
@@ -9915,6 +10156,7 @@ func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws
     #expect(request.finishedOrFailedTimestamp == nil)
     #expect(request.sourceMapURL == nil)
     #expect(request.metrics == nil)
+    #expect(request.security == nil)
     #expect(request.initiator?.nodeID == DOM.Node.ID("42"))
     #expect(request.lifecycleRevision == 1)
 }
@@ -9961,6 +10203,10 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("cached-request")
+    let security = Network.Security(
+        connection: Network.Security.Connection(tlsProtocol: "TLS 1.3"),
+        certificate: Network.Security.Certificate(subject: "example.com")
+    )
 
     await runtime.backend.emit(
         .requestServedFromMemoryCache(
@@ -9973,7 +10219,8 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
                 headers: ["Content-Type": "text/css"],
                 source: Network.Source(rawValue: "network"),
                 requestHeaders: ["Accept": "text/css"],
-                bodySize: 2048
+                bodySize: 2048,
+                security: security
             ),
             initiator: Network.Initiator(kind: "other", nodeID: DOM.Node.ID("23")),
             resourceType: .stylesheet,
@@ -10003,9 +10250,64 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
     #expect(request.finishedOrFailedTimestamp == 5)
     #expect(request.decodedDataLength == 2048)
     #expect(request.encodedDataLength == 2048)
+    #expect(request.security == security)
     #expect(request.responseBody.phase == .available)
     #expect(request.initiator?.nodeID == DOM.Node.ID("23"))
     #expect(context.registeredRequest(for: request.id) === request)
+}
+
+@MainActor
+@Test
+func memoryCacheSecurityReplacesExistingResponseSummary() throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let requestID = Network.Request.ID("memory-cache-security-replacement")
+    let request = NetworkRequest(
+        request: Network.Request(
+            id: requestID,
+            url: "https://example.com/cached.css",
+            method: "GET"
+        ),
+        initiator: nil,
+        resourceType: .stylesheet,
+        timestamp: 1,
+        modelContext: context
+    )
+    request.applyResponse(
+        Network.Response(
+            status: 200,
+            security: Network.Security(
+                connection: Network.Security.Connection(tlsProtocol: "TLS 1.2")
+            )
+        ),
+        resourceType: .stylesheet,
+        timestamp: 2
+    )
+    let cachedSecurity = Network.Security(
+        certificate: Network.Security.Certificate(subject: "cached.example.com")
+    )
+
+    request.applyMemoryCache(
+        response: Network.Response(
+            url: "https://example.com/cached.css",
+            status: 200,
+            security: cachedSecurity
+        ),
+        initiator: Network.Initiator(kind: "other"),
+        resourceType: .stylesheet,
+        timestamp: 3
+    )
+    #expect(request.security == cachedSecurity)
+
+    request.applyMemoryCache(
+        response: Network.Response(
+            url: "https://example.com/cached.css",
+            status: 200
+        ),
+        initiator: Network.Initiator(kind: "other"),
+        resourceType: .stylesheet,
+        timestamp: 4
+    )
+    #expect(request.security == nil)
 }
 
 @MainActor
@@ -10071,6 +10373,9 @@ func webSocketCreatedPreservesExistingNetworkLifecycleMetadata() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("websocket-created-after-request")
+    let responseSecurity = Network.Security(
+        connection: Network.Security.Connection(tlsProtocol: "TLS 1.3")
+    )
 
     await runtime.backend.emit(
         .requestWillBeSent(
@@ -10094,7 +10399,8 @@ func webSocketCreatedPreservesExistingNetworkLifecycleMetadata() async throws {
                 status: 101,
                 statusText: "Switching Protocols",
                 headers: ["Upgrade": "websocket"],
-                requestHeaders: ["Upgrade": "websocket"]
+                requestHeaders: ["Upgrade": "websocket"],
+                security: responseSecurity
             ),
             resourceType: .webSocket,
             timestamp: 2
@@ -10116,6 +10422,7 @@ func webSocketCreatedPreservesExistingNetworkLifecycleMetadata() async throws {
         target: target
     )
     try await waitUntil { request.url == "wss://example.com/socket?created" }
+    #expect(request.security == responseSecurity)
     await runtime.backend.emit(
         .webSocket(.handshakeRequest(
             id: requestID,
@@ -10129,6 +10436,7 @@ func webSocketCreatedPreservesExistingNetworkLifecycleMetadata() async throws {
         )),
         target: target
     )
+    try await waitUntil { request.state == .pending && request.security == nil }
     await runtime.backend.emit(
         .webSocket(.handshakeResponse(
             id: requestID,
@@ -10167,6 +10475,10 @@ func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("websocket-lifecycle")
+    let handshakeSecurity = Network.Security(
+        connection: Network.Security.Connection(tlsProtocol: "TLS 1.3"),
+        certificate: Network.Security.Certificate(subject: "example.com")
+    )
 
     await runtime.backend.emit(
         .webSocket(.created(id: requestID, url: "wss://example.com/socket")),
@@ -10204,7 +10516,8 @@ func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
                 status: 101,
                 statusText: "Switching Protocols",
                 headers: ["Upgrade": "websocket"],
-                requestHeaders: ["Upgrade": "websocket"]
+                requestHeaders: ["Upgrade": "websocket"],
+                security: handshakeSecurity
             ),
             timestamp: 2
         )),
@@ -10214,6 +10527,8 @@ func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
         request.webSocket?.readyState == .open && request.state == .responded
     }
     #expect(request.webSocket?.handshakeResponse?.status == 101)
+    #expect(request.webSocket?.handshakeResponse?.security == handshakeSecurity)
+    #expect(request.security == handshakeSecurity)
     #expect(request.status == 101)
     #expect(request.responseHeaders["Upgrade"] == "websocket")
     #expect(request.requestHeaders["Upgrade"] == "websocket")

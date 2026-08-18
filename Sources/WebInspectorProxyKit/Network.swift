@@ -189,6 +189,83 @@ public enum Network {
         }
     }
 
+    /// Security metadata reported by WebKit for a network response.
+    ///
+    /// Missing properties remain `nil`, while reported empty strings and
+    /// arrays are preserved. This value does not infer certificate trust,
+    /// certificate validity, or whether a request used an encrypted transport.
+    public struct Security: Equatable, Sendable {
+        /// Security connection metadata reported by WebKit.
+        public struct Connection: Equatable, Sendable {
+            /// The negotiated TLS protocol, if WebKit reported one.
+            public let tlsProtocol: String?
+
+            /// The negotiated cipher, if WebKit reported one.
+            public let cipher: String?
+
+            /// Creates security connection metadata.
+            public init(tlsProtocol: String? = nil, cipher: String? = nil) {
+                self.tlsProtocol = tlsProtocol
+                self.cipher = cipher
+            }
+        }
+
+        /// Certificate metadata reported by WebKit.
+        public struct Certificate: Equatable, Sendable {
+            /// The certificate subject, if WebKit reported one.
+            public let subject: String?
+
+            /// The certificate validity start date, if WebKit reported one.
+            public let validFrom: Date?
+
+            /// The certificate validity end date, if WebKit reported one.
+            public let validUntil: Date?
+
+            /// DNS names listed on the certificate, if WebKit reported them.
+            public let dnsNames: [String]?
+
+            /// IP addresses listed on the certificate, if WebKit reported them.
+            public let ipAddresses: [String]?
+
+            /// Creates certificate metadata.
+            public init(
+                subject: String? = nil,
+                validFrom: Date? = nil,
+                validUntil: Date? = nil,
+                dnsNames: [String]? = nil,
+                ipAddresses: [String]? = nil
+            ) {
+                self.subject = subject
+                self.validFrom = validFrom
+                self.validUntil = validUntil
+                self.dnsNames = dnsNames
+                self.ipAddresses = ipAddresses
+            }
+        }
+
+        /// Connection metadata reported by WebKit, if present.
+        public let connection: Connection?
+
+        /// Certificate metadata reported by WebKit, if present.
+        public let certificate: Certificate?
+
+        /// Creates response security metadata.
+        public init(connection: Connection? = nil, certificate: Certificate? = nil) {
+            self.connection = connection
+            self.certificate = certificate
+        }
+
+        package func merging(connection completion: Connection) -> Security {
+            Security(
+                connection: Connection(
+                    tlsProtocol: completion.tlsProtocol ?? connection?.tlsProtocol,
+                    cipher: completion.cipher ?? connection?.cipher
+                ),
+                certificate: certificate
+            )
+        }
+    }
+
     /// A network response payload reported by WebKit.
     public struct Response: Sendable {
         /// The response URL.
@@ -215,6 +292,12 @@ public enum Network {
         /// The response body size, if reported.
         public let bodySize: Int?
 
+        /// Security metadata for the response, if WebKit reported it.
+        ///
+        /// A missing value is not evidence that the response used an
+        /// unencrypted transport.
+        public let security: Security?
+
         /// Protocol-reported request membership for events that create a
         /// response without a preceding request payload.
         package let origin: Request.Origin?
@@ -228,7 +311,8 @@ public enum Network {
             headers: [String: String] = [:],
             source: Source? = nil,
             requestHeaders: [String: String]? = nil,
-            bodySize: Int? = nil
+            bodySize: Int? = nil,
+            security: Security? = nil
         ) {
             self.url = url
             self.status = status
@@ -238,6 +322,7 @@ public enum Network {
             self.source = source
             self.requestHeaders = requestHeaders
             self.bodySize = bodySize
+            self.security = security
             origin = nil
         }
 
@@ -250,6 +335,7 @@ public enum Network {
             source: Source? = nil,
             requestHeaders: [String: String]? = nil,
             bodySize: Int? = nil,
+            security: Security? = nil,
             origin: Request.Origin?
         ) {
             self.url = url
@@ -260,6 +346,7 @@ public enum Network {
             self.source = source
             self.requestHeaders = requestHeaders
             self.bodySize = bodySize
+            self.security = security
             self.origin = origin
         }
     }
@@ -303,19 +390,24 @@ public enum Network {
         /// Decoded body bytes.
         public let decodedBodyLength: Int?
 
+        /// Security connection metadata observed when loading completed.
+        public let securityConnection: Security.Connection?
+
         /// Creates network transfer metrics.
         public init(
             timestamp: Double? = nil,
             networkProtocol: String? = nil,
             remoteAddress: String? = nil,
             encodedDataLength: Int? = nil,
-            decodedBodyLength: Int? = nil
+            decodedBodyLength: Int? = nil,
+            securityConnection: Security.Connection? = nil
         ) {
             self.timestamp = timestamp
             self.networkProtocol = networkProtocol
             self.remoteAddress = remoteAddress
             self.encodedDataLength = encodedDataLength
             self.decodedBodyLength = decodedBodyLength
+            self.securityConnection = securityConnection
         }
     }
 

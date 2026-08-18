@@ -799,6 +799,7 @@ private struct ResponsePayload: Decodable {
     var mimeType: String?
     var source: String?
     var requestHeaders: [String: String]?
+    var security: SecurityPayload?
 
     func proxyResponse(
         fallbackURL: String?,
@@ -814,7 +815,52 @@ private struct ResponsePayload: Decodable {
             source: source.map(Network.Source.init(rawValue:)),
             requestHeaders: requestHeaders,
             bodySize: bodySize,
+            security: security?.proxySecurity,
             origin: origin
+        )
+    }
+}
+
+private struct SecurityPayload: Decodable {
+    var connection: SecurityConnectionPayload?
+    var certificate: SecurityCertificatePayload?
+
+    var proxySecurity: Network.Security {
+        Network.Security(
+            connection: connection?.proxyConnection,
+            certificate: certificate?.proxyCertificate
+        )
+    }
+}
+
+private struct SecurityConnectionPayload: Decodable {
+    var tlsProtocol: String?
+    var cipher: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case tlsProtocol = "protocol"
+        case cipher
+    }
+
+    var proxyConnection: Network.Security.Connection {
+        Network.Security.Connection(tlsProtocol: tlsProtocol, cipher: cipher)
+    }
+}
+
+private struct SecurityCertificatePayload: Decodable {
+    var subject: String?
+    var validFrom: Double?
+    var validUntil: Double?
+    var dnsNames: [String]?
+    var ipAddresses: [String]?
+
+    var proxyCertificate: Network.Security.Certificate {
+        Network.Security.Certificate(
+            subject: subject,
+            validFrom: validFrom.map { Date(timeIntervalSince1970: $0) },
+            validUntil: validUntil.map { Date(timeIntervalSince1970: $0) },
+            dnsNames: dnsNames,
+            ipAddresses: ipAddresses
         )
     }
 }
@@ -824,12 +870,14 @@ private struct MetricsPayload: Decodable {
     var remoteAddress: String?
     var responseBodyBytesReceived: Int?
     var responseBodyDecodedSize: Int?
+    var securityConnection: SecurityConnectionPayload?
 
     enum CodingKeys: String, CodingKey {
         case networkProtocol = "protocol"
         case remoteAddress
         case responseBodyBytesReceived
         case responseBodyDecodedSize
+        case securityConnection
     }
 
     func proxyMetrics(timestamp: Double) -> Network.Metrics {
@@ -838,7 +886,8 @@ private struct MetricsPayload: Decodable {
             networkProtocol: networkProtocol,
             remoteAddress: remoteAddress,
             encodedDataLength: responseBodyBytesReceived,
-            decodedBodyLength: responseBodyDecodedSize
+            decodedBodyLength: responseBodyDecodedSize,
+            securityConnection: securityConnection?.proxyConnection
         )
     }
 }
