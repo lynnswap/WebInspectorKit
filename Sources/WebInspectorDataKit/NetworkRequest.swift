@@ -417,8 +417,11 @@ public final class WebSocketState {
         lifecycleRevision: UInt64,
         chronologySequence: UInt64
     ) {
+        let frameKind = WebSocketTimelineFrame.Kind(opcode: frame.opcode)
         var entries: [WebSocketTimelineEntry] = []
-        if readyState == .connecting {
+        // WebCore can synthesize a close frame when a handshake fails, so only
+        // a non-close frame is definitive evidence that the connection opened.
+        if readyState == .connecting, frameKind != .close {
             readyState = .open
             let switchingProtocolsResponse = timelineEntries.last { entry in
                 guard case let .handshakeResponse(response) = entry.kind,
@@ -439,7 +442,7 @@ public final class WebSocketState {
             timestamp: timestamp,
             kind: .frame(WebSocketTimelineFrame(
                 direction: direction,
-                kind: WebSocketTimelineFrame.Kind(opcode: frame.opcode),
+                kind: frameKind,
                 payload: frame.opcode == 1
                     ? .text(frame.payloadData)
                     : .base64Encoded(frame.payloadData),

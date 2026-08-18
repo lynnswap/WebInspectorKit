@@ -10801,9 +10801,15 @@ func webSocketTimelineMapsEveryOpcodeWithoutTreatingNonTextAsText(opcode: Int) t
         chronologySequence: 9
     )
 
-    #expect(webSocket.timelineEntries.count == 2)
-    #expect(webSocket.timelineEntries[0].kind == .connectionEstablished)
-    #expect(webSocket.timelineEntries[0].id.ordinalWithinEvent == 0)
+    if opcode == 8 {
+        #expect(webSocket.timelineEntries.count == 1)
+        #expect(webSocket.readyState == .connecting)
+    } else {
+        #expect(webSocket.timelineEntries.count == 2)
+        #expect(webSocket.timelineEntries[0].kind == .connectionEstablished)
+        #expect(webSocket.timelineEntries[0].id.ordinalWithinEvent == 0)
+        #expect(webSocket.readyState == .open)
+    }
     let entry = try #require(webSocket.timelineEntries.last)
     #expect(entry.id.ordinalWithinEvent == 1)
     guard case let .frame(frame) = entry.kind else {
@@ -10828,6 +10834,57 @@ func webSocketTimelineMapsEveryOpcodeWithoutTreatingNonTextAsText(opcode: Int) t
     #expect(frame.payload == (opcode == 1 ? .text("text") : .base64Encoded("AQID")))
     #expect(frame.payloadLength == 3)
     #expect(frame.isMasked)
+}
+
+@Test
+func webSocketCloseFrameAloneDoesNotConfirmEstablishedConnection() throws {
+    let webSocket = WebSocketState()
+    #expect(webSocket.applyHandshakeResponse(
+        Network.Response(status: 101, statusText: "Switching Protocols"),
+        timestamp: 1,
+        lifecycleRevision: 6,
+        chronologySequence: 10
+    ))
+
+    webSocket.appendFrame(
+        Network.WebSocketFrame(
+            opcode: 8,
+            mask: false,
+            payloadData: "A+g=",
+            payloadLength: 2
+        ),
+        direction: .received,
+        timestamp: 2,
+        lifecycleRevision: 6,
+        chronologySequence: 11
+    )
+
+    #expect(webSocket.readyState == .connecting)
+    #expect(webSocket.timelineEntries.map(\.kind) == [
+        .handshakeResponse(WebSocketTimelineHandshakeResponse(
+            statusCode: 101,
+            statusText: "Switching Protocols"
+        )),
+        .frame(WebSocketTimelineFrame(
+            direction: .received,
+            kind: .close,
+            payload: .base64Encoded("A+g="),
+            payloadLength: 2,
+            isMasked: false
+        )),
+    ])
+    #expect(webSocket.timelineEntries[1].id == .init(
+        lifecycleRevision: 6,
+        chronologySequence: 11,
+        ordinalWithinEvent: 1
+    ))
+    #expect(webSocket.timelineEntries.contains { entry in
+        if case .connectionEstablished = entry.kind {
+            return true
+        }
+        return false
+    } == false)
+    #expect(webSocket.frames.map(\.opcode) == [8])
 }
 
 @MainActor
