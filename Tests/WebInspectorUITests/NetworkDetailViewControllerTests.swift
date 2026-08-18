@@ -4032,6 +4032,124 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func requestPickerRebindsVisibleCellWhenRequestInstanceIsReplaced() async throws {
+        let context = makeContext()
+        let frameID = FrameID("main-frame")
+        let nodeID = DOM.Node.ID("picker-instance")
+        installNavigationVisit(in: context, frameID: frameID)
+        let firstRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "picker-instance-first",
+            url: "https://example.com/first-instance.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 1
+        ))
+        _ = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "picker-instance-second",
+            url: "https://example.com/second-instance.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 4
+        ))
+        let model = NetworkPanelModel(context: context)
+        let entryID = try #require(model.entryID(containing: firstRequest.id))
+        let entry = try #require(model.entry(for: entryID))
+        model.selectEntry(entryID)
+        let picker = NetworkDetailRequestPickerViewController(model: model, entryID: entryID)
+        let window = showInWindow(picker, useUIKitVisibility: true)
+        defer { window.isHidden = true }
+        picker.resumeRenderingForTesting()
+        let cell = try #require(picker.requestCellForTesting(requestID: firstRequest.id))
+        let originalCellObservation = try #require(cell.requestObservationForTesting)
+        let originalCellIdentity = ObjectIdentifier(cell)
+        let proxyID = Network.Request.ID("picker-instance-first")
+        let origin = Network.Request.Origin(
+            frameID: frameID,
+            loaderID: "loader",
+            targetID: "page"
+        )
+        let replacementRequest = NetworkRequest(
+            request: Network.Request(
+                id: proxyID,
+                url: "https://example.com/replacement-instance.json",
+                method: "GET",
+                origin: origin
+            ),
+            initiator: firstRequest.initiator,
+            navigationVisit: firstRequest.navigationVisit,
+            resourceType: firstRequest.resourceType,
+            timestamp: firstRequest.logicalStartTimestamp,
+            chronologySequence: firstRequest.chronologySequence,
+            modelContext: context
+        )
+        let pickerObservation = try #require(picker.modelObservationDeliveryForTesting)
+        let reboundVisibleCell = await pickerObservation.values {
+            cell.observedRequestForTesting === replacementRequest
+        }
+        defer { reboundVisibleCell.cancel() }
+
+        model.upsertRequestForTesting(replacementRequest)
+
+        #expect(model.request(for: firstRequest.id) === replacementRequest)
+        #expect(model.entry(for: entryID) === entry)
+        #expect(
+            model.entry(for: entryID)?.requests.first { $0.id == firstRequest.id }
+                === replacementRequest
+        )
+        #expect(pickerObservation.isActive)
+        #expect(picker.collectionView.visibleCells.contains { $0 === cell })
+        #expect(await reboundVisibleCell.waitUntilValue(true))
+        #expect(picker.boundEntryIDForTesting == entryID)
+        #expect(
+            picker.requestCellForTesting(requestID: firstRequest.id)
+                .map(ObjectIdentifier.init) == originalCellIdentity
+        )
+        #expect(cell.observedRequestForTesting === replacementRequest)
+        #expect(cell.titleForTesting == "replacement-instance.json")
+        #expect(originalCellObservation.isActive == false)
+        let replacementCellObservation = try #require(cell.requestObservationForTesting)
+        let replacementTitle = await replacementCellObservation.values {
+            cell.titleForTesting
+        }
+        defer { replacementTitle.cancel() }
+
+        firstRequest.applyRequestWillBeSent(
+            request: Network.Request(
+                id: proxyID,
+                url: "https://example.com/stale-old-instance.json",
+                method: "GET",
+                origin: origin
+            ),
+            initiator: firstRequest.initiator,
+            navigationVisit: firstRequest.navigationVisit,
+            resourceType: firstRequest.resourceType,
+            timestamp: 20,
+            chronologySequence: 20
+        )
+
+        #expect(firstRequest.displayName == "stale-old-instance.json")
+        #expect(cell.titleForTesting == "replacement-instance.json")
+
+        replacementRequest.applyRequestWillBeSent(
+            request: Network.Request(
+                id: proxyID,
+                url: "https://example.com/current-instance.json",
+                method: "GET",
+                origin: origin
+            ),
+            initiator: replacementRequest.initiator,
+            navigationVisit: replacementRequest.navigationVisit,
+            resourceType: replacementRequest.resourceType,
+            timestamp: 21,
+            chronologySequence: 21
+        )
+
+        #expect(await replacementTitle.waitUntilValue("current-instance.json"))
+    }
+
+    @Test
     func requestPickerSearchRestartsObservationAndTracksContentMembership() async throws {
         let context = makeContext()
         let frameID = FrameID("main-frame")

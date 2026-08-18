@@ -1075,6 +1075,28 @@ package final class NetworkPanelModel {
 
 #if DEBUG
 extension NetworkPanelModel {
+    package func upsertRequestForTesting(_ request: NetworkRequest) {
+        let selectionBeforeTransaction = selection
+        var affectedEntryIDs: Set<NetworkListEntry.ID> = []
+        var topologyChangedEntryIDs: Set<NetworkListEntry.ID> = []
+        upsertRequest(
+            request,
+            affectedEntryIDs: &affectedEntryIDs,
+            topologyChangedEntryIDs: &topologyChangedEntryIDs
+        )
+        for entryID in affectedEntryIDs {
+            reconcileVisibility(
+                of: entryID,
+                topologyChangedEntryIDs: &topologyChangedEntryIDs
+            )
+        }
+        reconcileSelection(selectionBeforeTransaction)
+        publishListTransaction(
+            topologyChangedEntryIDs: topologyChangedEntryIDs,
+            rebindsStableEntries: false
+        )
+    }
+
     package func rebuildEntriesForTesting() {
         let selectionBeforeRebuild = selection
         rebuildEntries(from: requests.items)

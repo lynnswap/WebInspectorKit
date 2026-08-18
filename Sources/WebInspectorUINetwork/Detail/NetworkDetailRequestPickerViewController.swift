@@ -200,8 +200,17 @@ final class NetworkDetailRequestPickerViewController: UICollectionViewController
         snapshot.appendSections([.requests])
         snapshot.appendItems([.entry(entry.id)])
         snapshot.appendItems(visibleRequests.map { .request($0.id) })
+        let preservesVisibleItemIdentity = dataSource.snapshot().itemIdentifiers
+            == snapshot.itemIdentifiers
         dataSource.apply(snapshot, animatingDifferences: animatingDifferences) { [weak self] in
-            self?.renderSelection(selection)
+            guard let self else {
+                return
+            }
+            rebindVisibleRequestCells()
+            renderSelection(selection)
+        }
+        if preservesVisibleItemIdentity {
+            rebindVisibleRequestCells()
         }
     }
 
@@ -233,21 +242,7 @@ final class NetworkDetailRequestPickerViewController: UICollectionViewController
                 cell.unbind()
                 return
             }
-
-            switch itemID {
-            case .entry(let entryID):
-                guard entryID == boundEntryID else {
-                    preconditionFailure("The Network request picker received an entry from another binding.")
-                }
-                cell.bindAllRequests(renderingActive: isRenderingActive)
-            case .request(let requestID):
-                guard model.entryID(containing: requestID) == boundEntryID,
-                      let request = model.request(for: requestID) else {
-                    cell.unbind()
-                    return
-                }
-                cell.bind(request: request, renderingActive: isRenderingActive)
-            }
+            bind(cell, to: itemID)
         }
 
         return UICollectionViewDiffableDataSource<Section, ItemID>(
@@ -258,6 +253,34 @@ final class NetworkDetailRequestPickerViewController: UICollectionViewController
                 for: indexPath,
                 item: itemID
             )
+        }
+    }
+
+    private func rebindVisibleRequestCells() {
+        for case let cell as NetworkDetailRequestPickerCell in collectionView.visibleCells {
+            guard let indexPath = collectionView.indexPath(for: cell),
+                  let itemID = dataSource.itemIdentifier(for: indexPath) else {
+                cell.unbind()
+                continue
+            }
+            bind(cell, to: itemID)
+        }
+    }
+
+    private func bind(_ cell: NetworkDetailRequestPickerCell, to itemID: ItemID) {
+        switch itemID {
+        case .entry(let entryID):
+            guard entryID == boundEntryID else {
+                preconditionFailure("The Network request picker received an entry from another binding.")
+            }
+            cell.bindAllRequests(renderingActive: isRenderingActive)
+        case .request(let requestID):
+            guard model.entryID(containing: requestID) == boundEntryID,
+                  let request = model.request(for: requestID) else {
+                cell.unbind()
+                return
+            }
+            cell.bind(request: request, renderingActive: isRenderingActive)
         }
     }
 
@@ -296,6 +319,16 @@ extension NetworkDetailRequestPickerViewController {
 
     var boundEntryIDForTesting: NetworkListEntry.ID {
         boundEntryID
+    }
+
+    func requestCellForTesting(
+        requestID: NetworkRequest.ID
+    ) -> NetworkDetailRequestPickerCell? {
+        collectionView.layoutIfNeeded()
+        guard let indexPath = dataSource.indexPath(for: .request(requestID)) else {
+            return nil
+        }
+        return collectionView.cellForItem(at: indexPath) as? NetworkDetailRequestPickerCell
     }
 
     func resumeRenderingForTesting() {
