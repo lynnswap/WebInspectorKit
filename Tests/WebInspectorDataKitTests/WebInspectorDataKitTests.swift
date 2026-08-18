@@ -2216,6 +2216,251 @@ func restartWaitsForPreviousStartupCleanupBeforeReenable() async throws {
 
 @MainActor
 @Test
+func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let oldDocumentID = DOM.Node.ID("old-generation-document")
+    let oldElementID = DOM.Node.ID("old-generation-element")
+    let freshDocumentID = DOM.Node.ID("fresh-generation-document")
+    let freshElementID = DOM.Node.ID("fresh-generation-element")
+    let oldRequestID = Network.Request.ID("old-generation-request")
+    let staleRequestID = Network.Request.ID("stale-generation-request")
+    let freshRequestID = Network.Request.ID("fresh-generation-request")
+    let oldRuntimeID = Runtime.ExecutionContext.ID("old-generation-runtime")
+    let staleRuntimeID = Runtime.ExecutionContext.ID("stale-generation-runtime")
+    let freshRuntimeID = Runtime.ExecutionContext.ID("fresh-generation-runtime")
+    let oldDocument = DOM.Node(
+        id: oldDocumentID,
+        nodeType: 9,
+        nodeName: "#document",
+        childNodeCount: 1,
+        children: [
+            DOM.Node(
+                id: oldElementID,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                attributes: ["data-generation": "seed"]
+            )
+        ]
+    )
+    let freshDocument = DOM.Node(
+        id: freshDocumentID,
+        nodeType: 9,
+        nodeName: "#document",
+        childNodeCount: 1,
+        children: [
+            DOM.Node(
+                id: freshElementID,
+                nodeType: 1,
+                nodeName: "DIV",
+                localName: "div",
+                attributes: ["data-generation": "fresh-seed"]
+            )
+        ]
+    )
+    let (target, context) = try await startContext(runtime: runtime, document: oldDocument)
+    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+
+    let seedAppliedBaseline = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: oldRequestID,
+            request: Network.Request(
+                id: oldRequestID,
+                url: "https://example.test/old",
+                method: "GET"
+            ),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 1
+        ),
+        target: target
+    )
+    await runtime.backend.emit(
+        .attributeModified(oldElementID, name: "data-generation", value: "old"),
+        target: target
+    )
+    await runtime.backend.emit(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "warning"),
+            text: "old-console"
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: oldRuntimeID,
+            name: "Old Runtime",
+            kind: .normal
+        )),
+        target: target
+    )
+    await runtime.backend.emit(.mediaQueryResultChanged, target: target)
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(
+        after: seedAppliedBaseline,
+        count: 5
+    ))
+
+    let oldElement = try #require(context.node(for: DOMNode.ID(oldElementID)))
+    context.select(oldElement)
+    context.seedSelectedNodeStyles(matchedStyles: CSS.MatchedStyles())
+    let oldStyles = try #require(oldElement.elementStyles)
+    let oldConsoleMessage = try #require(consoleResults.items.first)
+    let oldRuntimeContext = try #require(context.executionContexts.first)
+    #expect(oldStyles.phase == .loaded)
+    #expect(networkResults.items.count == 1)
+    #expect(oldElement.attributes["data-generation"] == "old")
+    #expect(oldConsoleMessage.text == "old-console")
+    #expect(oldRuntimeContext.id == RuntimeContext.ID(oldRuntimeID))
+
+    let supersededSubscription = context.orderedEventSubscriptionStateForTesting
+    let appliedBaseline = context.eventPumpAppliedSequenceForTesting
+    #expect(await runtime.backend.activeOrderedEventSubscriberCount(for: target) == 1)
+    let disableGate = WebInspectorTestGate()
+    await runtime.backend.hold(domain: "Console", method: "disable", gate: disableGate)
+    await enqueueDomainDisableReplies(on: runtime.backend)
+    await enqueueStartupReplies(on: runtime.backend, document: freshDocument)
+
+    context.start()
+    let restartTask = try #require(context.startupTaskForTesting())
+    let linearizedSubscription = context.orderedEventSubscriptionStateForTesting
+    #expect(linearizedSubscription.generation == supersededSubscription.generation + 1)
+    #expect(linearizedSubscription.sequence == supersededSubscription.sequence)
+    #expect(networkResults.items.isEmpty)
+    #expect(context.registeredRequest(forProxyID: oldRequestID) == nil)
+
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "Console",
+        method: "disable",
+        count: 1
+    )
+
+    let staleEvents: [WebInspectorProxyEvent] = [
+        .network(.responseReceived(
+            id: staleRequestID,
+            response: Network.Response(
+                url: "https://example.test/stale",
+                status: 200,
+                mimeType: "text/plain"
+            ),
+            resourceType: .fetch,
+            timestamp: 2
+        )),
+        .dom(.attributeModified(
+            oldElementID,
+            name: "data-generation",
+            value: "stale"
+        )),
+        .console(Console.TargetedEvent(
+            event: .messageAdded(Console.Message(
+                source: Console.Source(rawValue: "console-api"),
+                level: Console.Level(rawValue: "error"),
+                text: "stale-console"
+            )),
+            targetID: target.id
+        )),
+        .runtime(.executionContextCreated(Runtime.ExecutionContext(
+            id: staleRuntimeID,
+            name: "Stale Runtime",
+            kind: .normal
+        ))),
+        .css(.mediaQueryResultChanged),
+    ]
+    for event in staleEvents {
+        await context.applyOrderedEventForTesting(
+            WebInspectorProxyOrderedEvent(
+                sequence: supersededSubscription.sequence,
+                event: event
+            ),
+            target: target,
+            subscriptionGeneration: supersededSubscription.generation
+        )
+    }
+
+    #expect(context.orderedEventSubscriptionStateForTesting == linearizedSubscription)
+    #expect(context.eventPumpAppliedSequenceForTesting == appliedBaseline)
+    #expect(networkResults.items.isEmpty)
+    #expect(context.registeredRequest(forProxyID: staleRequestID) == nil)
+    #expect(oldElement.attributes["data-generation"] == "old")
+    #expect(oldStyles.phase == .loaded)
+    #expect(consoleResults.items.first === oldConsoleMessage)
+    #expect(consoleResults.items.map(\.text) == ["old-console"])
+    #expect(context.executionContexts.first === oldRuntimeContext)
+    #expect(context.executionContexts.map(\.id) == [RuntimeContext.ID(oldRuntimeID)])
+
+    await disableGate.open()
+    await restartTask.value
+    try await waitForStartupSubscribers(runtime: runtime, target: target)
+    #expect(await runtime.backend.activeOrderedEventSubscriberCount(for: target) == 1)
+    #expect(context.state == .attached)
+
+    let freshElement = try #require(context.node(for: DOMNode.ID(freshElementID)))
+    context.select(freshElement)
+    context.seedSelectedNodeStyles(matchedStyles: CSS.MatchedStyles())
+    let freshStyles = try #require(freshElement.elementStyles)
+    #expect(freshStyles.phase == .loaded)
+    let freshAppliedBaseline = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(
+        .responseReceived(
+            id: freshRequestID,
+            response: Network.Response(
+                url: "https://example.test/fresh",
+                status: 201,
+                mimeType: "application/json"
+            ),
+            resourceType: .fetch,
+            timestamp: 3
+        ),
+        target: target
+    )
+    await runtime.backend.emit(
+        .attributeModified(freshElementID, name: "data-generation", value: "fresh"),
+        target: target
+    )
+    await runtime.backend.emit(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "log"),
+            text: "fresh-console"
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .executionContextCreated(Runtime.ExecutionContext(
+            id: freshRuntimeID,
+            name: "Fresh Runtime",
+            kind: .normal
+        )),
+        target: target
+    )
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(
+        after: freshAppliedBaseline,
+        count: 4
+    ))
+
+    context.seedSelectedNodeStyles(matchedStyles: CSS.MatchedStyles())
+    #expect(freshStyles.phase == .loaded)
+    let freshCSSAppliedBaseline = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(.mediaQueryResultChanged, target: target)
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(
+        after: freshCSSAppliedBaseline
+    ))
+
+    let freshSubscription = context.orderedEventSubscriptionStateForTesting
+    #expect(freshSubscription.generation == linearizedSubscription.generation + 1)
+    #expect(freshSubscription.sequence > supersededSubscription.sequence)
+    #expect(networkResults.items.count == 1)
+    #expect(context.registeredRequest(forProxyID: freshRequestID) != nil)
+    #expect(freshElement.attributes["data-generation"] == "fresh")
+    #expect(freshStyles.phase == .needsRefresh)
+    #expect(consoleResults.items.map(\.text) == ["fresh-console"])
+    #expect(context.executionContexts.map(\.id) == [RuntimeContext.ID(freshRuntimeID)])
+}
+
+@MainActor
+@Test
 func runtimeEnableReplayIsCapturedBeforeCommandReturns() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
