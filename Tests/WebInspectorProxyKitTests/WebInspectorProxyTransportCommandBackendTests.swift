@@ -3000,7 +3000,7 @@ func transportBackendFiltersEventsByRoute() async throws {
         transport,
         targetID: ProtocolTarget.ID("frame-target"),
         method: "Network.loadingFinished",
-        params: #"{"requestId":"frame-request","timestamp":4,"sourceMapURL":"frame.js.map","metrics":{"protocol":"h2","remoteAddress":"203.0.113.10:443","responseBodyBytesReceived":128,"responseBodyDecodedSize":256}}"#
+        params: #"{"requestId":"frame-request","timestamp":4,"sourceMapURL":"frame.js.map","metrics":{"protocol":"h2","remoteAddress":"203.0.113.10:443","requestHeaders":{"Cookie":"session=abc"},"responseBodyBytesReceived":128,"responseBodyDecodedSize":256,"futureField":true}}"#
     )
 
     let frameEvent = try #require(try await value(of: frameEventTask))
@@ -3013,10 +3013,39 @@ func transportBackendFiltersEventsByRoute() async throws {
     #expect(sourceMapURL == "frame.js.map")
     #expect(metrics?.networkProtocol == "h2")
     #expect(metrics?.remoteAddress == "203.0.113.10:443")
+    #expect(metrics?.requestHeaders == ["Cookie": "session=abc"])
     #expect(metrics?.encodedDataLength == 128)
     #expect(metrics?.decodedBodyLength == 256)
 
     pageEventTask.cancel()
+}
+
+@Test
+func transportBackendPreservesPresentEmptyMetricsRequestHeaders() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+
+    let eventTask = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    await waitForEventSubscription(target, domain: .network)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Network.loadingFinished",
+        params: #"{"requestId":"empty-request-headers","timestamp":4,"metrics":{"requestHeaders":{}}}"#
+    )
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .loadingFinished(_, _, _, metrics) = event else {
+        Issue.record("Expected Network.loadingFinished.")
+        return
+    }
+    #expect(metrics?.requestHeaders == [:])
 }
 
 @Test

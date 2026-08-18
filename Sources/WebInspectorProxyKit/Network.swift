@@ -297,6 +297,9 @@ public enum Network {
         /// The remote address, if WebKit reported one.
         public let remoteAddress: String?
 
+        /// Request headers transmitted over the network, if WebKit reported them.
+        public let requestHeaders: [String: String]?
+
         /// Encoded bytes transferred over the network.
         public let encodedDataLength: Int?
 
@@ -311,11 +314,42 @@ public enum Network {
             encodedDataLength: Int? = nil,
             decodedBodyLength: Int? = nil
         ) {
+            self.init(
+                timestamp: timestamp,
+                networkProtocol: networkProtocol,
+                remoteAddress: remoteAddress,
+                encodedDataLength: encodedDataLength,
+                decodedBodyLength: decodedBodyLength,
+                requestHeaders: nil
+            )
+        }
+
+        /// Returns a copy that records request headers reported by WebKit.
+        public func reporting(requestHeaders: [String: String]) -> Metrics {
+            Metrics(
+                timestamp: timestamp,
+                networkProtocol: networkProtocol,
+                remoteAddress: remoteAddress,
+                encodedDataLength: encodedDataLength,
+                decodedBodyLength: decodedBodyLength,
+                requestHeaders: requestHeaders
+            )
+        }
+
+        package init(
+            timestamp: Double? = nil,
+            networkProtocol: String? = nil,
+            remoteAddress: String? = nil,
+            encodedDataLength: Int? = nil,
+            decodedBodyLength: Int? = nil,
+            requestHeaders: [String: String]?
+        ) {
             self.timestamp = timestamp
             self.networkProtocol = networkProtocol
             self.remoteAddress = remoteAddress
             self.encodedDataLength = encodedDataLength
             self.decodedBodyLength = decodedBodyLength
+            self.requestHeaders = requestHeaders
         }
     }
 

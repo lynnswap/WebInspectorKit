@@ -67,3 +67,18 @@ func webInspectorProxyNetworkEventsMulticastToConsumerSubscribers() async throws
     #expect(firstTimestamp == 42)
     #expect(secondTimestamp == 42)
 }
+
+@Test
+func webInspectorProxyMetricsRequestHeadersPreserveInitializerAndCopyContracts() {
+    let makeMetrics = Network.Metrics.init
+    let base = makeMetrics(42, "h2", "203.0.113.10:443", 128, 256)
+    let reported = base.reporting(requestHeaders: ["Cookie": "session=abc"])
+
+    #expect(base.requestHeaders == nil)
+    #expect(reported.timestamp == 42)
+    #expect(reported.networkProtocol == "h2")
+    #expect(reported.remoteAddress == "203.0.113.10:443")
+    #expect(reported.encodedDataLength == 128)
+    #expect(reported.decodedBodyLength == 256)
+    #expect(reported.requestHeaders == ["Cookie": "session=abc"])
+}

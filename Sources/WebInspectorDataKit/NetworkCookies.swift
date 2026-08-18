@@ -333,6 +333,13 @@ package enum NetworkCookieParser {
         for (ordinal, fragment) in fragments.enumerated() {
             let rawFragment = String(fragment)
             let trimmedFragment = trimOptionalWhitespace(rawFragment)
+            guard containsNonOWSControlCharacter(rawFragment) == false else {
+                diagnostics.append(NetworkCookieParseDiagnostic(
+                    kind: .prohibitedControlCharacter,
+                    rawFragment: rawFragment
+                ))
+                continue
+            }
             guard let equalsIndex = trimmedFragment.firstIndex(of: "=") else {
                 diagnostics.append(NetworkCookieParseDiagnostic(
                     kind: .invalidCookieFragment,
@@ -342,6 +349,16 @@ package enum NetworkCookieParser {
             }
 
             let name = trimOptionalWhitespace(String(trimmedFragment[..<equalsIndex]))
+            let valueStart = trimmedFragment.index(after: equalsIndex)
+            let value = trimOptionalWhitespace(String(trimmedFragment[valueStart...]))
+            guard containsControlCharacter(name) == false,
+                  containsControlCharacter(value) == false else {
+                diagnostics.append(NetworkCookieParseDiagnostic(
+                    kind: .prohibitedControlCharacter,
+                    rawFragment: rawFragment
+                ))
+                continue
+            }
             guard isHTTPToken(name) else {
                 diagnostics.append(NetworkCookieParseDiagnostic(
                     kind: .invalidCookieFragment,
@@ -349,8 +366,6 @@ package enum NetworkCookieParser {
                 ))
                 continue
             }
-            let valueStart = trimmedFragment.index(after: equalsIndex)
-            let value = trimOptionalWhitespace(String(trimmedFragment[valueStart...]))
             cookies.append(NetworkRequestCookie(
                 ordinal: ordinal,
                 name: name,
@@ -395,7 +410,7 @@ package enum NetworkCookieParser {
                 status: .complete
             )
         }
-        guard containsProhibitedControlCharacter(rawHeaderValue) == false else {
+        guard containsNonOWSControlCharacter(rawHeaderValue) == false else {
             return NetworkResponseCookieParseReport(
                 cookies: [],
                 rawHeaderValues: rawHeaderValues,
@@ -433,6 +448,18 @@ package enum NetworkCookieParser {
             )
         }
         let name = trimOptionalWhitespace(String(trimmedCookiePair[..<equalsIndex]))
+        let valueStart = trimmedCookiePair.index(after: equalsIndex)
+        let value = trimOptionalWhitespace(String(trimmedCookiePair[valueStart...]))
+        guard containsControlCharacter(name) == false,
+              containsControlCharacter(value) == false else {
+            return unparsedResponseReport(
+                rawHeaderValues: rawHeaderValues,
+                diagnostic: NetworkCookieParseDiagnostic(
+                    kind: .prohibitedControlCharacter,
+                    rawFragment: rawHeaderValue
+                )
+            )
+        }
         guard isHTTPToken(name) else {
             return unparsedResponseReport(
                 rawHeaderValues: rawHeaderValues,
@@ -442,8 +469,6 @@ package enum NetworkCookieParser {
                 )
             )
         }
-        let valueStart = trimmedCookiePair.index(after: equalsIndex)
-        let value = trimOptionalWhitespace(String(trimmedCookiePair[valueStart...]))
 
         var attributes: [NetworkResponseCookieAttribute] = []
         attributes.reserveCapacity(max(fragments.count - 1, 0))
@@ -459,6 +484,16 @@ package enum NetworkCookieParser {
             } else {
                 attributeName = trimmedAttribute
                 attributeValue = nil
+            }
+            guard containsControlCharacter(attributeName) == false,
+                  attributeValue.map(containsControlCharacter) != true else {
+                return unparsedResponseReport(
+                    rawHeaderValues: rawHeaderValues,
+                    diagnostic: NetworkCookieParseDiagnostic(
+                        kind: .prohibitedControlCharacter,
+                        rawFragment: rawHeaderValue
+                    )
+                )
             }
 
             let attribute = NetworkResponseCookieAttribute(
@@ -576,10 +611,16 @@ fileprivate extension NetworkCookieParser {
         )
     }
 
-    static func containsProhibitedControlCharacter(_ value: String) -> Bool {
+    static func containsNonOWSControlCharacter(_ value: String) -> Bool {
         value.unicodeScalars.contains { scalar in
             let codePoint = scalar.value
             return (codePoint <= 0x1F && codePoint != 0x09) || codePoint == 0x7F
+        }
+    }
+
+    static func containsControlCharacter(_ value: String) -> Bool {
+        value.unicodeScalars.contains { scalar in
+            scalar.value <= 0x1F || scalar.value == 0x7F
         }
     }
 

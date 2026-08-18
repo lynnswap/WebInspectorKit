@@ -113,12 +113,35 @@ struct NetworkCookieParserTests {
         #expect(report.diagnostics.map(\.kind) == [
             .invalidCookieFragment,
             .invalidCookieFragment,
-            .invalidCookieFragment,
+            .prohibitedControlCharacter,
         ])
         #expect(report.diagnostics.map(\.rawFragment) == [
             " bad name=2",
             " naïve=3",
             " \u{1F}control=4",
+        ])
+        #expect(report.status == .partial)
+    }
+
+    @Test
+    func requestControlCharactersRejectOnlyAffectedFragments() throws {
+        let report = try #require(NetworkCookieParser.parseRequestHeaders([
+            "Cookie": "a=ok\u{1F}; tab=\tallowed\t; embedded=foo\tbar; b=2"
+        ]))
+
+        #expect(report.cookies == [
+            NetworkRequestCookie(ordinal: 1, name: "tab", value: "allowed", raw: " tab=\tallowed\t"),
+            NetworkRequestCookie(ordinal: 3, name: "b", value: "2", raw: " b=2"),
+        ])
+        #expect(report.diagnostics == [
+            NetworkCookieParseDiagnostic(
+                kind: .prohibitedControlCharacter,
+                rawFragment: "a=ok\u{1F}"
+            ),
+            NetworkCookieParseDiagnostic(
+                kind: .prohibitedControlCharacter,
+                rawFragment: " embedded=foo\tbar"
+            ),
         ])
         #expect(report.status == .partial)
     }
@@ -198,6 +221,9 @@ struct NetworkCookieParserTests {
         "a=b\u{0}",
         "a=b\u{1F}",
         "a=b\u{7F}",
+        "a=foo\tbar",
+        "na\tme=value",
+        "a=b; Domain=foo\tbar",
         "\u{1F}name=value",
     ])
     func responseControlCharactersAreFatal(_ rawHeader: String) throws {

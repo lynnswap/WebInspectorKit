@@ -822,12 +822,14 @@ private struct ResponsePayload: Decodable {
 private struct MetricsPayload: Decodable {
     var networkProtocol: String?
     var remoteAddress: String?
+    var requestHeaders: [String: String]?
     var responseBodyBytesReceived: Int?
     var responseBodyDecodedSize: Int?
 
     enum CodingKeys: String, CodingKey {
         case networkProtocol = "protocol"
         case remoteAddress
+        case requestHeaders
         case responseBodyBytesReceived
         case responseBodyDecodedSize
     }
@@ -838,7 +840,8 @@ private struct MetricsPayload: Decodable {
             networkProtocol: networkProtocol,
             remoteAddress: remoteAddress,
             encodedDataLength: responseBodyBytesReceived,
-            decodedBodyLength: responseBodyDecodedSize
+            decodedBodyLength: responseBodyDecodedSize,
+            requestHeaders: requestHeaders
         )
     }
 }
