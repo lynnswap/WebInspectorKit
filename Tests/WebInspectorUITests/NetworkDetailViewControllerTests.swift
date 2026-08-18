@@ -4133,23 +4133,55 @@ struct NetworkDetailViewControllerTests {
 
         picker.resumeRenderingForTesting()
         let observation = try #require(picker.modelObservationDeliveryForTesting)
-        let observedEntryID = await observation.values {
-            picker.boundEntryIDForTesting
+        let selectedItem = await observation.values {
+            picker.selectedItemIDForTesting
+                == .request(secondRequest.id)
         }
-        defer { observedEntryID.cancel() }
+        let itemCount = await observation.values {
+            picker.itemIDsForTesting.count
+        }
+        let stoppedObserving = await observation.values {
+            picker.isObservingModelForTesting == false
+        }
+        defer {
+            selectedItem.cancel()
+            itemCount.cancel()
+            stoppedObserving.cancel()
+        }
+
+        model.selectRequest(secondRequest)
+
+        #expect(await selectedItem.waitUntilValue(true))
+        #expect(picker.isObservingModelForTesting)
+        #expect(picker.boundEntryIDForTesting == entryID)
+
+        let thirdRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "picker-third",
+            url: "https://example.com/gamma.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 13
+        ))
+
+        #expect(await itemCount.waitUntilValue(4))
+        #expect(picker.itemIDsForTesting == [
+            .entry(entryID),
+            .request(firstRequest.id),
+            .request(secondRequest.id),
+            .request(thirdRequest.id),
+        ])
+        let originalItemIDs = picker.itemIDsForTesting
         let otherEntryID = try #require(model.entryID(containing: otherFirstRequest.id))
 
         model.selectEntry(otherEntryID)
 
-        #expect(await observedEntryID.waitUntilValue(otherEntryID))
-        #expect(picker.itemIDsForTesting == [
-            .entry(otherEntryID),
-            .request(otherFirstRequest.id),
-            .request(otherSecondRequest.id),
-        ])
-
-        picker.suspendRenderingForTesting()
+        #expect(await stoppedObserving.waitUntilValue(true))
         #expect(picker.isObservingModelForTesting == false)
+        #expect(picker.boundEntryIDForTesting == entryID)
+        #expect(picker.itemIDsForTesting == originalItemIDs)
+        #expect(picker.itemIDsForTesting.contains(.request(otherFirstRequest.id)) == false)
+        #expect(picker.itemIDsForTesting.contains(.request(otherSecondRequest.id)) == false)
     }
 
     @Test

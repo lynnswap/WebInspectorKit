@@ -19,7 +19,7 @@ final class NetworkDetailRequestPickerViewController: UICollectionViewController
     }
 
     private let model: NetworkPanelModel
-    private var boundEntryID: NetworkListEntry.ID
+    private let boundEntryID: NetworkListEntry.ID
     private var modelObservation: PortableObservationTracking.Token?
     private var isRenderingActive = false
     private var searchText = ""
@@ -176,11 +176,14 @@ final class NetworkDetailRequestPickerViewController: UICollectionViewController
             return
         }
 
-        guard selection.entryID == entry.id else {
+        guard selection.entryID == boundEntryID else {
+            dismissPicker(animated: true)
+            return
+        }
+        guard entry.id == boundEntryID else {
             preconditionFailure("The Network request picker must render the selected entry.")
         }
 
-        boundEntryID = entry.id
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let visibleRequests = requests.filter { request in
             request.matchesDisplaySearchText(query)
