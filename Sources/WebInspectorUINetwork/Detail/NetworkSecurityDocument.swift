@@ -255,7 +255,9 @@ struct NetworkSecurityDocumentBuilder {
         let hiddenValueCount = values.count - Self.collapsedValueLimit
         builder.appendDisclosure(
             kind: kind,
-            title: isExpanded ? showLessText : showMoreText(hiddenValueCount),
+            title: isExpanded
+                ? showLessText(for: kind)
+                : showMoreText(hiddenValueCount, for: kind),
             isExpanded: isExpanded
         )
     }
@@ -387,18 +389,38 @@ struct NetworkSecurityDocumentBuilder {
         )
     }
 
-    private func showMoreText(_ count: Int) -> String {
-        String.localizedStringWithFormat(
+    private func showMoreText(_ count: Int, for kind: NetworkSecurityListKind) -> String {
+        let format = switch kind {
+        case .dnsNames:
             localized(
-                "network.security.action.show_more",
-                defaultValue: "Show %lld More"
-            ),
+                "network.security.action.show_more_dns_names",
+                defaultValue: "Show %lld More DNS Names"
+            )
+        case .ipAddresses:
+            localized(
+                "network.security.action.show_more_ip_addresses",
+                defaultValue: "Show %lld More IP Addresses"
+            )
+        }
+        return String.localizedStringWithFormat(
+            format,
             Int64(count)
         )
     }
 
-    private var showLessText: String {
-        localized("network.security.action.show_less", defaultValue: "Show Less")
+    private func showLessText(for kind: NetworkSecurityListKind) -> String {
+        switch kind {
+        case .dnsNames:
+            localized(
+                "network.security.action.show_less_dns_names",
+                defaultValue: "Show Less DNS Names"
+            )
+        case .ipAddresses:
+            localized(
+                "network.security.action.show_less_ip_addresses",
+                defaultValue: "Show Less IP Addresses"
+            )
+        }
     }
 
     private var statusLabel: String {

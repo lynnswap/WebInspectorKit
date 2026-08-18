@@ -5574,36 +5574,70 @@
         }
       }
     },
-    "network.security.action.show_less" : {
+    "network.security.action.show_less_dns_names" : {
       "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Show Less"
+            "value" : "Show Less DNS Names"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "表示を減らす"
+            "value" : "DNS名の表示を減らす"
           }
         }
       }
     },
-    "network.security.action.show_more" : {
+    "network.security.action.show_less_ip_addresses" : {
       "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Show %lld More"
+            "value" : "Show Less IP Addresses"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "あと%lld件を表示"
+            "value" : "IPアドレスの表示を減らす"
+          }
+        }
+      }
+    },
+    "network.security.action.show_more_dns_names" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Show %lld More DNS Names"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DNS名をあと%lld件表示"
+          }
+        }
+      }
+    },
+    "network.security.action.show_more_ip_addresses" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Show %lld More IP Addresses"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "IPアドレスをあと%lld件表示"
           }
         }
       }

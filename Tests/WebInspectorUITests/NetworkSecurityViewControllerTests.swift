@@ -76,6 +76,40 @@ struct NetworkSecurityViewControllerTests {
     }
 
     @Test
+    func sectionHeadersExposeHeadingSemanticsAndClearThemForReuse() async throws {
+        let request = makeRequest(id: "security-headings", url: "https://example.test")
+        let viewController = NetworkSecurityViewController()
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        await render(
+            .pending(.https),
+            epoch: NetworkSecurityRequestEpoch(request: request),
+            in: viewController
+        )
+        for section in NetworkSecuritySectionID.allCases {
+            let header = try #require(viewController.sectionHeaderForTesting(section))
+            #expect(header.isAccessibilityElement)
+            #expect(
+                header.accessibilityLabel
+                    == NetworkSecurityViewController.sectionTitleForTesting(section)
+            )
+            #expect(header.accessibilityTraits.contains(.header))
+        }
+
+        let reusedHeader = UICollectionViewListCell()
+        reusedHeader.contentConfiguration = UIListContentConfiguration.header()
+        reusedHeader.isAccessibilityElement = true
+        reusedHeader.accessibilityLabel = "stale heading"
+        reusedHeader.accessibilityTraits = .header
+        NetworkSecurityViewController.clearSectionHeaderForTesting(reusedHeader)
+        #expect(reusedHeader.contentConfiguration == nil)
+        #expect(reusedHeader.isAccessibilityElement == false)
+        #expect(reusedHeader.accessibilityLabel == nil)
+        #expect(reusedHeader.accessibilityTraits.isEmpty)
+    }
+
+    @Test
     func reportedEmptyAndNestedEmptyMetadataRemainDistinct() async throws {
         let request = makeRequest(id: "security-empty", url: "https://example.test")
         let epoch = NetworkSecurityRequestEpoch(request: request)
@@ -137,7 +171,15 @@ struct NetworkSecurityViewControllerTests {
         defer { window.isHidden = true }
         let longHostname = String(repeating: "unbroken-hostname-", count: 12) + ".example"
         var dnsNames = ["one.example", "duplicate.example", "duplicate.example", "", longHostname, "six.example", "seven.example"]
-        let ipAddresses = ["192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4", "192.0.2.5", "192.0.2.6"]
+        let ipAddresses = [
+            "192.0.2.1",
+            "192.0.2.2",
+            "192.0.2.3",
+            "192.0.2.4",
+            "192.0.2.5",
+            "192.0.2.6",
+            "192.0.2.7",
+        ]
 
         await render(
             reportedSecurity(dnsNames: dnsNames, ipAddresses: ipAddresses),
@@ -157,25 +199,40 @@ struct NetworkSecurityViewControllerTests {
         )
         let dnsDisclosureID = try #require(itemID(.disclosure(.dnsNames), in: viewController))
         let ipDisclosureID = try #require(itemID(.disclosure(.ipAddresses), in: viewController))
-        let showMoreFormat = localized(
-            "network.security.action.show_more",
-            defaultValue: "Show %lld More"
+        let showMoreDNSFormat = localized(
+            "network.security.action.show_more_dns_names",
+            defaultValue: "Show %lld More DNS Names"
+        )
+        let showMoreIPFormat = localized(
+            "network.security.action.show_more_ip_addresses",
+            defaultValue: "Show %lld More IP Addresses"
         )
         #expect(
             viewController.rowContentForTesting(dnsDisclosureID)?.label
-                == String.localizedStringWithFormat(showMoreFormat, Int64(2))
+                == String.localizedStringWithFormat(showMoreDNSFormat, Int64(2))
         )
         #expect(
             viewController.rowContentForTesting(ipDisclosureID)?.label
-                == String.localizedStringWithFormat(showMoreFormat, Int64(1))
+                == String.localizedStringWithFormat(showMoreIPFormat, Int64(2))
         )
         let disclosureCell = try #require(visibleCell(dnsDisclosureID, in: viewController))
+        let dnsAccessibilityLabel = disclosureCell.accessibilityLabel
         #expect(disclosureCell.accessibilityTraits.contains(.button))
         #expect(disclosureCell.accessibilityValue == localized(
             "network.security.accessibility.collapsed",
             defaultValue: "Collapsed"
         ))
         #expect(disclosureCell.accessibilityHint?.isEmpty == false)
+        let ipDisclosureCell = try #require(visibleCell(ipDisclosureID, in: viewController))
+        #expect(dnsAccessibilityLabel != ipDisclosureCell.accessibilityLabel)
+        #expect(dnsAccessibilityLabel == String.localizedStringWithFormat(
+            showMoreDNSFormat,
+            Int64(2)
+        ))
+        #expect(ipDisclosureCell.accessibilityLabel == String.localizedStringWithFormat(
+            showMoreIPFormat,
+            Int64(2)
+        ))
 
         let longHostnameID = try #require(itemID(.dnsName(4), in: viewController))
         let longHostnameCell = try #require(visibleCell(longHostnameID, in: viewController))
@@ -193,7 +250,10 @@ struct NetworkSecurityViewControllerTests {
         #expect(itemID(.disclosure(.dnsNames), in: viewController) == dnsDisclosureID)
         #expect(
             viewController.rowContentForTesting(dnsDisclosureID)?.label
-                == localized("network.security.action.show_less", defaultValue: "Show Less")
+                == localized(
+                    "network.security.action.show_less_dns_names",
+                    defaultValue: "Show Less DNS Names"
+                )
         )
         let expandedDisclosureCell = try #require(visibleCell(dnsDisclosureID, in: viewController))
         #expect(expandedDisclosureCell.accessibilityValue == localized(
@@ -211,8 +271,15 @@ struct NetworkSecurityViewControllerTests {
         #expect(viewController.expandedListsForTesting == [.dnsNames])
 
         await toggle(.ipAddresses, in: viewController)
-        #expect(itemIDs(prefix: .ipAddress, in: viewController).count == 6)
+        #expect(itemIDs(prefix: .ipAddress, in: viewController).count == 7)
         #expect(viewController.expandedListsForTesting == [.dnsNames, .ipAddresses])
+        #expect(
+            viewController.rowContentForTesting(ipDisclosureID)?.label
+                == localized(
+                    "network.security.action.show_less_ip_addresses",
+                    defaultValue: "Show Less IP Addresses"
+                )
+        )
 
         await toggle(.dnsNames, in: viewController)
         #expect(itemIDs(prefix: .dnsName, in: viewController).count == 5)

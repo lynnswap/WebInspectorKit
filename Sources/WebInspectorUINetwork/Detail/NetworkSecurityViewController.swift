@@ -156,13 +156,11 @@ final class NetworkSecurityViewController: UICollectionViewController {
         ) { [weak dataSource] header, _, indexPath in
             guard let dataSource,
                   dataSource.snapshot().sectionIdentifiers.indices.contains(indexPath.section) else {
-                header.contentConfiguration = nil
+                Self.configure(header, for: nil)
                 return
             }
             let section = dataSource.snapshot().sectionIdentifiers[indexPath.section]
-            var content = UIListContentConfiguration.header()
-            content.text = Self.sectionTitle(section)
-            header.contentConfiguration = content
+            Self.configure(header, for: section)
         }
         dataSource.supplementaryViewProvider = { collectionView, elementKind, indexPath in
             guard elementKind == UICollectionView.elementKindSectionHeader else {
@@ -174,6 +172,26 @@ final class NetworkSecurityViewController: UICollectionViewController {
             )
         }
         return dataSource
+    }
+
+    private static func configure(
+        _ header: UICollectionViewListCell,
+        for section: NetworkSecuritySectionID?
+    ) {
+        guard let section else {
+            header.contentConfiguration = nil
+            header.isAccessibilityElement = false
+            header.accessibilityLabel = nil
+            header.accessibilityTraits = []
+            return
+        }
+        let title = sectionTitle(section)
+        var content = UIListContentConfiguration.header()
+        content.text = title
+        header.contentConfiguration = content
+        header.isAccessibilityElement = true
+        header.accessibilityLabel = title
+        header.accessibilityTraits = .header
     }
 
     private func configure(
@@ -370,6 +388,24 @@ extension NetworkSecurityViewController {
 
     static func sectionTitleForTesting(_ section: NetworkSecuritySectionID) -> String {
         sectionTitle(section)
+    }
+
+    func sectionHeaderForTesting(
+        _ section: NetworkSecuritySectionID
+    ) -> UICollectionViewListCell? {
+        collectionView.layoutIfNeeded()
+        guard let sectionIndex = dataSource.snapshot().sectionIdentifiers.firstIndex(of: section)
+        else {
+            return nil
+        }
+        return collectionView.supplementaryView(
+            forElementKind: UICollectionView.elementKindSectionHeader,
+            at: IndexPath(item: 0, section: sectionIndex)
+        ) as? UICollectionViewListCell
+    }
+
+    static func clearSectionHeaderForTesting(_ header: UICollectionViewListCell) {
+        configure(header, for: nil)
     }
 }
 #endif
