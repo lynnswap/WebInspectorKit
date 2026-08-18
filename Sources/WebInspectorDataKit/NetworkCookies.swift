@@ -406,6 +406,8 @@ package enum NetworkCookieParser {
                 status: .unparsed
             )
         }
+        // Do not split: WebKit's HTTPHeaderMap irreversibly discards Set-Cookie field boundaries,
+        // so commas in Expires or values cannot be safely distinguished from field separators.
         guard containsCombinedCookieCandidate(rawHeaderValue) == false else {
             return NetworkResponseCookieParseReport(
                 cookies: [],
