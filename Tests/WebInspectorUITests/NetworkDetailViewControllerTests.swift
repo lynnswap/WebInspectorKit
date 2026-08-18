@@ -1003,11 +1003,120 @@ struct NetworkDetailViewControllerTests {
         let configuration = try #require(
             textCell.contentConfiguration as? UIListContentConfiguration
         )
-        #expect(configuration.textProperties.numberOfLines == 0)
+        #expect(
+            configuration.textProperties.numberOfLines
+                == NetworkWebSocketPreviewViewController.maximumTitleLineCountForTesting
+        )
         #expect(configuration.textProperties.adjustsFontForContentSizeCategory)
         #expect(configuration.secondaryTextProperties.numberOfLines == 0)
         viewController.collectionView.semanticContentAttribute = .forceRightToLeft
         #expect(viewController.collectionView.effectiveUserInterfaceLayoutDirection == .rightToLeft)
+    }
+
+    @Test
+    func webSocketPreviewBoundsLargeTextPayloadAndResolvesFullCopyOnDemand() async throws {
+        let context = makeContext()
+        let request = try await applyWebSocket(
+            to: context,
+            requestID: "ws-large-text",
+            url: "wss://example.com/large-text"
+        )
+        let limit = NetworkWebSocketPreviewViewController
+            .maximumRenderedTextPayloadCharactersForTesting
+        let payload = String(repeating: "a", count: limit - 1)
+            + "👩🏽‍💻"
+            + String(repeating: "z", count: 1_000_000)
+            + "full-payload-tail"
+        await context.apply(.webSocket(.frameReceived(
+            id: request.proxyID,
+            frame: Network.WebSocketFrame(
+                opcode: 1,
+                mask: false,
+                payloadData: payload,
+                payloadLength: payload.utf8.count
+            ),
+            timestamp: 12
+        )))
+        await context.apply(.webSocket(.frameReceived(
+            id: request.proxyID,
+            frame: Network.WebSocketFrame(
+                opcode: 2,
+                mask: false,
+                payloadData: String(repeating: "QQ==", count: limit),
+                payloadLength: limit * 3
+            ),
+            timestamp: 13
+        )))
+
+        let replacement = try await applyWebSocket(
+            to: context,
+            requestID: "ws-large-text-replacement",
+            url: "wss://example.com/large-text-replacement"
+        )
+        let frameScheduler = ManualNetworkFrameScheduler()
+        let viewController = NetworkWebSocketPreviewViewController(frameScheduler: frameScheduler)
+        var copiedPayload: String?
+        viewController.setTextPayloadCopyHandlerForTesting { payload in
+            copiedPayload = payload
+        }
+        let window = showInWindow(viewController, useUIKitVisibility: true)
+        defer { window.isHidden = true }
+        viewController.bind(to: request)
+        await resumeWebSocketPreview(viewController)
+
+        let itemIDs = viewController.snapshotForTesting.itemIdentifiers
+        let textItemID = try #require(itemIDs.dropLast().last)
+        let binaryItemID = try #require(itemIDs.last)
+        let content = try #require(viewController.rowContentForTesting(textItemID))
+        #expect(content.title.count == limit + 1)
+        #expect(content.title.hasSuffix("👩🏽‍💻…"))
+        #expect(content.title.contains("full-payload-tail") == false)
+        #expect(content.accessibilityLabel == content.title)
+        #expect(content.accessibilityValue.contains("full-payload-tail") == false)
+        #expect(viewController.contextMenuConfigurationForTesting(textItemID) != nil)
+        #expect(viewController.contextMenuConfigurationForTesting(binaryItemID) == nil)
+
+        viewController.collectionView.layoutIfNeeded()
+        let textIndex = try #require(itemIDs.firstIndex(of: textItemID))
+        let textCell = try #require(
+            viewController.collectionView.cellForItem(at: IndexPath(item: textIndex, section: 0))
+                as? UICollectionViewListCell
+        )
+        let textConfiguration = try #require(
+            textCell.contentConfiguration as? UIListContentConfiguration
+        )
+        #expect(
+            textConfiguration.textProperties.numberOfLines
+                == NetworkWebSocketPreviewViewController.maximumTitleLineCountForTesting
+        )
+        #expect(textConfiguration.text == content.title)
+        #expect(textCell.accessibilityLabel == content.title)
+        #expect(textCell.accessibilityValue?.contains("full-payload-tail") == false)
+        let copyAction = try #require(textCell.accessibilityCustomActions?.first)
+        #expect(copyAction.name == String(
+            localized: "Copy",
+            defaultValue: "Copy",
+            bundle: WebInspectorUILocalization.bundle
+        ))
+        #expect(copyAction.actionHandler?(copyAction) == true)
+        #expect(copiedPayload == payload)
+
+        let binaryIndex = try #require(itemIDs.firstIndex(of: binaryItemID))
+        let binaryCell = try #require(
+            viewController.collectionView.cellForItem(at: IndexPath(item: binaryIndex, section: 0))
+                as? UICollectionViewListCell
+        )
+        #expect(binaryCell.accessibilityCustomActions?.isEmpty ?? true)
+
+        copiedPayload = nil
+        viewController.suspendKeepingSnapshot()
+        #expect(copyAction.actionHandler?(copyAction) == false)
+        #expect(copiedPayload == nil)
+
+        viewController.bind(to: replacement)
+        await resumeWebSocketPreview(viewController)
+        #expect(copyAction.actionHandler?(copyAction) == false)
+        #expect(copiedPayload == nil)
     }
 
     @Test

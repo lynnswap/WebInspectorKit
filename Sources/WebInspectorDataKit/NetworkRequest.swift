@@ -376,40 +376,9 @@ public final class WebSocketState {
     public private(set) var handshakeResponse: NetworkResponseSnapshot?
 
     /// Frames and errors observed for the WebSocket.
-    public var frames: [Frame] {
-        timelineEntries.compactMap { entry in
-            switch entry.kind {
-            case .handshakeResponse, .connectionEstablished, .connectionClosed:
-                return nil
-            case let .frame(frame):
-                guard let timestamp = entry.timestamp else {
-                    preconditionFailure("A WebSocket frame timeline entry must have a timestamp.")
-                }
-                let payloadData: String
-                switch frame.payload {
-                case let .text(text), let .base64Encoded(text):
-                    payloadData = text
-                }
-                return Frame(
-                    direction: frame.direction == .sent ? .sent : .received,
-                    opcode: frame.kind.opcode,
-                    mask: frame.isMasked,
-                    payloadData: payloadData,
-                    payloadLength: frame.payloadLength,
-                    timestamp: timestamp
-                )
-            case let .error(message):
-                guard let timestamp = entry.timestamp else {
-                    preconditionFailure("A WebSocket error timeline entry must have a timestamp.")
-                }
-                return Frame(
-                    direction: .error(message),
-                    errorMessage: message,
-                    timestamp: timestamp
-                )
-            }
-        }
-    }
+    ///
+    /// This compatibility projection preserves arrival order while omitting lifecycle entries.
+    public private(set) var frames: [Frame]
 
     package private(set) var timelineEntries: [WebSocketTimelineEntry]
 
@@ -417,6 +386,7 @@ public final class WebSocketState {
         self.readyState = readyState
         handshakeRequest = nil
         handshakeResponse = nil
+        frames = []
         timelineEntries = []
     }
 
@@ -581,6 +551,9 @@ public final class WebSocketState {
         guard let firstEntry = entries.first else {
             return
         }
+        let compatibilityFrames = entries.compactMap { entry in
+            Self.compatibilityFrame(for: entry)
+        }
         let lifecycleRevision = firstEntry.id.lifecycleRevision
         let existingRevisionMatches = timelineEntries.last.map {
             $0.id.lifecycleRevision == lifecycleRevision
@@ -605,7 +578,47 @@ public final class WebSocketState {
             timelineEntries.count <= Int.max - entries.count,
             "WebSocket timeline entry count overflowed."
         )
+        precondition(
+            frames.count <= Int.max - compatibilityFrames.count,
+            "WebSocket frame count overflowed."
+        )
         timelineEntries.append(contentsOf: entries)
+        if compatibilityFrames.isEmpty == false {
+            frames.append(contentsOf: compatibilityFrames)
+        }
+    }
+
+    private static func compatibilityFrame(for entry: WebSocketTimelineEntry) -> Frame? {
+        switch entry.kind {
+        case .handshakeResponse, .connectionEstablished, .connectionClosed:
+            return nil
+        case let .frame(frame):
+            guard let timestamp = entry.timestamp else {
+                preconditionFailure("A WebSocket frame timeline entry must have a timestamp.")
+            }
+            let payloadData: String
+            switch frame.payload {
+            case let .text(text), let .base64Encoded(text):
+                payloadData = text
+            }
+            return Frame(
+                direction: frame.direction == .sent ? .sent : .received,
+                opcode: frame.kind.opcode,
+                mask: frame.isMasked,
+                payloadData: payloadData,
+                payloadLength: frame.payloadLength,
+                timestamp: timestamp
+            )
+        case let .error(message):
+            guard let timestamp = entry.timestamp else {
+                preconditionFailure("A WebSocket error timeline entry must have a timestamp.")
+            }
+            return Frame(
+                direction: .error(message),
+                errorMessage: message,
+                timestamp: timestamp
+            )
+        }
     }
 }
 
