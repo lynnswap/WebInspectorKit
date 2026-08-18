@@ -943,18 +943,22 @@ struct NetworkDetailViewControllerTests {
         }
         let notReported = String(
             localized: "network.websocket.time.not_reported",
+            defaultValue: "Time not reported",
             bundle: WebInspectorUILocalization.bundle
         )
         let sent = String(
             localized: "network.websocket.direction.sent",
+            defaultValue: "Sent",
             bundle: WebInspectorUILocalization.bundle
         )
         let textFrame = String(
             localized: "network.websocket.frame.text",
+            defaultValue: "Text Frame",
             bundle: WebInspectorUILocalization.bundle
         )
         let handshakeResponse = String(
             localized: "network.websocket.handshake.response",
+            defaultValue: "WebSocket Handshake Response",
             bundle: WebInspectorUILocalization.bundle
         )
         #expect(contents[0].title == handshakeResponse)
@@ -1043,10 +1047,12 @@ struct NetworkDetailViewControllerTests {
         }
         let rejectionTitle = String(
             localized: "network.websocket.handshake.rejected",
+            defaultValue: "WebSocket Handshake Rejected",
             bundle: WebInspectorUILocalization.bundle
         )
         let establishedTitle = String(
             localized: "network.websocket.connection.established",
+            defaultValue: "WebSocket Connection Established",
             bundle: WebInspectorUILocalization.bundle
         )
         #expect(contents[0].title == rejectionTitle)
@@ -1063,14 +1069,17 @@ struct NetworkDetailViewControllerTests {
     func webSocketPreviewKeepsQuietAndUnreportedHandshakeResponsesNeutral() async throws {
         let handshakeTitle = String(
             localized: "network.websocket.handshake.response",
+            defaultValue: "WebSocket Handshake Response",
             bundle: WebInspectorUILocalization.bundle
         )
         let establishedTitle = String(
             localized: "network.websocket.connection.established",
+            defaultValue: "WebSocket Connection Established",
             bundle: WebInspectorUILocalization.bundle
         )
         let statusNotReported = String(
             localized: "network.websocket.status.not_reported",
+            defaultValue: "Status not reported",
             bundle: WebInspectorUILocalization.bundle
         )
         for (suffix, status, statusText) in [
