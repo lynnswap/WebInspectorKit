@@ -203,7 +203,7 @@ struct NetworkRequestHeadersContextTests {
     @Test
     func headersContextDistinguishesCancellationFailureAndProjectsResourceAndInitiator() throws {
         let context = WebInspectorContext.preview(isolation: MainActor.shared)
-        let nodeID = DOM.Node.ID("42")
+        let nodeID = DOM.Node.ID("42", scopedToTargetRawValue: "page-target")
         let canceled = NetworkRequest(
             request: Network.Request(
                 id: Network.Request.ID("canceled-context"),
@@ -231,8 +231,11 @@ struct NetworkRequestHeadersContextTests {
                     kind: "script",
                     url: "https://example.test/app.js",
                     line: 17,
-                    nodeID: nodeID
+                    nodeIDRawValue: "42"
                 ))
+        #expect(canceled.headersContext.initiator?.nodeIDRawValue == "42")
+        #expect(canceled.headersContext.initiator?.nodeIDRawValue?.contains("page-target") == false)
+        #expect(canceled.headersContext.initiator?.nodeIDRawValue?.contains("\u{1E}") == false)
 
         let failed = NetworkRequest(
             request: Network.Request(
@@ -299,6 +302,25 @@ struct NetworkRequestHeadersContextTests {
             timestamp: 4
         )
         #expect(request.headersContext.effectiveMIMEType == nil)
+
+        #expect(
+            NetworkContentTypeParser.effectiveMediaType(
+                protocolMIMEType: " Text/CSS ; charset=utf-8 ",
+                headers: [:]
+            ) == "Text/CSS"
+        )
+        #expect(
+            NetworkContentTypeParser.effectiveMediaType(
+                protocolMIMEType: nil,
+                headers: ["Content-Type": " Text/CSS ; charset=utf-8 "]
+            ) == "Text/CSS"
+        )
+        #expect(
+            NetworkContentTypeParser.effectiveMediaType(
+                protocolMIMEType: " invalid mime ; charset=utf-8 ",
+                headers: ["Content-Type": "text/plain"]
+            ) == "invalid mime"
+        )
     }
 
     @MainActor

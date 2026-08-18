@@ -3513,6 +3513,48 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func headersModeClearsSelectionWhenResponseSectionAppears() async throws {
+        let context = makeContext()
+        let request = try #require(await applyRequestWithoutResponse(
+            to: context,
+            requestID: "headers-response-selection",
+            url: "https://example.com/pending"
+        ))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(request)
+        let viewController = makeNetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.headersTextViewForTesting.renderedTextForTesting
+                .contains("GET /pending")
+        })
+        viewController.headersTextViewForTesting.selectedRangeForTesting = NSRange(
+            location: 2,
+            length: 4
+        )
+
+        await applyResponseReceived(
+            to: context,
+            requestID: "headers-response-selection",
+            url: request.url,
+            responseHeaders: ["x-response": "inserted"],
+            responseMimeType: "text/plain",
+            timestamp: 2
+        )
+
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.headersTextViewForTesting.renderedTextForTesting
+                .contains("x-response: inserted")
+        })
+        #expect(
+            viewController.headersTextViewForTesting.selectedRangeForTesting
+                == NSRange(location: 0, length: 0)
+        )
+    }
+
+    @Test
     func headersDocumentShowsOutcomeContextAndOrderedQueryAndFormParameters() async throws {
         let context = makeContext()
         let canceledID = Network.Request.ID("headers-context-canceled")
@@ -3532,7 +3574,7 @@ struct NetworkDetailViewControllerTests {
                     kind: "script",
                     url: "https://example.com/app.js",
                     line: 17,
-                    nodeID: DOM.Node.ID("42")
+                    nodeID: DOM.Node.ID("42", scopedToTargetRawValue: "page-target")
                 ),
                 resourceType: .xhr,
                 redirectResponse: nil,
@@ -3674,6 +3716,8 @@ struct NetworkDetailViewControllerTests {
                     && text.contains("\(initiatorURLLabel): https://example.com/app.js")
                     && text.contains("\(initiatorLineLabel): 17")
                     && text.contains("\(initiatorNodeLabel): 42")
+                    && text.contains("page-target") == false
+                    && text.contains("\u{1E}") == false
             })
 
         let text = viewController.headersTextViewForTesting.renderedTextForTesting
@@ -4395,11 +4439,22 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRenderFirst)
 
+        viewController.headersTextViewForTesting.selectedRangeForTesting = NSRange(
+            location: 2,
+            length: 4
+        )
         model.selectRequest(secondRequest)
         let didRenderSecond = await waitUntilRendered(in: viewController) {
             viewController.headersTextViewForTesting.renderedTextForTesting.contains("x-request: second")
         }
         #expect(didRenderSecond)
+        #expect(
+            viewController.headersTextViewForTesting.selectedRangeForTesting
+                == NSRange(location: 0, length: 0)
+        )
+
+        let currentSelection = NSRange(location: 3, length: 5)
+        viewController.headersTextViewForTesting.selectedRangeForTesting = currentSelection
 
         await applyResponseReceived(
             to: context,
@@ -4411,6 +4466,7 @@ struct NetworkDetailViewControllerTests {
         )
 
         #expect(viewController.headersTextViewForTesting.renderedTextForTesting.contains("x-old-request: stale") == false)
+        #expect(viewController.headersTextViewForTesting.selectedRangeForTesting == currentSelection)
 
         await applyResponseReceived(
             to: context,
@@ -4427,6 +4483,10 @@ struct NetworkDetailViewControllerTests {
                 && text.contains("x-old-request: stale") == false
         }
         #expect(didRenderCurrentUpdate)
+        #expect(
+            viewController.headersTextViewForTesting.selectedRangeForTesting
+                == NSRange(location: 0, length: 0)
+        )
     }
 
     @Test

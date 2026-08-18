@@ -358,15 +358,13 @@ package enum NetworkContentTypeParser {
         if let protocolMIMEType {
             let trimmed = NetworkHTTPGrammar.trimOptionalWhitespace(protocolMIMEType)
             if trimmed.isEmpty == false {
-                return trimmed
+                return reportedMediaType(in: parse(trimmed))
             }
         }
-        guard case let .value(contentType) = parseHeader(in: headers),
-            contentType.mediaType.isEmpty == false
-        else {
+        guard case let .value(contentType) = parseHeader(in: headers) else {
             return nil
         }
-        return contentType.mediaType
+        return reportedMediaType(in: contentType)
     }
 
     package static func effectiveNormalizedMediaType(
@@ -395,6 +393,13 @@ package enum NetworkContentTypeParser {
             return nil
         }
         return NetworkHTTPGrammar.lowercaseASCII(mediaType)
+    }
+
+    private static func reportedMediaType(in contentType: NetworkContentType) -> String? {
+        guard contentType.mediaType.isEmpty == false else {
+            return nil
+        }
+        return contentType.mediaType
     }
 
     private static func parseParameter(rawFragment: String, ordinal: Int) -> NetworkContentType.Parameter {
@@ -568,13 +573,13 @@ package struct NetworkRequestHeadersContext: Hashable, Sendable {
         package let kind: String
         package let url: String?
         package let line: Int?
-        package let nodeID: DOM.Node.ID?
+        package let nodeIDRawValue: String?
 
-        package init(kind: String, url: String?, line: Int?, nodeID: DOM.Node.ID?) {
+        package init(kind: String, url: String?, line: Int?, nodeIDRawValue: String?) {
             self.kind = kind
             self.url = url
             self.line = line
-            self.nodeID = nodeID
+            self.nodeIDRawValue = nodeIDRawValue
         }
     }
 
@@ -608,7 +613,12 @@ package struct NetworkRequestHeadersContext: Hashable, Sendable {
             headers: request.responseHeaders
         )
         initiator = request.initiator.map {
-            Initiator(kind: $0.kind, url: $0.url, line: $0.line, nodeID: $0.nodeID)
+            Initiator(
+                kind: $0.kind,
+                url: $0.url,
+                line: $0.line,
+                nodeIDRawValue: $0.nodeID?.unscopedRawValue
+            )
         }
         queryParameters = NetworkParameterParser.parseQuery(in: request.url)
 
@@ -642,64 +652,5 @@ package struct NetworkRequestHeadersContext: Hashable, Sendable {
 extension NetworkRequest {
     package var headersContext: NetworkRequestHeadersContext {
         NetworkRequestHeadersContext(request: self)
-    }
-}
-
-private enum NetworkHTTPGrammar {
-    static func asciiCaseInsensitiveEqual(_ lhs: String, _ rhs: String) -> Bool {
-        let lhsBytes = lhs.utf8
-        let rhsBytes = rhs.utf8
-        guard lhsBytes.count == rhsBytes.count else {
-            return false
-        }
-        return zip(lhsBytes, rhsBytes).allSatisfy { lhsByte, rhsByte in
-            lowercaseASCII(lhsByte) == lowercaseASCII(rhsByte)
-        }
-    }
-
-    static func lowercaseASCII(_ value: String) -> String {
-        String(decoding: value.utf8.map(lowercaseASCII), as: UTF8.self)
-    }
-
-    static func lowercaseASCII(_ byte: UInt8) -> UInt8 {
-        (65...90).contains(byte) ? byte + 32 : byte
-    }
-
-    static func trimOptionalWhitespace(_ value: String) -> String {
-        let bytes = value.utf8
-        var lowerBound = bytes.startIndex
-        var upperBound = bytes.endIndex
-        while lowerBound < upperBound, isOptionalWhitespace(bytes[lowerBound]) {
-            lowerBound = bytes.index(after: lowerBound)
-        }
-        while lowerBound < upperBound {
-            let preceding = bytes.index(before: upperBound)
-            guard isOptionalWhitespace(bytes[preceding]) else {
-                break
-            }
-            upperBound = preceding
-        }
-        return String(decoding: bytes[lowerBound..<upperBound], as: UTF8.self)
-    }
-
-    static func isHTTPToken(_ value: String) -> Bool {
-        let bytes = value.utf8
-        return bytes.isEmpty == false && bytes.allSatisfy(isHTTPTokenCharacter)
-    }
-
-    private static func isOptionalWhitespace(_ byte: UInt8) -> Bool {
-        byte == 0x20 || byte == 0x09
-    }
-
-    private static func isHTTPTokenCharacter(_ byte: UInt8) -> Bool {
-        switch byte {
-        case 48...57, 65...90, 97...122:
-            return true
-        case 0x21, 0x23, 0x24, 0x25, 0x26, 0x27, 0x2A, 0x2B, 0x2D, 0x2E,
-            0x5E, 0x5F, 0x60, 0x7C, 0x7E:
-            return true
-        default:
-            return false
-        }
     }
 }

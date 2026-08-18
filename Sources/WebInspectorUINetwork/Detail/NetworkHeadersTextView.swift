@@ -92,11 +92,19 @@ final class NetworkHeadersTextView: UIView {
             return
         }
 
+        let previousSignature = renderedSignature
+        let selectedRange = textView.selectedRange
         renderedSignature = document.signature
         sectionRules = document.sectionRules.map { SectionRule(range: $0.range, kind: $0.kind) }
-        let selectedRange = textView.selectedRange
         textView.attributedText = document.attributedString
-        textView.selectedRange = clamped(selectedRange, toUTF16Length: document.attributedString.length)
+        if previousSignature?.visibleText == document.signature.visibleText {
+            textView.selectedRange = clamped(
+                selectedRange,
+                toUTF16Length: document.attributedString.length
+            )
+        } else {
+            textView.selectedRange = NSRange(location: 0, length: 0)
+        }
 #if DEBUG
         attributedTextAssignmentCount += 1
 #endif

@@ -291,7 +291,7 @@ struct NetworkHeadersTextDocumentBuilder {
                         style: .summary
                     ))
             }
-            if let nodeID = initiator.nodeID {
+            if let nodeIDRawValue = initiator.nodeIDRawValue {
                 rows.append(
                     Row(
                         key: String(
@@ -299,7 +299,7 @@ struct NetworkHeadersTextDocumentBuilder {
                             defaultValue: "Initiator Node",
                             bundle: WebInspectorUILocalization.bundle
                         ),
-                        value: nodeID.rawValue,
+                        value: nodeIDRawValue,
                         style: .summary
                     ))
             }
