@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import Testing
 @testable import WebInspectorDataKit
 import WebInspectorProxyKit
@@ -10266,6 +10267,539 @@ func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
 
 @MainActor
 @Test
+func webSocketTimelinePreservesArrivalOrderStableIDsAndExactFrameSemantics() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("websocket-timeline")
+
+    await runtime.backend.emit(
+        .webSocket(.created(id: requestID, url: "wss://example.com/timeline")),
+        target: target
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    try await waitUntil { results.items.count == 1 }
+    let request = try #require(results.items.first)
+
+    await runtime.backend.emit(
+        .webSocket(.handshakeRequest(
+            id: requestID,
+            request: Network.Request(id: requestID, url: "", method: "GET"),
+            timestamp: nil
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.handshakeResponse(
+            id: requestID,
+            response: Network.Response(status: 101),
+            timestamp: nil
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.frameSent(
+            id: requestID,
+            frame: Network.WebSocketFrame(
+                opcode: 1,
+                mask: false,
+                payloadData: "hello",
+                payloadLength: 5
+            ),
+            timestamp: 7
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.frameReceived(
+            id: requestID,
+            frame: Network.WebSocketFrame(
+                opcode: 2,
+                mask: true,
+                payloadData: "AQID",
+                payloadLength: 3
+            ),
+            timestamp: 7
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.error(id: requestID, message: "boom", timestamp: 2)),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.closed(id: requestID, timestamp: 1)),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.frameReceived(
+            id: requestID,
+            frame: Network.WebSocketFrame(
+                opcode: 8,
+                mask: false,
+                payloadData: "A+g=",
+                payloadLength: 2
+            ),
+            timestamp: 0.5
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.frameSent(
+            id: requestID,
+            frame: Network.WebSocketFrame(
+                opcode: 42,
+                mask: true,
+                payloadData: "CQ==",
+                payloadLength: 1
+            ),
+            timestamp: 9
+        )),
+        target: target
+    )
+
+    try await waitUntil { request.webSocket?.timelineEntries.count == 7 }
+    let webSocket = try #require(request.webSocket)
+    let expected = [
+        WebSocketTimelineEntry(
+            id: .init(lifecycleRevision: 0, chronologySequence: 2),
+            timestamp: nil,
+            kind: .connectionEstablished
+        ),
+        WebSocketTimelineEntry(
+            id: .init(lifecycleRevision: 0, chronologySequence: 3),
+            timestamp: 7,
+            kind: .frame(WebSocketTimelineFrame(
+                direction: .sent,
+                kind: .text,
+                payload: .text("hello"),
+                payloadLength: 5,
+                isMasked: false
+            ))
+        ),
+        WebSocketTimelineEntry(
+            id: .init(lifecycleRevision: 0, chronologySequence: 4),
+            timestamp: 7,
+            kind: .frame(WebSocketTimelineFrame(
+                direction: .received,
+                kind: .binary,
+                payload: .base64Encoded("AQID"),
+                payloadLength: 3,
+                isMasked: true
+            ))
+        ),
+        WebSocketTimelineEntry(
+            id: .init(lifecycleRevision: 0, chronologySequence: 5),
+            timestamp: 2,
+            kind: .error("boom")
+        ),
+        WebSocketTimelineEntry(
+            id: .init(lifecycleRevision: 0, chronologySequence: 6),
+            timestamp: 1,
+            kind: .connectionClosed
+        ),
+        WebSocketTimelineEntry(
+            id: .init(lifecycleRevision: 0, chronologySequence: 7),
+            timestamp: 0.5,
+            kind: .frame(WebSocketTimelineFrame(
+                direction: .received,
+                kind: .close,
+                payload: .base64Encoded("A+g="),
+                payloadLength: 2,
+                isMasked: false
+            ))
+        ),
+        WebSocketTimelineEntry(
+            id: .init(lifecycleRevision: 0, chronologySequence: 8),
+            timestamp: 9,
+            kind: .frame(WebSocketTimelineFrame(
+                direction: .sent,
+                kind: .unknown(42),
+                payload: .base64Encoded("CQ=="),
+                payloadLength: 1,
+                isMasked: true
+            ))
+        ),
+    ]
+    #expect(webSocket.timelineEntries == expected)
+    #expect(webSocket.timelineEntry(for: expected[3].id) == expected[3])
+    #expect(webSocket.timelineEntry(for: .init(lifecycleRevision: 0, chronologySequence: 99)) == nil)
+    #expect(webSocket.readyState == .closed)
+    #expect(request.finishedOrFailedTimestamp == 1)
+    #expect(webSocket.frames.map(\.opcode) == [1, 2, nil, 8, 42])
+}
+
+@MainActor
+@Test
+func webSocketFirstCloseAndHandshakeAreTerminalAndDuplicateEventsDoNotNotify() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("websocket-terminal")
+
+    await runtime.backend.emit(
+        .webSocket(.created(id: requestID, url: "wss://example.com/terminal")),
+        target: target
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    try await waitUntil { results.items.count == 1 }
+    let request = try #require(results.items.first)
+    await runtime.backend.emit(
+        .webSocket(.handshakeResponse(
+            id: requestID,
+            response: Network.Response(status: 101, statusText: "First"),
+            timestamp: 2
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.closed(id: requestID, timestamp: 3)),
+        target: target
+    )
+    try await waitUntil { request.webSocket?.readyState == .closed }
+
+    let indexSequence = context.networkRequestIndexSequenceForTesting
+    let eventSequence = context.eventPumpAppliedSequenceForTesting
+    await runtime.backend.emit(
+        .webSocket(.closed(id: requestID, timestamp: 99)),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.handshakeRequest(
+            id: requestID,
+            request: Network.Request(id: requestID, url: "", method: "POST"),
+            timestamp: 100
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.handshakeResponse(
+            id: requestID,
+            response: Network.Response(status: 299, statusText: "Late"),
+            timestamp: 101
+        )),
+        target: target
+    )
+    let processed = await context.waitForEventPumpAppliedSequenceForTesting(
+        after: eventSequence,
+        count: 3
+    )
+    #expect(processed)
+
+    let webSocket = try #require(request.webSocket)
+    #expect(context.networkRequestIndexSequenceForTesting == indexSequence)
+    #expect(webSocket.readyState == .closed)
+    #expect(webSocket.handshakeResponse?.status == 101)
+    #expect(webSocket.handshakeResponse?.statusText == "First")
+    #expect(webSocket.handshakeRequest == nil)
+    #expect(webSocket.timelineEntries.count == 2)
+    #expect(webSocket.timelineEntries.map(\.kind) == [.connectionEstablished, .connectionClosed])
+    #expect(request.finishedOrFailedTimestamp == 3)
+    #expect(request.responseReceivedTimestamp == 2)
+}
+
+@MainActor
+@Test
+func activeDuplicateWebSocketCreatedPreservesStateIdentityAndTimeline() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("websocket-active-created")
+
+    await runtime.backend.emit(
+        .webSocket(.created(id: requestID, url: "wss://example.com/initial")),
+        target: target
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    try await waitUntil { results.items.count == 1 }
+    let request = try #require(results.items.first)
+    await runtime.backend.emit(
+        .webSocket(.handshakeResponse(
+            id: requestID,
+            response: Network.Response(status: 101),
+            timestamp: 1
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.frameReceived(
+            id: requestID,
+            frame: Network.WebSocketFrame(opcode: 9, mask: false, payloadData: "", payloadLength: 0),
+            timestamp: 2
+        )),
+        target: target
+    )
+    try await waitUntil { request.webSocket?.timelineEntries.count == 2 }
+    let originalState = try #require(request.webSocket)
+    let originalTimeline = originalState.timelineEntries
+
+    await runtime.backend.emit(
+        .webSocket(.created(id: requestID, url: "wss://example.com/enriched")),
+        target: target
+    )
+    try await waitUntil { request.url == "wss://example.com/enriched" }
+
+    #expect(request.webSocket === originalState)
+    #expect(request.webSocket?.readyState == .open)
+    #expect(request.webSocket?.timelineEntries == originalTimeline)
+    #expect(request.lifecycleRevision == 0)
+    #expect(request.state == .responded)
+}
+
+@Test(arguments: [0, 1, 2, 8, 9, 10, 42])
+func webSocketTimelineMapsEveryOpcodeWithoutTreatingNonTextAsText(opcode: Int) throws {
+    let webSocket = WebSocketState()
+    webSocket.appendFrame(
+        Network.WebSocketFrame(
+            opcode: opcode,
+            mask: true,
+            payloadData: opcode == 1 ? "text" : "AQID",
+            payloadLength: 3
+        ),
+        direction: .sent,
+        timestamp: 1,
+        lifecycleRevision: 4,
+        chronologySequence: 9
+    )
+
+    let entry = try #require(webSocket.timelineEntries.first)
+    guard case let .frame(frame) = entry.kind else {
+        Issue.record("Expected a WebSocket frame timeline entry.")
+        return
+    }
+    let expectedKind: WebSocketTimelineFrame.Kind = switch opcode {
+    case 0: .continuation
+    case 1: .text
+    case 2: .binary
+    case 8: .close
+    case 9: .ping
+    case 10: .pong
+    default: .unknown(opcode)
+    }
+    #expect(entry.id == .init(lifecycleRevision: 4, chronologySequence: 9))
+    #expect(frame.kind == expectedKind)
+    #expect(frame.payload == (opcode == 1 ? .text("text") : .base64Encoded("AQID")))
+    #expect(frame.payloadLength == 3)
+    #expect(frame.isMasked)
+}
+
+@MainActor
+@Test
+func terminalWebSocketCreatedRestartsSameRequestThroughCommonLifecycleReset() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("websocket-restarted")
+
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: requestID,
+            request: Network.Request(
+                id: requestID,
+                url: "wss://example.com/start",
+                method: "POST",
+                headers: ["X-Initial": "1"],
+                postData: "old body"
+            ),
+            resourceType: .webSocket,
+            redirectResponse: nil,
+            timestamp: 1
+        ),
+        target: target
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    try await waitUntil { results.items.count == 1 }
+    let request = try #require(results.items.first)
+    let responseBody = request.responseBody
+    await runtime.backend.emit(
+        .requestWillBeSent(
+            id: requestID,
+            request: Network.Request(
+                id: requestID,
+                url: "wss://example.com/redirected",
+                method: "POST",
+                headers: ["X-Redirected": "1"],
+                postData: "redirect body"
+            ),
+            resourceType: .webSocket,
+            redirectResponse: Network.Response(status: 302),
+            timestamp: 2
+        ),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.handshakeRequest(
+            id: requestID,
+            request: Network.Request(
+                id: requestID,
+                url: "",
+                method: "GET",
+                headers: ["Upgrade": "websocket"],
+                postData: "handshake body"
+            ),
+            timestamp: 3
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.handshakeResponse(
+            id: requestID,
+            response: Network.Response(
+                status: 101,
+                headers: ["Upgrade": "websocket"],
+                requestHeaders: ["Upgrade": "websocket"]
+            ),
+            timestamp: 4
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.frameSent(
+            id: requestID,
+            frame: Network.WebSocketFrame(opcode: 1, mask: true, payloadData: "old", payloadLength: 3),
+            timestamp: 5
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .loadingFinished(
+            id: requestID,
+            timestamp: 6,
+            sourceMapURL: "old.map",
+            metrics: Network.Metrics(encodedDataLength: 8, decodedBodyLength: 13)
+                .reporting(requestHeaders: ["X-Metrics": "1"])
+        ),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.closed(id: requestID, timestamp: 7)),
+        target: target
+    )
+    try await waitUntil { request.webSocket?.readyState == .closed }
+    let previousState = try #require(request.webSocket)
+    #expect(request.redirects.count == 1)
+    #expect(request.metrics != nil)
+    #expect(request.requestBody != nil)
+
+    await runtime.backend.emit(
+        .webSocket(.created(id: requestID, url: "wss://example.com/restarted")),
+        target: target
+    )
+    try await waitUntil {
+        request.lifecycleRevision == 1 && request.webSocket?.readyState == .connecting
+    }
+
+    #expect(results.items.first === request)
+    #expect(request.webSocket !== previousState)
+    #expect(request.webSocket?.timelineEntries.isEmpty == true)
+    #expect(request.url == "wss://example.com/restarted")
+    #expect(request.method == "GET")
+    #expect(request.resourceType == .webSocket)
+    #expect(request.state == .pending)
+    #expect(request.logicalStartTimestamp == nil)
+    #expect(request.chronologySequence == 7)
+    #expect(request.requestSentTimestamp == nil)
+    #expect(request.responseReceivedTimestamp == nil)
+    #expect(request.lastDataReceivedTimestamp == nil)
+    #expect(request.finishedOrFailedTimestamp == nil)
+    #expect(request.status == nil)
+    #expect(request.statusText == nil)
+    #expect(request.responseURL == nil)
+    #expect(request.mimeType == nil)
+    #expect(request.responseSource == nil)
+    #expect(request.sourceMapURL == nil)
+    #expect(request.requestHeaders.isEmpty)
+    #expect(request.requestHeaderSource == .unavailable)
+    #expect(request.responseHeaders.isEmpty)
+    #expect(request.requestBody == nil)
+    #expect(request.responseBody === responseBody)
+    #expect(request.responseBody.phase == .available)
+    #expect(request.metrics == nil)
+    #expect(request.redirects.isEmpty)
+    #expect(request.decodedDataLength == 0)
+    #expect(request.encodedDataLength == 0)
+    #expect(request.hasResponse == false)
+}
+
+@MainActor
+@Test
+func legacyWebSocketFramesProjectionPublishesTimelineChangesThroughObservation() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let requestID = Network.Request.ID("websocket-legacy-observation")
+    let request = NetworkRequest(
+        request: Network.Request(id: requestID, url: "wss://example.com/legacy", method: "GET"),
+        initiator: nil,
+        resourceType: .webSocket,
+        timestamp: nil,
+        modelContext: context
+    )
+    let webSocket = try #require(request.webSocket)
+    let observation = SynchronousObservationProbe()
+    withObservationTracking {
+        _ = webSocket.frames
+    } onChange: {
+        observation.markChanged()
+    }
+
+    request.appendWebSocketFrame(
+        Network.WebSocketFrame(opcode: 1, mask: true, payloadData: "legacy", payloadLength: 6),
+        direction: .received,
+        timestamp: 4,
+        chronologySequence: 1
+    )
+    try await waitUntil { observation.hasChanged }
+
+    #expect(webSocket.frames == [
+        WebSocketState.Frame(
+            direction: .received,
+            opcode: 1,
+            mask: true,
+            payloadData: "legacy",
+            payloadLength: 6,
+            timestamp: 4
+        )
+    ])
+}
+
+@MainActor
+@Test
+func closedWebSocketCannotFetchResponseBodyOrSendProtocolCommand() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("websocket-no-response-body")
+
+    await runtime.backend.emit(
+        .webSocket(.created(id: requestID, url: "wss://example.com/no-body")),
+        target: target
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    try await waitUntil { results.items.count == 1 }
+    let request = try #require(results.items.first)
+    await runtime.backend.emit(
+        .webSocket(.handshakeResponse(
+            id: requestID,
+            response: Network.Response(status: 101),
+            timestamp: 1
+        )),
+        target: target
+    )
+    await runtime.backend.emit(
+        .webSocket(.closed(id: requestID, timestamp: 2)),
+        target: target
+    )
+    try await waitUntil { request.state == .finished }
+
+    #expect(request.hasResponse)
+    #expect(request.hasResponseBody == false)
+    #expect(request.canFetchResponseBody == false)
+    let commandsBeforeFetch = await runtime.backend.recordedCommands()
+    await request.fetchResponseBody()
+    let commandsAfterFetch = await runtime.backend.recordedCommands()
+    #expect(commandsAfterFetch == commandsBeforeFetch)
+    #expect(commandsAfterFetch.filter {
+        $0 == RecordedCommand(domain: "Network", method: "getResponseBody")
+    }.isEmpty)
+    #expect(request.responseBody.phase == .available)
+}
+
+@MainActor
+@Test
 func webSocketEventForUnknownRequestIsSkipped() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
@@ -13413,6 +13947,23 @@ private final class CancellationProbe: @unchecked Sendable {
             lock.unlock()
         }
         return isCancelled
+    }
+}
+
+private final class SynchronousObservationProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var changed = false
+
+    var hasChanged: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return changed
+    }
+
+    func markChanged() {
+        lock.lock()
+        defer { lock.unlock() }
+        changed = true
     }
 }
 

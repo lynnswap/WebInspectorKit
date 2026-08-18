@@ -1054,6 +1054,10 @@ public final class WebInspectorContext {
         eventPumpAppliedSequenceForTestingStorage
     }
 
+    package var networkRequestIndexSequenceForTesting: UInt64 {
+        networkRequestIndexSequence
+    }
+
     package var orderedEventSubscriptionStateForTesting: (generation: UInt64, sequence: UInt64) {
         (orderedEventSubscriptionGeneration, lastOrderedEventSequence)
     }
@@ -6280,21 +6284,25 @@ extension WebInspectorContext {
             guard let networkRequest = networkRequest(for: id, method: "webSocketWillSendHandshakeRequest") else {
                 return
             }
-            networkRequest.applyWebSocketHandshakeRequest(
+            guard networkRequest.applyWebSocketHandshakeRequest(
                 request,
                 timestamp: timestamp,
                 chronologySequence: chronologySequence
-            )
+            ) else {
+                return
+            }
             await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
         case let .handshakeResponse(id, response, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketHandshakeResponseReceived") else {
                 return
             }
-            networkRequest.applyWebSocketHandshakeResponse(
+            guard networkRequest.applyWebSocketHandshakeResponse(
                 response,
                 timestamp: timestamp,
                 chronologySequence: chronologySequence
-            )
+            ) else {
+                return
+            }
             await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
         case let .frameSent(id, frame, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketFrameSent") else {
@@ -6332,10 +6340,12 @@ extension WebInspectorContext {
             guard let networkRequest = networkRequest(for: id, method: "webSocketClosed") else {
                 return
             }
-            networkRequest.closeWebSocket(
+            guard networkRequest.closeWebSocket(
                 timestamp: timestamp,
                 chronologySequence: chronologySequence
-            )
+            ) else {
+                return
+            }
             await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
         case .other:
             break
@@ -6370,7 +6380,7 @@ extension WebInspectorContext {
             appendNetworkRequestID(id)
             inserted = true
         }
-        request.applyWebSocketCreated(url: url)
+        request.applyWebSocketCreated(url: url, chronologySequence: chronologySequence)
         if inserted {
             await notifyNetworkRequestInserted(request, isolation: isolation)
         } else {
