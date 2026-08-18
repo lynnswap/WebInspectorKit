@@ -99,8 +99,24 @@ public struct NetworkResponseSnapshot: Equatable, Sendable {
         )
     }
 
-    /// Creates a response snapshot with security metadata.
-    public init(
+    /// Returns a copy that records security metadata reported by WebKit.
+    ///
+    /// The metadata is descriptive and does not represent a trust,
+    /// validity, or encrypted-transport verdict.
+    public func reporting(security: Network.Security) -> NetworkResponseSnapshot {
+        NetworkResponseSnapshot(
+            url: url,
+            status: status,
+            statusText: statusText,
+            mimeType: mimeType,
+            headers: headers,
+            source: source,
+            requestHeaders: requestHeaders,
+            security: security
+        )
+    }
+
+    package init(
         url: String? = nil,
         status: Int? = nil,
         statusText: String? = nil,

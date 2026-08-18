@@ -322,23 +322,17 @@ public enum Network {
                 source: source,
                 requestHeaders: requestHeaders,
                 bodySize: bodySize,
-                security: nil
+                security: nil,
+                origin: nil
             )
         }
 
-        /// Creates a network response payload with security metadata.
-        public init(
-            url: String? = nil,
-            status: Int? = nil,
-            statusText: String? = nil,
-            mimeType: String? = nil,
-            headers: [String: String] = [:],
-            source: Source? = nil,
-            requestHeaders: [String: String]? = nil,
-            bodySize: Int? = nil,
-            security: Security?
-        ) {
-            self.init(
+        /// Returns a copy that records security metadata reported by WebKit.
+        ///
+        /// The metadata is descriptive and does not represent a trust,
+        /// validity, or encrypted-transport verdict.
+        public func reporting(security: Security) -> Response {
+            Response(
                 url: url,
                 status: status,
                 statusText: statusText,
@@ -348,7 +342,7 @@ public enum Network {
                 requestHeaders: requestHeaders,
                 bodySize: bodySize,
                 security: security,
-                origin: nil
+                origin: origin
             )
         }
 
@@ -437,8 +431,23 @@ public enum Network {
             )
         }
 
-        /// Creates network transfer metrics with security connection metadata.
-        public init(
+        /// Returns a copy that records security connection metadata reported
+        /// by WebKit.
+        ///
+        /// The metadata is descriptive and does not represent a trust,
+        /// validity, or encrypted-transport verdict.
+        public func reporting(securityConnection: Security.Connection) -> Metrics {
+            Metrics(
+                timestamp: timestamp,
+                networkProtocol: networkProtocol,
+                remoteAddress: remoteAddress,
+                encodedDataLength: encodedDataLength,
+                decodedBodyLength: decodedBodyLength,
+                securityConnection: securityConnection
+            )
+        }
+
+        package init(
             timestamp: Double? = nil,
             networkProtocol: String? = nil,
             remoteAddress: String? = nil,

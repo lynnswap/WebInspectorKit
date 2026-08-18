@@ -2083,7 +2083,7 @@ func closeAfterAttachedClearsAttachmentBackedModels() async throws {
     await runtime.backend.emit(
         .responseReceived(
             id: requestID,
-            response: Network.Response(status: 200, security: requestSecurity),
+            response: Network.Response(status: 200).reporting(security: requestSecurity),
             resourceType: .script,
             timestamp: 1.5
         ),
@@ -6360,7 +6360,7 @@ func clearNetworkRequestsPreservesRetainedSecurityWithoutLeakingIntoReusedID() a
     await runtime.backend.emit(
         .responseReceived(
             id: requestID,
-            response: Network.Response(status: 200, security: initialSecurity),
+            response: Network.Response(status: 200).reporting(security: initialSecurity),
             resourceType: .fetch,
             timestamp: 2
         ),
@@ -6379,7 +6379,7 @@ func clearNetworkRequestsPreservesRetainedSecurityWithoutLeakingIntoReusedID() a
             id: requestID,
             timestamp: 3,
             sourceMapURL: nil,
-            metrics: Network.Metrics(
+            metrics: Network.Metrics().reporting(
                 securityConnection: Network.Security.Connection(tlsProtocol: "TLS 1.3")
             )
         ),
@@ -9562,7 +9562,8 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
                 statusText: "OK",
                 mimeType: "application/json",
                 headers: ["Content-Type": "application/json"],
-                source: Network.Source(rawValue: "network"),
+                source: Network.Source(rawValue: "network")
+            ).reporting(
                 security: Network.Security(
                     connection: Network.Security.Connection(
                         tlsProtocol: "TLS 1.2",
@@ -9585,7 +9586,7 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
             id: requestID,
             timestamp: 4,
             sourceMapURL: nil,
-            metrics: Network.Metrics(
+            metrics: Network.Metrics().reporting(
                 securityConnection: Network.Security.Connection(tlsProtocol: "TLS 1.3")
             )
         ),
@@ -9641,9 +9642,8 @@ func responseReceivedWithoutRequestWillBeSentCreatesRequest() async throws {
                 mimeType: "text/css",
                 headers: ["Content-Type": "text/css"],
                 source: Network.Source(rawValue: "network"),
-                requestHeaders: ["Accept": "text/css"],
-                security: responseSecurity
-            ),
+                requestHeaders: ["Accept": "text/css"]
+            ).reporting(security: responseSecurity),
             resourceType: .stylesheet,
             timestamp: 2
         ),
@@ -9830,7 +9830,7 @@ func loadingFinishedWithoutSecurityConnectionPreservesResponseSecurity() throws 
     )
 
     request.applyResponse(
-        Network.Response(status: 200, security: security),
+        Network.Response(status: 200).reporting(security: security),
         resourceType: .fetch,
         timestamp: 2
     )
@@ -9853,7 +9853,9 @@ func loadingFinishedWithoutSecurityConnectionPreservesResponseSecurity() throws 
     emptyCompletionRequest.finish(
         timestamp: 5,
         sourceMapURL: nil,
-        metrics: Network.Metrics(securityConnection: Network.Security.Connection())
+        metrics: Network.Metrics().reporting(
+            securityConnection: Network.Security.Connection()
+        )
     )
     let emptyCompletionSecurity = try #require(emptyCompletionRequest.security)
     let emptyConnection = try #require(emptyCompletionSecurity.connection)
@@ -9913,9 +9915,8 @@ func multipartContinuationPreservesFinishedLifecycleAcrossLaterParts() throws {
         Network.Response(
             url: "https://example.com/camera",
             status: 200,
-            mimeType: "MULTIPART/X-MIXED-REPLACE",
-            security: firstSecurity
-        ),
+            mimeType: "MULTIPART/X-MIXED-REPLACE"
+        ).reporting(security: firstSecurity),
         resourceType: .image,
         timestamp: 2
     )
@@ -9984,9 +9985,8 @@ func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
                 statusText: "Found",
                 mimeType: "text/html",
                 headers: ["Location": "https://example.com/final"],
-                source: Network.Source(rawValue: "network"),
-                security: redirectSecurity
-            ),
+                source: Network.Source(rawValue: "network")
+            ).reporting(security: redirectSecurity),
             resourceType: .document,
             timestamp: 2
         ),
@@ -10003,7 +10003,7 @@ func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
             id: requestID,
             request: Network.Request(id: requestID, url: "https://example.com/final", method: "GET"),
             resourceType: .document,
-            redirectResponse: Network.Response(status: 302, security: redirectSecurity),
+            redirectResponse: Network.Response(status: 302).reporting(security: redirectSecurity),
             timestamp: 3
         ),
         target: target
@@ -10122,7 +10122,8 @@ func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws
             sourceMapURL: "first.map",
             metrics: Network.Metrics(
                 encodedDataLength: 20,
-                decodedBodyLength: 40,
+                decodedBodyLength: 40
+            ).reporting(
                 securityConnection: Network.Security.Connection(tlsProtocol: "TLS 1.3")
             )
         ),
@@ -10219,9 +10220,8 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
                 headers: ["Content-Type": "text/css"],
                 source: Network.Source(rawValue: "network"),
                 requestHeaders: ["Accept": "text/css"],
-                bodySize: 2048,
-                security: security
-            ),
+                bodySize: 2048
+            ).reporting(security: security),
             initiator: Network.Initiator(kind: "other", nodeID: DOM.Node.ID("23")),
             resourceType: .stylesheet,
             timestamp: 5
@@ -10274,7 +10274,8 @@ func memoryCacheSecurityReplacesExistingResponseSummary() throws {
     )
     request.applyResponse(
         Network.Response(
-            status: 200,
+            status: 200
+        ).reporting(
             security: Network.Security(
                 connection: Network.Security.Connection(tlsProtocol: "TLS 1.2")
             )
@@ -10289,9 +10290,8 @@ func memoryCacheSecurityReplacesExistingResponseSummary() throws {
     request.applyMemoryCache(
         response: Network.Response(
             url: "https://example.com/cached.css",
-            status: 200,
-            security: cachedSecurity
-        ),
+            status: 200
+        ).reporting(security: cachedSecurity),
         initiator: Network.Initiator(kind: "other"),
         resourceType: .stylesheet,
         timestamp: 3
@@ -10399,9 +10399,8 @@ func webSocketCreatedPreservesExistingNetworkLifecycleMetadata() async throws {
                 status: 101,
                 statusText: "Switching Protocols",
                 headers: ["Upgrade": "websocket"],
-                requestHeaders: ["Upgrade": "websocket"],
-                security: responseSecurity
-            ),
+                requestHeaders: ["Upgrade": "websocket"]
+            ).reporting(security: responseSecurity),
             resourceType: .webSocket,
             timestamp: 2
         ),
@@ -10516,9 +10515,8 @@ func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
                 status: 101,
                 statusText: "Switching Protocols",
                 headers: ["Upgrade": "websocket"],
-                requestHeaders: ["Upgrade": "websocket"],
-                security: handshakeSecurity
-            ),
+                requestHeaders: ["Upgrade": "websocket"]
+            ).reporting(security: handshakeSecurity),
             timestamp: 2
         )),
         target: target

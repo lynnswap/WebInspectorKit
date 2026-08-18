@@ -1838,6 +1838,18 @@ func transportBackendDecodesNetworkResponseEventForTargetRoute() async throws {
     )
     #expect(resourceType == .document)
     #expect(timestamp == 12.5)
+
+    let copiedResponse = response.reporting(security: Network.Security())
+    #expect(copiedResponse.url == response.url)
+    #expect(copiedResponse.status == response.status)
+    #expect(copiedResponse.statusText == response.statusText)
+    #expect(copiedResponse.mimeType == response.mimeType)
+    #expect(copiedResponse.headers == response.headers)
+    #expect(copiedResponse.source == response.source)
+    #expect(copiedResponse.requestHeaders == response.requestHeaders)
+    #expect(copiedResponse.bodySize == response.bodySize)
+    #expect(copiedResponse.origin == response.origin)
+    #expect(copiedResponse.security == Network.Security())
 }
 
 @Test
