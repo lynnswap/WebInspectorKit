@@ -6,6 +6,15 @@ func webInspectorDataKitBaseSurfaceDoesNotRequireProxyKitImport() {
     _ = DataKitImportOnlyActor()
 }
 
+@Test
+func dataKitLegacyNetworkResponseSnapshotInitializerFunctionReferenceRemainsUsable() {
+    let makeResponseSnapshot = NetworkResponseSnapshot.init
+    let response = makeResponseSnapshot(nil, 204, nil, nil, [:], nil, nil)
+
+    #expect(response.status == 204)
+    #expect(response.security == nil)
+}
+
 private actor DataKitImportOnlyActor {
     func consume(_ context: WebInspectorContext) async throws {
         let requests: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
@@ -53,6 +62,8 @@ private actor DataKitImportOnlyActor {
         _ = requests.items.first?.hasResponse
         _ = requests.items.first?.hasResponseBody
         _ = requests.items.first?.metrics
+        _ = requests.items.first?.security?.connection?.tlsProtocol
+        _ = requests.items.first?.security?.certificate?.dnsNames
         _ = requestsByMethod.sections.first?.title
         let requestSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID> =
             requestController.snapshot
@@ -72,8 +83,12 @@ private actor DataKitImportOnlyActor {
 
         let request = NetworkRequestSnapshot(url: "https://example.com", method: "GET")
         let response = NetworkResponseSnapshot(status: 200, mimeType: "text/html")
+        if let security = requests.items.first?.security {
+            _ = response.reporting(security: security)
+        }
         let redirect = RedirectHop(request: request, response: response, timestamp: 1)
         _ = redirect.request.url
         _ = redirect.response.status
+        _ = redirect.response.security?.certificate?.subject
     }
 }
