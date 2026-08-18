@@ -974,10 +974,10 @@ public final class NetworkBody {
         url: String,
         role: Role
     ) -> (kind: Kind, syntaxKind: SyntaxKind) {
-        let contentType = (mimeType ?? headerValue(named: "content-type", in: headers) ?? "")
-            .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
-            .first
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() } ?? ""
+        let contentType = NetworkContentTypeParser.effectiveNormalizedMediaType(
+            protocolMIMEType: mimeType,
+            headers: headers
+        ) ?? ""
 
         if role == .request && contentType == "application/x-www-form-urlencoded" {
             return (.form, .plainText)
@@ -1001,10 +1001,6 @@ public final class NetworkBody {
             return (.text, syntaxKind(forPathExtensionIn: url))
         }
         return (.binary, .plainText)
-    }
-
-    private static func headerValue(named name: String, in headers: [String: String]) -> String? {
-        headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
     }
 
     private static func syntaxKind(forPathExtensionIn url: String) -> SyntaxKind {
@@ -1081,37 +1077,20 @@ public final class NetworkBody {
     }
 
     private func formattedURLEncodedFormText(from text: String?) -> String? {
-        guard let text, text.isEmpty == false, text.contains("=") else {
+        guard let text else {
             return nil
         }
-
-        var lines: [String] = []
-        for pair in text.split(separator: "&", omittingEmptySubsequences: false) {
-            let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-            guard parts.isEmpty == false else {
-                continue
-            }
-            guard let name = decodeFormComponent(String(parts[0])) else {
-                return nil
-            }
-            let value: String
-            if parts.count > 1 {
-                guard let decodedValue = decodeFormComponent(String(parts[1])) else {
-                    return nil
-                }
-                value = decodedValue
-            } else {
-                value = ""
-            }
-            lines.append("\(name)=\(value)")
+        let report = NetworkParameterParser.parseForm(text)
+        guard report.parameters.isEmpty == false else {
+            return text
         }
-        return lines.isEmpty ? nil : lines.joined(separator: "\n")
-    }
-
-    private func decodeFormComponent(_ component: String) -> String? {
-        component
-            .replacingOccurrences(of: "+", with: " ")
-            .removingPercentEncoding
+        return report.parameters.map { parameter in
+            let name = parameter.name.displayValue
+            guard parameter.hadEqualsSign else {
+                return name
+            }
+            return "\(name)=\(parameter.value.displayValue)"
+        }.joined(separator: "\n")
     }
 }
 
@@ -2070,36 +2049,21 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     }
 
     package static func effectiveMIMEType(mimeType: String?, headers: [String: String]) -> String? {
-        if let mimeType, mimeType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            return mimeType
-        }
-        guard let contentType = headers.first(where: { key, _ in
-            key.caseInsensitiveCompare("content-type") == .orderedSame
-        })?.value else {
-            return nil
-        }
-        return contentType
+        NetworkContentTypeParser.effectiveMediaType(
+            protocolMIMEType: mimeType,
+            headers: headers
+        )
     }
 
     private static func normalizedMIMEType(_ mimeType: String?) -> String {
-        mimeType?
-            .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
-            .first?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased() ?? ""
+        guard let mimeType else {
+            return ""
+        }
+        return NetworkContentTypeParser.parse(mimeType).normalizedMediaType ?? ""
     }
 
     private static func isMultipartMixedReplace(_ mimeType: String?) -> Bool {
-        guard let mimeType else {
-            return false
-        }
-        return mimeType.utf8.elementsEqual(
-            "multipart/x-mixed-replace".utf8,
-            by: { lhs, rhs in
-                let folded = lhs >= 65 && lhs <= 90 ? lhs + 32 : lhs
-                return folded == rhs
-            }
-        )
+        normalizedMIMEType(mimeType) == "multipart/x-mixed-replace"
     }
 
     private static func isPreviewableImage(mimeType: String, pathExtension: String) -> Bool {
