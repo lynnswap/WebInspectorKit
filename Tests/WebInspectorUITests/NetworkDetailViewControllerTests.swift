@@ -339,16 +339,16 @@ struct NetworkDetailViewControllerTests {
         ])
         #expect(
             NetworkCookiesViewController.sectionTitleForTesting(.request)
-                == String(
-                    localized: "network.cookies.section.request",
-                    bundle: WebInspectorUILocalization.bundle
+                == localized(
+                    "network.cookies.section.request",
+                    defaultValue: "Request Cookies"
                 )
         )
         #expect(
             NetworkCookiesViewController.sectionTitleForTesting(.response)
-                == String(
-                    localized: "network.cookies.section.response",
-                    bundle: WebInspectorUILocalization.bundle
+                == localized(
+                    "network.cookies.section.response",
+                    defaultValue: "Response Cookies"
                 )
         )
         #expect(
@@ -529,29 +529,29 @@ struct NetworkDetailViewControllerTests {
                 key: .init(name: "session", duplicateOccurrence: 0)
             ))
         )
-        let nameLabel = String(
-            localized: "network.cookies.field.name",
-            bundle: WebInspectorUILocalization.bundle
+        let nameLabel = localized(
+            "network.cookies.field.name",
+            defaultValue: "Name"
         )
-        let maxAgeLabel = String(
-            localized: "network.cookies.field.max_age",
-            bundle: WebInspectorUILocalization.bundle
+        let maxAgeLabel = localized(
+            "network.cookies.field.max_age",
+            defaultValue: "Max-Age"
         )
-        let secureLabel = String(
-            localized: "network.cookies.field.secure",
-            bundle: WebInspectorUILocalization.bundle
+        let secureLabel = localized(
+            "network.cookies.field.secure",
+            defaultValue: "Secure"
         )
-        let httpOnlyLabel = String(
-            localized: "network.cookies.field.http_only",
-            bundle: WebInspectorUILocalization.bundle
+        let httpOnlyLabel = localized(
+            "network.cookies.field.http_only",
+            defaultValue: "HttpOnly"
         )
-        let partitionedLabel = String(
-            localized: "network.cookies.field.partitioned",
-            bundle: WebInspectorUILocalization.bundle
+        let partitionedLabel = localized(
+            "network.cookies.field.partitioned",
+            defaultValue: "Partitioned"
         )
-        let yes = String(
-            localized: "network.cookies.value.yes",
-            bundle: WebInspectorUILocalization.bundle
+        let yes = localized(
+            "network.cookies.value.yes",
+            defaultValue: "Yes"
         )
         #expect(content.fields.count == 11)
         #expect(content.fields.map(\.label).contains(nameLabel))
@@ -5909,6 +5909,17 @@ struct NetworkDetailViewControllerTests {
             return nil
         }
         return bundle.localizedString(forKey: key, value: nil, table: nil)
+    }
+
+    private func localized(
+        _ key: StaticString,
+        defaultValue: String.LocalizationValue
+    ) -> String {
+        String(
+            localized: key,
+            defaultValue: defaultValue,
+            bundle: WebInspectorUILocalization.bundle
+        )
     }
 
     @MainActor
