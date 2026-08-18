@@ -1274,7 +1274,7 @@ struct ParentContainerTests {
     }
 
     @Test
-    func networkPanelModelSelectionIsSharedAcrossParentHosts() async throws {
+    func networkDetailSelectionAndModeSurviveParentHostReplacement() async throws {
         let context = makeContext()
         let session = WebInspectorSession(context: context)
         let contentStore = PresentationContentStore()
@@ -1305,6 +1305,12 @@ struct ParentContainerTests {
             compactNavigationController.viewControllers.last is NetworkDetailViewController
         }
         #expect(didPushDetail)
+        let compactDetailViewController = try #require(
+            compactNavigationController.viewControllers.last as? NetworkDetailViewController
+        )
+        compactDetailViewController.setModeForTesting(.preview)
+        let selectedEntryID = try #require(model.entryID(containing: request.id))
+        #expect(model.selection == .request(entryID: selectedEntryID, requestID: request.id))
 
         let regularRoot = WebInspectorTab.ContentFactory.makeViewController(
             for: .network,
@@ -1325,8 +1331,12 @@ struct ParentContainerTests {
         )
         detailViewController.loadViewIfNeeded()
 
+        #expect(detailViewController === compactDetailViewController)
+        #expect(detailViewController.currentModeForTesting == .preview)
+        #expect(model.selection == .request(entryID: selectedEntryID, requestID: request.id))
+
         let didRenderDetail = await waitUntilNetworkDetailRendered(in: detailViewController) {
-            detailViewController.headersTextViewForTesting.renderedTextForTesting.contains("GET /app.js")
+            detailViewController.previewRequestIDForTesting == request.id
         }
         #expect(didRenderDetail)
     }

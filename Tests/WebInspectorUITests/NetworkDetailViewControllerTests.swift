@@ -730,7 +730,7 @@ struct NetworkDetailViewControllerTests {
             base64Encoded: false
         )
         let model = NetworkPanelModel(context: context)
-        model.selectRequest(errorRequest)
+        try selectEntry(containing: errorRequest, in: model)
         let viewController = makeNetworkDetailViewController(
             model: model,
             initialMode: .preview
@@ -743,7 +743,7 @@ struct NetworkDetailViewControllerTests {
                 && viewController.syntaxBodyViewControllerForTesting
                     .syntaxViewForTesting.text.contains(#""error" : "not found""#)
         })
-        #expect(model.selectedRequests.map(\.id) == [successfulRequest.id, errorRequest.id])
+        #expect(model.selectedEntryRequests.map(\.id) == [successfulRequest.id, errorRequest.id])
     }
 
     @Test
@@ -2474,6 +2474,51 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func compactBackPreservesReplacementRequestInTheSameEntry() async throws {
+        let context = makeContext()
+        let frameID = FrameID("main-frame")
+        let nodeID = DOM.Node.ID("compact-replacement")
+        installNavigationVisit(in: context, frameID: frameID)
+        let firstRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "compact-first",
+            url: "https://example.com/compact-first.js",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 1
+        ))
+        let secondRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "compact-second",
+            url: "https://example.com/compact-second.js",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 4
+        ))
+        let model = NetworkPanelModel(context: context)
+        let entryID = try #require(model.entryID(containing: firstRequest.id))
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectRequest(firstRequest)
+        navigationController.syncStackForTesting()
+
+        let poppedViewController = navigationController.popDetailFromUserNavigationForTesting {
+            model.selectRequest(secondRequest)
+            navigationController.syncStackForTesting()
+        }
+
+        #expect(poppedViewController === detailViewController)
+        #expect(model.selection == .request(entryID: entryID, requestID: secondRequest.id))
+        #expect(model.selectedRequest === secondRequest)
+        #expect(navigationController.viewControllers == [listViewController, detailViewController])
+    }
+
+    @Test
     func compactContainerReleasesDetailMediaPreviewResourcesWhenDetailIsRemoved() async throws {
         let context = makeContext()
         let request = try #require(
@@ -3761,7 +3806,7 @@ struct NetworkDetailViewControllerTests {
             timestamp: 4
         ))
         let model = NetworkPanelModel(context: context)
-        model.selectRequest(secondRequest)
+        try selectEntry(containing: secondRequest, in: model)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -3779,7 +3824,47 @@ struct NetworkDetailViewControllerTests {
         let secondHeading = try #require(renderedText.range(of: "2. second.js"))
         #expect(firstHeading.lowerBound < secondHeading.lowerBound)
         #expect(model.selectedRequest === firstRequest)
-        #expect(model.selectedRequests.map(\.id) == [firstRequest.id, secondRequest.id])
+        #expect(model.selectedEntryRequests.map(\.id) == [firstRequest.id, secondRequest.id])
+    }
+
+    @Test
+    func explicitGroupedMemberHeadersRenderOnlyThatRequest() async throws {
+        let context = makeContext()
+        let frameID = FrameID("main-frame")
+        let nodeID = DOM.Node.ID("explicit-headers")
+        installNavigationVisit(in: context, frameID: frameID)
+        let firstRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "first-explicit-header",
+            url: "https://example.com/first-explicit.js",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            requestHeaders: ["x-member": "first"],
+            timestamp: 1
+        ))
+        let secondRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "second-explicit-header",
+            url: "https://example.com/second-explicit.js",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            requestHeaders: ["x-member": "second"],
+            timestamp: 4
+        ))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(secondRequest)
+        let viewController = makeNetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(await waitUntilRendered(in: viewController) {
+            let text = viewController.headersTextViewForTesting.renderedTextForTesting
+            return viewController.previewRequestIDForTesting == secondRequest.id
+                && text.contains("x-member: second")
+                && text.contains("x-member: first") == false
+        })
+        #expect(model.selectedRequest === secondRequest)
+        #expect(model.selectedRequest !== firstRequest)
     }
 
     @Test
@@ -3815,7 +3900,7 @@ struct NetworkDetailViewControllerTests {
             timestamp: 4
         ))
         let model = NetworkPanelModel(context: context)
-        model.selectRequest(partialSegmentRequest)
+        try selectEntry(containing: partialSegmentRequest, in: model)
         let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -3827,7 +3912,201 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didSelectHLSPreview)
         #expect(model.selectedRequest?.id == hlsRequest.id)
-        #expect(model.selectedRequests.map(\.id) == [hlsRequest.id, partialSegmentRequest.id])
+        #expect(model.selectedEntryRequests.map(\.id) == [hlsRequest.id, partialSegmentRequest.id])
+    }
+
+    @Test
+    func explicitGroupedMemberPreviewDoesNotJumpToAnotherMember() async throws {
+        let context = makeContext()
+        let frameID = FrameID("main-frame")
+        let nodeID = DOM.Node.ID("explicit-preview")
+        installNavigationVisit(in: context, frameID: frameID)
+        let hlsRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "explicit-playlist",
+            url: "https://media.example.com/live/explicit.m3u8",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+            responseMIMEType: "application/vnd.apple.mpegurl",
+            resourceType: .media,
+            timestamp: 1
+        ))
+        let partialSegmentRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "explicit-partial-segment",
+            url: "https://media.example.com/explicit-segment.mp4",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: [
+                "content-type": "video/mp4",
+                "content-range": "bytes 0-1023/4096",
+            ],
+            responseMIMEType: "video/mp4",
+            responseStatus: 206,
+            resourceType: .media,
+            timestamp: 4
+        ))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(partialSegmentRequest)
+        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == partialSegmentRequest.id
+                && viewController.previewViewForTesting.isHidden == false
+        })
+        #expect(model.selectedRequest === partialSegmentRequest)
+        #expect(viewController.previewRequestIDForTesting != hlsRequest.id)
+    }
+
+    @Test
+    func requestPickerUsesStableEntryAndRequestItemsWithSearch() async throws {
+        let context = makeContext()
+        let frameID = FrameID("main-frame")
+        let nodeID = DOM.Node.ID("picker")
+        installNavigationVisit(in: context, frameID: frameID)
+        let firstRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "picker-first",
+            url: "https://example.com/alpha.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 1
+        ))
+        let secondRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "picker-second",
+            url: "https://example.com/beta.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 4
+        ))
+        let otherNodeID = DOM.Node.ID("picker-other")
+        let otherFirstRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "picker-other-first",
+            url: "https://example.com/other-alpha.json",
+            frameID: frameID,
+            initiatorNodeID: otherNodeID,
+            timestamp: 7
+        ))
+        let otherSecondRequest = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "picker-other-second",
+            url: "https://example.com/other-beta.json",
+            frameID: frameID,
+            initiatorNodeID: otherNodeID,
+            timestamp: 10
+        ))
+        let model = NetworkPanelModel(context: context)
+        let entryID = try #require(model.entryID(containing: firstRequest.id))
+        model.selectEntry(entryID)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let window = showInWindow(detailViewController)
+        defer { window.isHidden = true }
+        let picker = NetworkDetailRequestPickerViewController(model: model, entryID: entryID)
+        let presentationController = UIPresentationController(
+            presentedViewController: picker,
+            presenting: nil
+        )
+
+        picker.resumeRenderingForTesting()
+
+        #expect(
+            detailViewController.requestPickerItemForTesting?.accessibilityIdentifier
+                == "WebInspector.Network.DetailRequestPickerButton"
+        )
+        #expect(picker.isObservingModelForTesting)
+        #expect(
+            picker.adaptivePresentationStyle(
+                for: presentationController,
+                traitCollection: UITraitCollection(horizontalSizeClass: .compact)
+            ) == .pageSheet
+        )
+        #expect(
+            picker.adaptivePresentationStyle(
+                for: presentationController,
+                traitCollection: UITraitCollection(horizontalSizeClass: .regular)
+            ) == .none
+        )
+        #expect(picker.itemIDsForTesting == [
+            .entry(entryID),
+            .request(firstRequest.id),
+            .request(secondRequest.id),
+        ])
+
+        picker.setSearchTextForTesting("beta")
+
+        #expect(picker.itemIDsForTesting == [
+            .entry(entryID),
+            .request(secondRequest.id),
+        ])
+
+        picker.collectionView(
+            picker.collectionView,
+            didSelectItemAt: IndexPath(item: 1, section: 0)
+        )
+
+        #expect(model.selection == .request(entryID: entryID, requestID: secondRequest.id))
+        #expect(picker.isObservingModelForTesting == false)
+
+        picker.setSearchTextForTesting("")
+        picker.resumeRenderingForTesting()
+        picker.collectionView(
+            picker.collectionView,
+            didSelectItemAt: IndexPath(item: 0, section: 0)
+        )
+
+        #expect(model.selection == .entry(entryID))
+
+        picker.resumeRenderingForTesting()
+        let observation = try #require(picker.modelObservationDeliveryForTesting)
+        let observedEntryID = await observation.values {
+            picker.boundEntryIDForTesting
+        }
+        defer { observedEntryID.cancel() }
+        let otherEntryID = try #require(model.entryID(containing: otherFirstRequest.id))
+
+        model.selectEntry(otherEntryID)
+
+        #expect(await observedEntryID.waitUntilValue(otherEntryID))
+        #expect(picker.itemIDsForTesting == [
+            .entry(otherEntryID),
+            .request(otherFirstRequest.id),
+            .request(otherSecondRequest.id),
+        ])
+
+        picker.suspendRenderingForTesting()
+        #expect(picker.isObservingModelForTesting == false)
+    }
+
+    @Test
+    func requestPickerVirtualizesLargeGroupedMembership() async throws {
+        let context = makeContext()
+        let frameID = FrameID("main-frame")
+        let nodeID = DOM.Node.ID("large-picker")
+        installNavigationVisit(in: context, frameID: frameID)
+        for index in 0..<2_305 {
+            await applyGroupedPendingRequest(
+                to: context,
+                requestID: "picker-\(index)",
+                frameID: frameID,
+                initiatorNodeID: nodeID,
+                timestamp: Double(index)
+            )
+        }
+        let model = NetworkPanelModel(context: context)
+        let entryID = try #require(model.displayEntryIDs.first)
+        model.selectEntry(entryID)
+        let picker = NetworkDetailRequestPickerViewController(model: model, entryID: entryID)
+
+        picker.resumeRenderingForTesting()
+
+        #expect(picker.itemIDsForTesting.count == 2_306)
+        #expect(picker.itemIDsForTesting.first == .entry(entryID))
+        picker.suspendRenderingForTesting()
     }
 
     @Test
@@ -3849,7 +4128,7 @@ struct NetworkDetailViewControllerTests {
             timestamp: 1
         ))
         let model = NetworkPanelModel(context: context)
-        model.selectRequest(firstRequest)
+        try selectEntry(containing: firstRequest, in: model)
         let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
         let playerFactory = MoviePreviewPlayerFactorySpy()
         viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
@@ -3886,7 +4165,7 @@ struct NetworkDetailViewControllerTests {
             viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting
                 != firstPlayerID
         )
-        #expect(model.selectedRequests.map(\.id) == [firstRequest.id, secondRequest.id])
+        #expect(model.selectedEntryRequests.map(\.id) == [firstRequest.id, secondRequest.id])
     }
 
     @Test
@@ -3907,7 +4186,7 @@ struct NetworkDetailViewControllerTests {
             timestamp: 1
         ))
         let model = NetworkPanelModel(context: context)
-        model.selectRequest(firstRequest)
+        try selectEntry(containing: firstRequest, in: model)
         let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
         let playerFactory = MoviePreviewPlayerFactorySpy()
         viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
@@ -3941,7 +4220,7 @@ struct NetworkDetailViewControllerTests {
                     .mediaPlayerURLForTesting?.absoluteString == secondRequest.url
                 && playerFactory.players.count == 2
         })
-        #expect(model.selectedRequests.map(\.id) == [firstRequest.id, secondRequest.id])
+        #expect(model.selectedEntryRequests.map(\.id) == [firstRequest.id, secondRequest.id])
     }
 
     @Test
@@ -3998,7 +4277,7 @@ struct NetworkDetailViewControllerTests {
             )
         }
         let model = NetworkPanelModel(context: context)
-        model.selectRequest(partialRequest)
+        try selectEntry(containing: partialRequest, in: model)
         let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
         let playerFactory = MoviePreviewPlayerFactorySpy()
         viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
@@ -4061,7 +4340,7 @@ struct NetworkDetailViewControllerTests {
             timestamp: 7
         ))
         let model = NetworkPanelModel(context: context)
-        model.selectRequest(noContentRequest)
+        try selectEntry(containing: noContentRequest, in: model)
         let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -4072,7 +4351,7 @@ struct NetworkDetailViewControllerTests {
                 && viewController.previewViewForTesting.isHidden == false
         }
         #expect(didSelectHealthyPreview)
-        #expect(model.selectedRequests.map(\.id) == [healthyRequest.id, failedRequest.id, noContentRequest.id])
+        #expect(model.selectedEntryRequests.map(\.id) == [healthyRequest.id, failedRequest.id, noContentRequest.id])
     }
 
     @Test
@@ -4106,7 +4385,7 @@ struct NetworkDetailViewControllerTests {
             timestamp: 4
         ))
         let model = NetworkPanelModel(context: context)
-        model.selectRequest(unavailableMediaRequest)
+        try selectEntry(containing: unavailableMediaRequest, in: model)
         let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -4191,7 +4470,7 @@ struct NetworkDetailViewControllerTests {
             timestamp: 1
         ))
         let model = NetworkPanelModel(context: context)
-        model.selectRequest(firstRequest)
+        try selectEntry(containing: firstRequest, in: model)
         let viewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -4216,7 +4495,7 @@ struct NetworkDetailViewControllerTests {
             return text.contains("first.js") && text.contains("second.js")
         })
         #expect(model.displayEntryIDs.isEmpty)
-        #expect(model.selectedRequests.map(\.id) == [firstRequest.id, secondRequest.id])
+        #expect(model.selectedEntryRequests.map(\.id) == [firstRequest.id, secondRequest.id])
     }
 
     @Test
@@ -4243,6 +4522,16 @@ struct NetworkDetailViewControllerTests {
         WebInspectorContext.preview(isolation: MainActor.shared)
     }
 
+    private func selectEntry(
+        containing request: NetworkRequest,
+        in model: NetworkPanelModel
+    ) throws {
+        let entryID: NetworkListEntry.ID = try #require(
+            model.entryID(containing: request.id)
+        )
+        model.selectEntry(entryID)
+    }
+
     private func installNavigationVisit(
         in context: WebInspectorContext,
         frameID: FrameID
@@ -4257,6 +4546,33 @@ struct NetworkDetailViewControllerTests {
             securityOrigin: "https://example.com",
             mimeType: "text/html"
         )))
+    }
+
+    private func applyGroupedPendingRequest(
+        to context: WebInspectorContext,
+        requestID rawRequestID: String,
+        frameID: FrameID,
+        initiatorNodeID: DOM.Node.ID,
+        timestamp: Double
+    ) async {
+        let requestID = Network.Request.ID(rawRequestID)
+        await context.apply(.requestWillBeSent(
+            id: requestID,
+            request: Network.Request(
+                id: requestID,
+                url: "https://example.com/\(rawRequestID)",
+                method: "GET",
+                origin: Network.Request.Origin(
+                    frameID: frameID,
+                    loaderID: "loader",
+                    targetID: "page"
+                )
+            ),
+            initiator: Network.Initiator(kind: "script", nodeID: initiatorNodeID),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: timestamp
+        ))
     }
 
     private func applyGroupedRequest(

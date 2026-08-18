@@ -97,11 +97,27 @@ package final class NetworkDetailViewController: UIViewController {
         }
         return controller
     }()
+    private lazy var requestPickerItem: UIBarButtonItem = {
+        let item = UIBarButtonItem(
+            image: UIImage(systemName: "list.bullet"),
+            style: .plain,
+            target: self,
+            action: #selector(presentRequestPicker)
+        )
+        item.accessibilityIdentifier = "WebInspector.Network.DetailRequestPickerButton"
+        item.accessibilityLabel = String(
+            localized: "network.section.request",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        return item
+    }()
     private var previewRoles: [NetworkBody.Role] = []
-    private var hasBoundSelectedRequest = false
+    private var hasBoundSelection = false
+    private var observedSelection: NetworkPanelSelection?
     private weak var observedEntry: NetworkListEntry?
     private weak var observedRequest: NetworkRequest?
     private var observedRequests: [NetworkRequest] = []
+    private weak var presentedRequestPicker: NetworkDetailRequestPickerViewController?
     private var bodyTopToPreviewContainerConstraint: NSLayoutConstraint?
     private var bodyTopToPreviewRoleControlConstraint: NSLayoutConstraint?
 #if DEBUG
@@ -164,6 +180,13 @@ package final class NetworkDetailViewController: UIViewController {
         suspendRendering()
     }
 
+    override package func willMove(toParent parent: UIViewController?) {
+        if parent == nil {
+            dismissRequestPicker(animated: false)
+        }
+        super.willMove(toParent: parent)
+    }
+
     override package func contentScrollView(for edge: NSDirectionalRectEdge) -> UIScrollView? {
         if edge == .top || edge == .bottom {
             return scrollEdgeController.contentScrollView ?? super.contentScrollView(for: edge)
@@ -182,10 +205,14 @@ package final class NetworkDetailViewController: UIViewController {
         modelObservation?.cancel()
         let token = withPortableContinuousObservation { [weak self] _ in
             guard let self else { return }
+            let selection = model.selection
             let selectedEntry = model.selectedEntry
             _ = selectedEntry?.requests
-            bindSelectedEntry(
-                selectedEntry,
+            let selectedRequest = model.selectedRequest
+            bindSelection(
+                selection,
+                entry: selectedEntry,
+                selectedRequest: selectedRequest,
                 force: selectedRequestRenderObservation == nil
             )
         }
@@ -197,12 +224,22 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func resumeRendering() {
         guard isRenderingActive == false else {
-            bindSelectedEntry(model.selectedEntry, force: selectedRequestRenderObservation == nil)
+            bindSelection(
+                model.selection,
+                entry: model.selectedEntry,
+                selectedRequest: model.selectedRequest,
+                force: selectedRequestRenderObservation == nil
+            )
             updateBodyRenderingActiveForCurrentSurface()
             return
         }
         isRenderingActive = true
-        bindSelectedEntry(model.selectedEntry, force: true)
+        bindSelection(
+            model.selection,
+            entry: model.selectedEntry,
+            selectedRequest: model.selectedRequest,
+            force: true
+        )
         startObservingModel()
         updateBodyRenderingActiveForCurrentSurface()
     }
@@ -314,31 +351,55 @@ package final class NetworkDetailViewController: UIViewController {
         renderModeControl()
     }
 
-    private func bindSelectedEntry(_ entry: NetworkListEntry?, force: Bool = false) {
+    private func bindSelection(
+        _ selection: NetworkPanelSelection?,
+        entry: NetworkListEntry?,
+        selectedRequest: NetworkRequest?,
+        force: Bool = false
+    ) {
         guard isRenderingActive else {
             return
         }
-        let requests = entry?.requests ?? []
+
+        let requests: [NetworkRequest]
+        switch selection {
+        case .entry:
+            requests = entry?.requests ?? []
+        case .request:
+            requests = selectedRequest.map { [$0] } ?? []
+        case nil:
+            requests = []
+        }
+        renderRequestPickerItem(entry: entry)
+
         guard force
-            || hasBoundSelectedRequest == false
+            || hasBoundSelection == false
+            || observedSelection != selection
             || observedEntry !== entry
-            || observedRequests.map(\.id) != requests.map(\.id) else {
-            renderModeControl(selectedRequest: requests.first)
+            || requestInstancesMatch(observedRequests, requests) == false else {
+            renderModeControl(selectedRequest: selectedRequest)
             return
         }
 
-        guard let entry,
-              let request = requests.first else {
+        guard let selection,
+              let entry,
+              let selectedRequest,
+              requests.isEmpty == false else {
             clearSelectedRequestPresentation(bodySurface: .none)
             return
         }
 
-        hasBoundSelectedRequest = true
+        guard selection.entryID == entry.id else {
+            preconditionFailure("A Network detail selection must reference its selected entry.")
+        }
+
+        hasBoundSelection = true
         selectedRequestRenderObservation?.cancel()
         selectedRequestRenderObservation = nil
         unbindResponseBodyFetchObservation()
+        observedSelection = selection
         observedEntry = entry
-        observedRequest = request
+        observedRequest = selectedRequest
         observedRequests = requests
 #if DEBUG
         selectedRequestRenderObservationDelivery = nil
@@ -347,8 +408,8 @@ package final class NetworkDetailViewController: UIViewController {
         if contentUnavailableConfiguration != nil {
             contentUnavailableConfiguration = nil
         }
-        renderModeControl(selectedRequest: request)
-        bindSelectedRequestRendering(requests)
+        renderModeControl(selectedRequest: selectedRequest)
+        bindSelectedRequestRendering(selection: selection, requests: requests)
     }
 
     private func rebindSelectedRequestRendering() {
@@ -361,23 +422,27 @@ package final class NetworkDetailViewController: UIViewController {
         guard isRenderingActive else {
             return
         }
-        guard observedRequests.isEmpty == false else {
+        guard let observedSelection,
+              observedRequests.isEmpty == false else {
             return
         }
-        bindSelectedRequestRendering(observedRequests)
+        bindSelectedRequestRendering(selection: observedSelection, requests: observedRequests)
     }
 
-    private func bindSelectedRequestRendering(_ requests: [NetworkRequest]) {
+    private func bindSelectedRequestRendering(
+        selection: NetworkPanelSelection,
+        requests: [NetworkRequest]
+    ) {
         guard isRenderingActive else {
             return
         }
-        let requestIDs = requests.map(\.id)
         let token = withPortableContinuousObservation { [weak self] _ in
             guard let self,
-                  observedRequests.map(\.id) == requestIDs else {
+                  observedSelection == selection,
+                  requestInstancesMatch(observedRequests, requests) else {
                 return
             }
-            renderSelectedRequests(observedRequests)
+            renderSelection(selection, requests: observedRequests)
         }
         selectedRequestRenderObservation = token
 #if DEBUG
@@ -385,18 +450,41 @@ package final class NetworkDetailViewController: UIViewController {
 #endif
     }
 
-    private func renderSelectedRequests(_ requests: [NetworkRequest]) {
+    private func renderSelection(
+        _ selection: NetworkPanelSelection,
+        requests: [NetworkRequest]
+    ) {
         guard isRenderingActive else {
             return
         }
         switch mode {
         case .preview:
-            guard let candidate = previewCandidate(in: requests) else {
-                return
+            let candidate: PreviewCandidate
+            switch selection {
+            case .entry:
+                guard let groupedCandidate = previewCandidate(in: requests) else {
+                    preconditionFailure("A selected Network entry must contain at least one request.")
+                }
+                candidate = groupedCandidate
+            case .request:
+                guard requests.count == 1,
+                      let request = requests.first else {
+                    preconditionFailure("An explicit Network request selection must render exactly one request.")
+                }
+                candidate = previewCandidate(for: request) ?? .standard(request)
             }
             renderPreviewSurface(candidate: candidate)
         case .headers:
-            renderHeadersSurface(selectedRequests: requests)
+            switch selection {
+            case .entry:
+                renderHeadersSurface(entryRequests: requests)
+            case .request:
+                guard requests.count == 1,
+                      let request = requests.first else {
+                    preconditionFailure("An explicit Network request selection must render exactly one request.")
+                }
+                renderHeadersSurface(request: request)
+            }
         }
     }
 
@@ -409,7 +497,7 @@ package final class NetworkDetailViewController: UIViewController {
         updateBodyRenderingActiveForCurrentSurface()
     }
 
-    private func renderHeadersSurface(selectedRequests requests: [NetworkRequest]) {
+    private func renderHeadersSurface(entryRequests requests: [NetworkRequest]) {
         guard let representativeRequest = requests.first else {
             preconditionFailure("A selected Network entry must contain at least one request.")
         }
@@ -417,6 +505,13 @@ package final class NetworkDetailViewController: UIViewController {
         title = representativeRequest.displayName
         showHeaders()
         headersTextView.render(requests: requests)
+    }
+
+    private func renderHeadersSurface(request: NetworkRequest) {
+        observedRequest = request
+        title = request.displayName
+        showHeaders()
+        headersTextView.render(request: request)
     }
 
     private func setMode(_ nextMode: NetworkDetailViewController.Mode) {
@@ -453,10 +548,11 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func clearSelectedRequestPresentation(bodySurface: NetworkBodySurface) {
-        hasBoundSelectedRequest = true
+        hasBoundSelection = true
         selectedRequestRenderObservation?.cancel()
         selectedRequestRenderObservation = nil
         unbindResponseBodyFetchObservation()
+        observedSelection = nil
         observedEntry = nil
         observedRequest = nil
         observedRequests = []
@@ -464,8 +560,58 @@ package final class NetworkDetailViewController: UIViewController {
         selectedRequestRenderObservationDelivery = nil
 #endif
         title = nil
+        renderRequestPickerItem(entry: nil)
         showEmptySelection(bodySurface: bodySurface)
         renderModeControl(selectedRequest: nil)
+    }
+
+    private func requestInstancesMatch(
+        _ lhs: [NetworkRequest],
+        _ rhs: [NetworkRequest]
+    ) -> Bool {
+        lhs.count == rhs.count && zip(lhs, rhs).allSatisfy { $0 === $1 }
+    }
+
+    private func renderRequestPickerItem(entry: NetworkListEntry?) {
+        guard let entry,
+              entry.requests.count > 1 else {
+            navigationItem.rightBarButtonItem = nil
+            dismissRequestPicker(animated: false)
+            return
+        }
+        navigationItem.rightBarButtonItem = requestPickerItem
+        requestPickerItem.accessibilityValue = String(entry.requests.count)
+    }
+
+    @objc private func presentRequestPicker() {
+        guard presentedRequestPicker == nil,
+              let entry = model.selectedEntry,
+              entry.requests.count > 1 else {
+            return
+        }
+
+        let picker = NetworkDetailRequestPickerViewController(model: model, entryID: entry.id)
+        let navigationController = UINavigationController(rootViewController: picker)
+        navigationController.modalPresentationStyle = .popover
+        navigationController.preferredContentSize = picker.preferredContentSize
+        guard let popoverPresentationController = navigationController.popoverPresentationController else {
+            preconditionFailure("A popover presentation must provide a popover presentation controller.")
+        }
+        popoverPresentationController.sourceItem = requestPickerItem
+        popoverPresentationController.delegate = picker
+        popoverPresentationController.adaptiveSheetPresentationController.detents = [
+            .medium(),
+            .large(),
+        ]
+        presentedRequestPicker = picker
+        present(navigationController, animated: true)
+    }
+
+    private func dismissRequestPicker(animated: Bool) {
+        guard let picker = presentedRequestPicker else {
+            return
+        }
+        picker.navigationController?.dismiss(animated: animated)
     }
 
     private func showEmptySelection(bodySurface: NetworkBodySurface) {
@@ -935,6 +1081,14 @@ extension NetworkDetailViewController {
         observedRequest?.id
     }
 
+    var requestPickerItemForTesting: UIBarButtonItem? {
+        navigationItem.rightBarButtonItem
+    }
+
+    var presentedRequestPickerForTesting: NetworkDetailRequestPickerViewController? {
+        presentedRequestPicker
+    }
+
     func isDetailModeEnabledForTesting(_ mode: NetworkDetailViewController.Mode) -> Bool {
         modeControlController.isModeEnabledForTesting(mode)
     }
@@ -954,6 +1108,10 @@ extension NetworkDetailViewController {
 
     func selectPreviewRoleForTesting(_ role: NetworkBody.Role) {
         previewRoleControlController.selectRoleForTesting(role)
+    }
+
+    func presentRequestPickerForTesting() {
+        presentRequestPicker()
     }
 }
 #endif

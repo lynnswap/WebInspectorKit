@@ -165,6 +165,18 @@ package struct NetworkPanelListProjection: Equatable, Sendable {
     package let entryIDs: [NetworkListEntry.ID]
 }
 
+package enum NetworkPanelSelection: Equatable, Sendable {
+    case entry(NetworkListEntry.ID)
+    case request(entryID: NetworkListEntry.ID, requestID: NetworkRequest.ID)
+
+    package var entryID: NetworkListEntry.ID {
+        switch self {
+        case .entry(let entryID), .request(let entryID, _):
+            entryID
+        }
+    }
+}
+
 private final class NetworkPanelListInvalidationRelay: Sendable {
     private struct State {
         var continuations: [UUID: AsyncStream<NetworkPanelListInvalidation>.Continuation] = [:]
@@ -242,7 +254,7 @@ package final class NetworkPanelModel {
     private let fetchedResultsController: WebInspectorFetchedResultsController<NetworkRequest>
     private let collectionState: NetworkRequestCollectionState
 
-    package private(set) var selectedEntryID: NetworkListEntry.ID?
+    package private(set) var selection: NetworkPanelSelection?
     package private(set) var searchText = ""
     package private(set) var activeResourceFilters: Set<NetworkDisplay.ResourceFilter> = []
 
@@ -258,7 +270,6 @@ package final class NetworkPanelModel {
     @ObservationIgnored private var visibleEntryIDSet: Set<NetworkListEntry.ID> = []
     @ObservationIgnored private var nextListTransactionRevision: UInt64 = 0
     @ObservationIgnored private var listEntryIdentityGeneration: UInt64 = 0
-    @ObservationIgnored private var selectedRequestAnchorID: NetworkRequest.ID?
 #if DEBUG
     private struct RawTransactionDeliveryWaiter {
         var id: Int
@@ -350,15 +361,31 @@ package final class NetworkPanelModel {
     }
 
     package var selectedRequest: NetworkRequest? {
-        selectedEntry?.representativeRequest
+        guard let selection else {
+            return nil
+        }
+        switch selection {
+        case .entry:
+            return selectedEntry?.representativeRequest
+        case let .request(entryID, requestID):
+            guard entryIDByRequestID[requestID] == entryID,
+                  let request = requestsByID[requestID] else {
+                preconditionFailure("A selected Network request must belong to its selected entry.")
+            }
+            return request
+        }
     }
 
-    package var selectedRequests: [NetworkRequest] {
+    package var selectedEntryRequests: [NetworkRequest] {
         selectedEntry?.requests ?? []
     }
 
+    package var selectedEntryID: NetworkListEntry.ID? {
+        selection?.entryID
+    }
+
     package var selectedRequestID: NetworkRequest.ID? {
-        selectedRequestAnchorID
+        selectedRequest?.id
     }
 
     package func entry(for id: NetworkListEntry.ID) -> NetworkListEntry? {
@@ -375,28 +402,35 @@ package final class NetworkPanelModel {
 
     package func selectEntry(_ id: NetworkListEntry.ID?) {
         guard let id else {
-            selectedEntryID = nil
-            selectedRequestAnchorID = nil
+            selection = nil
             return
         }
-        guard let entry = entriesByID[id] else {
-            selectedEntryID = nil
-            selectedRequestAnchorID = nil
+        guard entriesByID[id] != nil else {
+            selection = nil
             return
         }
-        selectedEntryID = id
-        selectedRequestAnchorID = entry.representativeRequest.id
+        selection = .entry(id)
     }
 
     package func selectRequest(_ request: NetworkRequest?) {
-        guard let request,
-              let entryID = entryIDByRequestID[request.id] else {
-            selectedEntryID = nil
-            selectedRequestAnchorID = nil
+        selectRequest(id: request?.id)
+    }
+
+    package func selectRequest(id requestID: NetworkRequest.ID?) {
+        guard let requestID,
+              requestsByID[requestID] != nil,
+              let entryID = entryIDByRequestID[requestID] else {
+            selection = nil
             return
         }
-        selectedEntryID = entryID
-        selectedRequestAnchorID = request.id
+        selection = .request(entryID: entryID, requestID: requestID)
+    }
+
+    package func clearSelection(ifUnchanged expectedSelection: NetworkPanelSelection) {
+        guard selection == expectedSelection else {
+            return
+        }
+        selection = nil
     }
 
     package func setSearchText(_ text: String) {
@@ -431,8 +465,7 @@ package final class NetworkPanelModel {
     }
 
     package func clearRequests() {
-        selectedEntryID = nil
-        selectedRequestAnchorID = nil
+        selection = nil
         context.network.clearRequests()
     }
 
@@ -462,15 +495,10 @@ package final class NetworkPanelModel {
         rawTransactionDeliveryCountStorageForTesting &+= 1
         resolveRawTransactionDeliveryWaitersForTesting(result: true)
 #endif
+        let selectionBeforeTransaction = selection
         if transaction.isReset {
             rebuildEntries(from: requests.items)
-            if let selectedRequestAnchorID,
-               let entryID = entryIDByRequestID[selectedRequestAnchorID] {
-                selectedEntryID = entryID
-            } else {
-                selectedEntryID = nil
-                selectedRequestAnchorID = nil
-            }
+            reconcileSelection(selectionBeforeTransaction, forceRebind: true)
             publishListTransaction(
                 topologyChangedEntryIDs: Set(visibleEntryIDs),
                 rebindsStableEntries: true
@@ -516,6 +544,8 @@ package final class NetworkPanelModel {
                 topologyChangedEntryIDs: &topologyChangedEntryIDs
             )
         }
+
+        reconcileSelection(selectionBeforeTransaction)
 
         publishListTransaction(
             topologyChangedEntryIDs: topologyChangedEntryIDs,
@@ -587,7 +617,6 @@ package final class NetworkPanelModel {
         affectedEntryIDs: inout Set<NetworkListEntry.ID>,
         topologyChangedEntryIDs: inout Set<NetworkListEntry.ID>
     ) {
-        let wasSelectedRequest = selectedRequestAnchorID == request.id
         let previousRequest = requestsByID[request.id]
         let previousStatusSeverity = requestStatusSeverityByID[request.id]
         let lifecycleRestarted: Bool
@@ -648,9 +677,6 @@ package final class NetworkPanelModel {
             if hasActiveDisplayCriteria {
                 affectedEntryIDs.insert(currentEntryID)
             }
-            if selectedRequestAnchorID == request.id {
-                selectedEntryID = currentEntryID
-            }
             return
         }
 
@@ -693,10 +719,6 @@ package final class NetworkPanelModel {
             affectedEntryIDs.insert(nextEntryID)
         }
 
-        if wasSelectedRequest {
-            selectedEntryID = nextEntryID
-            selectedRequestAnchorID = request.id
-        }
     }
 
     private func removeRequest(
@@ -720,13 +742,6 @@ package final class NetworkPanelModel {
             topologyChangedEntryIDs: &topologyChangedEntryIDs
         )
 
-        if selectedRequestAnchorID == requestID {
-            if let entry = entriesByID[entryID] {
-                selectedRequestAnchorID = entry.representativeRequest.id
-            } else {
-                selectedRequestAnchorID = nil
-            }
-        }
     }
 
     private func removeRequestFromEntry(
@@ -747,10 +762,6 @@ package final class NetworkPanelModel {
                 visibleEntryIDs.removeAll { $0 == entryID }
                 topologyChangedEntryIDs.insert(entryID)
             }
-            if selectedEntryID == entryID {
-                selectedEntryID = nil
-                selectedRequestAnchorID = nil
-            }
         } else {
 #if DEBUG
             memberTraversalCountStorageForTesting += entry.requests.count
@@ -765,6 +776,30 @@ package final class NetworkPanelModel {
                 affectedEntryIDs.insert(entryID)
             }
         }
+    }
+
+    private func reconcileSelection(
+        _ previousSelection: NetworkPanelSelection?,
+        forceRebind: Bool = false
+    ) {
+        let reconciledSelection: NetworkPanelSelection?
+        switch previousSelection {
+        case .entry(let entryID):
+            reconciledSelection = entriesByID[entryID] == nil ? nil : previousSelection
+        case .request(_, let requestID):
+            guard requestsByID[requestID] != nil,
+                  let entryID = entryIDByRequestID[requestID] else {
+                reconciledSelection = nil
+                break
+            }
+            reconciledSelection = .request(entryID: entryID, requestID: requestID)
+        case nil:
+            reconciledSelection = nil
+        }
+        guard forceRebind || selection != reconciledSelection else {
+            return
+        }
+        selection = reconciledSelection
     }
 
     private func reapplyDisplayCriteria() {
@@ -1041,7 +1076,9 @@ package final class NetworkPanelModel {
 #if DEBUG
 extension NetworkPanelModel {
     package func rebuildEntriesForTesting() {
+        let selectionBeforeRebuild = selection
         rebuildEntries(from: requests.items)
+        reconcileSelection(selectionBeforeRebuild, forceRebind: true)
         publishListTransaction(
             topologyChangedEntryIDs: Set(visibleEntryIDs),
             rebindsStableEntries: true
