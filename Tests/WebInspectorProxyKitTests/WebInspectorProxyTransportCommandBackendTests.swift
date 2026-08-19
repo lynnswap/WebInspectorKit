@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import WebInspectorProxyKit
+import WebInspectorProxyKitTesting
 import WebInspectorTestSupport
 
 private let transportCommandBackendWaitTimeout: Duration = .milliseconds(750)
@@ -603,6 +604,185 @@ func transportBackedProxyCloseDetachesTransportAndFinishesEventStreams() async t
 }
 
 @Test
+func testRuntimeCloseFinishesActiveAndLateDomainAndOrderedStreams() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let activeDomainTask = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+    let activeOrderedFeed = await target.orderedEventFeed()
+    let activeOrderedTask = Task {
+        var iterator = activeOrderedFeed.events.makeAsyncIterator()
+        return try await iterator.next()
+    }
+    try await runtime.backend.waitForSubscribers(
+        domain: "Network",
+        target: target,
+        count: 2
+    )
+
+    await runtime.proxy.close()
+
+    #expect(try await value(of: activeDomainTask) == nil)
+    #expect(try await throwingValue(of: activeOrderedTask) == nil)
+    var lateDomainIterator = target.network.events.makeAsyncIterator()
+    #expect(await lateDomainIterator.next() == nil)
+    let lateOrderedFeed = await target.orderedEventFeed()
+    var lateOrderedIterator = lateOrderedFeed.events.makeAsyncIterator()
+    #expect(try await lateOrderedIterator.next() == nil)
+    #expect(await runtime.backend.eventSubscriptionBookkeepingCountForTesting() == 0)
+}
+
+@Test
+func testRuntimeCloseReleasesPendingCommandsAndSubscriberWaiters() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let commandGate = WebInspectorProxyKitTesting.WebInspectorTestGate()
+    await runtime.backend.hold(domain: "Network", method: "enable", gate: commandGate)
+    await runtime.backend.enqueue((), for: "Network", method: "enable")
+    let commandTask = Task {
+        try await target.network.enable()
+    }
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "Network",
+        method: "enable",
+        count: 1
+    )
+    let subscriberWaitTask = Task {
+        try await runtime.backend.waitForSubscribers(
+            domain: "Network",
+            target: target,
+            count: 1
+        )
+    }
+    await runtime.backend.waitForEventSubscriptionWaiterForTesting()
+    #expect(await runtime.backend.eventSubscriptionWaiterCountForTesting() == 1)
+
+    await runtime.proxy.close()
+
+    await #expect(throws: WebInspectorProxyError.closed) {
+        try await commandTask.value
+    }
+    await #expect(throws: WebInspectorProxyError.closed) {
+        try await subscriberWaitTask.value
+    }
+    await #expect(throws: WebInspectorProxyError.closed) {
+        try await runtime.backend.waitForSubscribers(
+            domain: "Network",
+            target: target,
+            count: 1
+        )
+    }
+    #expect(await runtime.backend.eventSubscriptionWaiterCountForTesting() == 0)
+    #expect(await runtime.backend.eventSubscriptionBookkeepingCountForTesting() == 0)
+}
+
+@Test
+func subscriptionCancellationBeforeRegistrationLeavesNoBookkeeping() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: nil)
+    await installPageTarget(in: transport)
+    let liveBackend = LiveWebInspectorProxyBackend(transport: transport)
+    let proxy = WebInspectorProxy(
+        backend: liveBackend,
+        closeConnection: { error in
+            await transport.detach(error: error)
+        }
+    )
+    let target = pageTarget(proxy: proxy)
+
+    #expect(await liveBackend.exerciseCancelledSubscriptionRegistrationForTesting(
+        ordered: false,
+        route: target.route,
+        targetID: target.id
+    ))
+    #expect(await liveBackend.exerciseCancelledSubscriptionRegistrationForTesting(
+        ordered: true,
+        route: target.route,
+        targetID: target.id
+    ))
+
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let runtimeTarget = try await runtime.proxy.waitForCurrentPage()
+    #expect(await runtime.backend.exerciseCancelledSubscriptionRegistrationForTesting(
+        ordered: false,
+        route: runtimeTarget.route,
+        targetID: runtimeTarget.id
+    ))
+    #expect(await runtime.backend.exerciseCancelledSubscriptionRegistrationForTesting(
+        ordered: true,
+        route: runtimeTarget.route,
+        targetID: runtimeTarget.id
+    ))
+
+    let waiterTask = Task {
+        try await runtime.backend.waitForSubscribers(
+            domain: "Network",
+            target: runtimeTarget,
+            count: 1
+        )
+    }
+    await runtime.backend.waitForEventSubscriptionWaiterForTesting()
+    #expect(await runtime.backend.eventSubscriptionWaiterCountForTesting() == 1)
+    waiterTask.cancel()
+    await #expect(throws: CancellationError.self) {
+        try await waiterTask.value
+    }
+    #expect(await runtime.backend.eventSubscriptionWaiterCountForTesting() == 0)
+    #expect(await runtime.backend.eventSubscriptionBookkeepingCountForTesting() == 0)
+    await runtime.proxy.close()
+    await proxy.close()
+}
+
+@Test
+func liveSubscriptionWaitersReleaseOnCancellationAndExplicitClose() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: nil)
+    await installPageTarget(in: transport)
+    let liveBackend = LiveWebInspectorProxyBackend(transport: transport)
+    let proxy = WebInspectorProxy(
+        backend: liveBackend,
+        closeConnection: { error in
+            await transport.detach(error: error)
+        }
+    )
+    let target = pageTarget(proxy: proxy)
+
+    let cancelledWaiter = Task {
+        await liveBackend.waitForEventSubscriptions(
+            route: target.route,
+            targetID: target.id,
+            domain: .network,
+            minimumCount: 1
+        )
+    }
+    await liveBackend.waitForEventSubscriptionWaiterForTesting()
+    #expect(await liveBackend.eventSubscriptionWaiterCountForTesting() == 1)
+    cancelledWaiter.cancel()
+    await cancelledWaiter.value
+    #expect(await liveBackend.eventSubscriptionWaiterCountForTesting() == 0)
+
+    let terminalWaiter = Task {
+        await liveBackend.waitForEventSubscriptions(
+            route: target.route,
+            targetID: target.id,
+            domain: .network,
+            minimumCount: 1
+        )
+    }
+    await liveBackend.waitForEventSubscriptionWaiterForTesting()
+    #expect(await liveBackend.eventSubscriptionWaiterCountForTesting() == 1)
+
+    await proxy.close()
+
+    await terminalWaiter.value
+    #expect(await liveBackend.eventSubscriptionWaiterCountForTesting() == 0)
+    #expect(await liveBackend.eventSubscriptionBookkeepingCountForTesting() == 0)
+    #expect(await backend.isDetached())
+}
+
+@Test
 func malformedKnownDomainEventTerminatesProxyAndPendingCommand() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: nil)
@@ -679,7 +859,7 @@ func malformedKnownOrderedEventPropagatesTerminalFailure() async throws {
 }
 
 @Test
-func malformedKnownEventPropagatesFailureToEveryOrderedSubscriber() async throws {
+func malformedKnownDOMEventTerminatesFilteredDomainRouteWithoutDelivering() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: nil)
     await installPageTarget(in: transport)
@@ -687,6 +867,185 @@ func malformedKnownEventPropagatesFailureToEveryOrderedSubscriber() async throws
     let proxy = WebInspectorProxy(
         backend: liveBackend,
         closeConnection: { error in
+            await transport.detach(error: error)
+        }
+    )
+    let filteredTarget = WebInspectorTarget(
+        id: WebInspectorTarget.ID("filtered-frame"),
+        kind: .frame,
+        frameID: FrameID("filtered-frame"),
+        isProvisional: false,
+        proxy: proxy,
+        route: RoutingTargetID("filtered-frame")
+    )
+    let eventTask = Task {
+        var iterator = filteredTarget.dom.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+    await liveBackend.waitForEventSubscriptions(
+        route: filteredTarget.route,
+        targetID: filteredTarget.id,
+        domain: .dom,
+        minimumCount: 1
+    )
+
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "DOM.setChildNodes",
+        params: "{}"
+    )
+
+    #expect(try await value(of: eventTask) == nil)
+    let closeMessage = await disconnectedMessage(from: Task {
+        try await proxy.waitUntilClosed()
+    })
+    #expect(closeMessage?.contains("DOM.setChildNodes") == true)
+    #expect(await backend.isDetached())
+}
+
+@Test
+func malformedKnownEventTerminatesFilteredOrderedRouteWithoutWatermark() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: nil)
+    await installPageTarget(in: transport)
+    let liveBackend = LiveWebInspectorProxyBackend(transport: transport)
+    let proxy = WebInspectorProxy(
+        backend: liveBackend,
+        closeConnection: { error in
+            await transport.detach(error: error)
+        }
+    )
+    let filteredTarget = WebInspectorTarget(
+        id: WebInspectorTarget.ID("filtered-frame"),
+        kind: .frame,
+        frameID: FrameID("filtered-frame"),
+        isProvisional: false,
+        proxy: proxy,
+        route: RoutingTargetID("filtered-frame")
+    )
+    let feed = await filteredTarget.orderedEventFeed()
+    let eventTask = Task {
+        var iterator = feed.events.makeAsyncIterator()
+        return try await iterator.next()
+    }
+    await liveBackend.waitForEventSubscriptions(
+        route: filteredTarget.route,
+        targetID: filteredTarget.id,
+        domain: .ordered,
+        minimumCount: 1
+    )
+
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Network.loadingFinished",
+        params: "{}"
+    )
+
+    let closeMessage = await disconnectedMessage(from: eventTask)
+    #expect(closeMessage?.contains("Network.loadingFinished") == true)
+    #expect(await backend.isDetached())
+}
+
+@Test
+func domainSubscribersFinishBeforeGatedDetachAndFailureReasonWinsLaterClose() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: nil)
+    await installPageTarget(in: transport)
+    let liveBackend = LiveWebInspectorProxyBackend(transport: transport)
+    let closeGate = CloseConnectionGate()
+    let proxy = WebInspectorProxy(
+        backend: liveBackend,
+        closeConnection: { error in
+            await closeGate.waitUntilReleased()
+            await transport.detach(error: error)
+        }
+    )
+    let currentPage = WebInspectorTarget(
+        id: .currentPage,
+        kind: .page,
+        frameID: nil,
+        isProvisional: false,
+        proxy: proxy,
+        route: .currentPage
+    )
+    let filteredTarget = WebInspectorTarget(
+        id: WebInspectorTarget.ID("filtered-frame"),
+        kind: .frame,
+        frameID: FrameID("filtered-frame"),
+        isProvisional: false,
+        proxy: proxy,
+        route: RoutingTargetID("filtered-frame")
+    )
+    let currentTask = Task {
+        var iterator = currentPage.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+    let filteredTask = Task {
+        var iterator = filteredTarget.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+    await liveBackend.waitForEventSubscriptions(
+        route: currentPage.route,
+        targetID: currentPage.id,
+        domain: .network,
+        minimumCount: 1
+    )
+    await liveBackend.waitForEventSubscriptions(
+        route: filteredTarget.route,
+        targetID: filteredTarget.id,
+        domain: .network,
+        minimumCount: 1
+    )
+    let pendingCommandTask = Task {
+        try await currentPage.page.reload()
+    }
+    _ = try await waitForTargetMessage(backend, method: "Page.reload")
+
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Network.loadingFinished",
+        params: "{}"
+    )
+    await closeGate.waitUntilStarted()
+
+    #expect(try await value(of: currentTask) == nil)
+    #expect(try await value(of: filteredTask) == nil)
+    let lateTask = Task {
+        var iterator = filteredTarget.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+    #expect(try await value(of: lateTask) == nil)
+    #expect(await backend.isDetached() == false)
+
+    let explicitCloseTask = Task {
+        await proxy.close()
+    }
+    await closeGate.release()
+    await explicitCloseTask.value
+    let closeMessage = await disconnectedMessage(from: Task {
+        try await proxy.waitUntilClosed()
+    })
+    let commandMessage = await disconnectedMessage(from: pendingCommandTask)
+    #expect(closeMessage?.contains("Network.loadingFinished") == true)
+    #expect(commandMessage == closeMessage)
+    #expect(await closeGate.invocationCount() == 1)
+    #expect(await backend.isDetached())
+}
+
+@Test
+func malformedKnownEventPropagatesFailureToEveryOrderedSubscriber() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: nil)
+    await installPageTarget(in: transport)
+    let liveBackend = LiveWebInspectorProxyBackend(transport: transport)
+    let closeGate = CloseConnectionGate()
+    let proxy = WebInspectorProxy(
+        backend: liveBackend,
+        closeConnection: { error in
+            await closeGate.waitUntilReleased()
             await transport.detach(error: error)
         }
     )
@@ -727,6 +1086,14 @@ func malformedKnownEventPropagatesFailureToEveryOrderedSubscriber() async throws
     let secondMessage = await disconnectedMessage(from: secondTask)
     #expect(firstMessage?.contains("Network.loadingFinished") == true)
     #expect(secondMessage == firstMessage)
+    await closeGate.waitUntilStarted()
+    #expect(await closeGate.invocationCount() == 1)
+    #expect(await backend.isDetached() == false)
+    await closeGate.release()
+    let closeMessage = await disconnectedMessage(from: Task {
+        try await proxy.waitUntilClosed()
+    })
+    #expect(closeMessage == firstMessage)
     #expect(await backend.isDetached())
 }
 
@@ -838,6 +1205,46 @@ func explicitCloseReasonWinsConcurrentDecodeFailure() async throws {
     await closeGate.release()
     await closeTask.value
     try await proxy.waitUntilClosed()
+    #expect(await backend.isDetached())
+}
+
+@Test
+func closeWaiterCancellationIsIndependentFromDecodeFailure() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: nil)
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+    let eventTask = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+    await waitForEventSubscription(target, domain: .network)
+    let cancelledWaiter = Task {
+        try await proxy.waitUntilClosed()
+    }
+    let terminalWaiter = Task {
+        try await proxy.waitUntilClosed()
+    }
+    await proxy.waitForCloseWaiterForTesting(minimumCount: 2)
+
+    cancelledWaiter.cancel()
+    await #expect(throws: CancellationError.self) {
+        try await cancelledWaiter.value
+    }
+    #expect(await proxy.closeWaiterCountForTesting == 1)
+
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Network.loadingFinished",
+        params: "{}"
+    )
+
+    #expect(try await value(of: eventTask) == nil)
+    let terminalMessage = await disconnectedMessage(from: terminalWaiter)
+    #expect(terminalMessage?.contains("Network.loadingFinished") == true)
+    #expect(await proxy.closeWaiterCountForTesting == 0)
     #expect(await backend.isDetached())
 }
 
@@ -3858,13 +4265,13 @@ private func messageObject(_ message: String) throws -> [String: Any] {
 }
 
 private actor CloseConnectionGate {
-    private var started = false
+    private var startCount = 0
     private var released = false
     private var startWaiters: [CheckedContinuation<Void, Never>] = []
     private var releaseContinuation: CheckedContinuation<Void, Never>?
 
     func waitUntilReleased() async {
-        started = true
+        startCount += 1
         let waiters = startWaiters
         startWaiters.removeAll()
         for waiter in waiters {
@@ -3879,7 +4286,7 @@ private actor CloseConnectionGate {
     }
 
     func waitUntilStarted() async {
-        guard started == false else {
+        guard startCount == 0 else {
             return
         }
         await withCheckedContinuation { continuation in
@@ -3891,6 +4298,10 @@ private actor CloseConnectionGate {
         released = true
         releaseContinuation?.resume()
         releaseContinuation = nil
+    }
+
+    func invocationCount() -> Int {
+        startCount
     }
 }
 

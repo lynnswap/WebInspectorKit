@@ -96,7 +96,12 @@ private struct SubscriberWaiter: Sendable {
     var targetID: WebInspectorTarget.ID
     var domain: WebInspectorProxyEventDomain
     var count: Int
-    var continuation: CheckedContinuation<Void, Never>
+    var promise: ReplyPromise<Void>
+}
+
+private struct SubscriberWaiterRegistrationWaiter: Sendable {
+    var id: UInt64
+    var promise: ReplyPromise<Void>
 }
 
 private struct RecordedCommandWaiter: Sendable {
@@ -111,6 +116,14 @@ private struct CompletedCommandWaiter: Sendable {
     var method: String
     var count: Int
     var continuation: CheckedContinuation<[RecordedCommand], Never>
+}
+
+private struct EventTermination: Sendable {
+    var error: WebInspectorProxyError?
+
+    var operationError: WebInspectorProxyError {
+        error ?? .closed
+    }
 }
 
 /// Errors thrown by ``WebInspectorTestBackend`` helpers.
@@ -131,12 +144,15 @@ public actor WebInspectorTestBackend {
             UUID: AsyncThrowingStream<WebInspectorProxyOrderedEvent, any Error>.Continuation
         ]
     ]
+    private var cancelledEventSubscriptionIDs: Set<UUID>
+    private var eventTermination: EventTermination?
     private var orderedEventSequence: UInt64
     private var subscriberWaiters: [SubscriberWaiter]
+    private var subscriberWaiterRegistrationWaiters: [SubscriberWaiterRegistrationWaiter]
     private var recordedCommandWaiters: [RecordedCommandWaiter]
     private var completedCommandWaiters: [CompletedCommandWaiter]
     private var nextSubscriberWaiterID: UInt64
-    private var cancelledSubscriberWaiterIDs: Set<UInt64>
+    private var nextSubscriberWaiterRegistrationWaiterID: UInt64
 
     /// Creates an empty test backend.
     public init() {
@@ -146,12 +162,15 @@ public actor WebInspectorTestBackend {
         heldCommands = []
         eventContinuations = [:]
         orderedEventContinuations = [:]
+        cancelledEventSubscriptionIDs = []
+        eventTermination = nil
         orderedEventSequence = 0
         subscriberWaiters = []
+        subscriberWaiterRegistrationWaiters = []
         recordedCommandWaiters = []
         completedCommandWaiters = []
         nextSubscriberWaiterID = 0
-        cancelledSubscriberWaiterIDs = []
+        nextSubscriberWaiterRegistrationWaiterID = 0
     }
 
     /// Enqueues a successful reply for the next matching command.
@@ -310,7 +329,7 @@ public actor WebInspectorTestBackend {
         guard let eventDomain = WebInspectorProxyEventDomain(rawValue: domain) else {
             throw WebInspectorTestBackendError.unsupportedEventDomain(domain)
         }
-        await waitForSubscriber(route: nil, targetID: target, domain: eventDomain, count: count)
+        try await waitForSubscriber(route: nil, targetID: target, domain: eventDomain, count: count)
     }
 
     /// Waits until a target has at least the requested subscriber count.
@@ -322,7 +341,7 @@ public actor WebInspectorTestBackend {
         guard let eventDomain = WebInspectorProxyEventDomain(rawValue: domain) else {
             throw WebInspectorTestBackendError.unsupportedEventDomain(domain)
         }
-        await waitForSubscriber(route: target.route, targetID: target.id, domain: eventDomain, count: count)
+        try await waitForSubscriber(route: target.route, targetID: target.id, domain: eventDomain, count: count)
     }
 
     /// Returns the number of active ordered event subscribers for a target.
@@ -331,6 +350,57 @@ public actor WebInspectorTestBackend {
             route: target.route,
             targetID: target.id
         )]?.count ?? 0
+    }
+
+    package func eventSubscriptionBookkeepingCountForTesting() -> Int {
+        eventContinuations.values.reduce(0) { $0 + $1.count }
+            + orderedEventContinuations.values.reduce(0) { $0 + $1.count }
+            + cancelledEventSubscriptionIDs.count
+    }
+
+    package func eventSubscriptionWaiterCountForTesting() -> Int {
+        subscriberWaiters.count
+    }
+
+    package func waitForEventSubscriptionWaiterForTesting() async {
+        guard subscriberWaiters.isEmpty, eventTermination == nil else {
+            return
+        }
+        let id = nextSubscriberWaiterRegistrationWaiterID
+        nextSubscriberWaiterRegistrationWaiterID += 1
+        let waiter = SubscriberWaiterRegistrationWaiter(
+            id: id,
+            promise: ReplyPromise<Void>()
+        )
+        subscriberWaiterRegistrationWaiters.append(waiter)
+        defer {
+            subscriberWaiterRegistrationWaiters.removeAll { $0.id == id }
+        }
+        _ = try? await waiter.promise.value()
+    }
+
+    package func exerciseCancelledSubscriptionRegistrationForTesting(
+        ordered: Bool,
+        route: RoutingTargetID,
+        targetID: WebInspectorTarget.ID
+    ) -> Bool {
+        let id = UUID()
+        if ordered {
+            let key = OrderedEventSubscriptionKey(route: route, targetID: targetID)
+            let pair = AsyncThrowingStream<WebInspectorProxyOrderedEvent, any Error>.makeStream()
+            cancelOrderedEventContinuation(id: id, key: key)
+            addOrderedEventContinuation(pair.continuation, id: id, key: key)
+            return eventSubscriptionBookkeepingCountForTesting() == 0
+        }
+        let key = EventSubscriptionKey(
+            route: route,
+            targetID: targetID,
+            domain: .network
+        )
+        let pair = AsyncStream<WebInspectorProxyEvent>.makeStream()
+        cancelEventContinuation(id: id, key: key)
+        addEventContinuation(pair.continuation, id: id, key: key)
+        return eventSubscriptionBookkeepingCountForTesting() == 0
     }
 
     /// Holds matching commands until the supplied gate opens.
@@ -344,6 +414,9 @@ public actor WebInspectorTestBackend {
         route: RoutingTargetID?,
         domain: WebInspectorProxyEventDomain
     ) {
+        guard eventTermination == nil else {
+            return
+        }
         let (nextSequence, overflow) = orderedEventSequence.addingReportingOverflow(1)
         precondition(!overflow, "Test event sequence exhausted.")
         orderedEventSequence = nextSequence
@@ -374,14 +447,28 @@ public actor WebInspectorTestBackend {
         id: UUID,
         key: EventSubscriptionKey
     ) {
+        guard eventTermination == nil else {
+            continuation.finish()
+            return
+        }
+        guard cancelledEventSubscriptionIDs.remove(id) == nil else {
+            continuation.finish()
+            return
+        }
         eventContinuations[key, default: [:]][id] = continuation
         resolveSubscriberWaiters()
     }
 
-    private func removeEventContinuation(id: UUID, key: EventSubscriptionKey) {
-        eventContinuations[key]?[id] = nil
+    private func cancelEventContinuation(id: UUID, key: EventSubscriptionKey) {
+        guard eventTermination == nil else {
+            return
+        }
+        guard eventContinuations[key]?.removeValue(forKey: id) != nil else {
+            cancelledEventSubscriptionIDs.insert(id)
+            return
+        }
         if eventContinuations[key]?.isEmpty == true {
-            eventContinuations[key] = nil
+            eventContinuations.removeValue(forKey: key)
         }
     }
 
@@ -390,14 +477,28 @@ public actor WebInspectorTestBackend {
         id: UUID,
         key: OrderedEventSubscriptionKey
     ) {
-        orderedEventContinuations[key, default: [:]][id] = continuation
-        resolveSubscriberWaiters()
+        guard let termination = eventTermination else {
+            guard cancelledEventSubscriptionIDs.remove(id) == nil else {
+                continuation.finish()
+                return
+            }
+            orderedEventContinuations[key, default: [:]][id] = continuation
+            resolveSubscriberWaiters()
+            return
+        }
+        continuation.finish(throwing: termination.error)
     }
 
-    private func removeOrderedEventContinuation(id: UUID, key: OrderedEventSubscriptionKey) {
-        orderedEventContinuations[key]?[id] = nil
+    private func cancelOrderedEventContinuation(id: UUID, key: OrderedEventSubscriptionKey) {
+        guard eventTermination == nil else {
+            return
+        }
+        guard orderedEventContinuations[key]?.removeValue(forKey: id) != nil else {
+            cancelledEventSubscriptionIDs.insert(id)
+            return
+        }
         if orderedEventContinuations[key]?.isEmpty == true {
-            orderedEventContinuations[key] = nil
+            orderedEventContinuations.removeValue(forKey: key)
         }
     }
 
@@ -450,7 +551,7 @@ public actor WebInspectorTestBackend {
         var unresolved: [SubscriberWaiter] = []
         for waiter in subscriberWaiters {
             if subscriberCount(for: waiter) >= waiter.count {
-                waiter.continuation.resume()
+                waiter.promise.fulfill(.success(()))
             } else {
                 unresolved.append(waiter)
             }
@@ -463,47 +564,49 @@ public actor WebInspectorTestBackend {
         targetID: WebInspectorTarget.ID,
         domain: WebInspectorProxyEventDomain,
         count: Int
-    ) async {
+    ) async throws {
+        if let termination = eventTermination {
+            throw termination.operationError
+        }
         let waiterID = nextSubscriberWaiterID
         nextSubscriberWaiterID += 1
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                addSubscriberWaiter(SubscriberWaiter(
-                    id: waiterID,
-                    route: route,
-                    targetID: targetID,
-                    domain: domain,
-                    count: count,
-                    continuation: continuation
-                ))
-            }
-        } onCancel: {
-            Task {
-                await self.cancelSubscriberWaiter(waiterID)
-            }
+        let waiter = SubscriberWaiter(
+            id: waiterID,
+            route: route,
+            targetID: targetID,
+            domain: domain,
+            count: count,
+            promise: ReplyPromise<Void>()
+        )
+        addSubscriberWaiter(waiter)
+        defer {
+            removeSubscriberWaiter(waiterID)
         }
-        cancelledSubscriberWaiterIDs.remove(waiterID)
+        try await waiter.promise.value()
     }
 
     private func addSubscriberWaiter(_ waiter: SubscriberWaiter) {
-        guard cancelledSubscriberWaiterIDs.remove(waiter.id) == nil else {
-            waiter.continuation.resume()
+        if let termination = eventTermination {
+            waiter.promise.fulfill(.failure(termination.operationError))
             return
         }
         guard subscriberCount(for: waiter) < waiter.count else {
-            waiter.continuation.resume()
+            waiter.promise.fulfill(.success(()))
             return
         }
         subscriberWaiters.append(waiter)
+        let registrationWaiters = subscriberWaiterRegistrationWaiters
+        subscriberWaiterRegistrationWaiters.removeAll()
+        for waiter in registrationWaiters {
+            waiter.promise.fulfill(.success(()))
+        }
     }
 
-    private func cancelSubscriberWaiter(_ id: UInt64) {
+    private func removeSubscriberWaiter(_ id: UInt64) {
         guard let index = subscriberWaiters.firstIndex(where: { $0.id == id }) else {
-            cancelledSubscriberWaiterIDs.insert(id)
             return
         }
-        let waiter = subscriberWaiters.remove(at: index)
-        waiter.continuation.resume()
+        subscriberWaiters.remove(at: index)
     }
 
     private func subscriberCount(for waiter: SubscriberWaiter) -> Int {
@@ -586,6 +689,10 @@ extension WebInspectorTestBackend: WebInspectorProxyBackend {
             await gate.wait()
         }
 
+        if let termination = eventTermination {
+            throw termination.error ?? WebInspectorProxyError.closed
+        }
+
         let key = CommandKey(domain: command.domain.rawValue, method: command.method)
         guard var results = enqueuedReplies[key], results.isEmpty == false else {
             throw WebInspectorProxyError.commandFailed(
@@ -627,6 +734,44 @@ extension WebInspectorTestBackend: WebInspectorProxyBackend {
         )
     }
 
+    package func finishEventSubscriptions(throwing error: WebInspectorProxyError?) async {
+        guard eventTermination == nil else {
+            return
+        }
+        let termination = EventTermination(error: error)
+        eventTermination = termination
+        let domainContinuations = eventContinuations.values.flatMap { Array($0.values) }
+        eventContinuations.removeAll()
+        let orderedContinuations = orderedEventContinuations.values.flatMap { Array($0.values) }
+        orderedEventContinuations.removeAll()
+        cancelledEventSubscriptionIDs.removeAll()
+        let waiters = subscriberWaiters
+        subscriberWaiters.removeAll()
+        let registrationWaiters = subscriberWaiterRegistrationWaiters
+        subscriberWaiterRegistrationWaiters.removeAll()
+        let gates = Set(heldCommands.map { ObjectIdentifier($0.gate) })
+            .compactMap { identifier in
+                heldCommands.first { ObjectIdentifier($0.gate) == identifier }?.gate
+            }
+        heldCommands.removeAll()
+
+        for waiter in waiters {
+            waiter.promise.fulfill(.failure(termination.operationError))
+        }
+        for waiter in registrationWaiters {
+            waiter.promise.fulfill(.success(()))
+        }
+        for continuation in domainContinuations {
+            continuation.finish()
+        }
+        for continuation in orderedContinuations {
+            continuation.finish(throwing: error)
+        }
+        for gate in gates {
+            await gate.open()
+        }
+    }
+
     package func orderedEvents(
         route: RoutingTargetID,
         targetID: WebInspectorTarget.ID,
@@ -638,12 +783,12 @@ extension WebInspectorTestBackend: WebInspectorProxyBackend {
             bufferingPolicy: .unbounded
         )
         let id = UUID()
-        addOrderedEventContinuation(pair.continuation, id: id, key: key)
         pair.continuation.onTermination = { _ in
             Task {
-                await self.removeOrderedEventContinuation(id: id, key: key)
+                await self.cancelOrderedEventContinuation(id: id, key: key)
             }
         }
+        addOrderedEventContinuation(pair.continuation, id: id, key: key)
         return WebInspectorProxyOrderedEventFeed(
             initialSequence: orderedEventSequence,
             events: pair.stream
@@ -655,7 +800,7 @@ extension WebInspectorTestBackend: WebInspectorProxyBackend {
         targetID: WebInspectorTarget.ID,
         domain: WebInspectorProxyEventDomain
     ) async {
-        await waitForSubscriber(route: route, targetID: targetID, domain: domain, count: 1)
+        try? await waitForSubscriber(route: route, targetID: targetID, domain: domain, count: 1)
     }
 
     package nonisolated func events(
@@ -669,13 +814,13 @@ extension WebInspectorTestBackend: WebInspectorProxyBackend {
         let key = EventSubscriptionKey(route: route, targetID: targetID, domain: domain)
         return AsyncStream<WebInspectorProxyEvent> { continuation in
             let id = UUID()
-            Task {
-                await self.addEventContinuation(continuation, id: id, key: key)
-            }
             continuation.onTermination = { _ in
                 Task {
-                    await self.removeEventContinuation(id: id, key: key)
+                    await self.cancelEventContinuation(id: id, key: key)
                 }
+            }
+            Task {
+                await self.addEventContinuation(continuation, id: id, key: key)
             }
         }
     }

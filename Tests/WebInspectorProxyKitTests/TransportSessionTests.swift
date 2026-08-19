@@ -1385,6 +1385,40 @@ func waitForCurrentMainPageTargetFailsAfterDetach() async throws {
 }
 
 @Test
+func terminalDecodeFailureResolvesCurrentPageWaitersWithWinningReason() async throws {
+    let backend = FakeTransportBackend()
+    let timeout = ManualResponseTimeout()
+    let session = TransportSession(
+        backend: backend,
+        responseTimeout: testResponseTimeout,
+        timeoutSleep: { duration in
+            try await timeout.sleep(for: duration)
+        }
+    )
+    let waiter = Task {
+        try await session.waitForCurrentMainPageTarget(timeout: .seconds(1))
+    }
+    await timeout.waitUntilSuspended()
+    let terminalError = TransportSession.Error.eventDecodingFailed(
+        method: "DOM.setChildNodes",
+        message: "missing parentId"
+    )
+
+    await session.detach(error: terminalError)
+
+    await #expect(throws: terminalError) {
+        try await waiter.value
+    }
+    await #expect(throws: terminalError) {
+        try await session.waitForCurrentMainPageTarget()
+    }
+    await #expect(throws: terminalError) {
+        try await session.requireOpen()
+    }
+    #expect(await backend.isDetached())
+}
+
+@Test
 func receiveRootMessageAfterDetachDoesNotMutateSnapshot() async throws {
     let backend = FakeTransportBackend()
     let session = TransportSession(backend: backend, responseTimeout: testResponseTimeout)

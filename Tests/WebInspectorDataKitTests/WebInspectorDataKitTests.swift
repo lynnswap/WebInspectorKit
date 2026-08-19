@@ -1316,6 +1316,35 @@ func malformedKnownOrderedEventFailsAttachedContext() async throws {
         targetID: targetID,
         documentID: "decode-failure-root"
     )
+    let proxy = context.inspectionProxyForTesting
+    let target = try #require(context.currentPageForTesting)
+    let failedStatusTask = Task<WebInspectorContext.Status?, Never> { @MainActor in
+        for await status in context.statusUpdates {
+            if case .failed = status.state {
+                return status
+            }
+        }
+        return nil
+    }
+    let proxyCloseTask = Task {
+        await terminalProxyError(from: proxy)
+    }
+    let retargetBoundary = context.eventPumpAppliedSequenceForTesting
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-decode-failure"}}"#
+    )
+    #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: retargetBoundary))
+    let retargetTask = try #require(context.currentPageRetargetTaskForTesting())
+    let subscriptionBeforeFailure = context.orderedEventSubscriptionStateForTesting
+    let appliedBeforeFailure = context.eventPumpAppliedSequenceForTesting
+    let boundaryRegistration = ReplyPromise<Void>()
+    let boundaryWaiter = Task { @MainActor in
+        await context.waitForOrderedEventsForTesting(
+            through: subscriptionBeforeFailure.sequence + 1,
+            registration: boundaryRegistration
+        )
+    }
+    try await boundaryRegistration.value()
 
     await receiveTransportTargetEvent(
         transport,
@@ -1324,18 +1353,46 @@ func malformedKnownOrderedEventFailsAttachedContext() async throws {
         params: "{}"
     )
 
-    try await waitUntil {
-        if case .failed = context.state {
-            return true
-        }
-        return false
-    }
-    guard case let .failed(error) = context.state,
+    let failedStatus = try #require(await failedStatusTask.value)
+    let proxyError = try #require(await proxyCloseTask.value)
+    guard case let .failed(error) = failedStatus.state,
           case let .disconnected(message) = error else {
         Issue.record("Expected the context to fail with a disconnected error.")
         return
     }
     #expect(message.contains("Network.loadingFinished"))
+    #expect(proxyError == error)
+    #expect(await boundaryWaiter.value == false)
+    await retargetTask.value
+    #expect(context.currentPageRetargetTaskForTesting() == nil)
+    #expect(context.currentPageForTesting?.id == target.id)
+    #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("decode-failure-root")))
+    let subscriptionAfterFailure = context.orderedEventSubscriptionStateForTesting
+    #expect(subscriptionAfterFailure.generation == subscriptionBeforeFailure.generation + 1)
+    #expect(subscriptionAfterFailure.sequence == subscriptionBeforeFailure.sequence)
+    #expect(context.eventPumpAppliedSequenceForTesting == appliedBeforeFailure)
+    await context.applyOrderedEventForTesting(
+        WebInspectorProxyOrderedEvent(
+            sequence: subscriptionBeforeFailure.sequence + 1,
+            event: .network(.dataReceived(
+                id: Network.Request.ID("stale-after-failure"),
+                dataLength: 1,
+                encodedDataLength: 1,
+                timestamp: 4
+            ))
+        ),
+        target: target,
+        subscriptionGeneration: subscriptionBeforeFailure.generation
+    )
+    #expect(context.eventPumpAppliedSequenceForTesting == appliedBeforeFailure)
+    #expect(context.orderedEventSubscriptionStateForTesting == subscriptionAfterFailure)
+    context.handleOrderedEventStreamFailureForTesting(
+        WebInspectorProxyError.disconnected("stale failure callback"),
+        subscriptionGeneration: subscriptionBeforeFailure.generation
+    )
+    #expect(context.eventPumpAppliedSequenceForTesting == appliedBeforeFailure)
+    #expect(context.orderedEventSubscriptionStateForTesting == subscriptionAfterFailure)
+    #expect(context.state == failedStatus.state)
     #expect(await backend.isDetached())
 }
 
@@ -1349,6 +1406,17 @@ func malformedKnownOrderedEventFailsAttachingContextWithoutHanging() async throw
     let proxy = try await WebInspectorProxy(transport: transport)
     let container = WebInspectorContainer(proxy: proxy)
     let context = container.mainContext
+    let failedStatusTask = Task<WebInspectorContext.Status?, Never> { @MainActor in
+        for await status in context.statusUpdates {
+            if case .failed = status.state {
+                return status
+            }
+        }
+        return nil
+    }
+    let proxyCloseTask = Task {
+        await terminalProxyError(from: proxy)
+    }
 
     _ = try await waitForTransportTargetMessage(backend, method: "Inspector.enable")
     await receiveTransportTargetEvent(
@@ -1358,18 +1426,15 @@ func malformedKnownOrderedEventFailsAttachingContextWithoutHanging() async throw
         params: "{}"
     )
 
-    try await waitUntil {
-        if case .failed = context.state {
-            return true
-        }
-        return false
-    }
-    guard case let .failed(error) = context.state,
+    let failedStatus = try #require(await failedStatusTask.value)
+    let proxyError = try #require(await proxyCloseTask.value)
+    guard case let .failed(error) = failedStatus.state,
           case let .disconnected(message) = error else {
         Issue.record("Expected startup to fail with a disconnected error.")
         return
     }
     #expect(message.contains("Network.loadingFinished"))
+    #expect(proxyError == error)
     #expect(await backend.isDetached())
 }
 
@@ -3308,7 +3373,7 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
         transport,
         targetID: oldTargetID,
         method: "DOM.childNodeInserted",
-        params: ##"{"parentNodeId":"new-root","previousNodeId":null,"node":{"nodeId":"old-route-child","nodeType":1,"nodeName":"DIV","localName":"div","nodeValue":"","childNodeCount":0}}"##
+        params: ##"{"parentNodeId":"new-root","previousNodeId":0,"node":{"nodeId":"old-route-child","nodeType":1,"nodeName":"DIV","localName":"div","nodeValue":"","childNodeCount":0}}"##
     )
     await receiveTransportTargetEvent(
         transport,
@@ -14357,7 +14422,9 @@ private func startTransportBackedContext(
         result: "{}"
     )
 
-    try await waitUntil { context.state == .attached }
+    let startupTask = try #require(context.startupTaskForTesting())
+    await startupTask.value
+    #expect(context.state == .attached)
     return (backend, transport, context)
 }
 
@@ -14594,6 +14661,19 @@ private func receiveTransportTargetEvent(
         targetID: targetID,
         message: #"{"method":"\#(method)","params":\#(params)}"#
     ))
+}
+
+private func terminalProxyError(from proxy: WebInspectorProxy) async -> WebInspectorProxyError? {
+    do {
+        try await proxy.waitUntilClosed()
+        Issue.record("Expected the proxy to close with a terminal failure.")
+        return nil
+    } catch let error as WebInspectorProxyError {
+        return error
+    } catch {
+        Issue.record("Expected WebInspectorProxyError, got \(error).")
+        return nil
+    }
 }
 
 private func emitTransportNetworkRequest(

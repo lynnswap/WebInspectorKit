@@ -75,7 +75,10 @@ public actor WebInspectorProxy {
     private var nextTargetOrdinal: UInt64
     private var nextCloseWaiterID: UInt64
     private var closeWaiters: [UInt64: CheckedContinuation<Void, any Error>]
-    private var closeWaiterRegistrationWaiters: [CheckedContinuation<Void, Never>]
+    private var closeWaiterRegistrationWaiters: [(
+        minimumCount: Int,
+        continuation: CheckedContinuation<Void, Never>
+    )]
     private var cancelledCloseWaiterIDs: Set<UInt64>
     private var closeState: CloseState
 
@@ -357,16 +360,20 @@ public actor WebInspectorProxy {
         return target
     }
 
-    package func waitForCloseWaiterForTesting() async {
+    package func waitForCloseWaiterForTesting(minimumCount: Int = 1) async {
         if case .closed = closeState {
             preconditionFailure("Cannot wait for a close waiter after WebInspectorProxy closed.")
         }
-        guard closeWaiters.isEmpty else {
+        guard closeWaiters.count < minimumCount else {
             return
         }
         await withCheckedContinuation { continuation in
-            closeWaiterRegistrationWaiters.append(continuation)
+            closeWaiterRegistrationWaiters.append((minimumCount, continuation))
         }
+    }
+
+    package var closeWaiterCountForTesting: Int {
+        closeWaiters.count
     }
 
     package func dispatchCommand<Payload: Sendable, Result: Sendable>(
@@ -661,8 +668,8 @@ public actor WebInspectorProxy {
     }
 
     private nonisolated var terminalFailureHandler: WebInspectorProxyTerminalFailureHandler {
-        { failure, broadcast in
-            await self.terminate(failure, broadcast: broadcast)
+        { failure in
+            await self.terminate(failure)
         }
     }
 
@@ -984,21 +991,14 @@ public actor WebInspectorProxy {
     }
 
     private func terminate(
-        _ failure: WebInspectorProxyTerminalFailure,
-        broadcast: WebInspectorProxyTerminalBroadcast
+        _ failure: WebInspectorProxyTerminalFailure
     ) async {
-        switch closeState {
-        case .open:
-            _ = await terminate(.failed(failure), broadcast: broadcast)
-        case let .closing(reason), let .closed(reason):
-            await broadcast(reason.failureError)
-        }
+        _ = await terminate(.failed(failure))
     }
 
     @discardableResult
     private func terminate(
-        _ reason: TerminationReason,
-        broadcast: WebInspectorProxyTerminalBroadcast = { _ in }
+        _ reason: TerminationReason
     ) async -> Bool {
         guard case .open = closeState else {
             return false
@@ -1010,7 +1010,7 @@ public actor WebInspectorProxy {
                 "Inspector connection failed: \(String(describing: failure.publicError), privacy: .private)"
             )
         }
-        await broadcast(reason.failureError)
+        await backend?.finishEventSubscriptions(throwing: reason.failureError)
         await closeConnection?(reason.transportError)
         closeState = .closed(reason)
         resumeCloseWaiters(with: reason)
@@ -1078,10 +1078,14 @@ public actor WebInspectorProxy {
     }
 
     private func resumeCloseWaiterRegistrationWaiters() {
-        let waiters = closeWaiterRegistrationWaiters
-        closeWaiterRegistrationWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume()
+        let ready = closeWaiterRegistrationWaiters.filter {
+            closeWaiters.count >= $0.minimumCount
+        }
+        closeWaiterRegistrationWaiters.removeAll {
+            closeWaiters.count >= $0.minimumCount
+        }
+        for waiter in ready {
+            waiter.continuation.resume()
         }
     }
 

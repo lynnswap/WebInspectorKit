@@ -38,13 +38,8 @@ package struct WebInspectorProxyTerminalFailure: Sendable {
     }
 }
 
-package typealias WebInspectorProxyTerminalBroadcast = @Sendable (
-    WebInspectorProxyError?
-) async -> Void
-
 package typealias WebInspectorProxyTerminalFailureHandler = @Sendable (
-    WebInspectorProxyTerminalFailure,
-    WebInspectorProxyTerminalBroadcast
+    WebInspectorProxyTerminalFailure
 ) async -> Void
 
 package struct WebInspectorProxyCommandReply<Result: Sendable>: Sendable {
@@ -120,6 +115,8 @@ package protocol WebInspectorProxyBackend: Sendable {
     func dispatchCommandWithReplyBoundary<Payload: Sendable, Result: Sendable>(
         _ command: WebInspectorProxyCommand<Payload, Result>
     ) async throws -> WebInspectorProxyCommandReply<Result>
+
+    func finishEventSubscriptions(throwing error: WebInspectorProxyError?) async
 
     func orderedEvents(
         route: RoutingTargetID,
