@@ -131,6 +131,9 @@ package final class NetworkDetailViewController: UIViewController {
         let view = NetworkHeadersTextView()
         view.translatesAutoresizingMaskIntoConstraints = false
         view.isHidden = true
+        view.requestPreviewAction = { [weak self] in
+            self?.activateRequestPreviewFromHeaders()
+        }
         return view
     }()
     fileprivate var mode: NetworkDetailViewController.Mode = .headers
@@ -574,14 +577,17 @@ package final class NetworkDetailViewController: UIViewController {
         observedRequest = representativeRequest
         title = representativeRequest.displayName
         showHeaders()
-        headersTextView.render(requests: requests)
+        headersTextView.render(
+            requests: requests,
+            activeRequest: representativeRequest
+        )
     }
 
     private func renderHeadersSurface(request: NetworkRequest) {
         observedRequest = request
         title = request.displayName
         showHeaders()
-        headersTextView.render(request: request)
+        headersTextView.render(request: request, activeRequest: request)
     }
 
     private func renderCookiesSurface(request: NetworkRequest) {
@@ -620,6 +626,59 @@ package final class NetworkDetailViewController: UIViewController {
             return
         }
         rebindSelectedRequestRendering()
+    }
+
+    private func activateRequestPreviewFromHeaders() {
+        guard mode == .headers,
+              isRenderingActive,
+              let selection = model.selection,
+              let entry = model.selectedEntry,
+              let selectedRequest = model.selectedRequest else {
+            return
+        }
+        let currentRequests: [NetworkRequest] = switch selection {
+        case .entry:
+            entry.requests
+        case .request:
+            [selectedRequest]
+        }
+        let activeRequest = activeRequest(for: selection, requests: currentRequests)
+        guard activeRequest.webSocket == nil,
+              let requestData = activeRequest.headersContext.requestData,
+              case .body = requestData else {
+            return
+        }
+
+        previewRole = .request
+        let explicitRequest = promoteHeadersActiveRequestToExplicitSelection(
+            activeRequest,
+            expectedEntryID: entry.id
+        )
+
+        mode = .preview
+        bindSelection(
+            model.selection,
+            entry: model.selectedEntry,
+            selectedRequest: explicitRequest,
+            force: true
+        )
+    }
+
+    private func promoteHeadersActiveRequestToExplicitSelection(
+        _ request: NetworkRequest,
+        expectedEntryID: NetworkListEntry.ID
+    ) -> NetworkRequest {
+        model.selectRequest(request)
+        guard case let .request(entryID, requestID) = model.selection,
+              entryID == expectedEntryID,
+              requestID == request.id,
+              let selectedRequest = model.selectedRequest,
+              selectedRequest === request else {
+            preconditionFailure(
+                "A current Network headers request must become the exact explicit selection."
+            )
+        }
+        return selectedRequest
     }
 
     private func renderModeControl(selectedRequest request: NetworkRequest? = nil) {
@@ -933,16 +992,10 @@ package final class NetworkDetailViewController: UIViewController {
         from explicitMimeType: String?,
         headers: [String: String]
     ) -> String? {
-        let rawMimeType = explicitMimeType ?? headerValue(named: "content-type", in: headers)
-        let mimeType = rawMimeType?
-            .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
-            .first
-            .map(String.init)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let mimeType, mimeType.isEmpty == false else {
-            return nil
-        }
-        return mimeType
+        NetworkContentTypeParser.effectiveMediaType(
+            protocolMIMEType: explicitMimeType,
+            headers: headers
+        )
     }
 
     private func headerValue(named name: String, in headers: [String: String]) -> String? {

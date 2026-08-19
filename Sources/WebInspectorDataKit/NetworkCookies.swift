@@ -134,7 +134,7 @@ private struct NetworkResponseCookieProjection: Hashable, Sendable {
         var diagnostics: [NetworkCookieParseDiagnostic] = []
 
         for attribute in attributes {
-            guard NetworkCookieParser.isHTTPToken(attribute.name) else {
+            guard NetworkHTTPGrammar.isHTTPToken(attribute.name) else {
                 diagnostics.append(NetworkCookieParseDiagnostic(
                     kind: .invalidAttribute,
                     rawFragment: attribute.raw
@@ -142,7 +142,7 @@ private struct NetworkResponseCookieProjection: Hashable, Sendable {
                 continue
             }
 
-            switch NetworkCookieParser.lowercaseASCII(attribute.name) {
+            switch NetworkHTTPGrammar.lowercaseASCII(attribute.name) {
             case "domain":
                 guard let value = attribute.value, value.isEmpty == false else {
                     diagnostics.append(NetworkCookieParseDiagnostic(
@@ -227,7 +227,7 @@ private struct NetworkResponseCookieProjection: Hashable, Sendable {
                     ))
                     continue
                 }
-                switch NetworkCookieParser.lowercaseASCII(value) {
+                switch NetworkHTTPGrammar.lowercaseASCII(value) {
                 case "none":
                     sameSite = .none
                 case "lax":
@@ -316,7 +316,7 @@ package enum NetworkCookieParser {
         }
 
         let rawHeaderValue = rawHeaderValues[0]
-        guard trimOptionalWhitespace(rawHeaderValue).isEmpty == false else {
+        guard NetworkHTTPGrammar.trimOptionalWhitespace(rawHeaderValue).isEmpty == false else {
             return NetworkRequestCookieParseReport(
                 cookies: [],
                 rawHeaderValues: rawHeaderValues,
@@ -332,7 +332,7 @@ package enum NetworkCookieParser {
 
         for (ordinal, fragment) in fragments.enumerated() {
             let rawFragment = String(fragment)
-            let trimmedFragment = trimOptionalWhitespace(rawFragment)
+            let trimmedFragment = NetworkHTTPGrammar.trimOptionalWhitespace(rawFragment)
             guard containsNonOWSControlCharacter(rawFragment) == false else {
                 diagnostics.append(NetworkCookieParseDiagnostic(
                     kind: .prohibitedControlCharacter,
@@ -348,9 +348,9 @@ package enum NetworkCookieParser {
                 continue
             }
 
-            let name = trimOptionalWhitespace(String(trimmedFragment[..<equalsIndex]))
+            let name = NetworkHTTPGrammar.trimOptionalWhitespace(String(trimmedFragment[..<equalsIndex]))
             let valueStart = trimmedFragment.index(after: equalsIndex)
-            let value = trimOptionalWhitespace(String(trimmedFragment[valueStart...]))
+            let value = NetworkHTTPGrammar.trimOptionalWhitespace(String(trimmedFragment[valueStart...]))
             guard containsControlCharacter(name) == false,
                   containsControlCharacter(value) == false else {
                 diagnostics.append(NetworkCookieParseDiagnostic(
@@ -359,7 +359,7 @@ package enum NetworkCookieParser {
                 ))
                 continue
             }
-            guard isHTTPToken(name) else {
+            guard NetworkHTTPGrammar.isHTTPToken(name) else {
                 diagnostics.append(NetworkCookieParseDiagnostic(
                     kind: .invalidCookieFragment,
                     rawFragment: rawFragment
@@ -402,7 +402,7 @@ package enum NetworkCookieParser {
         }
 
         let rawHeaderValue = rawHeaderValues[0]
-        guard trimOptionalWhitespace(rawHeaderValue).isEmpty == false else {
+        guard NetworkHTTPGrammar.trimOptionalWhitespace(rawHeaderValue).isEmpty == false else {
             return NetworkResponseCookieParseReport(
                 cookies: [],
                 rawHeaderValues: rawHeaderValues,
@@ -437,7 +437,7 @@ package enum NetworkCookieParser {
 
         let fragments = rawHeaderValue.split(separator: ";", omittingEmptySubsequences: false)
         let rawCookiePair = String(fragments[0])
-        let trimmedCookiePair = trimOptionalWhitespace(rawCookiePair)
+        let trimmedCookiePair = NetworkHTTPGrammar.trimOptionalWhitespace(rawCookiePair)
         guard let equalsIndex = trimmedCookiePair.firstIndex(of: "=") else {
             return unparsedResponseReport(
                 rawHeaderValues: rawHeaderValues,
@@ -447,9 +447,9 @@ package enum NetworkCookieParser {
                 )
             )
         }
-        let name = trimOptionalWhitespace(String(trimmedCookiePair[..<equalsIndex]))
+        let name = NetworkHTTPGrammar.trimOptionalWhitespace(String(trimmedCookiePair[..<equalsIndex]))
         let valueStart = trimmedCookiePair.index(after: equalsIndex)
-        let value = trimOptionalWhitespace(String(trimmedCookiePair[valueStart...]))
+        let value = NetworkHTTPGrammar.trimOptionalWhitespace(String(trimmedCookiePair[valueStart...]))
         guard containsControlCharacter(name) == false,
               containsControlCharacter(value) == false else {
             return unparsedResponseReport(
@@ -460,7 +460,7 @@ package enum NetworkCookieParser {
                 )
             )
         }
-        guard isHTTPToken(name) else {
+        guard NetworkHTTPGrammar.isHTTPToken(name) else {
             return unparsedResponseReport(
                 rawHeaderValues: rawHeaderValues,
                 diagnostic: NetworkCookieParseDiagnostic(
@@ -474,13 +474,13 @@ package enum NetworkCookieParser {
         attributes.reserveCapacity(max(fragments.count - 1, 0))
         for (ordinal, fragment) in fragments.dropFirst().enumerated() {
             let rawAttribute = String(fragment)
-            let trimmedAttribute = trimOptionalWhitespace(rawAttribute)
+            let trimmedAttribute = NetworkHTTPGrammar.trimOptionalWhitespace(rawAttribute)
             let attributeName: String
             let attributeValue: String?
             if let equalsIndex = trimmedAttribute.firstIndex(of: "=") {
-                attributeName = trimOptionalWhitespace(String(trimmedAttribute[..<equalsIndex]))
+                attributeName = NetworkHTTPGrammar.trimOptionalWhitespace(String(trimmedAttribute[..<equalsIndex]))
                 let valueStart = trimmedAttribute.index(after: equalsIndex)
-                attributeValue = trimOptionalWhitespace(String(trimmedAttribute[valueStart...]))
+                attributeValue = NetworkHTTPGrammar.trimOptionalWhitespace(String(trimmedAttribute[valueStart...]))
             } else {
                 attributeName = trimmedAttribute
                 attributeValue = nil
@@ -535,7 +535,7 @@ fileprivate extension NetworkCookieParser {
         in headers: [String: String]
     ) -> [HeaderField]? {
         let fields = headers.compactMap { name, value -> HeaderField? in
-            guard asciiCaseInsensitiveEqual(name, targetName) else {
+            guard NetworkHTTPGrammar.asciiCaseInsensitiveEqual(name, targetName) else {
                 return nil
             }
             return HeaderField(name: name, value: value)
@@ -546,49 +546,6 @@ fileprivate extension NetworkCookieParser {
             return lhs.value < rhs.value
         }
         return fields.isEmpty ? nil : fields
-    }
-
-    static func asciiCaseInsensitiveEqual(_ lhs: String, _ rhs: String) -> Bool {
-        let lhsBytes = lhs.utf8
-        let rhsBytes = rhs.utf8
-        guard lhsBytes.count == rhsBytes.count else {
-            return false
-        }
-        return zip(lhsBytes, rhsBytes).allSatisfy { lhsByte, rhsByte in
-            lowercaseASCII(lhsByte) == lowercaseASCII(rhsByte)
-        }
-    }
-
-    static func lowercaseASCII(_ value: String) -> String {
-        String(decoding: value.utf8.map(lowercaseASCII), as: UTF8.self)
-    }
-
-    static func lowercaseASCII(_ byte: UInt8) -> UInt8 {
-        guard (65...90).contains(byte) else {
-            return byte
-        }
-        return byte + 32
-    }
-
-    static func trimOptionalWhitespace(_ value: String) -> String {
-        let bytes = value.utf8
-        var lowerBound = bytes.startIndex
-        var upperBound = bytes.endIndex
-        while lowerBound < upperBound, isOptionalWhitespace(bytes[lowerBound]) {
-            lowerBound = bytes.index(after: lowerBound)
-        }
-        while lowerBound < upperBound {
-            let preceding = bytes.index(before: upperBound)
-            guard isOptionalWhitespace(bytes[preceding]) else {
-                break
-            }
-            upperBound = preceding
-        }
-        return String(decoding: bytes[lowerBound..<upperBound], as: UTF8.self)
-    }
-
-    static func isOptionalWhitespace(_ byte: UInt8) -> Bool {
-        byte == 0x20 || byte == 0x09
     }
 
     static func parseStatus(
@@ -636,7 +593,7 @@ fileprivate extension NetworkCookieParser {
         guard let value else {
             return false
         }
-        if lowercaseASCII(name) == "expires" {
+        if NetworkHTTPGrammar.lowercaseASCII(name) == "expires" {
             return containsNonOWSControlCharacter(value)
         }
         return containsControlCharacter(value)
@@ -646,17 +603,17 @@ fileprivate extension NetworkCookieParser {
         let bytes = Array(value.utf8)
         for commaIndex in bytes.indices where bytes[commaIndex] == 0x2C {
             var index = commaIndex + 1
-            while index < bytes.count, isOptionalWhitespace(bytes[index]) {
+            while index < bytes.count, NetworkHTTPGrammar.isOptionalWhitespace(bytes[index]) {
                 index += 1
             }
             let tokenStart = index
-            while index < bytes.count, isHTTPTokenCharacter(bytes[index]) {
+            while index < bytes.count, NetworkHTTPGrammar.isHTTPTokenCharacter(bytes[index]) {
                 index += 1
             }
             guard index > tokenStart else {
                 continue
             }
-            while index < bytes.count, isOptionalWhitespace(bytes[index]) {
+            while index < bytes.count, NetworkHTTPGrammar.isOptionalWhitespace(bytes[index]) {
                 index += 1
             }
             if index < bytes.count, bytes[index] == 0x3D {
@@ -664,23 +621,6 @@ fileprivate extension NetworkCookieParser {
             }
         }
         return false
-    }
-
-    static func isHTTPTokenCharacter(_ byte: UInt8) -> Bool {
-        switch byte {
-        case 48...57, 65...90, 97...122:
-            return true
-        case 0x21, 0x23, 0x24, 0x25, 0x26, 0x27, 0x2A, 0x2B, 0x2D, 0x2E,
-             0x5E, 0x5F, 0x60, 0x7C, 0x7E:
-            return true
-        default:
-            return false
-        }
-    }
-
-    static func isHTTPToken(_ value: String) -> Bool {
-        let bytes = value.utf8
-        return bytes.isEmpty == false && bytes.allSatisfy(isHTTPTokenCharacter)
     }
 
     static func parseMaxAge(_ value: String) -> Int64? {
@@ -871,7 +811,10 @@ fileprivate extension NetworkCookieParser {
         guard token.count >= 3 else {
             return nil
         }
-        let prefix = String(decoding: token.prefix(3).map(lowercaseASCII), as: UTF8.self)
+        let prefix = String(
+            decoding: token.prefix(3).map(NetworkHTTPGrammar.lowercaseASCII),
+            as: UTF8.self
+        )
         switch prefix {
         case "jan": return 1
         case "feb": return 2

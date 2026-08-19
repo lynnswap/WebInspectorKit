@@ -7,9 +7,10 @@ import UIKit
 final class NetworkHeadersTextView: UIView {
     private struct SectionRule {
         var range: NSRange
-        var color: UIColor
+        var kind: NetworkHeadersTextSectionRuleKind
     }
 
+    static let requestPreviewTagIdentifier = "WebInspector.Network.Headers.RequestPreview"
     private static let textInsets = NetworkHeadersWebKitStyle.textInsets
     private static let ruleWidth = NetworkHeadersWebKitStyle.ruleWidth
     private static let ruleGap = NetworkHeadersWebKitStyle.ruleGap
@@ -37,8 +38,10 @@ final class NetworkHeadersTextView: UIView {
         return view
     }()
     private var sectionRules: [SectionRule] = []
-    private var renderedText = ""
+    private var renderedSignature: NetworkHeadersTextDocumentSignature?
     private var renderedRequests: [NetworkRequest] = []
+    private weak var renderedActiveRequest: NetworkRequest?
+    var requestPreviewAction: (@MainActor () -> Void)?
 #if DEBUG
     private var attributedTextAssignmentCount = 0
 #endif
@@ -58,30 +61,50 @@ final class NetworkHeadersTextView: UIView {
         updateSectionRuleRuns()
     }
 
-    func render(request: NetworkRequest) {
-        render(requests: [request])
+    func render(request: NetworkRequest, activeRequest: NetworkRequest) {
+        render(requests: [request], activeRequest: activeRequest)
     }
 
-    func render(requests: [NetworkRequest]) {
-        render(requests: requests, forceDocumentAssignment: false)
+    func render(requests: [NetworkRequest], activeRequest: NetworkRequest) {
+        render(
+            requests: requests,
+            activeRequest: activeRequest,
+            forceDocumentAssignment: false
+        )
     }
 
     private func render(
         requests: [NetworkRequest],
+        activeRequest: NetworkRequest,
         forceDocumentAssignment: Bool
     ) {
         precondition(requests.isEmpty == false, "Network headers require at least one request.")
+        precondition(requests.contains { $0 === activeRequest })
         renderedRequests = requests
-        let document = NetworkHeadersTextDocumentBuilder(requests: requests).makeDocument()
-        let documentText = document.attributedString.string
-        if forceDocumentAssignment == false, renderedText == documentText {
+        renderedActiveRequest = activeRequest
+        let document = NetworkHeadersTextDocumentBuilder(
+            requests: requests,
+            activeRequest: activeRequest,
+            traitCollection: traitCollection
+        ).makeDocument()
+        if forceDocumentAssignment == false, renderedSignature == document.signature {
             updateSectionRuleRuns()
             return
         }
 
-        renderedText = documentText
-        sectionRules = document.sectionRules.map { SectionRule(range: $0.range, color: $0.color) }
+        let previousSignature = renderedSignature
+        let selectedRange = textView.selectedRange
+        renderedSignature = document.signature
+        sectionRules = document.sectionRules.map { SectionRule(range: $0.range, kind: $0.kind) }
         textView.attributedText = document.attributedString
+        if previousSignature?.visibleText == document.signature.visibleText {
+            textView.selectedRange = clamped(
+                selectedRange,
+                toUTF16Length: document.attributedString.length
+            )
+        } else {
+            textView.selectedRange = NSRange(location: 0, length: 0)
+        }
 #if DEBUG
         attributedTextAssignmentCount += 1
 #endif
@@ -90,7 +113,8 @@ final class NetworkHeadersTextView: UIView {
 
     func clear() {
         renderedRequests = []
-        renderedText = ""
+        renderedActiveRequest = nil
+        renderedSignature = nil
         sectionRules = []
         textView.attributedText = NSAttributedString()
         updateSectionRuleRuns()
@@ -128,7 +152,14 @@ final class NetworkHeadersTextView: UIView {
         guard renderedRequests.isEmpty == false else {
             return
         }
-        render(requests: renderedRequests, forceDocumentAssignment: true)
+        guard let renderedActiveRequest else {
+            preconditionFailure("Rendered Network headers must retain an active request.")
+        }
+        render(
+            requests: renderedRequests,
+            activeRequest: renderedActiveRequest,
+            forceDocumentAssignment: true
+        )
     }
 
     private func updateSectionRuleRuns() {
@@ -139,9 +170,15 @@ final class NetworkHeadersTextView: UIView {
             }
             return NetworkHeadersRuleOverlayView.RuleRun(
                 rect: rect,
-                color: rule.color.resolvedColor(with: traitCollection).cgColor
+                color: rule.kind.color.resolvedColor(with: traitCollection).cgColor
             )
         }
+    }
+
+    private func clamped(_ range: NSRange, toUTF16Length length: Int) -> NSRange {
+        let location = min(max(0, range.location), length)
+        let selectionLength = min(max(0, range.length), length - location)
+        return NSRange(location: location, length: selectionLength)
     }
 
     private func sectionRuleRect(for range: NSRange) -> CGRect? {
@@ -152,8 +189,21 @@ final class NetworkHeadersTextView: UIView {
         let unionRect = rects.dropFirst().reduce(firstRect) { partialResult, rect in
             partialResult.union(rect)
         }
+        let ruleX: CGFloat
+        if effectiveUserInterfaceLayoutDirection == .rightToLeft {
+            ruleX = textView.textContainerInset.left
+                + unionRect.maxX
+                + Self.ruleGap
+                - Self.ruleWidth
+                - textView.contentOffset.x
+        } else {
+            ruleX = textView.textContainerInset.left
+                + unionRect.minX
+                - Self.ruleGap
+                - textView.contentOffset.x
+        }
         return CGRect(
-            x: textView.textContainerInset.left + unionRect.minX - Self.ruleGap - textView.contentOffset.x,
+            x: ruleX,
             y: textView.textContainerInset.top + unionRect.minY - textView.contentOffset.y,
             width: Self.ruleWidth,
             height: unionRect.height
@@ -200,6 +250,24 @@ final class NetworkHeadersTextView: UIView {
 }
 
 extension NetworkHeadersTextView: UITextViewDelegate {
+    func textView(
+        _ textView: UITextView,
+        primaryActionFor textItem: UITextItem,
+        defaultAction: UIAction
+    ) -> UIAction? {
+        guard case .tag(Self.requestPreviewTagIdentifier) = textItem.content else {
+            return defaultAction
+        }
+        let title = String(
+            localized: "network.headers.request_data.view_preview",
+            defaultValue: "View Request Preview",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        return UIAction(title: title) { [weak self] _ in
+            self?.requestPreviewAction?()
+        }
+    }
+
     nonisolated func scrollViewDidScroll(_ scrollView: UIScrollView) {
         MainActor.assumeIsolated {
             updateSectionRuleRuns()
@@ -244,506 +312,10 @@ private final class NetworkHeadersRuleOverlayView: UIView {
     }
 }
 
-private struct NetworkHeadersTextSectionRule {
-    var range: NSRange
-    var color: UIColor
-}
-
-private struct NetworkHeadersTextDocument {
-    var attributedString: NSAttributedString
-    var sectionRules: [NetworkHeadersTextSectionRule]
-}
-
-@MainActor
-private struct NetworkHeadersTextDocumentBuilder {
-    private enum RowStyle {
-        case summary
-        case header
-        case pseudoHeader
-        case message
-    }
-
-    private struct Row {
-        var key: String
-        var value: String?
-        var style: RowStyle
-    }
-
-    private struct Section {
-        var title: String
-        var rows: [Row]
-        var ruleColor: UIColor
-    }
-
-    var requests: [NetworkRequest]
-
-    func makeDocument() -> NetworkHeadersTextDocument {
-        let text = NSMutableAttributedString()
-        var rules: [NetworkHeadersTextSectionRule] = []
-        for (index, request) in requests.enumerated() {
-            if requests.count > 1 {
-                appendRequestHeading(request: request, index: index, to: text)
-            }
-            for section in sections(for: request) where section.rows.isEmpty == false {
-                append(section: section, to: text, rules: &rules)
-            }
-        }
-        return NetworkHeadersTextDocument(attributedString: text, sectionRules: rules)
-    }
-
-    private func sections(for request: NetworkRequest) -> [Section] {
-        var sections = [summarySection(for: request)]
-        for (index, redirect) in request.redirects.enumerated() {
-            sections.append(redirectRequestSection(redirect.request, index: index))
-            sections.append(redirectResponseSection(redirect.response, index: index))
-        }
-        sections.append(requestSection(for: request))
-        if let responseSection = responseSection(for: request) {
-            sections.append(responseSection)
-        }
-        return sections
-    }
-
-    private func summarySection(for request: NetworkRequest) -> Section {
-        var rows: [Row] = [
-            Row(key: String(localized: "network.headers.summary.url", defaultValue: "URL", bundle: WebInspectorUILocalization.bundle), value: request.url, style: .summary),
-            Row(key: String(localized: "network.headers.summary.status", defaultValue: "Status", bundle: WebInspectorUILocalization.bundle), value: statusText(for: request), style: .summary),
-            Row(key: String(localized: "network.headers.summary.source", defaultValue: "Source", bundle: WebInspectorUILocalization.bundle), value: sourceText(for: request), style: .summary),
-        ]
-        if request.redirects.isEmpty == false {
-            rows.append(Row(
-                key: String(localized: "network.headers.summary.redirects", defaultValue: "Redirects", bundle: WebInspectorUILocalization.bundle),
-                value: String(request.redirects.count),
-                style: .summary
-            ))
-        }
-        if let remoteAddress = request.metrics?.remoteAddress, remoteAddress.isEmpty == false {
-            rows.append(
-                Row(
-                    key: String(localized: "network.headers.summary.address", defaultValue: "Address", bundle: WebInspectorUILocalization.bundle),
-                    value: remoteAddress,
-                    style: .summary
-                )
-            )
-        }
-        return Section(
-            title: String(localized: "network.detail.section.overview", bundle: WebInspectorUILocalization.bundle),
-            rows: rows,
-            ruleColor: NetworkHeadersWebKitStyle.networkSystemColor
-        )
-    }
-
-    private func requestSection(for request: NetworkRequest) -> Section {
-        let headers = request.requestHeaders
-        var rows: [Row] = requestProtocolRows(
-            url: request.url,
-            method: request.method,
-            protocolName: request.metrics?.networkProtocol
-        )
-        rows.append(contentsOf: headerRows(headers))
-        if rows.isEmpty {
-            rows.append(
-                Row(
-                    key: String(localized: "network.headers.request.empty", defaultValue: "No request headers", bundle: WebInspectorUILocalization.bundle),
-                    value: nil,
-                    style: .message
-                )
-            )
-        }
-        return Section(
-            title: String(localized: "network.section.request", bundle: WebInspectorUILocalization.bundle),
-            rows: rows,
-            ruleColor: NetworkHeadersWebKitStyle.networkHeaderColor
-        )
-    }
-
-    private func responseSection(for request: NetworkRequest) -> Section? {
-        guard request.hasResponse else {
-            return nil
-        }
-        let headers = request.responseHeaders
-        var rows: [Row] = responseProtocolRows(
-            status: request.status,
-            statusText: request.statusText,
-            protocolName: request.metrics?.networkProtocol
-        )
-        rows.append(contentsOf: headerRows(headers))
-        if rows.isEmpty {
-            rows.append(
-                Row(
-                    key: String(localized: "network.headers.response.empty", defaultValue: "No response headers", bundle: WebInspectorUILocalization.bundle),
-                    value: nil,
-                    style: .message
-                )
-            )
-        }
-        return Section(
-            title: String(localized: "network.section.response", bundle: WebInspectorUILocalization.bundle),
-            rows: rows,
-            ruleColor: NetworkHeadersWebKitStyle.networkHeaderColor
-        )
-    }
-
-    private func redirectRequestSection(
-        _ request: NetworkRequestSnapshot,
-        index: Int
-    ) -> Section {
-        var rows = requestProtocolRows(url: request.url, method: request.method, protocolName: nil)
-        rows.append(contentsOf: headerRows(request.headers))
-        return Section(
-            title: String(
-                localized: "network.section.redirect_request",
-                defaultValue: "Redirect Request",
-                bundle: WebInspectorUILocalization.bundle
-            ) + " \(index + 1)",
-            rows: rows,
-            ruleColor: NetworkHeadersWebKitStyle.networkHeaderColor
-        )
-    }
-
-    private func redirectResponseSection(
-        _ response: NetworkResponseSnapshot,
-        index: Int
-    ) -> Section {
-        var rows = responseProtocolRows(
-            status: response.status,
-            statusText: response.statusText,
-            protocolName: nil
-        )
-        rows.append(contentsOf: headerRows(response.headers))
-        return Section(
-            title: String(
-                localized: "network.section.redirect_response",
-                defaultValue: "Redirect Response",
-                bundle: WebInspectorUILocalization.bundle
-            ) + " \(index + 1)",
-            rows: rows,
-            ruleColor: NetworkHeadersWebKitStyle.networkHeaderColor
-        )
-    }
-
-    private func requestProtocolRows(
-        url: String,
-        method: String,
-        protocolName rawProtocolName: String?
-    ) -> [Row] {
-        let protocolName = rawProtocolName ?? ""
-        let components = URLComponents(string: url)
-        if protocolName == "h2" {
-            return [
-                Row(key: ":method", value: method, style: .pseudoHeader),
-                Row(key: ":scheme", value: components?.scheme, style: .pseudoHeader),
-                Row(key: ":authority", value: authority(from: components), style: .pseudoHeader),
-                Row(key: ":path", value: path(from: components), style: .pseudoHeader),
-            ].compactMap { row in
-                guard row.value?.isEmpty == false else {
-                    return nil
-                }
-                return row
-            }
-        }
-        let path = path(from: components) ?? "/"
-        let suffix = protocolName.hasPrefix("http/1") ? " \(protocolName.uppercased())" : ""
-        return [
-            Row(key: "\(method) \(path)\(suffix)", value: nil, style: .pseudoHeader),
-        ]
-    }
-
-    private func responseProtocolRows(
-        status: Int?,
-        statusText: String?,
-        protocolName rawProtocolName: String?
-    ) -> [Row] {
-        guard let status else {
-            return []
-        }
-        let protocolName = rawProtocolName ?? ""
-        if protocolName == "h2" {
-            return [Row(key: ":status", value: "\(status)", style: .pseudoHeader)]
-        }
-        if protocolName.hasPrefix("http/1") {
-            let resolvedStatusText = statusText ?? ""
-            let suffix = resolvedStatusText.isEmpty ? "" : " \(resolvedStatusText)"
-            return [Row(key: "\(protocolName.uppercased()) \(status)\(suffix)", value: nil, style: .pseudoHeader)]
-        }
-        let resolvedStatusText = statusText ?? ""
-        let suffix = resolvedStatusText.isEmpty ? "" : " \(resolvedStatusText)"
-        return [Row(key: "\(status)\(suffix)", value: nil, style: .pseudoHeader)]
-    }
-
-    private func headerRows(_ headers: [String: String]) -> [Row] {
-        headers
-            .map { Row(key: $0.key, value: $0.value, style: .header) }
-            .sorted {
-                let nameComparison = $0.key.localizedCaseInsensitiveCompare($1.key)
-                if nameComparison == .orderedSame {
-                    return ($0.value ?? "") < ($1.value ?? "")
-                }
-                return nameComparison == .orderedAscending
-            }
-    }
-
-    private func statusText(for request: NetworkRequest) -> String {
-        guard request.hasResponse else {
-            return "-"
-        }
-        let statusText = request.statusText ?? ""
-        let suffix = statusText.isEmpty ? "" : " \(statusText)"
-        return request.status.map { "\($0)\(suffix)" } ?? (statusText.isEmpty ? "-" : statusText)
-    }
-
-    private func sourceText(for request: NetworkRequest) -> String {
-        guard let source = request.responseSource else {
-            return "-"
-        }
-        switch source {
-        case "network":
-            return String(localized: "network.headers.source.network", defaultValue: "Network", bundle: WebInspectorUILocalization.bundle)
-        case "memory-cache":
-            return String(localized: "network.headers.source.memory_cache", defaultValue: "Memory Cache", bundle: WebInspectorUILocalization.bundle)
-        case "disk-cache":
-            return String(localized: "network.headers.source.disk_cache", defaultValue: "Disk Cache", bundle: WebInspectorUILocalization.bundle)
-        case "service-worker":
-            return String(localized: "network.headers.source.service_worker", defaultValue: "Service Worker", bundle: WebInspectorUILocalization.bundle)
-        case "inspector-override":
-            return String(localized: "network.headers.source.local_override", defaultValue: "Local Override", bundle: WebInspectorUILocalization.bundle)
-        default:
-            return source
-        }
-    }
-
-    private func authority(from components: URLComponents?) -> String? {
-        guard let host = components?.host, host.isEmpty == false else {
-            return nil
-        }
-        guard let port = components?.port else {
-            return host
-        }
-        return "\(host):\(port)"
-    }
-
-    private func path(from components: URLComponents?) -> String? {
-        guard let components else {
-            return nil
-        }
-        var path = components.percentEncodedPath.isEmpty ? "/" : components.percentEncodedPath
-        if let query = components.percentEncodedQuery, query.isEmpty == false {
-            path += "?\(query)"
-        }
-        return path
-    }
-
-    private func appendRequestHeading(
-        request: NetworkRequest,
-        index: Int,
-        to text: NSMutableAttributedString
-    ) {
-        if text.length > 0 {
-            text.append(NSAttributedString(
-                string: "\n",
-                attributes: rowAttributes(style: .message).value
-            ))
-        }
-        text.append(NSAttributedString(
-            string: "\(index + 1). \(request.displayName)\n",
-            attributes: requestHeadingAttributes()
-        ))
-    }
-
-    private func append(
-        section: Section,
-        to text: NSMutableAttributedString,
-        rules: inout [NetworkHeadersTextSectionRule]
-    ) {
-        if text.length > 0 {
-            text.append(NSAttributedString(string: "\n", attributes: rowAttributes(style: .message).value))
-        }
-
-        text.append(NSAttributedString(string: section.title + "\n", attributes: sectionTitleAttributes()))
-        let ruleStart = text.length
-        for row in section.rows {
-            append(row: row, to: text)
-        }
-        let ruleLength = text.length - ruleStart
-        if ruleLength > 0 {
-            rules.append(NetworkHeadersTextSectionRule(range: NSRange(location: ruleStart, length: ruleLength), color: section.ruleColor))
-        }
-    }
-
-    private func append(row: Row, to text: NSMutableAttributedString) {
-        let attributes = rowAttributes(style: row.style)
-        text.append(NSAttributedString(string: row.key, attributes: attributes.key))
-        if let value = row.value, value.isEmpty == false {
-            text.append(NSAttributedString(string: ": ", attributes: attributes.key))
-            text.append(NSAttributedString(string: value, attributes: attributes.value))
-        }
-        text.append(NSAttributedString(string: "\n", attributes: attributes.value))
-    }
-
-    private func sectionTitleAttributes() -> [NSAttributedString.Key: Any] {
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineBreakMode = .byWordWrapping
-        paragraphStyle.paragraphSpacing = NetworkHeadersWebKitStyle.sectionTitleBottomSpacing
-        return [
-            .font: NetworkHeadersWebKitStyle.sectionTitleFont,
-            .foregroundColor: NetworkHeadersWebKitStyle.textColor,
-            .paragraphStyle: paragraphStyle,
-        ]
-    }
-
-    private func requestHeadingAttributes() -> [NSAttributedString.Key: Any] {
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineBreakMode = .byWordWrapping
-        paragraphStyle.paragraphSpacing = NetworkHeadersWebKitStyle.sectionTitleBottomSpacing
-        return [
-            .font: UIFont.preferredFont(forTextStyle: .headline),
-            .foregroundColor: NetworkHeadersWebKitStyle.textColor,
-            .paragraphStyle: paragraphStyle,
-        ]
-    }
-
-    private func rowAttributes(
-        style: RowStyle
-    ) -> (key: [NSAttributedString.Key: Any], value: [NSAttributedString.Key: Any]) {
-        let font = NetworkHeadersWebKitStyle.bodyFont
-        let keyFont = NetworkHeadersWebKitStyle.keyFont
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineBreakMode = .byWordWrapping
-        paragraphStyle.firstLineHeadIndent = NetworkHeadersWebKitStyle.rowFirstLineHeadIndent
-        paragraphStyle.headIndent = NetworkHeadersWebKitStyle.rowWrappedLineHeadIndent
-        paragraphStyle.paragraphSpacingBefore = NetworkHeadersWebKitStyle.rowVerticalPadding
-        paragraphStyle.paragraphSpacing = NetworkHeadersWebKitStyle.rowVerticalPadding
-
-        let keyColor: UIColor
-        switch style {
-        case .summary:
-            keyColor = NetworkHeadersWebKitStyle.networkSystemColor
-        case .header:
-            keyColor = NetworkHeadersWebKitStyle.networkHeaderColor
-        case .pseudoHeader:
-            keyColor = NetworkHeadersWebKitStyle.networkPseudoHeaderColor
-        case .message:
-            keyColor = NetworkHeadersWebKitStyle.consoleSecondaryTextColor
-        }
-
-        let keyAttributes: [NSAttributedString.Key: Any] = [
-            .font: keyFont,
-            .foregroundColor: keyColor,
-            .paragraphStyle: paragraphStyle,
-        ]
-        let valueAttributes: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: style == .message
-                ? NetworkHeadersWebKitStyle.consoleSecondaryTextColor
-                : NetworkHeadersWebKitStyle.textColor,
-            .paragraphStyle: paragraphStyle,
-        ]
-        return (keyAttributes, valueAttributes)
-    }
-}
-
-private enum NetworkHeadersWebKitStyle {
-    static let textInsets = UIEdgeInsets(top: 16, left: 18, bottom: 16, right: 18)
-    static let ruleWidth: CGFloat = 2
-    static let ruleGap = detailsTextPadding
-    static let sectionTitleBottomSpacing: CGFloat = 10
-    static let rowVerticalPadding: CGFloat = 2
-    private static let detailsMarginStart: CGFloat = 12
-    private static let detailsTextPadding: CGFloat = 12
-    private static let detailsValueIndent: CGFloat = 12
-    static let rowFirstLineHeadIndent = detailsMarginStart + detailsTextPadding
-    static let rowWrappedLineHeadIndent = rowFirstLineHeadIndent + detailsValueIndent
-
-    static var bodyFont: UIFont {
-        UIFont.preferredFont(forTextStyle: .callout)
-    }
-
-    static var keyFont: UIFont {
-        UIFont.preferredFont(forTextStyle: .callout).withWeight(.medium)
-    }
-
-    static var sectionTitleFont: UIFont {
-        UIFont.preferredFont(forTextStyle: .headline)
-    }
-
-    static var textColor: UIColor {
-        dynamic(light: .black, dark: hsl(0, 0, 88))
-    }
-
-    static var consoleSecondaryTextColor: UIColor {
-        dynamic(
-            light: hsl(0, 0, 0, alpha: 0.33),
-            dark: hsl(0, 0, 100, alpha: 0.45)
-        )
-    }
-
-    static var networkSystemColor: UIColor {
-        dynamic(light: hsl(79, 32, 50), dark: hsl(79, 95, 50))
-    }
-
-    static var networkHeaderColor: UIColor {
-        hsl(204, 52, 55)
-    }
-
-    static var networkPseudoHeaderColor: UIColor {
-        dynamic(light: hsl(312, 35, 51), dark: hsl(312, 55, 61))
-    }
-
-    private static func dynamic(light: UIColor, dark: UIColor) -> UIColor {
-        UIColor { traitCollection in
-            traitCollection.userInterfaceStyle == .dark ? dark : light
-        }
-    }
-
-    private static func hsl(
-        _ hue: CGFloat,
-        _ saturation: CGFloat,
-        _ lightness: CGFloat,
-        alpha: CGFloat = 1
-    ) -> UIColor {
-        let hue = hue / 360
-        let saturation = saturation / 100
-        let lightness = lightness / 100
-        let chroma = (1 - abs(2 * lightness - 1)) * saturation
-        let huePrime = hue * 6
-        let secondary = chroma * (1 - abs(huePrime.truncatingRemainder(dividingBy: 2) - 1))
-        let match = lightness - chroma / 2
-
-        let components: (red: CGFloat, green: CGFloat, blue: CGFloat)
-        switch huePrime {
-        case 0..<1:
-            components = (chroma, secondary, 0)
-        case 1..<2:
-            components = (secondary, chroma, 0)
-        case 2..<3:
-            components = (0, chroma, secondary)
-        case 3..<4:
-            components = (0, secondary, chroma)
-        case 4..<5:
-            components = (secondary, 0, chroma)
-        default:
-            components = (chroma, 0, secondary)
-        }
-
-        return UIColor(
-            red: components.red + match,
-            green: components.green + match,
-            blue: components.blue + match,
-            alpha: alpha
-        )
-    }
-}
-
-private extension UIFont {
-    func withWeight(_ weight: UIFont.Weight) -> UIFont {
-        UIFont.systemFont(ofSize: pointSize, weight: weight)
-    }
-}
-
 #if DEBUG
 extension NetworkHeadersTextView {
     var renderedTextForTesting: String {
-        renderedText
+        textView.attributedText.string
     }
 
     var usesTextKit2ForTesting: Bool {
@@ -765,6 +337,37 @@ extension NetworkHeadersTextView {
 
     var attributedTextAssignmentCountForTesting: Int {
         attributedTextAssignmentCount
+    }
+
+    var requestPreviewTagRangesForTesting: [NSRange] {
+        let attributedText = AttributedString(textView.attributedText)
+        return attributedText.runs.compactMap { run in
+            guard run.uiKit.textItemTag == Self.requestPreviewTagIdentifier else {
+                return nil
+            }
+            let prefix = String(attributedText.characters[..<run.range.lowerBound])
+            let value = String(attributedText.characters[run.range])
+            return NSRange(location: prefix.utf16.count, length: value.utf16.count)
+        }
+    }
+
+    var sectionRuleRectsForTesting: [CGRect] {
+        ruleOverlayView.ruleRuns.map(\.rect)
+    }
+
+    var effectiveLayoutDirectionForTesting: UIUserInterfaceLayoutDirection {
+        effectiveUserInterfaceLayoutDirection
+    }
+
+    var requestPreviewFontPointSizeForTesting: CGFloat? {
+        let attributedText = AttributedString(textView.attributedText)
+        return attributedText.runs.first(where: {
+            $0.uiKit.textItemTag == Self.requestPreviewTagIdentifier
+        })?.uiKit.font?.pointSize
+    }
+
+    func activateRequestPreviewForTesting() {
+        requestPreviewAction?()
     }
 }
 #endif
