@@ -510,7 +510,21 @@ public final class WebSocketState {
     }
 
     package func timelineEntry(for id: WebSocketTimelineEntry.ID) -> WebSocketTimelineEntry? {
-        timelineEntries.first { $0.id == id }
+        var lowerBound = 0
+        var upperBound = timelineEntries.count
+        while lowerBound < upperBound {
+            let index = lowerBound + (upperBound - lowerBound) / 2
+            if timelineEntries[index].id < id {
+                lowerBound = index + 1
+            } else {
+                upperBound = index
+            }
+        }
+        guard lowerBound < timelineEntries.count,
+              timelineEntries[lowerBound].id == id else {
+            return nil
+        }
+        return timelineEntries[lowerBound]
     }
 
     private func appendTimelineEntry(
@@ -1834,7 +1848,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     }
 
     func applyWebSocketCreated(url: String, chronologySequence: UInt64) {
-        guard isActive else {
+        guard isActive, webSocket?.readyState != .closed else {
             resetLifecycle(
                 request: Network.Request(
                     id: currentRequest.id,

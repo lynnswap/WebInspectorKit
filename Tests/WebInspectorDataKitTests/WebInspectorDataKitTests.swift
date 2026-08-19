@@ -11036,7 +11036,10 @@ func webSocketTimelinePreservesArrivalOrderStableIDsAndExactFrameSemantics() asy
     ]
     #expect(webSocket.timelineEntries == expected)
     #expect(expected.map(\.id) == expected.map(\.id).sorted())
+    #expect(webSocket.timelineEntry(for: expected[0].id) == expected[0])
     #expect(webSocket.timelineEntry(for: expected[4].id) == expected[4])
+    #expect(webSocket.timelineEntry(for: expected[7].id) == expected[7])
+    #expect(webSocket.timelineEntry(for: .init(lifecycleRevision: 0, chronologySequence: 1)) == nil)
     #expect(webSocket.timelineEntry(for: .init(lifecycleRevision: 0, chronologySequence: 99)) == nil)
     #expect(webSocket.readyState == .closed)
     #expect(request.finishedOrFailedTimestamp == 1)
@@ -11395,6 +11398,44 @@ func webSocketTimelineMapsEveryOpcodeWithoutTreatingNonTextAsText(opcode: Int) t
 }
 
 @Test
+func webSocketTimelineEntryLookupCoversLargeOrderedHistory() throws {
+    let webSocket = WebSocketState()
+    for index in 0..<4_096 {
+        webSocket.appendFrame(
+            Network.WebSocketFrame(
+                opcode: 2,
+                mask: false,
+                payloadData: "AA==",
+                payloadLength: 1
+            ),
+            direction: .received,
+            timestamp: Double(index),
+            lifecycleRevision: 12,
+            chronologySequence: UInt64(index + 1)
+        )
+    }
+
+    let entries = webSocket.timelineEntries
+    #expect(entries.count == 4_097)
+    for index in [0, entries.count / 2, entries.count - 1] {
+        #expect(webSocket.timelineEntry(for: entries[index].id) == entries[index])
+    }
+    #expect(webSocket.timelineEntry(for: .init(
+        lifecycleRevision: 12,
+        chronologySequence: 2_048,
+        ordinalWithinEvent: 0
+    )) == nil)
+    #expect(webSocket.timelineEntry(for: .init(
+        lifecycleRevision: 12,
+        chronologySequence: 5_000
+    )) == nil)
+    #expect(webSocket.timelineEntry(for: .init(
+        lifecycleRevision: 13,
+        chronologySequence: 1
+    )) == nil)
+}
+
+@Test
 func webSocketCloseFrameAloneDoesNotConfirmEstablishedConnection() throws {
     let webSocket = WebSocketState()
     #expect(webSocket.applyHandshakeResponse(
@@ -11580,6 +11621,77 @@ func terminalWebSocketCreatedRestartsSameRequestThroughCommonLifecycleReset() as
     #expect(request.decodedDataLength == 0)
     #expect(request.encodedDataLength == 0)
     #expect(request.hasResponse == false)
+}
+
+@MainActor
+@Test(arguments: [false, true])
+func webSocketCreatedRestartsLifecycleClosedByErrorWithoutClosedEvent(
+    hasHandshakeResponse: Bool
+) async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (target, context) = try await startContext(runtime: runtime)
+    let requestID = Network.Request.ID("websocket-error-restarted-\(hasHandshakeResponse)")
+
+    await runtime.backend.emit(
+        .webSocket(.created(id: requestID, url: "wss://example.com/first")),
+        target: target
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    try await waitUntil { results.items.count == 1 }
+    let request = try #require(results.items.first)
+    if hasHandshakeResponse {
+        await runtime.backend.emit(
+            .webSocket(.handshakeResponse(
+                id: requestID,
+                response: Network.Response(status: 101, statusText: "Switching Protocols"),
+                timestamp: 0.5
+            )),
+            target: target
+        )
+        try await waitUntil { request.state == .responded }
+    }
+    let stateBeforeError = request.state
+    await runtime.backend.emit(
+        .webSocket(.error(id: requestID, message: "upgrade failed", timestamp: 1)),
+        target: target
+    )
+    try await waitUntil { request.webSocket?.readyState == .closed }
+    let previousState = try #require(request.webSocket)
+    #expect(stateBeforeError == (hasHandshakeResponse ? .responded : .pending))
+    #expect(request.state == stateBeforeError)
+    #expect(previousState.frames.map(\.direction) == [.error("upgrade failed")])
+
+    await runtime.backend.emit(
+        .webSocket(.created(id: requestID, url: "wss://example.com/restarted")),
+        target: target
+    )
+    try await waitUntil {
+        request.lifecycleRevision == 1 && request.webSocket?.readyState == .connecting
+    }
+
+    #expect(results.items.first === request)
+    #expect(request.webSocket !== previousState)
+    #expect(request.webSocket?.timelineEntries.isEmpty == true)
+    #expect(request.webSocket?.frames.isEmpty == true)
+    #expect(request.url == "wss://example.com/restarted")
+    #expect(request.state == .pending)
+
+    await runtime.backend.emit(
+        .webSocket(.handshakeRequest(
+            id: requestID,
+            request: Network.Request(
+                id: requestID,
+                url: "wss://example.com/restarted",
+                method: "GET",
+                headers: ["Upgrade": "websocket"]
+            ),
+            timestamp: 2
+        )),
+        target: target
+    )
+    try await waitUntil {
+        request.webSocket?.handshakeRequest?.headers["Upgrade"] == "websocket"
+    }
 }
 
 @MainActor
