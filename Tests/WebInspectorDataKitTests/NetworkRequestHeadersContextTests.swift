@@ -199,6 +199,73 @@ struct NetworkRequestHeadersContextTests {
         #expect(repeatedValue == .ambiguous(rawValues: ["same", "same"]))
     }
 
+    @Test
+    func normalizedMediaTypeResolutionDistinguishesAbsentInvalidAndAmbiguousInput() {
+        #expect(
+            NetworkContentTypeParser.normalizedMediaTypeResolution(
+                protocolMIMEType: nil,
+                headers: [:]
+            ) == .absent
+        )
+        #expect(
+            NetworkContentTypeParser.normalizedMediaTypeResolution(
+                protocolMIMEType: "not a media type",
+                headers: ["Content-Type": "text/plain"]
+            ) == .invalid
+        )
+        #expect(
+            NetworkContentTypeParser.normalizedMediaTypeResolution(
+                protocolMIMEType: nil,
+                headers: ["Content-Type": "not a media type"]
+            ) == .invalid
+        )
+        #expect(
+            NetworkContentTypeParser.normalizedMediaTypeResolution(
+                protocolMIMEType: nil,
+                headers: [
+                    "Content-Type": "text/plain",
+                    "content-type": "application/octet-stream",
+                ]
+            ) == .invalid
+        )
+        #expect(
+            NetworkContentTypeParser.normalizedMediaTypeResolution(
+                protocolMIMEType: " \t ",
+                headers: ["Content-Type": " Text/Plain; charset=utf-8"]
+            ) == .value("text/plain")
+        )
+    }
+
+    @Test
+    func bodyHintsTreatOnlyAbsentContentTypeAsURLInferredText() {
+        let absent = NetworkBody.bodyHints(
+            mimeType: nil,
+            headers: [:],
+            url: "https://example.test/data.json",
+            role: .response
+        )
+        #expect(absent.kind == .text)
+        #expect(absent.syntaxKind == .json)
+
+        for (mimeType, headers) in [
+            ("not a media type", [:]),
+            (nil, ["Content-Type": "not a media type"]),
+            (nil, [
+                "Content-Type": "text/plain",
+                "content-type": "application/octet-stream",
+            ]),
+        ] as [(String?, [String: String])] {
+            let invalid = NetworkBody.bodyHints(
+                mimeType: mimeType,
+                headers: headers,
+                url: "https://example.test/data.json",
+                role: .response
+            )
+            #expect(invalid.kind == .binary)
+            #expect(invalid.syntaxKind == .plainText)
+        }
+    }
+
     @MainActor
     @Test
     func headersContextDistinguishesCancellationFailureAndProjectsResourceAndInitiator() throws {

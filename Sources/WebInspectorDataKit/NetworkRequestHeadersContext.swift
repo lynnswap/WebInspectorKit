@@ -307,6 +307,12 @@ package struct NetworkContentType: Hashable, Sendable {
 }
 
 package enum NetworkContentTypeParser {
+    enum NormalizedMediaTypeResolution: Equatable, Sendable {
+        case absent
+        case invalid
+        case value(String)
+    }
+
     private enum ParameterValueParseResult {
         case value(String)
         case issue(NetworkContentType.Parameter.Issue)
@@ -367,17 +373,28 @@ package enum NetworkContentTypeParser {
         return reportedMediaType(in: contentType)
     }
 
-    package static func effectiveNormalizedMediaType(
+    static func normalizedMediaTypeResolution(
         protocolMIMEType: String?,
         headers: [String: String]
-    ) -> String? {
+    ) -> NormalizedMediaTypeResolution {
         if let protocolMIMEType {
             let trimmed = NetworkHTTPGrammar.trimOptionalWhitespace(protocolMIMEType)
             if trimmed.isEmpty == false {
-                return parse(trimmed).normalizedMediaType
+                return parse(trimmed).normalizedMediaType.map(NormalizedMediaTypeResolution.value)
+                    ?? .invalid
             }
         }
-        return parseHeader(in: headers).contentType?.normalizedMediaType
+        switch parseHeader(in: headers) {
+        case .absent:
+            return .absent
+        case .ambiguous:
+            return .invalid
+        case .value(let contentType):
+            if let normalizedMediaType = contentType.normalizedMediaType {
+                return .value(normalizedMediaType)
+            }
+            return contentType.mediaType.isEmpty ? .absent : .invalid
+        }
     }
 
     private static func normalizedMediaType(_ mediaType: String) -> String? {

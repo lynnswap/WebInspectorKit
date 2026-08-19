@@ -1045,10 +1045,19 @@ public final class NetworkBody {
         url: String,
         role: Role
     ) -> (kind: Kind, syntaxKind: SyntaxKind) {
-        let contentType = NetworkContentTypeParser.effectiveNormalizedMediaType(
+        let contentTypeResolution = NetworkContentTypeParser.normalizedMediaTypeResolution(
             protocolMIMEType: mimeType,
             headers: headers
-        ) ?? ""
+        )
+        let contentType: String
+        switch contentTypeResolution {
+        case .absent:
+            contentType = ""
+        case .invalid:
+            return (.binary, .plainText)
+        case .value(let value):
+            contentType = value
+        }
 
         if role == .request && contentType == "application/x-www-form-urlencoded" {
             return (.form, .plainText)
