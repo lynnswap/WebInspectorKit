@@ -280,6 +280,8 @@ struct NetworkHeadersTextDocumentBuilder {
                     ))
             }
             if let line = initiator.line {
+                // Do not add one: WebKit reports this Network initiator coordinate one-based.
+                // Its frontend subtracts one only when creating a zero-based editor location.
                 rows.append(
                     Row(
                         key: String(

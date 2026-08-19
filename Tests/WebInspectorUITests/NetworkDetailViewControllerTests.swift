@@ -3843,7 +3843,7 @@ struct NetworkDetailViewControllerTests {
                 initiator: Network.Initiator(
                     kind: "script",
                     url: "https://example.com/app.js",
-                    line: 17,
+                    line: 1,
                     nodeID: DOM.Node.ID("42", scopedToTargetRawValue: "page-target")
                 ),
                 resourceType: .xhr,
@@ -3984,7 +3984,7 @@ struct NetworkDetailViewControllerTests {
                     && text.contains("\(mimeTypeLabel): application/json")
                     && text.contains("\(initiatorKindLabel): script")
                     && text.contains("\(initiatorURLLabel): https://example.com/app.js")
-                    && text.contains("\(initiatorLineLabel): 17")
+                    && text.contains("\(initiatorLineLabel): 1")
                     && text.contains("\(initiatorNodeLabel): 42")
                     && text.contains("page-target") == false
                     && text.contains("\u{1E}") == false
