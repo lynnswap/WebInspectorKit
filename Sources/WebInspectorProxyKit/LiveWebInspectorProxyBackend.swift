@@ -40,15 +40,22 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
 
     package func orderedEvents(
         route: RoutingTargetID,
-        targetID: WebInspectorTarget.ID
+        targetID: WebInspectorTarget.ID,
+        terminalFailureHandler: @escaping WebInspectorProxyTerminalFailureHandler
     ) async -> WebInspectorProxyOrderedEventFeed {
         let transportFeed = await transport.orderedEventFeed()
         let key = LiveProxyEventSubscriptionKey(route: route, targetID: targetID, domain: .ordered)
         let subscriptionID = LiveProxyEventSubscriptionID()
-        await eventSubscriptions.register(key, id: subscriptionID)
 
-        let stream = AsyncStream<WebInspectorProxyOrderedEvent>(bufferingPolicy: .unbounded) { continuation in
+        let stream = AsyncThrowingStream<WebInspectorProxyOrderedEvent, any Error>(
+            bufferingPolicy: .unbounded
+        ) { continuation in
             let task = Task {
+                await eventSubscriptions.registerOrdered(
+                    key,
+                    id: subscriptionID,
+                    continuation: continuation
+                )
                 for await event in transportFeed.events {
                     guard Task.isCancelled == false else {
                         break
@@ -63,7 +70,16 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
                             )
                         ))
                     } catch {
-                        preconditionFailure("Failed to decode \(event.method): \(error)")
+                        let failure = WebInspectorProxyTerminalFailure.eventDecodingFailed(
+                            method: event.method,
+                            error: error
+                        )
+                        await terminate(
+                            failure,
+                            terminalFailureHandler: terminalFailureHandler
+                        )
+                        await eventSubscriptions.unregister(key, id: subscriptionID)
+                        return
                     }
                 }
                 await eventSubscriptions.unregister(key, id: subscriptionID)
@@ -107,7 +123,8 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
     package nonisolated func events(
         route: RoutingTargetID,
         targetID: WebInspectorTarget.ID,
-        domain: WebInspectorProxyEventDomain
+        domain: WebInspectorProxyEventDomain,
+        terminalFailureHandler: @escaping WebInspectorProxyTerminalFailureHandler
     ) -> AsyncStream<WebInspectorProxyEvent> {
         AsyncStream<WebInspectorProxyEvent> { continuation in
             let key = LiveProxyEventSubscriptionKey(route: route, targetID: targetID, domain: domain)
@@ -135,7 +152,15 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
                         )
                         continuation.yield(projectedEvent(proxyEvent, from: event, route: route))
                     } catch {
-                        preconditionFailure("Failed to decode \(event.method): \(error)")
+                        let failure = WebInspectorProxyTerminalFailure.eventDecodingFailed(
+                            method: event.method,
+                            error: error
+                        )
+                        await terminate(
+                            failure,
+                            terminalFailureHandler: terminalFailureHandler
+                        )
+                        break
                     }
                 }
                 await eventSubscriptions.unregister(key, id: subscriptionID)
@@ -157,6 +182,10 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         switch transportError {
         case .transportClosed:
             return WebInspectorProxyError.closed
+        case let .eventDecodingFailed(method, message):
+            return WebInspectorProxyError.disconnected(
+                "Failed to decode \(method): \(message)"
+            )
         case let .replyTimeout(method, _):
             return WebInspectorProxyError.timeout(domain: domain, method: method)
         case let .remoteError(method, _, message):
@@ -171,6 +200,15 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
                 method: method,
                 message: "\(transportError)"
             )
+        }
+    }
+
+    private func terminate(
+        _ failure: WebInspectorProxyTerminalFailure,
+        terminalFailureHandler: WebInspectorProxyTerminalFailureHandler
+    ) async {
+        await terminalFailureHandler(failure) { terminalError in
+            await eventSubscriptions.finish(throwing: terminalError)
         }
     }
 
@@ -847,6 +885,11 @@ private struct LiveProxyEventSubscriptionID: Hashable, Sendable {
 }
 
 private actor LiveProxyEventSubscriptions {
+    typealias OrderedContinuation = AsyncThrowingStream<
+        WebInspectorProxyOrderedEvent,
+        any Error
+    >.Continuation
+
     private struct Waiter {
         let id: UInt64
         let minimumCount: Int
@@ -854,11 +897,17 @@ private actor LiveProxyEventSubscriptions {
     }
 
     private var activeSubscriberIDs: [LiveProxyEventSubscriptionKey: Set<LiveProxyEventSubscriptionID>] = [:]
+    private var orderedContinuations: [LiveProxyEventSubscriptionID: OrderedContinuation] = [:]
     private var waiters: [LiveProxyEventSubscriptionKey: [Waiter]] = [:]
     private var nextWaiterID: UInt64 = 0
     private var cancelledWaiterIDs: Set<UInt64> = []
+    private var isFinished = false
+    private var terminalError: WebInspectorProxyError?
 
     func register(_ key: LiveProxyEventSubscriptionKey, id: LiveProxyEventSubscriptionID) {
+        guard isFinished == false else {
+            return
+        }
         let inserted = activeSubscriberIDs[key, default: []].insert(id).inserted
         guard inserted else {
             return
@@ -880,7 +929,21 @@ private actor LiveProxyEventSubscriptions {
         }
     }
 
+    func registerOrdered(
+        _ key: LiveProxyEventSubscriptionKey,
+        id: LiveProxyEventSubscriptionID,
+        continuation: OrderedContinuation
+    ) {
+        guard isFinished == false else {
+            continuation.finish(throwing: terminalError)
+            return
+        }
+        orderedContinuations[id] = continuation
+        register(key, id: id)
+    }
+
     func unregister(_ key: LiveProxyEventSubscriptionKey, id: LiveProxyEventSubscriptionID) {
+        orderedContinuations[id] = nil
         guard var ids = activeSubscriberIDs[key],
               ids.remove(id) != nil else {
             return
@@ -897,6 +960,9 @@ private actor LiveProxyEventSubscriptions {
     }
 
     func waitForActiveSubscribers(_ key: LiveProxyEventSubscriptionKey, minimumCount: Int) async {
+        guard isFinished == false else {
+            return
+        }
         guard activeSubscriberIDs[key, default: []].count < minimumCount else {
             return
         }
@@ -917,7 +983,31 @@ private actor LiveProxyEventSubscriptions {
         cancelledWaiterIDs.remove(waiterID)
     }
 
+    func finish(throwing error: WebInspectorProxyError?) {
+        guard isFinished == false else {
+            return
+        }
+        isFinished = true
+        terminalError = error
+        activeSubscriberIDs.removeAll()
+        let orderedContinuations = orderedContinuations.values
+        self.orderedContinuations.removeAll()
+        let pending = waiters.values.flatMap { $0 }
+        waiters.removeAll()
+        cancelledWaiterIDs.removeAll()
+        for waiter in pending {
+            waiter.continuation.resume()
+        }
+        for continuation in orderedContinuations {
+            continuation.finish(throwing: error)
+        }
+    }
+
     private func addWaiter(_ waiter: Waiter, key: LiveProxyEventSubscriptionKey) {
+        guard isFinished == false else {
+            waiter.continuation.resume()
+            return
+        }
         guard cancelledWaiterIDs.remove(waiter.id) == nil else {
             waiter.continuation.resume()
             return

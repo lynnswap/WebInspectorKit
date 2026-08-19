@@ -126,7 +126,11 @@ public actor WebInspectorTestBackend {
     private var completedCommands: [RecordedCommand]
     private var heldCommands: [HeldCommand]
     private var eventContinuations: [EventSubscriptionKey: [UUID: AsyncStream<WebInspectorProxyEvent>.Continuation]]
-    private var orderedEventContinuations: [OrderedEventSubscriptionKey: [UUID: AsyncStream<WebInspectorProxyOrderedEvent>.Continuation]]
+    private var orderedEventContinuations: [
+        OrderedEventSubscriptionKey: [
+            UUID: AsyncThrowingStream<WebInspectorProxyOrderedEvent, any Error>.Continuation
+        ]
+    ]
     private var orderedEventSequence: UInt64
     private var subscriberWaiters: [SubscriberWaiter]
     private var recordedCommandWaiters: [RecordedCommandWaiter]
@@ -382,7 +386,7 @@ public actor WebInspectorTestBackend {
     }
 
     private func addOrderedEventContinuation(
-        _ continuation: AsyncStream<WebInspectorProxyOrderedEvent>.Continuation,
+        _ continuation: AsyncThrowingStream<WebInspectorProxyOrderedEvent, any Error>.Continuation,
         id: UUID,
         key: OrderedEventSubscriptionKey
     ) {
@@ -625,10 +629,14 @@ extension WebInspectorTestBackend: WebInspectorProxyBackend {
 
     package func orderedEvents(
         route: RoutingTargetID,
-        targetID: WebInspectorTarget.ID
+        targetID: WebInspectorTarget.ID,
+        terminalFailureHandler: @escaping WebInspectorProxyTerminalFailureHandler
     ) async -> WebInspectorProxyOrderedEventFeed {
+        _ = terminalFailureHandler
         let key = OrderedEventSubscriptionKey(route: route, targetID: targetID)
-        let pair = AsyncStream<WebInspectorProxyOrderedEvent>.makeStream(bufferingPolicy: .unbounded)
+        let pair = AsyncThrowingStream<WebInspectorProxyOrderedEvent, any Error>.makeStream(
+            bufferingPolicy: .unbounded
+        )
         let id = UUID()
         addOrderedEventContinuation(pair.continuation, id: id, key: key)
         pair.continuation.onTermination = { _ in
@@ -653,8 +661,10 @@ extension WebInspectorTestBackend: WebInspectorProxyBackend {
     package nonisolated func events(
         route: RoutingTargetID,
         targetID: WebInspectorTarget.ID,
-        domain: WebInspectorProxyEventDomain
+        domain: WebInspectorProxyEventDomain,
+        terminalFailureHandler: @escaping WebInspectorProxyTerminalFailureHandler
     ) -> AsyncStream<WebInspectorProxyEvent> {
+        _ = terminalFailureHandler
         _ = route
         let key = EventSubscriptionKey(route: route, targetID: targetID, domain: domain)
         return AsyncStream<WebInspectorProxyEvent> { continuation in

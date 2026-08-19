@@ -6,15 +6,26 @@ struct WebInspectorEventPump: Sendable {
     init<Event: Sendable, Events: AsyncSequence & Sendable>(
         stream: Events,
         isolation: isolated (any Actor),
-        apply: @escaping (Event) async -> Void
-    ) where Events.Element == Event, Events.Failure == Never {
-        let target = WebInspectorEventPumpTarget(apply: apply)
+        apply: @escaping (Event) async -> Void,
+        onFailure: @escaping (any Error) async -> Void
+    ) where Events.Element == Event {
+        let target = WebInspectorEventPumpTarget(
+            apply: apply,
+            onFailure: onFailure
+        )
         task = Task.detached(priority: .userInitiated) {
-            for await event in stream {
-                if Task.isCancelled {
-                    break
+            do {
+                for try await event in stream {
+                    if Task.isCancelled {
+                        return
+                    }
+                    await target.apply(event, isolation: isolation)
                 }
-                await target.apply(event, isolation: isolation)
+            } catch {
+                guard Task.isCancelled == false else {
+                    return
+                }
+                await target.handleFailure(error, isolation: isolation)
             }
         }
     }
@@ -29,13 +40,23 @@ struct WebInspectorEventPump: Sendable {
 // WebInspectorContext owner actor passed to the pump initializer.
 private final class WebInspectorEventPumpTarget<Event: Sendable>: @unchecked Sendable {
     private let applyEvent: (Event) async -> Void
+    private let failureHandler: (any Error) async -> Void
 
-    init(apply: @escaping (Event) async -> Void) {
+    init(
+        apply: @escaping (Event) async -> Void,
+        onFailure: @escaping (any Error) async -> Void
+    ) {
         applyEvent = apply
+        failureHandler = onFailure
     }
 
     func apply(_ event: Event, isolation: isolated (any Actor)) async {
         _ = isolation
         await applyEvent(event)
+    }
+
+    func handleFailure(_ error: any Error, isolation: isolated (any Actor)) async {
+        _ = isolation
+        await failureHandler(error)
     }
 }

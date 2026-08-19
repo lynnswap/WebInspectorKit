@@ -1310,6 +1310,71 @@ func consecutiveDocumentUpdatesReloadLatestDocumentWithinSingleLoad() async thro
 
 @MainActor
 @Test
+func malformedKnownOrderedEventFailsAttachedContext() async throws {
+    let targetID = ProtocolTarget.ID("page-decode-failure")
+    let (backend, transport, context) = try await startTransportBackedContext(
+        targetID: targetID,
+        documentID: "decode-failure-root"
+    )
+
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: targetID,
+        method: "Network.loadingFinished",
+        params: "{}"
+    )
+
+    try await waitUntil {
+        if case .failed = context.state {
+            return true
+        }
+        return false
+    }
+    guard case let .failed(error) = context.state,
+          case let .disconnected(message) = error else {
+        Issue.record("Expected the context to fail with a disconnected error.")
+        return
+    }
+    #expect(message.contains("Network.loadingFinished"))
+    #expect(await backend.isDetached())
+}
+
+@MainActor
+@Test
+func malformedKnownOrderedEventFailsAttachingContextWithoutHanging() async throws {
+    let targetID = ProtocolTarget.ID("page-startup-decode-failure")
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: nil)
+    await installTransportPageTarget(in: transport, targetID: targetID)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let container = WebInspectorContainer(proxy: proxy)
+    let context = container.mainContext
+
+    _ = try await waitForTransportTargetMessage(backend, method: "Inspector.enable")
+    await receiveTransportTargetEvent(
+        transport,
+        targetID: targetID,
+        method: "Network.loadingFinished",
+        params: "{}"
+    )
+
+    try await waitUntil {
+        if case .failed = context.state {
+            return true
+        }
+        return false
+    }
+    guard case let .failed(error) = context.state,
+          case let .disconnected(message) = error else {
+        Issue.record("Expected startup to fail with a disconnected error.")
+        return
+    }
+    #expect(message.contains("Network.loadingFinished"))
+    #expect(await backend.isDetached())
+}
+
+@MainActor
+@Test
 func currentPageCommitBeforePageEnableAcquiresCommittedPageLease() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()

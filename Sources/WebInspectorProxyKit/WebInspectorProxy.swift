@@ -36,6 +36,10 @@ private struct ProtocolCommandTarget: Sendable {
 ///
 /// await proxy.close()
 /// ```
+///
+/// Domain event streams finish when the connection closes. Use
+/// ``waitUntilClosed()`` to distinguish an explicit close from an unexpected
+/// terminal connection failure.
 public actor WebInspectorProxy {
     /// Optional timeout configuration for command replies and current-page bootstrap.
     public struct Configuration: Equatable, Sendable {
@@ -66,7 +70,7 @@ public actor WebInspectorProxy {
     private let configuration: Configuration
     private let backend: (any WebInspectorProxyBackend)?
     private let transport: TransportSession?
-    private let closeConnection: (@Sendable () async -> Void)?
+    private let closeConnection: (@Sendable (TransportSession.Error) async -> Void)?
     private var pageTarget: WebInspectorTarget?
     private var nextTargetOrdinal: UInt64
     private var nextCloseWaiterID: UInt64
@@ -75,10 +79,51 @@ public actor WebInspectorProxy {
     private var cancelledCloseWaiterIDs: Set<UInt64>
     private var closeState: CloseState
 
+    private enum TerminationReason {
+        case requested
+        case failed(WebInspectorProxyTerminalFailure)
+
+        var publicResult: Result<Void, WebInspectorProxyError> {
+            switch self {
+            case .requested:
+                .success(())
+            case let .failed(failure):
+                .failure(failure.publicError)
+            }
+        }
+
+        var operationError: WebInspectorProxyError {
+            switch self {
+            case .requested:
+                .closed
+            case let .failed(failure):
+                failure.publicError
+            }
+        }
+
+        var transportError: TransportSession.Error {
+            switch self {
+            case .requested:
+                .transportClosed
+            case let .failed(failure):
+                failure.transportError
+            }
+        }
+
+        var failureError: WebInspectorProxyError? {
+            switch self {
+            case .requested:
+                nil
+            case let .failed(failure):
+                failure.publicError
+            }
+        }
+    }
+
     private enum CloseState {
         case open
-        case closing
-        case closed
+        case closing(TerminationReason)
+        case closed(TerminationReason)
     }
 
     /// Attaches a Web Inspector protocol connection to a web view.
@@ -106,8 +151,8 @@ public actor WebInspectorProxy {
         self.configuration = configuration
         backend = LiveWebInspectorProxyBackend(transport: nativeConnection.transport)
         transport = nativeConnection.transport
-        closeConnection = {
-            await nativeConnection.close()
+        closeConnection = { error in
+            await nativeConnection.close(error: error)
         }
         pageTarget = nil
         nextTargetOrdinal = 0
@@ -128,7 +173,7 @@ public actor WebInspectorProxy {
     package init(
         configuration: Configuration = .init(),
         backend: (any WebInspectorProxyBackend)? = nil,
-        closeConnection: (@Sendable () async -> Void)? = nil
+        closeConnection: (@Sendable (TransportSession.Error) async -> Void)? = nil
     ) {
         self.configuration = configuration
         self.backend = backend
@@ -146,13 +191,13 @@ public actor WebInspectorProxy {
     package init(
         transport: TransportSession,
         configuration: Configuration = .init(),
-        closeConnection: (@Sendable () async -> Void)? = nil
+        closeConnection: (@Sendable (TransportSession.Error) async -> Void)? = nil
     ) async throws {
         self.configuration = configuration
         self.transport = transport
         backend = LiveWebInspectorProxyBackend(transport: transport)
-        self.closeConnection = closeConnection ?? {
-            await transport.detach()
+        self.closeConnection = closeConnection ?? { error in
+            await transport.detach(error: error)
         }
         pageTarget = nil
         nextTargetOrdinal = 0
@@ -182,7 +227,10 @@ public actor WebInspectorProxy {
     /// A Boolean value indicating whether the proxy has an open page target
     /// that can receive reload commands.
     public var canReload: Bool {
-        pageTarget != nil && closeState == .open
+        guard case .open = closeState else {
+            return false
+        }
+        return pageTarget != nil
     }
 
     /// Waits for and returns the current page target.
@@ -196,7 +244,7 @@ public actor WebInspectorProxy {
             do {
                 try await refreshCurrentPage(from: transport, timeout: configuration.bootstrapTimeout)
             } catch {
-                throw Self.mapBootstrapTargetError(error)
+                throw operationError(replacing: Self.mapBootstrapTargetError(error))
             }
             if let pageTarget {
                 return pageTarget
@@ -224,7 +272,7 @@ public actor WebInspectorProxy {
         } catch TransportSession.Error.missingMainPageTarget {
             return nil
         } catch {
-            throw Self.mapBootstrapTargetError(error)
+            throw operationError(replacing: Self.mapBootstrapTargetError(error))
         }
         try ensureOpenForCurrentPageAccess()
         return pageTarget
@@ -236,6 +284,7 @@ public actor WebInspectorProxy {
 
     /// Reloads the currently inspected page without ignoring cache.
     public func reload() async throws {
+        try ensureOpenForCurrentPageAccess()
         guard let pageTarget else {
             throw WebInspectorProxyError.disconnected("WebInspectorProxyKit shell has no current page target.")
         }
@@ -255,26 +304,23 @@ public actor WebInspectorProxy {
     public func close() async {
         switch closeState {
         case .open:
-            break
+            await terminate(.requested)
         case .closing:
             try? await waitUntilClosed()
-            return
         case .closed:
-            return
+            break
         }
-        closeState = .closing
-        pageTarget = nil
-        await closeConnection?()
-        closeState = .closed
-        resumeCloseWaiters()
     }
 
     /// Suspends until ``close()`` has finished.
     ///
-    /// If the proxy is already closed, this method returns immediately. If the
-    /// waiting task is cancelled, only that waiter is cancelled.
+    /// If an explicit close has already completed, this method returns
+    /// immediately. If the connection terminated because of an inspector
+    /// failure, it throws that terminal error. Cancelling the waiting task
+    /// cancels only that waiter.
     public func waitUntilClosed() async throws {
-        guard closeState != .closed else {
+        if case let .closed(reason) = closeState {
+            try reason.publicResult.get()
             return
         }
         nextCloseWaiterID &+= 1
@@ -312,7 +358,7 @@ public actor WebInspectorProxy {
     }
 
     package func waitForCloseWaiterForTesting() async {
-        guard closeState != .closed else {
+        if case .closed = closeState {
             preconditionFailure("Cannot wait for a close waiter after WebInspectorProxy closed.")
         }
         guard closeWaiters.isEmpty else {
@@ -330,9 +376,7 @@ public actor WebInspectorProxy {
         method: String,
         payload: Payload
     ) async throws -> Result {
-        guard closeState == .open else {
-            throw WebInspectorProxyError.closed
-        }
+        try ensureOpenForOperation()
         guard let backend else {
             throw unimplementedCommand(domain: domain.rawValue, method: method)
         }
@@ -349,7 +393,11 @@ public actor WebInspectorProxy {
             method: method,
             payload: payload
         )
-        return try await backend.dispatchCommand(command)
+        do {
+            return try await backend.dispatchCommand(command)
+        } catch {
+            throw operationError(replacing: error)
+        }
     }
 
     package func dispatchCommandWithReplyBoundary<Payload: Sendable, Result: Sendable>(
@@ -359,9 +407,7 @@ public actor WebInspectorProxy {
         method: String,
         payload: Payload
     ) async throws -> WebInspectorProxyCommandReply<Result> {
-        guard closeState == .open else {
-            throw WebInspectorProxyError.closed
-        }
+        try ensureOpenForOperation()
         guard let backend else {
             throw unimplementedCommand(domain: domain.rawValue, method: method)
         }
@@ -378,7 +424,11 @@ public actor WebInspectorProxy {
             method: method,
             payload: payload
         )
-        return try await backend.dispatchCommandWithReplyBoundary(command)
+        do {
+            return try await backend.dispatchCommandWithReplyBoundary(command)
+        } catch {
+            throw operationError(replacing: error)
+        }
     }
 
     package nonisolated func orderedEvents(
@@ -388,20 +438,30 @@ public actor WebInspectorProxy {
         guard let backend else {
             preconditionFailure("WebInspectorProxy has no backend for ordered events.")
         }
-        let backendFeed = await backend.orderedEvents(route: route, targetID: targetID)
-        let stream = AsyncStream<WebInspectorProxyOrderedEvent>(bufferingPolicy: .unbounded) { continuation in
+        let backendFeed = await backend.orderedEvents(
+            route: route,
+            targetID: targetID,
+            terminalFailureHandler: terminalFailureHandler
+        )
+        let stream = AsyncThrowingStream<WebInspectorProxyOrderedEvent, any Error>(
+            bufferingPolicy: .unbounded
+        ) { continuation in
             let task = Task {
-                for await sequencedEvent in backendFeed.events {
-                    let event = sequencedEvent.event
-                    if case let .targetLifecycle(lifecycleEvent) = event {
-                        await self.applyTargetLifecycleEventToProxyState(lifecycleEvent)
+                do {
+                    for try await sequencedEvent in backendFeed.events {
+                        let event = sequencedEvent.event
+                        if case let .targetLifecycle(lifecycleEvent) = event {
+                            await self.applyTargetLifecycleEventToProxyState(lifecycleEvent)
+                        }
+                        continuation.yield(WebInspectorProxyOrderedEvent(
+                            sequence: sequencedEvent.sequence,
+                            event: event
+                        ))
                     }
-                    continuation.yield(WebInspectorProxyOrderedEvent(
-                        sequence: sequencedEvent.sequence,
-                        event: event
-                    ))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
                 }
-                continuation.finish()
             }
             continuation.onTermination = { _ in
                 task.cancel()
@@ -424,7 +484,12 @@ public actor WebInspectorProxy {
             let task = Task {
                 await withTaskGroup(of: Void.self) { group in
                     group.addTask {
-                        for await event in backend.events(route: route, targetID: targetID, domain: .dom) {
+                        for await event in backend.events(
+                            route: route,
+                            targetID: targetID,
+                            domain: .dom,
+                            terminalFailureHandler: self.terminalFailureHandler
+                        ) {
                             guard case let .dom(value) = event else {
                                 preconditionFailure("Backend emitted a mismatched event for DOM.")
                             }
@@ -432,7 +497,12 @@ public actor WebInspectorProxy {
                         }
                     }
                     group.addTask {
-                        for await event in backend.events(route: route, targetID: targetID, domain: .inspector) {
+                        for await event in backend.events(
+                            route: route,
+                            targetID: targetID,
+                            domain: .inspector,
+                            terminalFailureHandler: self.terminalFailureHandler
+                        ) {
                             guard case let .inspector(value) = event else {
                                 preconditionFailure("Backend emitted a mismatched event for Inspector.")
                             }
@@ -525,7 +595,12 @@ public actor WebInspectorProxy {
                 await withTaskGroup(of: Void.self) { group in
                     for domain in [WebInspectorProxyEventDomain.target, .page] {
                         group.addTask {
-                            for await event in backend.events(route: route, targetID: targetID, domain: domain) {
+                            for await event in backend.events(
+                                route: route,
+                                targetID: targetID,
+                                domain: domain,
+                                terminalFailureHandler: self.terminalFailureHandler
+                            ) {
                                 guard case let .targetLifecycle(value) = event else {
                                     preconditionFailure("Backend emitted a mismatched event for lifecycle.")
                                 }
@@ -566,7 +641,12 @@ public actor WebInspectorProxy {
         }
         return AsyncStream<Element> { continuation in
             let task = Task {
-                for await event in backend.events(route: route, targetID: targetID, domain: domain) {
+                for await event in backend.events(
+                    route: route,
+                    targetID: targetID,
+                    domain: domain,
+                    terminalFailureHandler: self.terminalFailureHandler
+                ) {
                     guard let value = extract(event) else {
                         preconditionFailure("Backend emitted a mismatched event for \(domain.rawValue).")
                     }
@@ -577,6 +657,12 @@ public actor WebInspectorProxy {
             continuation.onTermination = { _ in
                 task.cancel()
             }
+        }
+    }
+
+    private nonisolated var terminalFailureHandler: WebInspectorProxyTerminalFailureHandler {
+        { failure, broadcast in
+            await self.terminate(failure, broadcast: broadcast)
         }
     }
 
@@ -871,14 +957,68 @@ public actor WebInspectorProxy {
     }
 
     private func ensureOpenForCurrentPageAccess() throws {
-        guard closeState == .open else {
+        do {
+            try ensureOpenForOperation()
+        } catch {
             pageTarget = nil
-            throw WebInspectorProxyError.closed
+            throw error
         }
     }
 
+    private func ensureOpenForOperation() throws {
+        switch closeState {
+        case .open:
+            return
+        case let .closing(reason), let .closed(reason):
+            throw reason.operationError
+        }
+    }
+
+    private func operationError(replacing error: any Error) -> any Error {
+        switch closeState {
+        case .open:
+            return error
+        case let .closing(reason), let .closed(reason):
+            return reason.operationError
+        }
+    }
+
+    private func terminate(
+        _ failure: WebInspectorProxyTerminalFailure,
+        broadcast: WebInspectorProxyTerminalBroadcast
+    ) async {
+        switch closeState {
+        case .open:
+            _ = await terminate(.failed(failure), broadcast: broadcast)
+        case let .closing(reason), let .closed(reason):
+            await broadcast(reason.failureError)
+        }
+    }
+
+    @discardableResult
+    private func terminate(
+        _ reason: TerminationReason,
+        broadcast: WebInspectorProxyTerminalBroadcast = { _ in }
+    ) async -> Bool {
+        guard case .open = closeState else {
+            return false
+        }
+        closeState = .closing(reason)
+        pageTarget = nil
+        if case let .failed(failure) = reason {
+            logger.error(
+                "Inspector connection failed: \(String(describing: failure.publicError), privacy: .private)"
+            )
+        }
+        await broadcast(reason.failureError)
+        await closeConnection?(reason.transportError)
+        closeState = .closed(reason)
+        resumeCloseWaiters(with: reason)
+        return true
+    }
+
     private func applyTargetLifecycleEventToProxyState(_ event: WebInspectorTargetLifecycleEvent) {
-        guard closeState == .open else {
+        guard case .open = closeState else {
             return
         }
         switch event {
@@ -892,8 +1032,8 @@ public actor WebInspectorProxy {
     }
 
     private func registerCloseWaiter(id: UInt64, continuation: CheckedContinuation<Void, any Error>) {
-        guard closeState != .closed else {
-            continuation.resume()
+        if case let .closed(reason) = closeState {
+            resume(continuation, with: reason)
             return
         }
         guard cancelledCloseWaiterIDs.remove(id) == nil else {
@@ -906,7 +1046,9 @@ public actor WebInspectorProxy {
 
     private func cancelCloseWaiter(_ id: UInt64) {
         guard let continuation = closeWaiters.removeValue(forKey: id) else {
-            if closeState != .closed {
+            if case .closed = closeState {
+                return
+            } else {
                 cancelledCloseWaiterIDs.insert(id)
             }
             return
@@ -914,12 +1056,24 @@ public actor WebInspectorProxy {
         continuation.resume(throwing: CancellationError())
     }
 
-    private func resumeCloseWaiters() {
+    private func resumeCloseWaiters(with reason: TerminationReason) {
         let waiters = closeWaiters.values
         closeWaiters.removeAll()
         cancelledCloseWaiterIDs.removeAll()
         for waiter in waiters {
-            waiter.resume()
+            resume(waiter, with: reason)
+        }
+    }
+
+    private func resume(
+        _ continuation: CheckedContinuation<Void, any Error>,
+        with reason: TerminationReason
+    ) {
+        switch reason.publicResult {
+        case .success:
+            continuation.resume()
+        case let .failure(error):
+            continuation.resume(throwing: error)
         }
     }
 
@@ -971,6 +1125,10 @@ public actor WebInspectorProxy {
             return WebInspectorProxyError.timeout(domain: "Target", method: method)
         case let .remoteError(method, _, message):
             return WebInspectorProxyError.commandFailed(domain: "Target", method: method, message: message)
+        case let .eventDecodingFailed(method, message):
+            return WebInspectorProxyError.disconnected(
+                "Failed to decode \(method): \(message)"
+            )
         case let .missingTarget(targetID):
             return WebInspectorProxyError.disconnected("Target \(targetID.rawValue) disappeared during bootstrap.")
         case let .unsupportedDomain(domain, targetID):

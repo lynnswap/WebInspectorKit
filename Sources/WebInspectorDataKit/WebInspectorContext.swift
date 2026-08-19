@@ -3034,16 +3034,28 @@ public final class WebInspectorContext {
         stopEventPumps()
         let subscriptionGeneration = orderedEventSubscriptionGeneration
         let feed = await target.orderedEventFeed()
-        let pump = WebInspectorEventPump(stream: feed.events, isolation: isolation) { [weak self, target] sequencedEvent in
-            guard let self else { return }
-            await self.applyOrderedEvent(
-                sequencedEvent,
-                target: target,
-                subscriptionGeneration: subscriptionGeneration,
-                beforeWatermarkUpdate: nil,
-                isolation: isolation
-            )
-        }
+        let pump = WebInspectorEventPump(
+            stream: feed.events,
+            isolation: isolation,
+            apply: { [weak self, target] sequencedEvent in
+                guard let self else { return }
+                await self.applyOrderedEvent(
+                    sequencedEvent,
+                    target: target,
+                    subscriptionGeneration: subscriptionGeneration,
+                    beforeWatermarkUpdate: nil,
+                    isolation: isolation
+                )
+            },
+            onFailure: { [weak self] error in
+                guard let self else { return }
+                self.handleOrderedEventStreamFailure(
+                    error,
+                    subscriptionGeneration: subscriptionGeneration,
+                    isolation: isolation
+                )
+            }
+        )
         if let beforeValidation {
             await beforeValidation()
         }
@@ -3057,6 +3069,29 @@ public final class WebInspectorContext {
         )
         lastOrderedEventSequence = feed.initialSequence
         eventPumps = [pump]
+    }
+
+    private func handleOrderedEventStreamFailure(
+        _ error: any Error,
+        subscriptionGeneration: UInt64,
+        isolation: isolated (any Actor)
+    ) {
+        requireOwner(isolation)
+        guard subscriptionGeneration == orderedEventSubscriptionGeneration else {
+            return
+        }
+        stopEventPumps()
+        startupTask?.cancel()
+        currentPageRetargetTask?.cancel()
+        currentPageCleanupTask?.cancel()
+        documentReloadTask?.cancel()
+        cancelDOMDocumentLoad()
+
+        if let proxyError = error as? WebInspectorProxyError {
+            fail(proxyError)
+        } else {
+            fail(.disconnected("Ordered event stream failed: \(error)"))
+        }
     }
 
     private func stopEventPumps() {
