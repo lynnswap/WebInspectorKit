@@ -868,6 +868,7 @@ private struct SecurityCertificatePayload: Decodable {
 private struct MetricsPayload: Decodable {
     var networkProtocol: String?
     var remoteAddress: String?
+    var requestHeaders: [String: String]?
     var responseBodyBytesReceived: Int?
     var responseBodyDecodedSize: Int?
     var securityConnection: SecurityConnectionPayload?
@@ -875,6 +876,7 @@ private struct MetricsPayload: Decodable {
     enum CodingKeys: String, CodingKey {
         case networkProtocol = "protocol"
         case remoteAddress
+        case requestHeaders
         case responseBodyBytesReceived
         case responseBodyDecodedSize
         case securityConnection
@@ -887,6 +889,7 @@ private struct MetricsPayload: Decodable {
             remoteAddress: remoteAddress,
             encodedDataLength: responseBodyBytesReceived,
             decodedBodyLength: responseBodyDecodedSize,
+            requestHeaders: requestHeaders,
             securityConnection: securityConnection?.proxyConnection
         )
     }

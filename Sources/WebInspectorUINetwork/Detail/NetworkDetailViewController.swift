@@ -84,6 +84,8 @@ package final class NetworkDetailViewController: UIViewController {
     private var isBodyRenderingActive = false
     private lazy var bodyViewController = makeBodyViewController(scrollEdgeController)
     private lazy var securityViewController = NetworkSecurityViewController()
+    private lazy var cookiesViewController = NetworkCookiesViewController()
+    private let webSocketPreviewViewController: NetworkWebSocketPreviewViewController
     private lazy var modeControlController: NetworkDetailModeControlController = {
         let controller = NetworkDetailModeControlController(initialMode: mode)
         controller.selectionHandler = { [weak self] mode in
@@ -124,11 +126,15 @@ package final class NetworkDetailViewController: UIViewController {
 #if DEBUG
     private var modelObservationDelivery: PortableObservationTracking.Token?
     private var selectedRequestRenderObservationDelivery: PortableObservationTracking.Token?
+    private var selectedRequestRenderCountStorageForTesting = 0
 #endif
     private lazy var headersTextView: NetworkHeadersTextView = {
         let view = NetworkHeadersTextView()
         view.translatesAutoresizingMaskIntoConstraints = false
         view.isHidden = true
+        view.requestPreviewAction = { [weak self] in
+            self?.activateRequestPreviewFromHeaders()
+        }
         return view
     }()
     fileprivate var mode: NetworkDetailViewController.Mode = .headers
@@ -137,12 +143,16 @@ package final class NetworkDetailViewController: UIViewController {
     package init(
         model: NetworkPanelModel,
         initialMode: NetworkDetailViewController.Mode = .headers,
+        webSocketFrameScheduler: any NetworkFrameScheduling = NetworkDisplayLinkFrameScheduler(),
         makeBodyViewController: @escaping NetworkBodyViewControllerFactory = { scrollEdgeSink in
             UnavailableNetworkBodyPreviewViewController(scrollEdgeSink: scrollEdgeSink)
         }
     ) {
         self.model = model
         self.makeBodyViewController = makeBodyViewController
+        webSocketPreviewViewController = NetworkWebSocketPreviewViewController(
+            frameScheduler: webSocketFrameScheduler
+        )
         mode = initialMode
         super.init(nibName: nil, bundle: nil)
     }
@@ -256,6 +266,7 @@ package final class NetworkDetailViewController: UIViewController {
         selectedRequestRenderObservation = nil
         unbindResponseBodyFetchObservation()
         setBodyRenderingActive(false)
+        webSocketPreviewViewController.suspendKeepingSnapshot()
 #if DEBUG
         modelObservationDelivery = nil
         selectedRequestRenderObservationDelivery = nil
@@ -285,23 +296,36 @@ package final class NetworkDetailViewController: UIViewController {
         headersTextView.backgroundColor = backgroundColor
         securityViewController.view.backgroundColor = backgroundColor
         securityViewController.collectionView.backgroundColor = backgroundColor
+        cookiesViewController.view.backgroundColor = backgroundColor
+        webSocketPreviewViewController.view.backgroundColor = backgroundColor
+        webSocketPreviewViewController.collectionView.backgroundColor = backgroundColor
     }
 
     private func installContentViews() {
         addChild(bodyViewController)
         addChild(securityViewController)
+        addChild(cookiesViewController)
+        addChild(webSocketPreviewViewController)
         view.addSubview(bodyViewController.view)
         view.addSubview(previewRoleControlController.containerView)
         view.addSubview(headersTextView)
         view.addSubview(securityViewController.view)
+        view.addSubview(cookiesViewController.view)
+        view.addSubview(webSocketPreviewViewController.view)
         bodyViewController.view.translatesAutoresizingMaskIntoConstraints = false
         bodyViewController.view.isHidden = true
         bodyViewController.view.accessibilityIdentifier = "WebInspector.Network.DetailPreview"
+        cookiesViewController.view.translatesAutoresizingMaskIntoConstraints = false
+        cookiesViewController.view.isHidden = true
+        webSocketPreviewViewController.view.translatesAutoresizingMaskIntoConstraints = false
+        webSocketPreviewViewController.view.isHidden = true
         previewRoleControlController.containerView.translatesAutoresizingMaskIntoConstraints = false
         securityViewController.view.translatesAutoresizingMaskIntoConstraints = false
         securityViewController.view.isHidden = true
         bodyViewController.didMove(toParent: self)
         securityViewController.didMove(toParent: self)
+        cookiesViewController.didMove(toParent: self)
+        webSocketPreviewViewController.didMove(toParent: self)
 
         let bodyTopToPreviewContainerConstraint = bodyViewController.view.topAnchor.constraint(
             equalTo: view.topAnchor
@@ -338,6 +362,18 @@ package final class NetworkDetailViewController: UIViewController {
                 equalTo: view.safeAreaLayoutGuide.trailingAnchor
             ),
             securityViewController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            cookiesViewController.view.topAnchor.constraint(equalTo: view.topAnchor),
+            cookiesViewController.view.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            cookiesViewController.view.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            cookiesViewController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            webSocketPreviewViewController.view.topAnchor.constraint(equalTo: view.topAnchor),
+            webSocketPreviewViewController.view.leadingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.leadingAnchor
+            ),
+            webSocketPreviewViewController.view.trailingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.trailingAnchor
+            ),
+            webSocketPreviewViewController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
     }
 
@@ -458,6 +494,9 @@ package final class NetworkDetailViewController: UIViewController {
                   requestInstancesMatch(observedRequests, requests) else {
                 return
             }
+#if DEBUG
+            selectedRequestRenderCountStorageForTesting += 1
+#endif
             renderSelection(selection, requests: observedRequests)
         }
         selectedRequestRenderObservation = token
@@ -475,6 +514,12 @@ package final class NetworkDetailViewController: UIViewController {
         }
         switch mode {
         case .preview:
+            let activeRequest = activeRequest(for: selection, requests: requests)
+            let activeWebSocket = activeRequest.webSocket
+            if activeWebSocket != nil {
+                renderWebSocketPreviewSurface(request: activeRequest)
+                return
+            }
             let candidate: PreviewCandidate
             switch selection {
             case .entry:
@@ -505,6 +550,8 @@ package final class NetworkDetailViewController: UIViewController {
             renderSecuritySurface(
                 request: activeRequest(for: selection, requests: requests)
             )
+        case .cookies:
+            renderCookiesSurface(request: activeRequest(for: selection, requests: requests))
         }
     }
 
@@ -514,16 +561,16 @@ package final class NetworkDetailViewController: UIViewController {
     ) -> NetworkRequest {
         switch selection {
         case .entry:
-            guard let request = requests.first else {
+            guard let representativeRequest = requests.first else {
                 preconditionFailure("A selected Network entry must contain at least one request.")
             }
-            return request
+            return representativeRequest
         case .request:
             guard requests.count == 1,
-                  let request = requests.first else {
+                  let selectedRequest = requests.first else {
                 preconditionFailure("An explicit Network request selection must render exactly one request.")
             }
-            return request
+            return selectedRequest
         }
     }
 
@@ -536,6 +583,13 @@ package final class NetworkDetailViewController: UIViewController {
         updateBodyRenderingActiveForCurrentSurface()
     }
 
+    private func renderWebSocketPreviewSurface(request: NetworkRequest) {
+        observedRequest = request
+        title = request.displayName
+        webSocketPreviewViewController.bind(to: request)
+        showWebSocketPreview()
+    }
+
     private func renderHeadersSurface(entryRequests requests: [NetworkRequest]) {
         guard let representativeRequest = requests.first else {
             preconditionFailure("A selected Network entry must contain at least one request.")
@@ -543,14 +597,27 @@ package final class NetworkDetailViewController: UIViewController {
         observedRequest = representativeRequest
         title = representativeRequest.displayName
         showHeaders()
-        headersTextView.render(requests: requests)
+        headersTextView.render(
+            requests: requests,
+            activeRequest: representativeRequest
+        )
     }
 
     private func renderHeadersSurface(request: NetworkRequest) {
         observedRequest = request
         title = request.displayName
         showHeaders()
-        headersTextView.render(request: request)
+        headersTextView.render(request: request, activeRequest: request)
+    }
+
+    private func renderCookiesSurface(request: NetworkRequest) {
+        observedRequest = request
+        title = request.displayName
+        showCookies()
+        cookiesViewController.render(
+            request.cookieSections,
+            requestEpoch: NetworkCookiesViewController.RequestEpoch(request: request)
+        )
     }
 
     private func renderSecuritySurface(request: NetworkRequest) {
@@ -589,6 +656,59 @@ package final class NetworkDetailViewController: UIViewController {
             return
         }
         rebindSelectedRequestRendering()
+    }
+
+    private func activateRequestPreviewFromHeaders() {
+        guard mode == .headers,
+              isRenderingActive,
+              let selection = model.selection,
+              let entry = model.selectedEntry,
+              let selectedRequest = model.selectedRequest else {
+            return
+        }
+        let currentRequests: [NetworkRequest] = switch selection {
+        case .entry:
+            entry.requests
+        case .request:
+            [selectedRequest]
+        }
+        let activeRequest = activeRequest(for: selection, requests: currentRequests)
+        guard activeRequest.webSocket == nil,
+              let requestData = activeRequest.headersContext.requestData,
+              case .body = requestData else {
+            return
+        }
+
+        previewRole = .request
+        let explicitRequest = promoteHeadersActiveRequestToExplicitSelection(
+            activeRequest,
+            expectedEntryID: entry.id
+        )
+
+        mode = .preview
+        bindSelection(
+            model.selection,
+            entry: model.selectedEntry,
+            selectedRequest: explicitRequest,
+            force: true
+        )
+    }
+
+    private func promoteHeadersActiveRequestToExplicitSelection(
+        _ request: NetworkRequest,
+        expectedEntryID: NetworkListEntry.ID
+    ) -> NetworkRequest {
+        model.selectRequest(request)
+        guard case let .request(entryID, requestID) = model.selection,
+              entryID == expectedEntryID,
+              requestID == request.id,
+              let selectedRequest = model.selectedRequest,
+              selectedRequest === request else {
+            preconditionFailure(
+                "A current Network headers request must become the exact explicit selection."
+            )
+        }
+        return selectedRequest
     }
 
     private func renderModeControl(selectedRequest request: NetworkRequest? = nil) {
@@ -672,6 +792,10 @@ package final class NetworkDetailViewController: UIViewController {
         headersTextView.clear()
         securityViewController.view.isHidden = true
         securityViewController.clear()
+        cookiesViewController.view.isHidden = true
+        cookiesViewController.clear()
+        webSocketPreviewViewController.view.isHidden = true
+        webSocketPreviewViewController.clear()
         renderPreviewRoleControl(roles: [], selectedRole: nil)
         scrollEdgeController.contentScrollView = nil
 
@@ -686,12 +810,17 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func showPreview() {
+        webSocketPreviewViewController.suspendKeepingSnapshot()
+        webSocketPreviewViewController.view.isHidden = true
         headersTextView.isHidden = true
         securityViewController.view.isHidden = true
+        cookiesViewController.view.isHidden = true
         bodyViewController.view.isHidden = false
     }
 
     private func showHeaders() {
+        webSocketPreviewViewController.suspendKeepingSnapshot()
+        webSocketPreviewViewController.view.isHidden = true
         setBodyRenderingActive(false)
         bodyViewController.view.isHidden = true
         previewRoleControlController.containerView.isHidden = true
@@ -700,10 +829,28 @@ package final class NetworkDetailViewController: UIViewController {
         bodyViewController.setSurface(.none)
         headersTextView.isHidden = false
         securityViewController.view.isHidden = true
+        cookiesViewController.view.isHidden = true
         scrollEdgeController.contentScrollView = headersTextView.contentScrollView
     }
 
+    private func showCookies() {
+        webSocketPreviewViewController.suspendKeepingSnapshot()
+        webSocketPreviewViewController.view.isHidden = true
+        setBodyRenderingActive(false)
+        bodyViewController.view.isHidden = true
+        previewRoleControlController.containerView.isHidden = true
+        updatePreviewRoleControlLayout(isVisible: false)
+        scrollEdgeController.isPreviewRoleControlVisible = false
+        bodyViewController.setSurface(.none)
+        headersTextView.isHidden = true
+        securityViewController.view.isHidden = true
+        cookiesViewController.view.isHidden = false
+        scrollEdgeController.contentScrollView = cookiesViewController.collectionView
+    }
+
     private func showSecurity() {
+        webSocketPreviewViewController.suspendKeepingSnapshot()
+        webSocketPreviewViewController.view.isHidden = true
         setBodyRenderingActive(false)
         bodyViewController.view.isHidden = true
         bodyViewController.setSurface(.none)
@@ -713,8 +860,26 @@ package final class NetworkDetailViewController: UIViewController {
         updatePreviewRoleControlLayout(isVisible: false)
         scrollEdgeController.isPreviewRoleControlVisible = false
         headersTextView.isHidden = true
+        cookiesViewController.view.isHidden = true
         securityViewController.view.isHidden = false
         scrollEdgeController.contentScrollView = securityViewController.collectionView
+    }
+
+    private func showWebSocketPreview() {
+        setBodyRenderingActive(false)
+        bodyViewController.view.isHidden = true
+        bodyViewController.setSurface(.none)
+        unbindResponseBodyFetchObservation()
+        previewRoleControlController.containerView.isHidden = true
+        renderPreviewRoleControl(roles: [], selectedRole: nil)
+        updatePreviewRoleControlLayout(isVisible: false)
+        scrollEdgeController.isPreviewRoleControlVisible = false
+        headersTextView.isHidden = true
+        securityViewController.view.isHidden = true
+        cookiesViewController.view.isHidden = true
+        webSocketPreviewViewController.view.isHidden = false
+        scrollEdgeController.contentScrollView = webSocketPreviewViewController.collectionView
+        webSocketPreviewViewController.resumeRendering()
     }
 
     private func renderPreview(candidate: PreviewCandidate) {
@@ -882,16 +1047,10 @@ package final class NetworkDetailViewController: UIViewController {
         from explicitMimeType: String?,
         headers: [String: String]
     ) -> String? {
-        let rawMimeType = explicitMimeType ?? headerValue(named: "content-type", in: headers)
-        let mimeType = rawMimeType?
-            .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
-            .first
-            .map(String.init)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let mimeType, mimeType.isEmpty == false else {
-            return nil
-        }
-        return mimeType
+        NetworkContentTypeParser.effectiveMediaType(
+            protocolMIMEType: explicitMimeType,
+            headers: headers
+        )
     }
 
     private func headerValue(named name: String, in headers: [String: String]) -> String? {
@@ -903,6 +1062,9 @@ package final class NetworkDetailViewController: UIViewController {
         var latestStandard: PreviewCandidate?
         var latestUnavailableMedia: PreviewCandidate?
         for request in requests.reversed() {
+            guard request.webSocket == nil else {
+                continue
+            }
             guard let candidate = previewCandidate(for: request) else {
                 continue
             }
@@ -1112,6 +1274,14 @@ extension NetworkDetailViewController {
         securityViewController
     }
 
+    var cookiesViewControllerForTesting: NetworkCookiesViewController {
+        cookiesViewController
+    }
+
+    var webSocketPreviewViewControllerForTesting: NetworkWebSocketPreviewViewController {
+        webSocketPreviewViewController
+    }
+
     var bodyViewControllerForTesting: NetworkBodyPreviewViewController {
         bodyViewController
     }
@@ -1162,6 +1332,10 @@ extension NetworkDetailViewController {
 
     var selectedRequestRenderObservationDeliveryForTesting: PortableObservationTracking.Token? {
         selectedRequestRenderObservationDelivery
+    }
+
+    var selectedRequestRenderCountForTesting: Int {
+        selectedRequestRenderCountStorageForTesting
     }
 
     var responseBodyFetchObservationDeliveryForTesting: PortableObservationTracking.Token? {

@@ -71,6 +71,31 @@ func webInspectorProxyNetworkEventsMulticastToConsumerSubscribers() async throws
 }
 
 @Test
+func webInspectorProxyMetricsRequestHeadersPreserveInitializerAndCopyContracts() {
+    let makeMetrics = Network.Metrics.init
+    let base = makeMetrics(42, "h2", "203.0.113.10:443", 128, 256)
+    let securityConnection = Network.Security.Connection(tlsProtocol: "TLS 1.3")
+    let reported = base
+        .reporting(securityConnection: securityConnection)
+        .reporting(requestHeaders: ["Cookie": "session=abc"])
+    let replacedConnection = reported.reporting(
+        securityConnection: Network.Security.Connection(cipher: "AES_128_GCM_SHA256")
+    )
+
+    #expect(base.requestHeaders == nil)
+    #expect(base.securityConnection == nil)
+    #expect(reported.timestamp == 42)
+    #expect(reported.networkProtocol == "h2")
+    #expect(reported.remoteAddress == "203.0.113.10:443")
+    #expect(reported.encodedDataLength == 128)
+    #expect(reported.decodedBodyLength == 256)
+    #expect(reported.requestHeaders == ["Cookie": "session=abc"])
+    #expect(reported.securityConnection == securityConnection)
+    #expect(replacedConnection.requestHeaders == ["Cookie": "session=abc"])
+    #expect(replacedConnection.securityConnection?.cipher == "AES_128_GCM_SHA256")
+}
+
+@Test
 func webInspectorProxySecurityMetadataIsConstructibleAndReadableByConsumers() {
     let validFrom = Date(timeIntervalSince1970: 1_700_000_000)
     let validUntil = Date(timeIntervalSince1970: 1_800_000_000)
@@ -161,5 +186,6 @@ func webInspectorProxyLegacyNetworkInitializerFunctionReferencesRemainUsable() {
     #expect(response.status == 204)
     #expect(response.security == nil)
     #expect(metrics.networkProtocol == "h2")
+    #expect(metrics.requestHeaders == nil)
     #expect(metrics.securityConnection == nil)
 }

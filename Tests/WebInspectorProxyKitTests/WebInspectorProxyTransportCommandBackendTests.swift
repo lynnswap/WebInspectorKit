@@ -3063,6 +3063,82 @@ func transportBackendDecodesWebSocketHandshakeEventsForTargetRoute() async throw
 }
 
 @Test
+func transportBackendPreservesEveryWebSocketOpcodeDirectionMaskAndPayloadMetadata() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(
+        backend: backend,
+        protocolProfile: .latest,
+        responseTimeout: .milliseconds(750)
+    )
+    await installPageTarget(in: transport)
+    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let cases: [(method: String, opcode: Int, mask: Bool, payload: String, length: Int)] = [
+        ("Network.webSocketFrameSent", 0, false, "AA==", 1),
+        ("Network.webSocketFrameSent", 1, true, "sent text", 9),
+        ("Network.webSocketFrameReceived", 1, false, "received text", 13),
+        ("Network.webSocketFrameReceived", 2, true, "AQID", 3),
+        ("Network.webSocketFrameSent", 8, false, "A+g=", 2),
+        ("Network.webSocketFrameReceived", 9, false, "", 0),
+        ("Network.webSocketFrameSent", 10, true, "BA==", 1),
+        ("Network.webSocketFrameReceived", 42, true, "BQY=", 2),
+    ]
+
+    let eventsTask = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        var events: [Network.WebSocketEvent] = []
+        while events.count < cases.count, let event = await iterator.next() {
+            guard case let .webSocket(webSocketEvent) = event else {
+                continue
+            }
+            events.append(webSocketEvent)
+        }
+        return events
+    }
+
+    await waitForEventSubscription(target, domain: .network)
+    for (index, testCase) in cases.enumerated() {
+        await receiveTargetEvent(
+            transport,
+            targetID: ProtocolTarget.ID("page-main"),
+            method: testCase.method,
+            params: """
+            {"requestId":"ws-opcodes","timestamp":\(Double(index) + 0.5),"response":{"opcode":\(testCase.opcode),"mask":\(testCase.mask),"payloadData":"\(testCase.payload)","payloadLength":\(testCase.length)}}
+            """
+        )
+    }
+
+    let events = try await value(of: eventsTask)
+    #expect(events.count == cases.count)
+    for (index, pair) in zip(cases.indices, zip(cases, events)) {
+        let (testCase, event) = pair
+        let id: Network.Request.ID
+        let frame: Network.WebSocketFrame
+        let timestamp: Double
+        switch event {
+        case let .frameSent(eventID, eventFrame, eventTimestamp):
+            #expect(testCase.method == "Network.webSocketFrameSent")
+            id = eventID
+            frame = eventFrame
+            timestamp = eventTimestamp
+        case let .frameReceived(eventID, eventFrame, eventTimestamp):
+            #expect(testCase.method == "Network.webSocketFrameReceived")
+            id = eventID
+            frame = eventFrame
+            timestamp = eventTimestamp
+        default:
+            Issue.record("Expected a WebSocket frame event.")
+            continue
+        }
+        #expect(id == Network.Request.ID("ws-opcodes"))
+        #expect(frame.opcode == testCase.opcode)
+        #expect(frame.mask == testCase.mask)
+        #expect(frame.payloadData == testCase.payload)
+        #expect(frame.payloadLength == testCase.length)
+        #expect(timestamp == Double(index) + 0.5)
+    }
+}
+
+@Test
 func transportBackendFiltersEventsByRoute() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
@@ -3096,7 +3172,7 @@ func transportBackendFiltersEventsByRoute() async throws {
         transport,
         targetID: ProtocolTarget.ID("frame-target"),
         method: "Network.loadingFinished",
-        params: #"{"requestId":"frame-request","timestamp":4,"sourceMapURL":"frame.js.map","metrics":{"protocol":"h2","remoteAddress":"203.0.113.10:443","responseBodyBytesReceived":128,"responseBodyDecodedSize":256,"securityConnection":{"protocol":"TLS 1.3","cipher":"AES_128_GCM_SHA256","futureConnectionField":true}}}"#
+        params: #"{"requestId":"frame-request","timestamp":4,"sourceMapURL":"frame.js.map","metrics":{"protocol":"h2","remoteAddress":"203.0.113.10:443","requestHeaders":{"Cookie":"session=abc"},"responseBodyBytesReceived":128,"responseBodyDecodedSize":256,"securityConnection":{"protocol":"TLS 1.3","cipher":"AES_128_GCM_SHA256","futureConnectionField":true},"futureField":true}}"#
     )
 
     let frameEvent = try #require(try await value(of: frameEventTask))
@@ -3109,12 +3185,41 @@ func transportBackendFiltersEventsByRoute() async throws {
     #expect(sourceMapURL == "frame.js.map")
     #expect(metrics?.networkProtocol == "h2")
     #expect(metrics?.remoteAddress == "203.0.113.10:443")
+    #expect(metrics?.requestHeaders == ["Cookie": "session=abc"])
     #expect(metrics?.encodedDataLength == 128)
     #expect(metrics?.decodedBodyLength == 256)
     #expect(metrics?.securityConnection?.tlsProtocol == "TLS 1.3")
     #expect(metrics?.securityConnection?.cipher == "AES_128_GCM_SHA256")
 
     pageEventTask.cancel()
+}
+
+@Test
+func transportBackendPreservesPresentEmptyMetricsRequestHeaders() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+
+    let eventTask = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+
+    await waitForEventSubscription(target, domain: .network)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Network.loadingFinished",
+        params: #"{"requestId":"empty-request-headers","timestamp":4,"metrics":{"requestHeaders":{}}}"#
+    )
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .loadingFinished(_, _, _, metrics) = event else {
+        Issue.record("Expected Network.loadingFinished.")
+        return
+    }
+    #expect(metrics?.requestHeaders == [:])
 }
 
 @Test

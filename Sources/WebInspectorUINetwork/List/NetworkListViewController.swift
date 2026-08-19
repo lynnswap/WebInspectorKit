@@ -240,7 +240,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private var snapshotCoordinator = SnapshotCoordinator()
     private var needsListProjectionCapture = false
-    private let listFrameScheduler: any NetworkListFrameScheduling
+    private let listFrameScheduler: any NetworkFrameScheduling
     private let listSnapshotBuildCoordinator: ListSnapshotBuildCoordinator
     private let snapshotApplyCompletionScheduler: any NetworkListSnapshotApplyCompletionScheduling
     private var isApplyingSearchPresentation = false
@@ -283,7 +283,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     package convenience init(model: NetworkPanelModel) {
         self.init(
             model: model,
-            listFrameScheduler: NetworkListDisplayLinkFrameScheduler(),
+            listFrameScheduler: NetworkDisplayLinkFrameScheduler(),
             listSnapshotBuilderFactory: NetworkListSnapshotBuilderFactory(),
             snapshotApplyCompletionScheduler: NetworkListImmediateSnapshotApplyCompletionScheduler()
         )
@@ -291,7 +291,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     package convenience init(
         model: NetworkPanelModel,
-        listFrameScheduler: any NetworkListFrameScheduling,
+        listFrameScheduler: any NetworkFrameScheduling,
         listSnapshotBuilderFactory: any NetworkListSnapshotBuilderMaking,
         snapshotApplyCompletionScheduler: any NetworkListSnapshotApplyCompletionScheduling =
             NetworkListImmediateSnapshotApplyCompletionScheduler()
@@ -306,7 +306,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private init(
         model: NetworkPanelModel,
-        frameScheduler: any NetworkListFrameScheduling,
+        frameScheduler: any NetworkFrameScheduling,
         snapshotBuilderFactory: any NetworkListSnapshotBuilderMaking,
         snapshotApplyCompletionScheduler: any NetworkListSnapshotApplyCompletionScheduling
     ) {

@@ -181,18 +181,133 @@ public struct RedirectHop: Equatable, Sendable {
     }
 }
 
+package struct WebSocketTimelineHandshakeResponse: Equatable, Sendable {
+    package enum Disposition: Equatable, Sendable {
+        case switchingProtocols(statusText: String?)
+        case rejected(statusCode: Int, statusText: String?)
+        case unreported(statusText: String?)
+    }
+
+    package let statusCode: Int?
+    package let statusText: String?
+
+    package var disposition: Disposition {
+        switch statusCode {
+        case 101?:
+            .switchingProtocols(statusText: statusText)
+        case let statusCode?:
+            .rejected(statusCode: statusCode, statusText: statusText)
+        case nil:
+            .unreported(statusText: statusText)
+        }
+    }
+
+    package init(statusCode: Int?, statusText: String?) {
+        self.statusCode = statusCode
+        self.statusText = statusText
+    }
+}
+
+package struct WebSocketTimelineEntry: Identifiable, Equatable, Sendable {
+    package struct ID: Comparable, Hashable, Sendable {
+        package let lifecycleRevision: UInt64
+        package let chronologySequence: UInt64
+        package let ordinalWithinEvent: UInt8
+
+        package init(
+            lifecycleRevision: UInt64,
+            chronologySequence: UInt64,
+            ordinalWithinEvent: UInt8 = 0
+        ) {
+            self.lifecycleRevision = lifecycleRevision
+            self.chronologySequence = chronologySequence
+            self.ordinalWithinEvent = ordinalWithinEvent
+        }
+
+        package static func < (lhs: ID, rhs: ID) -> Bool {
+            if lhs.lifecycleRevision != rhs.lifecycleRevision {
+                return lhs.lifecycleRevision < rhs.lifecycleRevision
+            }
+            if lhs.chronologySequence != rhs.chronologySequence {
+                return lhs.chronologySequence < rhs.chronologySequence
+            }
+            return lhs.ordinalWithinEvent < rhs.ordinalWithinEvent
+        }
+    }
+
+    package enum Kind: Equatable, Sendable {
+        case handshakeResponse(WebSocketTimelineHandshakeResponse)
+        case connectionEstablished
+        case frame(WebSocketTimelineFrame)
+        case error(String)
+        case connectionClosed
+    }
+
+    package let id: ID
+    package let timestamp: Double?
+    package let kind: Kind
+
+    package init(id: ID, timestamp: Double?, kind: Kind) {
+        self.id = id
+        self.timestamp = timestamp
+        self.kind = kind
+    }
+}
+
+package struct WebSocketTimelineFrame: Equatable, Sendable {
+    package enum Direction: Equatable, Sendable {
+        case sent
+        case received
+    }
+
+    package enum Kind: Equatable, Sendable {
+        case continuation
+        case text
+        case binary
+        case close
+        case ping
+        case pong
+        case unknown(Int)
+    }
+
+    package enum Payload: Equatable, Sendable {
+        case text(String)
+        case base64Encoded(String)
+    }
+
+    package let direction: Direction
+    package let kind: Kind
+    package let payload: Payload
+    package let payloadLength: Int
+    package let isMasked: Bool
+
+    package init(
+        direction: Direction,
+        kind: Kind,
+        payload: Payload,
+        payloadLength: Int,
+        isMasked: Bool
+    ) {
+        self.direction = direction
+        self.kind = kind
+        self.payload = payload
+        self.payloadLength = payloadLength
+        self.isMasked = isMasked
+    }
+}
+
 /// Observable WebSocket state attached to a network request.
 @Observable
 public final class WebSocketState {
     /// WebSocket ready state tracked from network events.
     public enum ReadyState: Equatable, Sendable {
-        /// The WebSocket is connecting.
+        /// No frame has confirmed that the WebSocket connection opened.
         case connecting
 
-        /// The WebSocket handshake completed.
+        /// A WebSocket frame confirmed that the connection opened.
         case open
 
-        /// The WebSocket is closed.
+        /// A WebSocket error or close event was observed.
         case closed
     }
 
@@ -261,58 +376,303 @@ public final class WebSocketState {
     public private(set) var handshakeResponse: NetworkResponseSnapshot?
 
     /// Frames and errors observed for the WebSocket.
+    ///
+    /// This compatibility projection preserves arrival order while omitting lifecycle entries.
     public private(set) var frames: [Frame]
+
+    package private(set) var timelineEntries: [WebSocketTimelineEntry]
 
     init(readyState: ReadyState = .connecting) {
         self.readyState = readyState
         handshakeRequest = nil
         handshakeResponse = nil
         frames = []
+        timelineEntries = []
     }
 
-    func markConnecting() {
-        readyState = .connecting
-    }
-
-    func markOpen() {
-        readyState = .open
-    }
-
-    func markClosed() {
-        readyState = .closed
-    }
-
-    func applyHandshakeRequest(_ request: Network.Request) {
+    @discardableResult
+    func applyHandshakeRequest(_ request: Network.Request) -> Bool {
+        guard readyState == .connecting, handshakeRequest == nil else {
+            return false
+        }
         handshakeRequest = NetworkRequestSnapshot(request)
-        readyState = .connecting
+        return true
     }
 
-    func applyHandshakeResponse(_ response: Network.Response) {
+    @discardableResult
+    func applyHandshakeResponse(
+        _ response: Network.Response,
+        timestamp: Double?,
+        lifecycleRevision: UInt64,
+        chronologySequence: UInt64
+    ) -> Bool {
+        guard readyState != .closed, handshakeResponse == nil else {
+            return false
+        }
         handshakeResponse = NetworkResponseSnapshot(response)
-        readyState = .open
+        // Do not infer an open connection here. WebKit reports this response
+        // before some invalid-101 failure paths and exposes no didConnect event.
+        appendTimelineEntry(
+            timestamp: timestamp,
+            kind: .handshakeResponse(WebSocketTimelineHandshakeResponse(
+                statusCode: response.status,
+                statusText: response.statusText
+            )),
+            lifecycleRevision: lifecycleRevision,
+            chronologySequence: chronologySequence
+        )
+        return true
     }
 
     func appendFrame(
         _ frame: Network.WebSocketFrame,
-        direction: FrameDirection,
-        timestamp: Double
+        direction: WebSocketTimelineFrame.Direction,
+        timestamp: Double,
+        lifecycleRevision: UInt64,
+        chronologySequence: UInt64
     ) {
-        frames.append(Frame(
-            direction: direction,
-            opcode: frame.opcode,
-            mask: frame.mask,
-            payloadData: frame.payloadData,
-            payloadLength: frame.payloadLength,
-            timestamp: timestamp
+        let frameKind = WebSocketTimelineFrame.Kind(opcode: frame.opcode)
+        var entries: [WebSocketTimelineEntry] = []
+        // WebCore can synthesize a close frame when a handshake fails, so only
+        // a non-close frame is definitive evidence that the connection opened.
+        if readyState == .connecting, frameKind != .close {
+            readyState = .open
+            let switchingProtocolsResponse = timelineEntries.last { entry in
+                guard case let .handshakeResponse(response) = entry.kind,
+                      case .switchingProtocols = response.disposition else {
+                    return false
+                }
+                return true
+            }
+            entries.append(makeTimelineEntry(
+                timestamp: switchingProtocolsResponse?.timestamp ?? timestamp,
+                kind: .connectionEstablished,
+                lifecycleRevision: lifecycleRevision,
+                chronologySequence: chronologySequence,
+                ordinalWithinEvent: 0
+            ))
+        }
+        entries.append(makeTimelineEntry(
+            timestamp: timestamp,
+            kind: .frame(WebSocketTimelineFrame(
+                direction: direction,
+                kind: frameKind,
+                payload: frame.opcode == 1
+                    ? .text(frame.payloadData)
+                    : .base64Encoded(frame.payloadData),
+                payloadLength: frame.payloadLength,
+                isMasked: frame.mask
+            )),
+            lifecycleRevision: lifecycleRevision,
+            chronologySequence: chronologySequence,
+            ordinalWithinEvent: 1
         ))
+        appendTimelineEntries(entries)
     }
 
-    func appendError(_ message: String, timestamp: Double) {
-        frames.append(Frame(
-            direction: .error(message),
-            errorMessage: message,
-            timestamp: timestamp
-        ))
+    func appendError(
+        _ message: String,
+        timestamp: Double,
+        lifecycleRevision: UInt64,
+        chronologySequence: UInt64
+    ) {
+        readyState = .closed
+        appendTimelineEntry(
+            timestamp: timestamp,
+            kind: .error(message),
+            lifecycleRevision: lifecycleRevision,
+            chronologySequence: chronologySequence
+        )
+    }
+
+    @discardableResult
+    func close(
+        timestamp: Double,
+        lifecycleRevision: UInt64,
+        chronologySequence: UInt64
+    ) -> Bool {
+        guard timelineEntries.contains(where: { entry in
+            if case .connectionClosed = entry.kind {
+                return true
+            }
+            return false
+        }) == false else {
+            return false
+        }
+        readyState = .closed
+        appendTimelineEntry(
+            timestamp: timestamp,
+            kind: .connectionClosed,
+            lifecycleRevision: lifecycleRevision,
+            chronologySequence: chronologySequence
+        )
+        return true
+    }
+
+    package func timelineEntry(for id: WebSocketTimelineEntry.ID) -> WebSocketTimelineEntry? {
+        var lowerBound = 0
+        var upperBound = timelineEntries.count
+        while lowerBound < upperBound {
+            let index = lowerBound + (upperBound - lowerBound) / 2
+            if timelineEntries[index].id < id {
+                lowerBound = index + 1
+            } else {
+                upperBound = index
+            }
+        }
+        guard lowerBound < timelineEntries.count,
+              timelineEntries[lowerBound].id == id else {
+            return nil
+        }
+        return timelineEntries[lowerBound]
+    }
+
+    private func appendTimelineEntry(
+        timestamp: Double?,
+        kind: WebSocketTimelineEntry.Kind,
+        lifecycleRevision: UInt64,
+        chronologySequence: UInt64,
+        ordinalWithinEvent: UInt8 = 0
+    ) {
+        appendTimelineEntries([makeTimelineEntry(
+            timestamp: timestamp,
+            kind: kind,
+            lifecycleRevision: lifecycleRevision,
+            chronologySequence: chronologySequence,
+            ordinalWithinEvent: ordinalWithinEvent
+        )])
+    }
+
+    private func makeTimelineEntry(
+        timestamp: Double?,
+        kind: WebSocketTimelineEntry.Kind,
+        lifecycleRevision: UInt64,
+        chronologySequence: UInt64,
+        ordinalWithinEvent: UInt8
+    ) -> WebSocketTimelineEntry {
+        WebSocketTimelineEntry(
+            id: WebSocketTimelineEntry.ID(
+                lifecycleRevision: lifecycleRevision,
+                chronologySequence: chronologySequence,
+                ordinalWithinEvent: ordinalWithinEvent
+            ),
+            timestamp: timestamp,
+            kind: kind
+        )
+    }
+
+    private func appendTimelineEntries(_ entries: [WebSocketTimelineEntry]) {
+        guard let firstEntry = entries.first else {
+            return
+        }
+        let compatibilityFrames = entries.compactMap { entry in
+            Self.compatibilityFrame(for: entry)
+        }
+        let lifecycleRevision = firstEntry.id.lifecycleRevision
+        let existingRevisionMatches = timelineEntries.last.map {
+            $0.id.lifecycleRevision == lifecycleRevision
+        } ?? true
+        precondition(
+            entries.allSatisfy { $0.id.lifecycleRevision == lifecycleRevision }
+                && existingRevisionMatches,
+            "A WebSocketState cannot span multiple request lifecycle revisions."
+        )
+        var lastID = timelineEntries.last?.id
+        for entry in entries {
+            let id = entry.id
+            if let lastID {
+                precondition(
+                    lastID < id,
+                    "WebSocket timeline entries must follow owner-issued chronology order."
+                )
+            }
+            lastID = id
+        }
+        precondition(
+            timelineEntries.count <= Int.max - entries.count,
+            "WebSocket timeline entry count overflowed."
+        )
+        precondition(
+            frames.count <= Int.max - compatibilityFrames.count,
+            "WebSocket frame count overflowed."
+        )
+        timelineEntries.append(contentsOf: entries)
+        if compatibilityFrames.isEmpty == false {
+            frames.append(contentsOf: compatibilityFrames)
+        }
+    }
+
+    private static func compatibilityFrame(for entry: WebSocketTimelineEntry) -> Frame? {
+        switch entry.kind {
+        case .handshakeResponse, .connectionEstablished, .connectionClosed:
+            return nil
+        case let .frame(frame):
+            guard let timestamp = entry.timestamp else {
+                preconditionFailure("A WebSocket frame timeline entry must have a timestamp.")
+            }
+            let payloadData: String
+            switch frame.payload {
+            case let .text(text), let .base64Encoded(text):
+                payloadData = text
+            }
+            return Frame(
+                direction: frame.direction == .sent ? .sent : .received,
+                opcode: frame.kind.opcode,
+                mask: frame.isMasked,
+                payloadData: payloadData,
+                payloadLength: frame.payloadLength,
+                timestamp: timestamp
+            )
+        case let .error(message):
+            guard let timestamp = entry.timestamp else {
+                preconditionFailure("A WebSocket error timeline entry must have a timestamp.")
+            }
+            return Frame(
+                direction: .error(message),
+                errorMessage: message,
+                timestamp: timestamp
+            )
+        }
+    }
+}
+
+private extension WebSocketTimelineFrame.Kind {
+    init(opcode: Int) {
+        switch opcode {
+        case 0:
+            self = .continuation
+        case 1:
+            self = .text
+        case 2:
+            self = .binary
+        case 8:
+            self = .close
+        case 9:
+            self = .ping
+        case 10:
+            self = .pong
+        default:
+            self = .unknown(opcode)
+        }
+    }
+
+    var opcode: Int {
+        switch self {
+        case .continuation:
+            0
+        case .text:
+            1
+        case .binary:
+            2
+        case .close:
+            8
+        case .ping:
+            9
+        case .pong:
+            10
+        case let .unknown(opcode):
+            opcode
+        }
     }
 }
 
@@ -685,10 +1045,19 @@ public final class NetworkBody {
         url: String,
         role: Role
     ) -> (kind: Kind, syntaxKind: SyntaxKind) {
-        let contentType = (mimeType ?? headerValue(named: "content-type", in: headers) ?? "")
-            .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
-            .first
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() } ?? ""
+        let contentTypeResolution = NetworkContentTypeParser.normalizedMediaTypeResolution(
+            protocolMIMEType: mimeType,
+            headers: headers
+        )
+        let contentType: String
+        switch contentTypeResolution {
+        case .absent:
+            contentType = ""
+        case .invalid:
+            return (.binary, .plainText)
+        case .value(let value):
+            contentType = value
+        }
 
         if role == .request && contentType == "application/x-www-form-urlencoded" {
             return (.form, .plainText)
@@ -712,10 +1081,6 @@ public final class NetworkBody {
             return (.text, syntaxKind(forPathExtensionIn: url))
         }
         return (.binary, .plainText)
-    }
-
-    private static func headerValue(named name: String, in headers: [String: String]) -> String? {
-        headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
     }
 
     private static func syntaxKind(forPathExtensionIn url: String) -> SyntaxKind {
@@ -792,37 +1157,20 @@ public final class NetworkBody {
     }
 
     private func formattedURLEncodedFormText(from text: String?) -> String? {
-        guard let text, text.isEmpty == false, text.contains("=") else {
+        guard let text else {
             return nil
         }
-
-        var lines: [String] = []
-        for pair in text.split(separator: "&", omittingEmptySubsequences: false) {
-            let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-            guard parts.isEmpty == false else {
-                continue
-            }
-            guard let name = decodeFormComponent(String(parts[0])) else {
-                return nil
-            }
-            let value: String
-            if parts.count > 1 {
-                guard let decodedValue = decodeFormComponent(String(parts[1])) else {
-                    return nil
-                }
-                value = decodedValue
-            } else {
-                value = ""
-            }
-            lines.append("\(name)=\(value)")
+        let report = NetworkParameterParser.parseForm(text)
+        guard report.parameters.isEmpty == false else {
+            return text
         }
-        return lines.isEmpty ? nil : lines.joined(separator: "\n")
-    }
-
-    private func decodeFormComponent(_ component: String) -> String? {
-        component
-            .replacingOccurrences(of: "+", with: " ")
-            .removingPercentEncoding
+        return report.parameters.map { parameter in
+            let name = parameter.name.displayValue
+            guard parameter.hadEqualsSign else {
+                return name
+            }
+            return "\(name)=\(parameter.value.displayValue)"
+        }.joined(separator: "\n")
     }
 }
 
@@ -840,6 +1188,44 @@ package struct NetworkNavigationVisit: Hashable, Sendable {
         self.frameID = frameID
         self.epoch = epoch
     }
+}
+
+package enum NetworkRequestHeaderSource: Equatable, Sendable {
+    case unavailable
+    case requestWillBeSent
+    case response
+    case metrics
+}
+
+package struct NetworkCookieSections: Equatable, Sendable {
+    package let request: NetworkRequestCookieSection
+    package let response: NetworkResponseCookieSection
+
+    package init(
+        request: NetworkRequestCookieSection,
+        response: NetworkResponseCookieSection
+    ) {
+        self.request = request
+        self.response = response
+    }
+}
+
+package enum NetworkRequestCookieSection: Equatable, Sendable {
+    case unavailable(NetworkRequestCookieUnavailableReason)
+    case empty
+    case values(NetworkRequestCookieParseReport)
+}
+
+package enum NetworkRequestCookieUnavailableReason: Equatable, Sendable {
+    case notCaptured
+    case servedFromMemoryCache
+}
+
+package enum NetworkResponseCookieSection: Equatable, Sendable {
+    case loading
+    case noResponse
+    case empty
+    case values(NetworkResponseCookieParseReport)
 }
 
 /// Observable model for one network request.
@@ -950,6 +1336,9 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     /// Request headers keyed by header name.
     public private(set) var requestHeaders: [String: String]
 
+    /// The most authoritative protocol source for ``requestHeaders``.
+    package private(set) var requestHeaderSource: NetworkRequestHeaderSource
+
     /// Response headers keyed by header name.
     public private(set) var responseHeaders: [String: String]
 
@@ -1023,6 +1412,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         resourceType: Network.ResourceType?,
         timestamp: Double?,
         chronologySequence: UInt64 = 0,
+        requestHeaderSource: NetworkRequestHeaderSource = .requestWillBeSent,
         modelContext: WebInspectorContext
     ) {
         id = ID(request.id)
@@ -1042,6 +1432,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         responseSource = nil
         sourceMapURL = nil
         requestHeaders = request.headers
+        self.requestHeaderSource = requestHeaderSource
         responseHeaders = [:]
         requestSentTimestamp = timestamp
         responseReceivedTimestamp = nil
@@ -1064,7 +1455,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
 
     /// A Boolean value indicating whether the response body can be fetched now.
     public var canFetchResponseBody: Bool {
-        guard state == .finished else {
+        guard state == .finished, hasResponseBody else {
             return false
         }
         return responseBody.needsFetch
@@ -1084,6 +1475,40 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     /// A Boolean value indicating whether the request can have a response body.
     public var hasResponseBody: Bool {
         hasResponse && resourceType != .webSocket
+    }
+
+    package var cookieSections: NetworkCookieSections {
+        NetworkCookieSections(
+            request: requestCookieSection,
+            response: responseCookieSection
+        )
+    }
+
+    private var requestCookieSection: NetworkRequestCookieSection {
+        if responseSource == "memory-cache" {
+            return .unavailable(.servedFromMemoryCache)
+        }
+        guard requestHeaderSource != .unavailable else {
+            return .unavailable(.notCaptured)
+        }
+        guard let report = NetworkCookieParser.parseRequestHeaders(requestHeaders) else {
+            return .empty
+        }
+        return report.cookies.isEmpty && report.diagnostics.isEmpty
+            ? .empty
+            : .values(report)
+    }
+
+    private var responseCookieSection: NetworkResponseCookieSection {
+        guard hasResponse else {
+            return isActive ? .loading : .noResponse
+        }
+        guard let report = NetworkCookieParser.parseResponseHeaders(responseHeaders) else {
+            return .empty
+        }
+        return report.cookies.isEmpty && report.diagnostics.isEmpty
+            ? .empty
+            : .values(report)
     }
 
     /// The coarse category inferred for filtering and display.
@@ -1136,12 +1561,10 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     /// Concurrent callers join one protocol command. Cancelling a caller ends
     /// only that caller's wait and does not cancel the shared response fetch.
     public func fetchResponseBody(isolation: isolated (any Actor) = #isolation) async {
-        let body = responseBody
-        if case .available = body.phase {
-            guard state == .finished else {
-                return
-            }
+        guard state == .finished, hasResponseBody else {
+            return
         }
+        let body = responseBody
 
         let lease: NetworkBody.ResponseFetchLease
         switch body.acquireResponseFetch() {
@@ -1195,6 +1618,26 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         timestamp: Double,
         chronologySequence: UInt64
     ) {
+        resetLifecycle(
+            request: request,
+            initiator: initiator,
+            navigationVisit: navigationVisit,
+            resourceType: resourceType,
+            timestamp: timestamp,
+            chronologySequence: chronologySequence,
+            requestHeaderSource: .requestWillBeSent
+        )
+    }
+
+    private func resetLifecycle(
+        request: Network.Request,
+        initiator: Network.Initiator?,
+        navigationVisit: NetworkNavigationVisit?,
+        resourceType: Network.ResourceType?,
+        timestamp: Double?,
+        chronologySequence: UInt64,
+        requestHeaderSource: NetworkRequestHeaderSource
+    ) {
         precondition(lifecycleRevision < UInt64.max, "Network request lifecycle revision overflowed.")
         lifecycleRevision += 1
         currentRequest = request
@@ -1205,7 +1648,12 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         self.resourceType = resourceType
         logicalStartTimestamp = timestamp
         self.chronologySequence = chronologySequence
-        requestHeaders = request.headers
+        requestBody = NetworkBody.makeRequestBody(for: request)
+        updateRequestHeaders(
+            request.headers,
+            source: requestHeaderSource,
+            resetsPrecedence: true
+        )
         status = nil
         statusText = nil
         responseURL = nil
@@ -1223,7 +1671,6 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         security = nil
         redirects = []
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
-        requestBody = NetworkBody.makeRequestBody(for: request)
         responseBody.resetForResponse(fallbackURL: currentRequest.url)
         allowsMultipartContinuation = false
         state = .pending
@@ -1246,7 +1693,12 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         let resolvedResourceType = resourceType ?? self.resourceType
         self.resourceType = resolvedResourceType
         webSocket = resolvedResourceType == .webSocket ? webSocket ?? WebSocketState() : nil
-        requestHeaders = request.headers
+        requestBody = NetworkBody.makeRequestBody(for: request)
+        updateRequestHeaders(
+            request.headers,
+            source: .requestWillBeSent,
+            resetsPrecedence: true
+        )
         status = nil
         statusText = nil
         responseURL = nil
@@ -1262,7 +1714,6 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         encodedDataLength = 0
         metrics = nil
         security = nil
-        requestBody = NetworkBody.makeRequestBody(for: request)
         responseBody.resetForResponse(fallbackURL: currentRequest.url)
         allowsMultipartContinuation = false
         state = .pending
@@ -1291,9 +1742,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         responseHeaders = response.headers
         security = response.security
         if let requestHeaders = response.requestHeaders {
-            self.requestHeaders = requestHeaders
-            currentRequest = requestWithHeaders(requestHeaders)
-            refreshRequestBodyHints()
+            updateRequestHeaders(requestHeaders, source: .response)
         }
         if let timestamp {
             responseReceivedTimestamp = timestamp
@@ -1318,6 +1767,9 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     func finish(timestamp: Double, sourceMapURL: String?, metrics: Network.Metrics?) {
         self.sourceMapURL = sourceMapURL
         self.metrics = metrics
+        if let requestHeaders = metrics?.requestHeaders {
+            updateRequestHeaders(requestHeaders, source: .metrics)
+        }
         if let securityConnection = metrics?.securityConnection {
             security = security?.merging(connection: securityConnection)
                 ?? Network.Security(connection: securityConnection)
@@ -1361,9 +1813,12 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         sourceMapURL = nil
         responseHeaders = response.headers
         if let requestHeaders = response.requestHeaders {
-            self.requestHeaders = requestHeaders
+            updateRequestHeaders(
+                requestHeaders,
+                source: .response,
+                resetsPrecedence: true
+            )
         }
-        currentRequest = requestWithHeaders(requestHeaders)
         requestSentTimestamp = timestamp
         responseReceivedTimestamp = timestamp
         lastDataReceivedTimestamp = nil
@@ -1380,7 +1835,23 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         state = .finished
     }
 
-    func applyWebSocketCreated(url: String) {
+    func applyWebSocketCreated(url: String, chronologySequence: UInt64) {
+        guard isActive, webSocket?.readyState != .closed else {
+            resetLifecycle(
+                request: Network.Request(
+                    id: currentRequest.id,
+                    url: url,
+                    method: "GET"
+                ),
+                initiator: nil,
+                navigationVisit: nil,
+                resourceType: .webSocket,
+                timestamp: nil,
+                chronologySequence: chronologySequence,
+                requestHeaderSource: .unavailable
+            )
+            return
+        }
         self.url = url
         currentRequest = requestWithURL(url)
         resourceType = .webSocket
@@ -1388,19 +1859,27 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         _ = ensureWebSocketState()
     }
 
+    @discardableResult
     func applyWebSocketHandshakeRequest(
         _ request: Network.Request,
         timestamp: Double?,
         chronologySequence: UInt64
-    ) {
-        recordWebSocketLogicalStartIfNeeded(timestamp, chronologySequence: chronologySequence)
+    ) -> Bool {
         let request = requestPreservingCurrentURLIfNeeded(request)
+        guard ensureWebSocketState().applyHandshakeRequest(request) else {
+            return false
+        }
+        recordWebSocketLogicalStartIfNeeded(timestamp, chronologySequence: chronologySequence)
         currentRequest = request
         url = request.url
         method = request.method
         resourceType = .webSocket
-        requestHeaders = request.headers
         requestBody = NetworkBody.makeRequestBody(for: request)
+        updateRequestHeaders(
+            request.headers,
+            source: .requestWillBeSent,
+            resetsPrecedence: true
+        )
         responseBody.resetForResponse(fallbackURL: currentRequest.url)
         allowsMultipartContinuation = false
         status = nil
@@ -1413,29 +1892,44 @@ public final class NetworkRequest: WebInspectorFetchableModel {
             requestSentTimestamp = timestamp
         }
         state = .pending
-        ensureWebSocketState().applyHandshakeRequest(request)
+        return true
     }
 
+    @discardableResult
     func applyWebSocketHandshakeResponse(
         _ response: Network.Response,
         timestamp: Double?,
         chronologySequence: UInt64
-    ) {
+    ) -> Bool {
+        guard ensureWebSocketState().applyHandshakeResponse(
+            response,
+            timestamp: timestamp,
+            lifecycleRevision: lifecycleRevision,
+            chronologySequence: chronologySequence
+        ) else {
+            return false
+        }
         recordWebSocketLogicalStartIfNeeded(timestamp, chronologySequence: chronologySequence)
         applyResponse(response, resourceType: .webSocket, timestamp: timestamp)
-        ensureWebSocketState().applyHandshakeResponse(response)
+        return true
     }
 
     func appendWebSocketFrame(
         _ frame: Network.WebSocketFrame,
-        direction: WebSocketState.FrameDirection,
+        direction: WebSocketTimelineFrame.Direction,
         timestamp: Double,
         chronologySequence: UInt64
     ) {
         recordWebSocketLogicalStartIfNeeded(timestamp, chronologySequence: chronologySequence)
         decodedDataLength += max(0, frame.payloadLength)
         lastDataReceivedTimestamp = timestamp
-        ensureWebSocketState().appendFrame(frame, direction: direction, timestamp: timestamp)
+        ensureWebSocketState().appendFrame(
+            frame,
+            direction: direction,
+            timestamp: timestamp,
+            lifecycleRevision: lifecycleRevision,
+            chronologySequence: chronologySequence
+        )
     }
 
     func appendWebSocketError(
@@ -1445,14 +1939,27 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     ) {
         recordWebSocketLogicalStartIfNeeded(timestamp, chronologySequence: chronologySequence)
         lastDataReceivedTimestamp = timestamp
-        ensureWebSocketState().appendError(message, timestamp: timestamp)
+        ensureWebSocketState().appendError(
+            message,
+            timestamp: timestamp,
+            lifecycleRevision: lifecycleRevision,
+            chronologySequence: chronologySequence
+        )
     }
 
-    func closeWebSocket(timestamp: Double, chronologySequence: UInt64) {
+    @discardableResult
+    func closeWebSocket(timestamp: Double, chronologySequence: UInt64) -> Bool {
+        guard ensureWebSocketState().close(
+            timestamp: timestamp,
+            lifecycleRevision: lifecycleRevision,
+            chronologySequence: chronologySequence
+        ) else {
+            return false
+        }
         recordWebSocketLogicalStartIfNeeded(timestamp, chronologySequence: chronologySequence)
-        ensureWebSocketState().markClosed()
         finishedOrFailedTimestamp = timestamp
         state = .finished
+        return true
     }
 
     private func recordWebSocketLogicalStartIfNeeded(
@@ -1518,6 +2025,34 @@ public final class NetworkRequest: WebInspectorFetchableModel {
             backendResourceIdentifier: currentRequest.backendResourceIdentifier,
             origin: currentRequest.origin
         )
+    }
+
+    private func updateRequestHeaders(
+        _ headers: [String: String],
+        source: NetworkRequestHeaderSource,
+        resetsPrecedence: Bool = false
+    ) {
+        guard resetsPrecedence
+            || Self.requestHeaderPrecedence(source) >= Self.requestHeaderPrecedence(requestHeaderSource) else {
+            return
+        }
+        requestHeaders = headers
+        currentRequest = requestWithHeaders(headers)
+        requestHeaderSource = source
+        refreshRequestBodyHints()
+    }
+
+    private static func requestHeaderPrecedence(_ source: NetworkRequestHeaderSource) -> Int {
+        switch source {
+        case .unavailable:
+            0
+        case .requestWillBeSent:
+            1
+        case .response:
+            2
+        case .metrics:
+            3
+        }
     }
 
     private func refreshRequestBodyHints() {
@@ -1611,36 +2146,21 @@ public final class NetworkRequest: WebInspectorFetchableModel {
     }
 
     package static func effectiveMIMEType(mimeType: String?, headers: [String: String]) -> String? {
-        if let mimeType, mimeType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            return mimeType
-        }
-        guard let contentType = headers.first(where: { key, _ in
-            key.caseInsensitiveCompare("content-type") == .orderedSame
-        })?.value else {
-            return nil
-        }
-        return contentType
+        NetworkContentTypeParser.effectiveMediaType(
+            protocolMIMEType: mimeType,
+            headers: headers
+        )
     }
 
     private static func normalizedMIMEType(_ mimeType: String?) -> String {
-        mimeType?
-            .split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
-            .first?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased() ?? ""
+        guard let mimeType else {
+            return ""
+        }
+        return NetworkContentTypeParser.parse(mimeType).normalizedMediaType ?? ""
     }
 
     private static func isMultipartMixedReplace(_ mimeType: String?) -> Bool {
-        guard let mimeType else {
-            return false
-        }
-        return mimeType.utf8.elementsEqual(
-            "multipart/x-mixed-replace".utf8,
-            by: { lhs, rhs in
-                let folded = lhs >= 65 && lhs <= 90 ? lhs + 32 : lhs
-                return folded == rhs
-            }
-        )
+        normalizedMIMEType(mimeType) == "multipart/x-mixed-replace"
     }
 
     private static func isPreviewableImage(mimeType: String, pathExtension: String) -> Bool {

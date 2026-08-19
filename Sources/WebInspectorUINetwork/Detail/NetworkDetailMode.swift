@@ -9,9 +9,10 @@ extension NetworkDetailViewController {
         case preview
         case headers
         case security
+        case cookies
 
         nonisolated package static var allCases: [NetworkDetailViewController.Mode] {
-            [.headers, .preview, .security]
+            [.headers, .preview, .cookies, .security]
         }
 
         package var title: String {
@@ -26,6 +27,8 @@ extension NetworkDetailViewController {
                     defaultValue: "Security",
                     bundle: WebInspectorUILocalization.bundle
                 )
+            case .cookies:
+                String(localized: "network.detail.mode.cookies", defaultValue: "Cookies", bundle: WebInspectorUILocalization.bundle)
             }
         }
     }

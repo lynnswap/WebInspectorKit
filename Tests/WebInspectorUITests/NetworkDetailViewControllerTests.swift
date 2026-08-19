@@ -5,6 +5,7 @@ import Synchronization
 import Testing
 @testable import WebInspectorDataKit
 import WebInspectorProxyKit
+import WebInspectorProxyKitTesting
 import UIKit
 @testable import WebInspectorUI
 @testable import WebInspectorUISyntaxBody
@@ -67,6 +68,13 @@ struct NetworkDetailViewControllerTests {
         #expect(viewController.headersTextViewForTesting.isHidden)
         #expect(viewController.securityViewControllerForTesting.view.isHidden)
         #expect(viewController.securityViewControllerForTesting.snapshotForTesting.itemIdentifiers.isEmpty)
+        #expect(viewController.cookiesViewControllerForTesting.view.isHidden)
+        #expect(viewController.cookiesViewControllerForTesting.snapshotForTesting.itemIdentifiers.isEmpty)
+        #expect(viewController.webSocketPreviewViewControllerForTesting.view.isHidden)
+        #expect(
+            viewController.webSocketPreviewViewControllerForTesting
+                .snapshotForTesting.itemIdentifiers.isEmpty
+        )
         #expect(viewController.contentUnavailableConfiguration != nil)
         let configuration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
         #expect(configuration?.text?.isEmpty == false)
@@ -90,6 +98,11 @@ struct NetworkDetailViewControllerTests {
         #expect(viewController.view.backgroundColor == .clear)
         #expect(viewController.headersTextViewForTesting.backgroundColor == .clear)
         #expect(viewController.securityViewControllerForTesting.collectionView.backgroundColor == .clear)
+        #expect(viewController.cookiesViewControllerForTesting.collectionView.backgroundColor == .clear)
+        #expect(
+            viewController.webSocketPreviewViewControllerForTesting.collectionView.backgroundColor
+                == .clear
+        )
         #expect(viewController.syntaxBodyViewControllerForTesting.view.backgroundColor == .clear)
     }
 
@@ -212,24 +225,30 @@ struct NetworkDetailViewControllerTests {
         let topInset = viewController.view.safeAreaLayoutGuide.layoutFrame.minY
         let trailingInset = viewController.view.safeAreaLayoutGuide.layoutFrame.maxX
         let bounds = viewController.view.bounds
-        let contentViews: [UIView] = [
+        let securityView: UIView = viewController.securityViewControllerForTesting.view
+        let cookiesView: UIView = viewController.cookiesViewControllerForTesting.view
+        let webSocketView: UIView = viewController.webSocketPreviewViewControllerForTesting.view
+        for contentView in [
             viewController.headersTextViewForTesting,
             viewController.previewViewForTesting,
-            viewController.securityViewControllerForTesting.view,
-        ]
-        for contentView in contentViews {
+            securityView,
+            cookiesView,
+            webSocketView,
+        ] {
             #expect(contentView.frame.minX == leadingInset)
             #expect(contentView.frame.maxX == trailingInset)
             #expect(contentView.frame.maxY == bounds.maxY)
         }
         #expect(viewController.headersTextViewForTesting.frame.minY == bounds.minY)
         #expect(viewController.previewViewForTesting.frame.minY == bounds.minY)
-        #expect(viewController.securityViewControllerForTesting.view.frame.minY == bounds.minY)
+        #expect(securityView.frame.minY == bounds.minY)
+        #expect(cookiesView.frame.minY == bounds.minY)
+        #expect(webSocketView.frame.minY == bounds.minY)
         #expect(viewController.previewRoleControlContainerViewForTesting.frame.minY == topInset)
     }
 
     @Test
-    func detailModeControlSwitchesPreviewAndHeaders() async throws {
+    func detailModeControlSwitchesHeadersPreviewCookiesAndSecurity() async throws {
         let context = makeContext()
         let request = try #require(
             await applyRequest(
@@ -238,10 +257,14 @@ struct NetworkDetailViewControllerTests {
                 url: "https://example.com/api/data.json",
                 requestHeaders: [
                     "accept": "application/json",
+                    "Cookie": "request-cookie=1",
                     "content-type": "application/x-www-form-urlencoded",
                 ],
                 postData: "name=Jane+Doe&city=Tokyo%20East",
-                responseHeaders: ["content-type": "application/json"],
+                responseHeaders: [
+                    "content-type": "application/json",
+                    "Set-Cookie": "response-cookie=2; HttpOnly",
+                ],
                 responseMimeType: "application/json"
             )
         )
@@ -256,6 +279,9 @@ struct NetworkDetailViewControllerTests {
             return viewController.currentModeForTesting == .headers
                 && viewController.previewViewForTesting.isHidden
                 && viewController.headersTextViewForTesting.isHidden == false
+                && viewController.securityViewControllerForTesting.view.isHidden
+                && viewController.cookiesViewControllerForTesting.view.isHidden
+                && viewController.webSocketPreviewViewControllerForTesting.view.isHidden
                 && viewController.headersTextViewForTesting.usesTextKit2ForTesting
                 && viewController.headersTextViewForTesting.isSelectableForTesting
                 && text.contains("accept: application/json")
@@ -265,7 +291,27 @@ struct NetworkDetailViewControllerTests {
 
         #expect(didRenderHeaders)
         #expect(viewController.contentUnavailableConfiguration == nil)
-        #expect(NetworkDetailViewController.Mode.allCases == [.headers, .preview, .security])
+        #expect(NetworkDetailViewController.Mode.allCases == [.headers, .preview, .cookies, .security])
+
+        selectMode(.cookies, on: viewController)
+
+        let didRenderCookies = await waitUntilRendered(in: viewController) {
+            let items = viewController.cookiesViewControllerForTesting
+                .snapshotForTesting.itemIdentifiers
+            return viewController.currentModeForTesting == .cookies
+                && viewController.previewViewForTesting.isHidden
+                && viewController.headersTextViewForTesting.isHidden
+                && viewController.securityViewControllerForTesting.view.isHidden
+                && viewController.cookiesViewControllerForTesting.view.isHidden == false
+                && viewController.webSocketPreviewViewControllerForTesting.view.isHidden
+                && items.contains(where: isRequestCookieItem)
+                && items.contains(where: isResponseCookieItem)
+        }
+        #expect(didRenderCookies)
+        #expect(
+            viewController.contentScrollView(for: .top)
+                === viewController.cookiesViewControllerForTesting.collectionView
+        )
 
         selectMode(.security, on: viewController)
 
@@ -273,6 +319,8 @@ struct NetworkDetailViewControllerTests {
             viewController.currentModeForTesting == .security
                 && viewController.previewViewForTesting.isHidden
                 && viewController.headersTextViewForTesting.isHidden
+                && viewController.cookiesViewControllerForTesting.view.isHidden
+                && viewController.webSocketPreviewViewControllerForTesting.view.isHidden
                 && viewController.securityViewControllerForTesting.view.isHidden == false
                 && viewController.securityViewControllerForTesting.snapshotForTesting.sectionIdentifiers
                     == NetworkSecuritySectionID.allCases
@@ -291,6 +339,9 @@ struct NetworkDetailViewControllerTests {
             viewController.currentModeForTesting == .preview
                 && viewController.previewViewForTesting.isHidden == false
                 && viewController.headersTextViewForTesting.isHidden
+                && viewController.securityViewControllerForTesting.view.isHidden
+                && viewController.cookiesViewControllerForTesting.view.isHidden
+                && viewController.webSocketPreviewViewControllerForTesting.view.isHidden
                 && viewController.isPreviewRoleControlHiddenForTesting == false
         }
         #expect(didRenderPreview)
@@ -448,10 +499,21 @@ struct NetworkDetailViewControllerTests {
                 }) == false
         })
 
-        model.selectRequest(explicit)
+        let entryID = try #require(model.entryID(containing: explicit.id))
+        let picker = NetworkDetailRequestPickerViewController(model: model, entryID: entryID)
+        picker.resumeRenderingForTesting()
+        let explicitIndex = try #require(
+            picker.itemIDsForTesting.firstIndex(of: .request(explicit.id))
+        )
+        picker.collectionView(
+            picker.collectionView,
+            didSelectItemAt: IndexPath(item: explicitIndex, section: 0)
+        )
         #expect(await waitUntilRendered(in: viewController) {
             let security = viewController.securityViewControllerForTesting
-            return model.selectedRequest === explicit
+            return viewController.currentModeForTesting == .security
+                && model.selection == .request(entryID: entryID, requestID: explicit.id)
+                && model.selectedRequest === explicit
                 && security.snapshotForTesting.itemIdentifiers.contains(where: {
                     $0.kind == .scheme && security.rowContentForTesting($0)?.value == "HTTPS"
                 })
@@ -528,8 +590,12 @@ struct NetworkDetailViewControllerTests {
         #expect(ObjectIdentifier(viewController.detailModeControlViewForTesting) == modeControlIdentity)
         #expect(securityController.expandedListsForTesting == [.dnsNames])
 
-        viewController.beginAppearanceTransition(false, animated: false)
-        viewController.endAppearanceTransition()
+        selectMode(.cookies, on: viewController)
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .cookies
+                && securityController.view.isHidden
+                && viewController.cookiesViewControllerForTesting.view.isHidden == false
+        })
         let hiddenDNSNames = initialDNSNames + ["hidden-8.example.test"]
         let hiddenUpdateTransactionBaseline = model.rawTransactionDeliveryCountForTesting
         await context.apply(.responseReceived(
@@ -558,16 +624,63 @@ struct NetworkDetailViewControllerTests {
             }.count == 7
         )
 
+        selectMode(.security, on: viewController)
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .security
+                && securityController.view.isHidden == false
+                && viewController.cookiesViewControllerForTesting.view.isHidden
+                && securityController.snapshotForTesting.itemIdentifiers.filter {
+                    if case .dnsName = $0.kind { return true }
+                    return false
+                }.count == 8
+                && securityController.snapshotForTesting.itemIdentifiers.contains(where: {
+                    $0.kind == .subject
+                        && securityController.rowContentForTesting($0)?.value == "CN=hidden-update"
+                })
+        })
+        #expect(securityController.expandedListsForTesting == [.dnsNames])
+        #expect(securityController.currentEpochForTesting == originalEpoch)
+
+        viewController.beginAppearanceTransition(false, animated: false)
+        viewController.endAppearanceTransition()
+        let suspendedDNSNames = hiddenDNSNames + ["suspended-9.example.test"]
+        let suspendedUpdateTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+        await context.apply(.responseReceived(
+            id: proxyID,
+            response: Network.Response(
+                url: "https://example.test/initial",
+                status: 200
+            ).reporting(security: Network.Security(
+                certificate: Network.Security.Certificate(
+                    subject: "CN=suspended-update",
+                    dnsNames: suspendedDNSNames
+                )
+            )),
+            resourceType: .fetch,
+            timestamp: 3.5
+        ))
+        #expect(
+            await model.waitForRawTransactionDeliveryForTesting(
+                after: suspendedUpdateTransactionBaseline
+            )
+        )
+        #expect(
+            securityController.snapshotForTesting.itemIdentifiers.filter {
+                if case .dnsName = $0.kind { return true }
+                return false
+            }.count == 8
+        )
+
         viewController.beginAppearanceTransition(true, animated: false)
         viewController.endAppearanceTransition()
         #expect(await waitUntilRendered(in: viewController) {
             securityController.snapshotForTesting.itemIdentifiers.filter {
                 if case .dnsName = $0.kind { return true }
                 return false
-            }.count == 8
+            }.count == 9
                 && securityController.snapshotForTesting.itemIdentifiers.contains(where: {
                     $0.kind == .subject
-                        && securityController.rowContentForTesting($0)?.value == "CN=hidden-update"
+                        && securityController.rowContentForTesting($0)?.value == "CN=suspended-update"
                 })
         })
         #expect(securityController.expandedListsForTesting == [.dnsNames])
@@ -658,6 +771,1724 @@ struct NetworkDetailViewControllerTests {
             securityController.snapshotForTesting.itemIdentifiers.isEmpty
                 && securityController.expandedListsForTesting.isEmpty
         })
+    }
+
+    @Test
+    func cookiesListUsesNativeInsetGroupedLayoutAndFixedStateSections() async {
+        let viewController = NetworkCookiesViewController()
+        let requestEpoch = NetworkCookiesViewController.RequestEpoch.testing(viewController)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        await renderCookies(
+            NetworkCookieSections(
+                request: .unavailable(.notCaptured),
+                response: .loading
+            ),
+            in: viewController
+        )
+
+        let configuration = NetworkCookiesViewController.listLayoutConfigurationForTesting
+        #expect(configuration.appearance == .insetGrouped)
+        #expect(configuration.headerMode == .supplementary)
+        #expect(configuration.showsSeparators)
+        #expect(viewController.collectionView.collectionViewLayout is UICollectionViewCompositionalLayout)
+        #expect(viewController.collectionView.allowsSelection == false)
+        #expect(viewController.snapshotForTesting.sectionIdentifiers == [.request, .response])
+        #expect(viewController.snapshotForTesting.itemIdentifiers(inSection: .request) == [
+            .state(epoch: requestEpoch, section: .request, kind: .requestNotCaptured)
+        ])
+        #expect(viewController.snapshotForTesting.itemIdentifiers(inSection: .response) == [
+            .state(epoch: requestEpoch, section: .response, kind: .responseLoading)
+        ])
+        #expect(
+            NetworkCookiesViewController.sectionTitleForTesting(.request)
+                == localized(
+                    "network.cookies.section.request",
+                    defaultValue: "Request Cookies"
+                )
+        )
+        #expect(
+            NetworkCookiesViewController.sectionTitleForTesting(.response)
+                == localized(
+                    "network.cookies.section.response",
+                    defaultValue: "Response Cookies"
+                )
+        )
+        #expect(
+            viewController.messageContentForTesting(
+                .state(epoch: requestEpoch, section: .response, kind: .responseLoading)
+            )?.kind == .loading
+        )
+
+        await renderCookies(
+            NetworkCookieSections(
+                request: .unavailable(.servedFromMemoryCache),
+                response: .noResponse
+            ),
+            in: viewController
+        )
+        #expect(viewController.snapshotForTesting.itemIdentifiers(inSection: .request) == [
+            .state(epoch: requestEpoch, section: .request, kind: .requestMemoryCache)
+        ])
+        #expect(viewController.snapshotForTesting.itemIdentifiers(inSection: .response) == [
+            .state(epoch: requestEpoch, section: .response, kind: .responseMissing)
+        ])
+
+        await renderCookies(
+            NetworkCookieSections(request: .empty, response: .empty),
+            in: viewController
+        )
+        #expect(viewController.snapshotForTesting.itemIdentifiers(inSection: .request) == [
+            .state(epoch: requestEpoch, section: .request, kind: .requestEmpty)
+        ])
+        #expect(viewController.snapshotForTesting.itemIdentifiers(inSection: .response) == [
+            .state(epoch: requestEpoch, section: .response, kind: .responseEmpty)
+        ])
+    }
+
+    @Test
+    func cookiesListKeepsValidRowsWithPartialAndAmbiguousRawWarnings() async throws {
+        let requestReport = try #require(NetworkCookieParser.parseRequestHeaders([
+            "Cookie": "z=3; broken; a=1; a=2"
+        ]))
+        let responseReport = try #require(NetworkCookieParser.parseResponseHeaders([
+            "Set-Cookie": "first=1, second=2"
+        ]))
+        #expect(requestReport.status == .partial)
+        #expect(responseReport.status == .ambiguousCombined)
+
+        let viewController = NetworkCookiesViewController()
+        let requestEpoch = NetworkCookiesViewController.RequestEpoch.testing(viewController)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        await renderCookies(
+            NetworkCookieSections(
+                request: .values(requestReport),
+                response: .values(responseReport)
+            ),
+            in: viewController
+        )
+
+        #expect(viewController.snapshotForTesting.itemIdentifiers(inSection: .request) == [
+            .requestCookie(
+                epoch: requestEpoch,
+                key: .init(name: "a", duplicateOccurrence: 0)
+            ),
+            .requestCookie(
+                epoch: requestEpoch,
+                key: .init(name: "a", duplicateOccurrence: 1)
+            ),
+            .requestCookie(
+                epoch: requestEpoch,
+                key: .init(name: "z", duplicateOccurrence: 0)
+            ),
+            .diagnostic(epoch: requestEpoch, section: .request, ordinal: 0),
+        ])
+        #expect(viewController.snapshotForTesting.itemIdentifiers(inSection: .response) == [
+            .diagnostic(epoch: requestEpoch, section: .response, ordinal: 0)
+        ])
+        #expect(
+            viewController.cookieContentForTesting(.requestCookie(
+                epoch: requestEpoch,
+                key: .init(name: "a", duplicateOccurrence: 0)
+            ))?
+                .fields.first?.value == "a"
+        )
+        #expect(
+            viewController.cookieContentForTesting(.requestCookie(
+                epoch: requestEpoch,
+                key: .init(name: "a", duplicateOccurrence: 1)
+            ))?
+                .fields.first?.value == "a"
+        )
+        #expect(
+            viewController.messageContentForTesting(
+                .diagnostic(epoch: requestEpoch, section: .request, ordinal: 0)
+            )?.detail?.contains("broken") == true
+        )
+        #expect(
+            viewController.messageContentForTesting(
+                .diagnostic(epoch: requestEpoch, section: .response, ordinal: 0)
+            )?.detail == "first=1, second=2"
+        )
+    }
+
+    @Test
+    func cookiesListKeepsSemanticIdentityOnlyWithinOneRequestEpoch() async throws {
+        let initialReport = try #require(NetworkCookieParser.parseRequestHeaders([
+            "Cookie": "b=2; broken; c=3"
+        ]))
+        let refinedReport = try #require(NetworkCookieParser.parseRequestHeaders([
+            "Cookie": "a=1; broken; b=4"
+        ]))
+        let initialSections = NetworkCookieSections(
+            request: .values(initialReport),
+            response: .loading
+        )
+        let refinedSections = NetworkCookieSections(
+            request: .values(refinedReport),
+            response: .loading
+        )
+        let viewController = NetworkCookiesViewController()
+        let firstEpoch = NetworkCookiesViewController.RequestEpoch.testing(viewController)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        await renderCookies(initialSections, requestEpoch: firstEpoch, in: viewController)
+        let initialRequestIDs = viewController.snapshotForTesting.itemIdentifiers(inSection: .request)
+        let initialB = try #require(initialRequestIDs.first { itemID in
+            guard case let .requestCookie(_, key) = itemID else {
+                return false
+            }
+            return key == .init(name: "b", duplicateOccurrence: 0)
+        })
+        let initialC = try #require(initialRequestIDs.first { itemID in
+            guard case let .requestCookie(_, key) = itemID else {
+                return false
+            }
+            return key == .init(name: "c", duplicateOccurrence: 0)
+        })
+
+        await renderCookies(refinedSections, requestEpoch: firstEpoch, in: viewController)
+        let refinedIDs = viewController.snapshotForTesting.itemIdentifiers
+        #expect(refinedIDs.contains(initialB))
+        #expect(refinedIDs.contains(initialC) == false)
+
+        let nextEpochOwner = NSObject()
+        let nextEpoch = NetworkCookiesViewController.RequestEpoch.testing(nextEpochOwner)
+        await renderCookies(refinedSections, requestEpoch: nextEpoch, in: viewController)
+        let nextEpochIDs = viewController.snapshotForTesting.itemIdentifiers
+        #expect(Set(refinedIDs).intersection(nextEpochIDs).isEmpty)
+        #expect(nextEpochIDs.contains(where: isRequestCookieItem))
+        #expect(nextEpochIDs.contains { itemID in
+            if case .diagnostic = itemID {
+                return true
+            }
+            return false
+        })
+        #expect(nextEpochIDs.contains { itemID in
+            isCookieStateItem(itemID, section: .response, kind: .responseLoading)
+        })
+    }
+
+    @Test
+    func responseCookieCellShowsAllFieldsAndAdaptsColumnsAccessibilityAndRTL() async throws {
+        let report = try #require(NetworkCookieParser.parseResponseHeaders([
+            "Set-Cookie": "session=abc; Domain=example.test; Path=/; Partitioned; "
+                + "Expires=Wed, 09 Jun 2027 10:18:14 GMT; Max-Age=0; Secure; "
+                + "HttpOnly; SameSite=Lax; Priority=High"
+        ]))
+        let viewController = NetworkCookiesViewController()
+        let requestEpoch = NetworkCookiesViewController.RequestEpoch.testing(viewController)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        await renderCookies(
+            NetworkCookieSections(request: .empty, response: .values(report)),
+            in: viewController
+        )
+        let content = try #require(
+            viewController.cookieContentForTesting(.responseCookie(
+                epoch: requestEpoch,
+                key: .init(name: "session", duplicateOccurrence: 0)
+            ))
+        )
+        let nameLabel = localized(
+            "network.cookies.field.name",
+            defaultValue: "Name"
+        )
+        let maxAgeLabel = localized(
+            "network.cookies.field.max_age",
+            defaultValue: "Max-Age"
+        )
+        let secureLabel = localized(
+            "network.cookies.field.secure",
+            defaultValue: "Secure"
+        )
+        let httpOnlyLabel = localized(
+            "network.cookies.field.http_only",
+            defaultValue: "HttpOnly"
+        )
+        let partitionedLabel = localized(
+            "network.cookies.field.partitioned",
+            defaultValue: "Partitioned"
+        )
+        let yes = localized(
+            "network.cookies.value.yes",
+            defaultValue: "Yes"
+        )
+        #expect(content.fields.count == 11)
+        #expect(content.fields.map(\.label).contains(nameLabel))
+        #expect(content.fields.map(\.label).contains(maxAgeLabel))
+        #expect(content.fields.first { $0.label == maxAgeLabel }?.value == "0")
+        #expect(content.fields.first { $0.label == secureLabel }?.value == yes)
+        #expect(content.fields.first { $0.label == httpOnlyLabel }?.value == yes)
+        #expect(content.fields.first { $0.label == partitionedLabel }?.value == yes)
+        #expect(content.fields.last?.isFullWidth == true)
+        #expect(content.fields.last?.value.contains("Priority=High") == true)
+
+        let host = UIViewController()
+        let cellHost = UIViewController()
+        host.addChild(cellHost)
+        host.view.addSubview(cellHost.view)
+        cellHost.view.frame = host.view.bounds
+        cellHost.didMove(toParent: host)
+        let cell = NetworkCookieCell(frame: CGRect(x: 0, y: 0, width: 700, height: 200))
+        cellHost.view.addSubview(cell)
+        let cellWindow = showInWindow(host)
+        defer { cellWindow.isHidden = true }
+        cellHost.traitOverrides.horizontalSizeClass = .regular
+        cellHost.traitOverrides.preferredContentSizeCategory = .large
+        cellHost.updateTraitsIfNeeded()
+        cell.updateTraitsIfNeeded()
+        cell.bind(content)
+        host.view.layoutIfNeeded()
+        #expect(cell.usesTwoColumnsForTesting)
+        #expect(cell.fieldRowCountForTesting == 6)
+
+        cellHost.traitOverrides.horizontalSizeClass = .compact
+        cellHost.updateTraitsIfNeeded()
+        cell.updateTraitsIfNeeded()
+        cell.bind(content)
+        #expect(cell.usesTwoColumnsForTesting == false)
+        #expect(cell.fieldRowCountForTesting == content.fields.count)
+
+        cellHost.traitOverrides.horizontalSizeClass = .regular
+        cellHost.traitOverrides.preferredContentSizeCategory = .accessibilityExtraExtraExtraLarge
+        cellHost.updateTraitsIfNeeded()
+        cell.updateTraitsIfNeeded()
+        cell.bind(content)
+        #expect(cell.usesTwoColumnsForTesting == false)
+        #expect(cell.fieldRowCountForTesting == content.fields.count)
+
+        cell.semanticContentAttribute = .forceRightToLeft
+        cell.bind(content)
+        #expect(cell.effectiveUserInterfaceLayoutDirection == .rightToLeft)
+        #expect(cell.accessibilityLabel?.contains("\(secureLabel), \(yes)") == true)
+        #expect(cell.accessibilityLabel?.contains("\(partitionedLabel), \(yes)") == true)
+        #expect(cell.accessibilityValue == nil)
+
+        cell.prepareForReuse()
+        #expect(cell.renderedFieldsForTesting.isEmpty)
+        #expect(cell.accessibilityLabel == nil)
+    }
+
+    @Test
+    func cookiesModeTracksLoadingResponseAndRefinedMetricsHeaders() async throws {
+        let context = makeContext()
+        let request = try #require(await applyRequestWithoutResponse(
+            to: context,
+            requestID: "cookie-live",
+            url: "https://example.com/cookie-live",
+            requestHeaders: ["Cookie": "initial=1"]
+        ))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(request)
+        let viewController = makeNetworkDetailViewController(model: model, initialMode: .cookies)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(await waitUntilRendered(in: viewController) {
+            requestCookieValue(in: viewController) == "1"
+                && viewController.cookiesViewControllerForTesting.snapshotForTesting
+                    .itemIdentifiers(inSection: .response)
+                    .contains(where: { isCookieStateItem(
+                        $0,
+                        section: .response,
+                        kind: .responseLoading
+                    ) })
+        })
+
+        await applyResponseReceived(
+            to: context,
+            requestID: "cookie-live",
+            url: request.url,
+            responseHeaders: ["Set-Cookie": "response=2; HttpOnly"],
+            responseMimeType: "text/plain",
+            timestamp: 2
+        )
+
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.cookiesViewControllerForTesting.snapshotForTesting
+                .itemIdentifiers(inSection: .response).filter(isResponseCookieItem).count == 1
+        })
+
+        await applyLoadingFinished(
+            to: context,
+            requestID: "cookie-live",
+            timestamp: 3,
+            requestHeaders: ["Cookie": "refined=3"]
+        )
+
+        #expect(await waitUntilRendered(in: viewController) {
+            requestCookieName(in: viewController) == "refined"
+                && requestCookieValue(in: viewController) == "3"
+        })
+        #expect(viewController.selectedRequestRenderObservationDeliveryForTesting?.isActive == true)
+    }
+
+    @Test
+    func cookiesModeUsesRepresentativeThenExplicitGroupedRequestWithoutAggregation() async throws {
+        let context = makeContext()
+        let frameID = FrameID("cookie-group-frame")
+        let nodeID = DOM.Node.ID("cookie-group-node")
+        installNavigationVisit(in: context, frameID: frameID)
+        let first = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "cookie-group-first",
+            url: "https://example.com/first",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            requestHeaders: ["Cookie": "first=1"],
+            timestamp: 1
+        ))
+        let second = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "cookie-group-second",
+            url: "https://example.com/second",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            requestHeaders: ["Cookie": "second=2"],
+            timestamp: 4
+        ))
+        let model = NetworkPanelModel(context: context)
+        try selectEntry(containing: first, in: model)
+        let viewController = makeNetworkDetailViewController(model: model, initialMode: .cookies)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(await waitUntilRendered(in: viewController) {
+            requestCookieName(in: viewController) == "first"
+        })
+        let firstCookieItemID = try #require(
+            viewController.cookiesViewControllerForTesting.snapshotForTesting
+                .itemIdentifiers(inSection: .request).first(where: isRequestCookieItem)
+        )
+        #expect(
+            viewController.cookiesViewControllerForTesting.snapshotForTesting
+                .itemIdentifiers(inSection: .request).filter(isRequestCookieItem).count == 1
+        )
+        #expect(viewController.requestPickerItemForTesting != nil)
+
+        model.selectRequest(second)
+
+        #expect(await waitUntilRendered(in: viewController) {
+            requestCookieName(in: viewController) == "second"
+                && requestCookieValue(in: viewController) == "2"
+        })
+        let secondCookieItemID = try #require(
+            viewController.cookiesViewControllerForTesting.snapshotForTesting
+                .itemIdentifiers(inSection: .request).first(where: isRequestCookieItem)
+        )
+        #expect(secondCookieItemID != firstCookieItemID)
+        #expect(
+            viewController.cookiesViewControllerForTesting.snapshotForTesting
+                .itemIdentifiers(inSection: .request).filter(isRequestCookieItem).count == 1
+        )
+        #expect(model.selectedRequest === second)
+        #expect(viewController.requestPickerItemForTesting != nil)
+    }
+
+    @Test
+    func cookiesModeRebindsSameIDInstanceAndIgnoresHiddenAndOldMutations() async throws {
+        let context = makeContext()
+        let request = try #require(await applyRequest(
+            to: context,
+            requestID: "cookie-instance",
+            url: "https://example.com/original",
+            requestHeaders: ["Cookie": "original=1"]
+        ))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(request)
+        let viewController = makeNetworkDetailViewController(model: model, initialMode: .cookies)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(await waitUntilRendered(in: viewController) {
+            requestCookieName(in: viewController) == "original"
+        })
+
+        viewController.beginAppearanceTransition(false, animated: false)
+        viewController.endAppearanceTransition()
+        let transactionBaseline = model.rawTransactionDeliveryCountForTesting
+        await applyLoadingFinished(
+            to: context,
+            requestID: "cookie-instance",
+            timestamp: 4,
+            requestHeaders: ["Cookie": "hidden=2"]
+        )
+        #expect(await model.waitForRawTransactionDeliveryForTesting(after: transactionBaseline))
+        #expect(requestCookieName(in: viewController) == "original")
+
+        viewController.beginAppearanceTransition(true, animated: false)
+        viewController.endAppearanceTransition()
+        #expect(await waitUntilRendered(in: viewController) {
+            requestCookieName(in: viewController) == "hidden"
+        })
+
+        let proxyID = Network.Request.ID("cookie-instance")
+        let replacement = NetworkRequest(
+            request: Network.Request(
+                id: proxyID,
+                url: "https://example.com/replacement",
+                method: "GET",
+                headers: ["Cookie": "replacement=3"]
+            ),
+            initiator: request.initiator,
+            navigationVisit: request.navigationVisit,
+            resourceType: request.resourceType,
+            timestamp: request.logicalStartTimestamp,
+            chronologySequence: request.chronologySequence,
+            modelContext: context
+        )
+        model.upsertRequestForTesting(replacement)
+
+        #expect(await waitUntilRendered(in: viewController) {
+            model.selectedRequest === replacement
+                && requestCookieName(in: viewController) == "replacement"
+        })
+
+        request.applyRequestWillBeSent(
+            request: Network.Request(
+                id: proxyID,
+                url: "https://example.com/stale",
+                method: "GET",
+                headers: ["Cookie": "stale=4"]
+            ),
+            initiator: request.initiator,
+            navigationVisit: request.navigationVisit,
+            resourceType: request.resourceType,
+            timestamp: 5,
+            chronologySequence: 5
+        )
+        #expect(requestCookieName(in: viewController) == "replacement")
+
+        replacement.applyRequestWillBeSent(
+            request: Network.Request(
+                id: proxyID,
+                url: "https://example.com/current",
+                method: "GET",
+                headers: ["Cookie": "current=5"]
+            ),
+            initiator: replacement.initiator,
+            navigationVisit: replacement.navigationVisit,
+            resourceType: replacement.resourceType,
+            timestamp: 6,
+            chronologySequence: 6
+        )
+        #expect(await waitUntilRendered(in: viewController) {
+            requestCookieName(in: viewController) == "current"
+                && requestCookieValue(in: viewController) == "5"
+        })
+    }
+
+    @Test
+    func webSocketPreviewRendersAllTimelineRowsWithoutDisclosingBase64Payloads() async throws {
+        let context = makeContext()
+        let request = try await applyWebSocket(
+            to: context,
+            requestID: "ws-all-rows",
+            url: "wss://example.com/all-rows",
+            requestTimestamp: 10,
+            responseTimestamp: nil
+        )
+        let requestID = request.proxyID
+        let frames: [Network.WebSocketEvent] = [
+            (.frameSent(
+                id: requestID,
+                frame: Network.WebSocketFrame(
+                    opcode: 1,
+                    mask: true,
+                    payloadData: "hello\nworld",
+                    payloadLength: 11
+                ),
+                timestamp: 10.005
+            )),
+            (.frameReceived(
+                id: requestID,
+                frame: Network.WebSocketFrame(
+                    opcode: 2,
+                    mask: false,
+                    payloadData: "QklOQVJZX1NFQ1JFVA==",
+                    payloadLength: 13
+                ),
+                timestamp: 11.25
+            )),
+            (.frameSent(
+                id: requestID,
+                frame: Network.WebSocketFrame(
+                    opcode: 0,
+                    mask: true,
+                    payloadData: "Q09OVElOVUFUSU9OX1NFQ1JFVA==",
+                    payloadLength: 18
+                ),
+                timestamp: 12
+            )),
+            (.frameReceived(
+                id: requestID,
+                frame: Network.WebSocketFrame(
+                    opcode: 8,
+                    mask: false,
+                    payloadData: "Q0xPU0VfU0VDUkVU",
+                    payloadLength: 12
+                ),
+                timestamp: 13
+            )),
+            (.frameSent(
+                id: requestID,
+                frame: Network.WebSocketFrame(
+                    opcode: 9,
+                    mask: true,
+                    payloadData: "UElOR19TRUNSRVQ=",
+                    payloadLength: 11
+                ),
+                timestamp: 14
+            )),
+            (.frameReceived(
+                id: requestID,
+                frame: Network.WebSocketFrame(
+                    opcode: 10,
+                    mask: false,
+                    payloadData: "UE9OR19TRUNSRVQ=",
+                    payloadLength: 11
+                ),
+                timestamp: 15
+            )),
+            (.frameReceived(
+                id: requestID,
+                frame: Network.WebSocketFrame(
+                    opcode: 15,
+                    mask: false,
+                    payloadData: "VU5LTk9XTl9TRUNSRVQ=",
+                    payloadLength: 14
+                ),
+                timestamp: 16
+            )),
+        ]
+        for event in frames {
+            await context.apply(.webSocket(event))
+        }
+        await context.apply(.webSocket(.error(
+            id: requestID,
+            message: "decode failed",
+            timestamp: 17
+        )))
+        await context.apply(.webSocket(.closed(id: requestID, timestamp: 18)))
+
+        let frameScheduler = ManualNetworkFrameScheduler()
+        let viewController = NetworkWebSocketPreviewViewController(frameScheduler: frameScheduler)
+        let window = showInWindow(viewController, useUIKitVisibility: true)
+        defer { window.isHidden = true }
+        viewController.bind(to: request)
+        await resumeWebSocketPreview(viewController)
+
+        #expect(NetworkWebSocketPreviewViewController.listLayoutConfigurationForTesting.appearance == .plain)
+        #expect(viewController.collectionView.allowsSelection == false)
+        #expect(viewController.snapshotForTesting.sectionIdentifiers == [.timeline])
+        let itemIDs = viewController.snapshotForTesting.itemIdentifiers
+        #expect(itemIDs.count == 11)
+        let contents = try itemIDs.map { itemID in
+            try #require(viewController.rowContentForTesting(itemID))
+        }
+        let notReported = String(
+            localized: "network.websocket.time.not_reported",
+            defaultValue: "Time not reported",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let sent = String(
+            localized: "network.websocket.direction.sent",
+            defaultValue: "Sent",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let textFrame = String(
+            localized: "network.websocket.frame.text",
+            defaultValue: "Text Frame",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let copy = String(
+            localized: "Copy",
+            defaultValue: "Copy",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let handshakeResponse = String(
+            localized: "network.websocket.handshake.response",
+            defaultValue: "WebSocket Handshake Response",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        #expect(contents[0].title == handshakeResponse)
+        #expect(contents[0].style == .lifecycle)
+        #expect(contents[0].subtitle.contains("101 Switching Protocols"))
+        #expect(contents[0].subtitle.contains(notReported))
+        #expect(contents[1].style == .lifecycle)
+        #expect(contents[2].title == "hello\nworld")
+        #expect(contents[2].style == .sent)
+        #expect(contents[2].symbolName == "arrow.up")
+        #expect(contents[2].subtitle.contains(sent))
+        #expect(contents[2].subtitle.contains(textFrame))
+        #expect(contents[2].subtitle.contains("+5 ms"))
+        #expect(contents[2].accessibilityLabel == "hello\nworld")
+        #expect(contents[2].accessibilityValue == contents[2].subtitle)
+        #expect(viewController.contextMenuConfigurationForTesting(itemIDs[2]) != nil)
+        #expect(contents[3].style == .received)
+        #expect(contents[3].symbolName == "arrow.down")
+        #expect(contents[3].title.contains(13.formatted()))
+        #expect(viewController.contextMenuConfigurationForTesting(itemIDs[3]) == nil)
+        #expect(contents[8].title.contains("15"))
+        #expect(contents[9].style == .error)
+        #expect(contents[9].title == "decode failed")
+        #expect(contents[10].style == .lifecycle)
+        let copiedText = contents.flatMap {
+            [$0.title, $0.subtitle, $0.accessibilityLabel, $0.accessibilityValue]
+        }.joined(separator: "\n")
+        for secret in [
+            "QklOQVJZX1NFQ1JFVA==",
+            "Q09OVElOVUFUSU9OX1NFQ1JFVA==",
+            "Q0xPU0VfU0VDUkVU",
+            "UElOR19TRUNSRVQ=",
+            "UE9OR19TRUNSRVQ=",
+            "VU5LTk9XTl9TRUNSRVQ=",
+        ] {
+            #expect(copiedText.contains(secret) == false)
+        }
+
+        viewController.collectionView.layoutIfNeeded()
+        let textCell = try #require(
+            viewController.collectionView.cellForItem(at: IndexPath(item: 2, section: 0))
+                as? UICollectionViewListCell
+        )
+        let configuration = try #require(
+            textCell.contentConfiguration as? UIListContentConfiguration
+        )
+        #expect(
+            configuration.textProperties.numberOfLines
+                == NetworkWebSocketPreviewViewController.maximumTitleLineCountForTesting
+        )
+        #expect(configuration.textProperties.adjustsFontForContentSizeCategory)
+        #expect(configuration.secondaryTextProperties.numberOfLines == 0)
+        #expect(textCell.accessibilityCustomActions?.map(\.name) == [copy])
+        viewController.collectionView.semanticContentAttribute = .forceRightToLeft
+        #expect(viewController.collectionView.effectiveUserInterfaceLayoutDirection == .rightToLeft)
+    }
+
+    @Test
+    func webSocketPreviewBoundsLargeTextPayloadAndResolvesFullCopyOnDemand() async throws {
+        let context = makeContext()
+        let request = try await applyWebSocket(
+            to: context,
+            requestID: "ws-large-text",
+            url: "wss://example.com/large-text"
+        )
+        let byteLimit = NetworkWebSocketPreviewViewController
+            .maximumRenderedTextPayloadUTF8BytesForTesting
+        let scalarBoundaryPayload = String(repeating: "a", count: byteLimit - 1)
+            + "💡"
+            + "scalar-boundary-tail"
+        let scalarBoundarySummary = NetworkWebSocketPreviewViewController
+            .renderedTextPayloadForTesting(scalarBoundaryPayload)
+        #expect(scalarBoundarySummary == String(repeating: "a", count: byteLimit - 1) + "…")
+        #expect(scalarBoundarySummary.contains("�") == false)
+        let payload = "a"
+            + String(repeating: "\u{0301}", count: 1_000_000)
+            + "full-payload-tail"
+        await context.apply(.webSocket(.frameReceived(
+            id: request.proxyID,
+            frame: Network.WebSocketFrame(
+                opcode: 1,
+                mask: false,
+                payloadData: payload,
+                payloadLength: payload.utf8.count
+            ),
+            timestamp: 12
+        )))
+        await context.apply(.webSocket(.frameReceived(
+            id: request.proxyID,
+            frame: Network.WebSocketFrame(
+                opcode: 2,
+                mask: false,
+                payloadData: String(repeating: "QQ==", count: byteLimit),
+                payloadLength: byteLimit * 3
+            ),
+            timestamp: 13
+        )))
+
+        let replacement = try await applyWebSocket(
+            to: context,
+            requestID: "ws-large-text-replacement",
+            url: "wss://example.com/large-text-replacement"
+        )
+        let frameScheduler = ManualNetworkFrameScheduler()
+        let viewController = NetworkWebSocketPreviewViewController(frameScheduler: frameScheduler)
+        var copiedPayload: String?
+        viewController.setTextPayloadCopyHandlerForTesting { payload in
+            copiedPayload = payload
+        }
+        let window = showInWindow(viewController, useUIKitVisibility: true)
+        defer { window.isHidden = true }
+        viewController.bind(to: request)
+        await resumeWebSocketPreview(viewController)
+
+        let itemIDs = viewController.snapshotForTesting.itemIdentifiers
+        let textItemID = try #require(itemIDs.dropLast().last)
+        let binaryItemID = try #require(itemIDs.last)
+        let content = try #require(viewController.rowContentForTesting(textItemID))
+        #expect(content.title.utf8.count <= byteLimit + "…".utf8.count)
+        #expect(Array(content.title.unicodeScalars.prefix(2).map(\.value)) == [0x61, 0x301])
+        #expect(content.title.hasSuffix("…"))
+        #expect(content.title.contains("full-payload-tail") == false)
+        #expect(content.accessibilityLabel == content.title)
+        #expect(content.accessibilityValue.contains("full-payload-tail") == false)
+        #expect(viewController.contextMenuConfigurationForTesting(textItemID) != nil)
+        #expect(viewController.contextMenuConfigurationForTesting(binaryItemID) == nil)
+
+        viewController.collectionView.layoutIfNeeded()
+        let textIndex = try #require(itemIDs.firstIndex(of: textItemID))
+        let textCell = try #require(
+            viewController.collectionView.cellForItem(at: IndexPath(item: textIndex, section: 0))
+                as? UICollectionViewListCell
+        )
+        let textConfiguration = try #require(
+            textCell.contentConfiguration as? UIListContentConfiguration
+        )
+        #expect(
+            textConfiguration.textProperties.numberOfLines
+                == NetworkWebSocketPreviewViewController.maximumTitleLineCountForTesting
+        )
+        #expect(textConfiguration.text == content.title)
+        #expect(textCell.accessibilityLabel == content.title)
+        #expect(textCell.accessibilityValue?.contains("full-payload-tail") == false)
+        let copyAction = try #require(textCell.accessibilityCustomActions?.first)
+        #expect(copyAction.name == String(
+            localized: "Copy",
+            defaultValue: "Copy",
+            bundle: WebInspectorUILocalization.bundle
+        ))
+        #expect(copyAction.actionHandler?(copyAction) == true)
+        #expect(copiedPayload == payload)
+
+        let binaryIndex = try #require(itemIDs.firstIndex(of: binaryItemID))
+        let binaryCell = try #require(
+            viewController.collectionView.cellForItem(at: IndexPath(item: binaryIndex, section: 0))
+                as? UICollectionViewListCell
+        )
+        #expect(binaryCell.accessibilityCustomActions?.isEmpty ?? true)
+
+        copiedPayload = nil
+        viewController.suspendKeepingSnapshot()
+        #expect(copyAction.actionHandler?(copyAction) == false)
+        #expect(copiedPayload == nil)
+
+        viewController.bind(to: replacement)
+        await resumeWebSocketPreview(viewController)
+        #expect(copyAction.actionHandler?(copyAction) == false)
+        #expect(copiedPayload == nil)
+    }
+
+    @Test
+    func webSocketPreviewRendersRejectedHandshakeWithoutEstablishedRow() async throws {
+        let context = makeContext()
+        let requestID = Network.Request.ID("ws-rejected-preview")
+        await context.apply(.webSocket(.created(
+            id: requestID,
+            url: "wss://example.com/rejected-preview"
+        )))
+        await context.apply(.webSocket(.handshakeResponse(
+            id: requestID,
+            response: Network.Response(
+                url: "wss://example.com/rejected-preview",
+                status: 403,
+                statusText: "Forbidden"
+            ),
+            timestamp: 2
+        )))
+        await context.apply(.webSocket(.error(
+            id: requestID,
+            message: "upgrade failed",
+            timestamp: 3
+        )))
+        await context.apply(.webSocket(.closed(id: requestID, timestamp: 4)))
+        let request = try #require(context.registeredRequest(forProxyID: requestID))
+        let viewController = NetworkWebSocketPreviewViewController(
+            frameScheduler: ManualNetworkFrameScheduler()
+        )
+        viewController.bind(to: request)
+        await resumeWebSocketPreview(viewController)
+
+        let itemIDs = viewController.snapshotForTesting.itemIdentifiers
+        #expect(itemIDs.count == 3)
+        let contents = try itemIDs.map { itemID in
+            try #require(viewController.rowContentForTesting(itemID))
+        }
+        let rejectionTitle = String(
+            localized: "network.websocket.handshake.rejected",
+            defaultValue: "WebSocket Handshake Rejected",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let establishedTitle = String(
+            localized: "network.websocket.connection.established",
+            defaultValue: "WebSocket Connection Established",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        #expect(contents[0].title == rejectionTitle)
+        #expect(contents[0].subtitle.contains("403 Forbidden"))
+        #expect(contents[0].style == .error)
+        #expect(contents[0].symbolName == "exclamationmark.shield")
+        #expect(contents[0].accessibilityLabel == rejectionTitle)
+        #expect(contents[0].accessibilityValue.contains("403 Forbidden"))
+        #expect(contents[1].title == "upgrade failed")
+        #expect(contents.contains { $0.title == establishedTitle } == false)
+    }
+
+    @Test
+    func webSocketPreviewKeepsQuietAndUnreportedHandshakeResponsesNeutral() async throws {
+        let handshakeTitle = String(
+            localized: "network.websocket.handshake.response",
+            defaultValue: "WebSocket Handshake Response",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let establishedTitle = String(
+            localized: "network.websocket.connection.established",
+            defaultValue: "WebSocket Connection Established",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let statusNotReported = String(
+            localized: "network.websocket.status.not_reported",
+            defaultValue: "Status not reported",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        for (suffix, status, statusText) in [
+            ("switching", Optional(101), Optional("Switching Protocols")),
+            ("unreported", Optional<Int>.none, Optional("Opaque Response")),
+        ] {
+            let context = makeContext()
+            let requestID = Network.Request.ID("ws-neutral-\(suffix)")
+            await context.apply(.webSocket(.created(
+                id: requestID,
+                url: "wss://example.com/neutral-\(suffix)"
+            )))
+            await context.apply(.webSocket(.handshakeResponse(
+                id: requestID,
+                response: Network.Response(status: status, statusText: statusText),
+                timestamp: 2
+            )))
+            let request = try #require(context.registeredRequest(forProxyID: requestID))
+            let viewController = NetworkWebSocketPreviewViewController(
+                frameScheduler: ManualNetworkFrameScheduler()
+            )
+            viewController.bind(to: request)
+            await resumeWebSocketPreview(viewController)
+
+            let itemIDs = viewController.snapshotForTesting.itemIdentifiers
+            #expect(itemIDs.count == 1)
+            let content = try #require(viewController.rowContentForTesting(itemIDs[0]))
+            #expect(content.title == handshakeTitle)
+            #expect(content.style == .lifecycle)
+            #expect(content.accessibilityLabel == handshakeTitle)
+            #expect(content.title != establishedTitle)
+            #expect(request.webSocket?.readyState == .connecting)
+            if let status {
+                #expect(content.subtitle.contains(String(status)))
+                #expect(content.subtitle.contains(statusText ?? ""))
+            } else {
+                #expect(content.subtitle.contains(statusNotReported))
+                #expect(content.subtitle.contains(statusText ?? ""))
+            }
+        }
+    }
+
+    @Test
+    func webSocketFirstFramePublishesEstablishedAndFrameInOneObservationDelivery() async throws {
+        let webSocket = WebSocketState()
+        let observation = withPortableContinuousObservation { _ in
+            _ = webSocket.timelineEntries
+            _ = webSocket.frames
+        }
+        defer { observation.cancel() }
+        let values = await observation.values {
+            [webSocket.timelineEntries.count, webSocket.frames.count]
+        }
+        defer { values.cancel() }
+        let deliveryBaseline = values.snapshot().count
+
+        webSocket.appendFrame(
+            Network.WebSocketFrame(
+                opcode: 1,
+                mask: false,
+                payloadData: "first",
+                payloadLength: 5
+            ),
+            direction: .received,
+            timestamp: 4,
+            lifecycleRevision: 3,
+            chronologySequence: 8
+        )
+
+        #expect(await values.waitUntilValue([2, 1]))
+        #expect(values.snapshot().count == deliveryBaseline + 1)
+        #expect(values.snapshot().contains([1, 0]) == false)
+        #expect(webSocket.readyState == .open)
+        #expect(webSocket.timelineEntries.map(\.id) == [
+            .init(
+                lifecycleRevision: 3,
+                chronologySequence: 8,
+                ordinalWithinEvent: 0
+            ),
+            .init(
+                lifecycleRevision: 3,
+                chronologySequence: 8,
+                ordinalWithinEvent: 1
+            ),
+        ])
+    }
+
+    @Test
+    func webSocketPreviewCoalescesLiveSuffixAndRetainsExistingRows() async throws {
+        let context = makeContext()
+        let request = try await applyWebSocket(
+            to: context,
+            requestID: "ws-live-suffix",
+            url: "wss://example.com/live-suffix"
+        )
+        let requestID = request.proxyID
+        await context.apply(.webSocket(.frameReceived(
+            id: requestID,
+            frame: Network.WebSocketFrame(
+                opcode: 1,
+                mask: false,
+                payloadData: "initial",
+                payloadLength: 7
+            ),
+            timestamp: 12
+        )))
+
+        let frameScheduler = ManualNetworkFrameScheduler()
+        let viewController = NetworkWebSocketPreviewViewController(frameScheduler: frameScheduler)
+        let window = showInWindow(viewController, useUIKitVisibility: true)
+        defer { window.isHidden = true }
+        viewController.bind(to: request)
+        await resumeWebSocketPreview(viewController)
+        let initialIDs = viewController.snapshotForTesting.itemIdentifiers
+        #expect(initialIDs.count == 3)
+        let initialCell = try #require(
+            viewController.collectionView.cellForItem(at: IndexPath(item: 0, section: 0))
+        )
+        let initialCellIdentity = ObjectIdentifier(initialCell)
+        let scheduledFrameBaseline = frameScheduler.scheduledFrameCount
+
+        for (index, timestamp) in [13.0, 12.5, 14.0].enumerated() {
+            await context.apply(.webSocket(.frameSent(
+                id: requestID,
+                frame: Network.WebSocketFrame(
+                    opcode: 1,
+                    mask: true,
+                    payloadData: "live-\(index)",
+                    payloadLength: 6
+                ),
+                timestamp: timestamp
+            )))
+        }
+
+        #expect(frameScheduler.scheduledFrameCount == scheduledFrameBaseline + 1)
+        #expect(frameScheduler.hasScheduledFrame)
+        #expect(viewController.snapshotForTesting.itemIdentifiers == initialIDs)
+        await fireWebSocketRenderingFrame(frameScheduler, in: viewController)
+
+        let renderedIDs = viewController.snapshotForTesting.itemIdentifiers
+        #expect(renderedIDs.count == 6)
+        #expect(Array(renderedIDs.prefix(initialIDs.count)) == initialIDs)
+        #expect(
+            viewController.collectionView.cellForItem(at: IndexPath(item: 0, section: 0))
+                .map(ObjectIdentifier.init) == initialCellIdentity
+        )
+        let renderedEntryIDs = viewController.renderedEntryIDsForTesting
+        #expect(zip(renderedEntryIDs, renderedEntryIDs.dropFirst()).allSatisfy { pair in
+            pair.0 < pair.1
+        })
+    }
+
+    @Test
+    func webSocketPreviewFollowsTailOnlyWhilePinned() async throws {
+        let context = makeContext()
+        let request = try await applyWebSocket(
+            to: context,
+            requestID: "ws-tail",
+            url: "wss://example.com/tail"
+        )
+        let requestID = request.proxyID
+        for index in 0..<30 {
+            await context.apply(.webSocket(.frameReceived(
+                id: requestID,
+                frame: Network.WebSocketFrame(
+                    opcode: 1,
+                    mask: false,
+                    payloadData: "row-\(index)",
+                    payloadLength: 6
+                ),
+                timestamp: 12 + Double(index)
+            )))
+        }
+
+        let frameScheduler = ManualNetworkFrameScheduler()
+        let viewController = NetworkWebSocketPreviewViewController(frameScheduler: frameScheduler)
+        let window = showInWindow(viewController, useUIKitVisibility: true)
+        defer { window.isHidden = true }
+        viewController.bind(to: request)
+        await resumeWebSocketPreview(viewController)
+        #expect(viewController.tailScrollCountForTesting == 1)
+        #expect(viewController.isFollowingTailForTesting)
+        let epoch = try #require(viewController.requestEpochForTesting)
+        let priorApplyGeneration = viewController.snapshotApplyGenerationForTesting
+        let priorUserScrollRevision = viewController.userScrollRevisionForTesting
+
+        viewController.collectionView.setContentOffset(
+            CGPoint(x: 0, y: -viewController.collectionView.adjustedContentInset.top),
+            animated: false
+        )
+        viewController.collectionView.layoutIfNeeded()
+        #expect(viewController.isFollowingTailForTesting == false)
+        let offsetBeforeUnpinnedAppend = viewController.collectionView.contentOffset.y
+        let scrollCountBeforeUnpinnedAppend = viewController.tailScrollCountForTesting
+        await context.apply(.webSocket(.frameReceived(
+            id: requestID,
+            frame: Network.WebSocketFrame(
+                opcode: 1,
+                mask: false,
+                payloadData: "while-unpinned",
+                payloadLength: 14
+            ),
+            timestamp: 50
+        )))
+        await fireWebSocketRenderingFrame(frameScheduler, in: viewController)
+        #expect(viewController.tailScrollCountForTesting == scrollCountBeforeUnpinnedAppend)
+        #expect(abs(viewController.collectionView.contentOffset.y - offsetBeforeUnpinnedAppend) < 0.5)
+        viewController.invokeSnapshotApplyCompletionForTesting(
+            epoch: epoch,
+            followsTail: true,
+            applyGeneration: priorApplyGeneration,
+            userScrollRevision: priorUserScrollRevision
+        )
+        #expect(viewController.tailScrollCountForTesting == scrollCountBeforeUnpinnedAppend)
+
+        let lastIndexPath = IndexPath(
+            item: viewController.snapshotForTesting.itemIdentifiers.count - 1,
+            section: 0
+        )
+        viewController.collectionView.scrollToItem(
+            at: lastIndexPath,
+            at: .bottom,
+            animated: false
+        )
+        viewController.collectionView.layoutIfNeeded()
+        #expect(viewController.isFollowingTailForTesting)
+        let scrollCountBeforePinnedAppend = viewController.tailScrollCountForTesting
+        let userScrollRevisionBeforePinnedAppend = viewController.userScrollRevisionForTesting
+        await context.apply(.webSocket(.frameReceived(
+            id: requestID,
+            frame: Network.WebSocketFrame(
+                opcode: 1,
+                mask: false,
+                payloadData: "while-pinned",
+                payloadLength: 12
+            ),
+            timestamp: 51
+        )))
+        await fireWebSocketRenderingFrame(frameScheduler, in: viewController)
+        #expect(viewController.tailScrollCountForTesting == scrollCountBeforePinnedAppend + 1)
+        #expect(viewController.isFollowingTailForTesting)
+        #expect(viewController.userScrollRevisionForTesting == userScrollRevisionBeforePinnedAppend)
+
+        let completedApplyGeneration = viewController.snapshotApplyGenerationForTesting
+        let userScrollRevisionBeforeDrag = viewController.userScrollRevisionForTesting
+        let scrollCountBeforeDrag = viewController.tailScrollCountForTesting
+        viewController.scrollViewWillBeginDragging(viewController.collectionView)
+        viewController.invokeSnapshotApplyCompletionForTesting(
+            epoch: epoch,
+            followsTail: true,
+            applyGeneration: completedApplyGeneration,
+            userScrollRevision: userScrollRevisionBeforeDrag
+        )
+        #expect(viewController.tailScrollCountForTesting == scrollCountBeforeDrag)
+
+        let userScrollRevisionAtDragStart = viewController.userScrollRevisionForTesting
+        #expect(viewController.isUserScrollingForTesting)
+        viewController.invokeSnapshotApplyCompletionForTesting(
+            epoch: epoch,
+            followsTail: true,
+            applyGeneration: completedApplyGeneration,
+            userScrollRevision: userScrollRevisionAtDragStart
+        )
+        #expect(viewController.tailScrollCountForTesting == scrollCountBeforeDrag)
+        viewController.scrollViewDidScroll(viewController.collectionView)
+        #expect(viewController.userScrollRevisionForTesting > userScrollRevisionAtDragStart)
+        viewController.scrollViewDidEndDragging(
+            viewController.collectionView,
+            willDecelerate: false
+        )
+        #expect(viewController.isUserScrollingForTesting == false)
+        viewController.invokeSnapshotApplyCompletionForTesting(
+            epoch: epoch,
+            followsTail: true,
+            applyGeneration: completedApplyGeneration,
+            userScrollRevision: userScrollRevisionAtDragStart
+        )
+        #expect(viewController.tailScrollCountForTesting == scrollCountBeforeDrag)
+
+        viewController.scrollViewWillBeginDragging(viewController.collectionView)
+        let userScrollRevisionBeforeDeceleration = viewController.userScrollRevisionForTesting
+        viewController.scrollViewDidEndDragging(
+            viewController.collectionView,
+            willDecelerate: true
+        )
+        #expect(viewController.isUserScrollingForTesting)
+        viewController.invokeSnapshotApplyCompletionForTesting(
+            epoch: epoch,
+            followsTail: true,
+            applyGeneration: completedApplyGeneration,
+            userScrollRevision: userScrollRevisionBeforeDeceleration
+        )
+        #expect(viewController.tailScrollCountForTesting == scrollCountBeforeDrag)
+        viewController.scrollViewDidScroll(viewController.collectionView)
+        viewController.scrollViewDidEndDecelerating(viewController.collectionView)
+        #expect(viewController.isUserScrollingForTesting == false)
+        viewController.invokeSnapshotApplyCompletionForTesting(
+            epoch: epoch,
+            followsTail: true,
+            applyGeneration: completedApplyGeneration,
+            userScrollRevision: userScrollRevisionBeforeDeceleration
+        )
+        #expect(viewController.tailScrollCountForTesting == scrollCountBeforeDrag)
+
+        #expect(viewController.scrollViewShouldScrollToTop(viewController.collectionView))
+        let userScrollRevisionAtScrollToTopStart = viewController.userScrollRevisionForTesting
+        #expect(viewController.isUserScrollingForTesting)
+        viewController.invokeSnapshotApplyCompletionForTesting(
+            epoch: epoch,
+            followsTail: true,
+            applyGeneration: completedApplyGeneration,
+            userScrollRevision: userScrollRevisionAtScrollToTopStart
+        )
+        #expect(viewController.tailScrollCountForTesting == scrollCountBeforeDrag)
+        viewController.scrollViewDidScrollToTop(viewController.collectionView)
+        #expect(viewController.isUserScrollingForTesting == false)
+        #expect(
+            viewController.userScrollRevisionForTesting
+                > userScrollRevisionAtScrollToTopStart
+        )
+        viewController.invokeSnapshotApplyCompletionForTesting(
+            epoch: epoch,
+            followsTail: true,
+            applyGeneration: completedApplyGeneration,
+            userScrollRevision: userScrollRevisionAtScrollToTopStart
+        )
+        #expect(viewController.tailScrollCountForTesting == scrollCountBeforeDrag)
+
+        let userScrollRevisionBeforeNonDragScroll = viewController.userScrollRevisionForTesting
+        viewController.scrollViewDidScroll(viewController.collectionView)
+        #expect(
+            viewController.userScrollRevisionForTesting
+                > userScrollRevisionBeforeNonDragScroll
+        )
+        viewController.invokeSnapshotApplyCompletionForTesting(
+            epoch: epoch,
+            followsTail: true,
+            applyGeneration: completedApplyGeneration,
+            userScrollRevision: userScrollRevisionBeforeNonDragScroll
+        )
+        #expect(viewController.tailScrollCountForTesting == scrollCountBeforeDrag)
+    }
+
+    @Test
+    func webSocketPreviewRoutesOnlyTheActiveGroupedRequestAndReturnsToBodyPreview() async throws {
+        let context = makeContext()
+        let frameID = FrameID("ws-group-frame")
+        installNavigationVisit(in: context, frameID: frameID)
+
+        let webSocketFirstNodeID = DOM.Node.ID("ws-first-node")
+        let webSocketFirst = try await applyGroupedWebSocket(
+            to: context,
+            requestID: "ws-group-first",
+            url: "wss://example.com/first",
+            frameID: frameID,
+            initiatorNodeID: webSocketFirstNodeID,
+            timestamp: 1
+        )
+        await context.apply(.webSocket(.closed(id: webSocketFirst.proxyID, timestamp: 3)))
+        let ordinarySecond = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "ws-group-ordinary-second",
+            url: "https://example.com/second.json",
+            frameID: frameID,
+            initiatorNodeID: webSocketFirstNodeID,
+            responseHeaders: ["content-type": "application/json"],
+            responseMIMEType: "application/json",
+            resourceType: .xhr,
+            timestamp: 4
+        ))
+        applyResponseBody(
+            to: context,
+            request: ordinarySecond,
+            body: #"{"request":"ordinary-second"}"#
+        )
+
+        let ordinaryFirstNodeID = DOM.Node.ID("ordinary-first-node")
+        let ordinaryFirst = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "ws-group-ordinary-first",
+            url: "https://example.com/ordinary-first.json",
+            frameID: frameID,
+            initiatorNodeID: ordinaryFirstNodeID,
+            responseHeaders: ["content-type": "application/json"],
+            responseMIMEType: "application/json",
+            resourceType: .xhr,
+            timestamp: 10
+        ))
+        applyResponseBody(
+            to: context,
+            request: ordinaryFirst,
+            body: #"{"request":"ordinary-first"}"#
+        )
+        let webSocketSecond = try await applyGroupedWebSocket(
+            to: context,
+            requestID: "ws-group-second",
+            url: "wss://example.com/second",
+            frameID: frameID,
+            initiatorNodeID: ordinaryFirstNodeID,
+            timestamp: 14
+        )
+
+        let model = NetworkPanelModel(context: context)
+        try selectEntry(containing: webSocketFirst, in: model)
+        let frameScheduler = ManualNetworkFrameScheduler()
+        let viewController = makeNetworkDetailViewController(
+            model: model,
+            initialMode: .preview,
+            webSocketFrameScheduler: frameScheduler
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(await waitUntilWebSocketPreviewBound(to: webSocketFirst, in: viewController))
+        #expect(viewController.webSocketPreviewViewControllerForTesting.view.isHidden == false)
+        #expect(viewController.securityViewControllerForTesting.view.isHidden)
+        #expect(
+            viewController.webSocketPreviewViewControllerForTesting
+                .snapshotForTesting.itemIdentifiers.count == 2
+        )
+        #expect(viewController.previewViewForTesting.isHidden)
+        #expect(viewController.isPreviewRoleControlHiddenForTesting)
+        #expect(webSocketFirst.canFetchResponseBody == false)
+        #expect(viewController.responseBodyFetchObservationDeliveryForTesting == nil)
+        #expect(
+            viewController.contentScrollView(for: .top)
+                === viewController.webSocketPreviewViewControllerForTesting.collectionView
+        )
+        #expect(viewController.requestPickerItemForTesting != nil)
+
+        selectMode(.security, on: viewController)
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .security
+                && viewController.securityViewControllerForTesting.view.isHidden == false
+                && viewController.webSocketPreviewViewControllerForTesting.view.isHidden
+                && viewController.webSocketPreviewViewControllerForTesting
+                    .timelineObservationDeliveryForTesting == nil
+        })
+        #expect(viewController.requestPickerItemForTesting != nil)
+        #expect(
+            viewController.contentScrollView(for: .top)
+                === viewController.securityViewControllerForTesting.collectionView
+        )
+        let webSocketSnapshotBeforeSecurityUpdate = viewController.webSocketPreviewViewControllerForTesting
+            .snapshotForTesting.itemIdentifiers
+        let hiddenRawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+        await context.apply(.webSocket(.frameReceived(
+            id: webSocketFirst.proxyID,
+            frame: Network.WebSocketFrame(
+                opcode: 1,
+                mask: false,
+                payloadData: "security-hidden-update",
+                payloadLength: 22
+            ),
+            timestamp: 2.5
+        )))
+        #expect(await model.waitForRawTransactionDeliveryForTesting(after: hiddenRawTransactionBaseline))
+        #expect(frameScheduler.hasScheduledFrame == false)
+        #expect(
+            viewController.webSocketPreviewViewControllerForTesting
+                .snapshotForTesting.itemIdentifiers == webSocketSnapshotBeforeSecurityUpdate
+        )
+
+        selectMode(.preview, on: viewController)
+        #expect(await waitUntilWebSocketPreviewBound(to: webSocketFirst, in: viewController))
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.securityViewControllerForTesting.view.isHidden
+                && viewController.webSocketPreviewViewControllerForTesting.view.isHidden == false
+                && viewController.webSocketPreviewViewControllerForTesting
+                    .snapshotForTesting.itemIdentifiers.count == 3
+                && viewController.webSocketPreviewViewControllerForTesting
+                    .timelineObservationDeliveryForTesting?.isActive == true
+        })
+        #expect(
+            viewController.contentScrollView(for: .top)
+                === viewController.webSocketPreviewViewControllerForTesting.collectionView
+        )
+
+        let parentRenderBaseline = viewController.selectedRequestRenderCountForTesting
+        let scheduledFrameBaseline = frameScheduler.scheduledFrameCount
+        let webSocketSnapshotBeforeFrame = viewController.webSocketPreviewViewControllerForTesting
+            .snapshotForTesting.itemIdentifiers
+        let childObservation = try #require(
+            viewController.webSocketPreviewViewControllerForTesting
+                .timelineObservationDeliveryForTesting
+        )
+        let didScheduleChildFrame = await childObservation.values {
+            frameScheduler.hasScheduledFrame
+        }
+        defer { didScheduleChildFrame.cancel() }
+        let rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+        await context.apply(.webSocket(.frameReceived(
+            id: webSocketFirst.proxyID,
+            frame: Network.WebSocketFrame(
+                opcode: 1,
+                mask: false,
+                payloadData: "child-only-update",
+                payloadLength: 17
+            ),
+            timestamp: 3
+        )))
+        #expect(await didScheduleChildFrame.waitUntilValue(true))
+        #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+        #expect(viewController.selectedRequestRenderCountForTesting == parentRenderBaseline)
+        #expect(frameScheduler.scheduledFrameCount == scheduledFrameBaseline + 1)
+        #expect(
+            viewController.webSocketPreviewViewControllerForTesting
+                .snapshotForTesting.itemIdentifiers == webSocketSnapshotBeforeFrame
+        )
+        await fireWebSocketRenderingFrame(
+            frameScheduler,
+            in: viewController.webSocketPreviewViewControllerForTesting
+        )
+        #expect(
+            viewController.webSocketPreviewViewControllerForTesting
+                .snapshotForTesting.itemIdentifiers.count == 4
+        )
+
+        model.selectRequest(ordinarySecond)
+        #expect(await waitUntilPreparedTextPreviewRendered(in: viewController) {
+            viewController.webSocketPreviewViewControllerForTesting.view.isHidden
+                && viewController.previewViewForTesting.isHidden == false
+                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text
+                    .contains("ordinary-second")
+        })
+        #expect(
+            viewController.webSocketPreviewViewControllerForTesting
+                .timelineObservationDeliveryForTesting == nil
+        )
+
+        try selectEntry(containing: ordinaryFirst, in: model)
+        #expect(await waitUntilPreparedTextPreviewRendered(in: viewController) {
+            viewController.webSocketPreviewViewControllerForTesting.view.isHidden
+                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text
+                    .contains("ordinary-first")
+        })
+
+        model.selectRequest(webSocketSecond)
+        #expect(await waitUntilWebSocketPreviewBound(to: webSocketSecond, in: viewController))
+        #expect(viewController.webSocketPreviewViewControllerForTesting.view.isHidden == false)
+        #expect(viewController.previewViewForTesting.isHidden)
+        #expect(viewController.responseBodyFetchObservationDeliveryForTesting == nil)
+    }
+
+    @Test
+    func webSocketPreviewSuspendsCatchesUpAndRebindsRequestEpochs() async throws {
+        let context = makeContext()
+        let first = try await applyWebSocket(
+            to: context,
+            requestID: "ws-rebind-first",
+            url: "wss://example.com/rebind-first"
+        )
+        let second = try await applyWebSocket(
+            to: context,
+            requestID: "ws-rebind-second",
+            url: "wss://example.com/rebind-second"
+        )
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(first)
+        let frameScheduler = ManualNetworkFrameScheduler()
+        let viewController = makeNetworkDetailViewController(
+            model: model,
+            initialMode: .preview,
+            webSocketFrameScheduler: frameScheduler
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(await waitUntilWebSocketPreviewBound(to: first, in: viewController))
+        #expect(
+            viewController.webSocketPreviewViewControllerForTesting
+                .snapshotForTesting.itemIdentifiers.count == 1
+        )
+        let firstTimelineObservation = try #require(
+            viewController.webSocketPreviewViewControllerForTesting
+                .timelineObservationDeliveryForTesting
+        )
+        let snapshotBeforeHide = viewController.webSocketPreviewViewControllerForTesting
+            .snapshotForTesting.itemIdentifiers
+        let requestEpochBeforeHide = try #require(
+            viewController.webSocketPreviewViewControllerForTesting.requestEpochForTesting
+        )
+        let applyGenerationBeforeHide = viewController.webSocketPreviewViewControllerForTesting
+            .snapshotApplyGenerationForTesting
+        let userScrollRevisionBeforeHide = viewController.webSocketPreviewViewControllerForTesting
+            .userScrollRevisionForTesting
+
+        viewController.beginAppearanceTransition(false, animated: false)
+        viewController.endAppearanceTransition()
+        #expect(firstTimelineObservation.isActive == false)
+        #expect(
+            viewController.webSocketPreviewViewControllerForTesting
+                .timelineObservationDeliveryForTesting == nil
+        )
+        await context.apply(.webSocket(.frameReceived(
+            id: first.proxyID,
+            frame: Network.WebSocketFrame(
+                opcode: 1,
+                mask: false,
+                payloadData: "hidden",
+                payloadLength: 6
+            ),
+            timestamp: 12
+        )))
+        #expect(frameScheduler.hasScheduledFrame == false)
+        #expect(
+            viewController.webSocketPreviewViewControllerForTesting
+                .snapshotForTesting.itemIdentifiers == snapshotBeforeHide
+        )
+
+        viewController.beginAppearanceTransition(true, animated: false)
+        viewController.endAppearanceTransition()
+        #expect(await waitUntilWebSocketPreviewBound(to: first, in: viewController))
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.webSocketPreviewViewControllerForTesting
+                .snapshotForTesting.itemIdentifiers.count == 3
+        })
+        #expect(
+            viewController.webSocketPreviewViewControllerForTesting
+                .timelineObservationDeliveryForTesting?.isActive == true
+        )
+        let tailScrollCountAfterResume = viewController.webSocketPreviewViewControllerForTesting
+            .tailScrollCountForTesting
+        viewController.webSocketPreviewViewControllerForTesting
+            .invokeSnapshotApplyCompletionForTesting(
+                epoch: requestEpochBeforeHide,
+                followsTail: true,
+                applyGeneration: applyGenerationBeforeHide,
+                userScrollRevision: userScrollRevisionBeforeHide
+            )
+        #expect(
+            viewController.webSocketPreviewViewControllerForTesting
+                .tailScrollCountForTesting == tailScrollCountAfterResume
+        )
+
+        let firstRequestEpoch = try #require(
+            viewController.webSocketPreviewViewControllerForTesting.requestEpochForTesting
+        )
+        let firstApplyGeneration = viewController.webSocketPreviewViewControllerForTesting
+            .snapshotApplyGenerationForTesting
+        let firstUserScrollRevision = viewController.webSocketPreviewViewControllerForTesting
+            .userScrollRevisionForTesting
+        model.selectRequest(second)
+        #expect(await waitUntilWebSocketPreviewBound(to: second, in: viewController))
+        #expect(
+            viewController.webSocketPreviewViewControllerForTesting
+                .snapshotForTesting.itemIdentifiers.count == 1
+        )
+        let tailScrollCountAfterRebind = viewController.webSocketPreviewViewControllerForTesting
+            .tailScrollCountForTesting
+        viewController.webSocketPreviewViewControllerForTesting
+            .invokeSnapshotApplyCompletionForTesting(
+                epoch: firstRequestEpoch,
+                followsTail: true,
+                applyGeneration: firstApplyGeneration,
+                userScrollRevision: firstUserScrollRevision
+            )
+        #expect(
+            viewController.webSocketPreviewViewControllerForTesting
+                .tailScrollCountForTesting == tailScrollCountAfterRebind
+        )
+        let secondSnapshot = viewController.webSocketPreviewViewControllerForTesting
+            .snapshotForTesting.itemIdentifiers
+        await context.apply(.webSocket(.frameReceived(
+            id: first.proxyID,
+            frame: Network.WebSocketFrame(
+                opcode: 1,
+                mask: false,
+                payloadData: "stale-first",
+                payloadLength: 11
+            ),
+            timestamp: 13
+        )))
+        #expect(frameScheduler.hasScheduledFrame == false)
+        #expect(
+            viewController.webSocketPreviewViewControllerForTesting
+                .snapshotForTesting.itemIdentifiers == secondSnapshot
+        )
+
+        let priorWebSocket = try #require(second.webSocket)
+        let priorLifecycleRevision = second.lifecycleRevision
+        let priorTimelineObservation = try #require(
+            viewController.webSocketPreviewViewControllerForTesting
+                .timelineObservationDeliveryForTesting
+        )
+        let restartTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+        await context.apply(.webSocket(.closed(id: second.proxyID, timestamp: 14)))
+        #expect(await model.waitForRawTransactionDeliveryForTesting(
+            after: restartTransactionBaseline
+        ))
+        let createdTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+        await context.apply(.webSocket(.created(
+            id: second.proxyID,
+            url: "wss://example.com/rebind-second-restarted"
+        )))
+        #expect(await model.waitForRawTransactionDeliveryForTesting(
+            after: createdTransactionBaseline
+        ))
+        let restartedWebSocket = try #require(second.webSocket)
+        #expect(restartedWebSocket !== priorWebSocket)
+        #expect(await waitUntilWebSocketPreviewBound(
+            to: second,
+            webSocket: restartedWebSocket,
+            in: viewController
+        ))
+        #expect(
+            viewController.webSocketPreviewViewControllerForTesting
+                .snapshotForTesting.itemIdentifiers.isEmpty
+        )
+        #expect(priorTimelineObservation.isActive == false)
+        #expect(frameScheduler.hasScheduledFrame == false)
+
+        priorWebSocket.appendError(
+            "stale-old-state",
+            timestamp: 15,
+            lifecycleRevision: priorLifecycleRevision,
+            chronologySequence: 1_000
+        )
+        #expect(frameScheduler.hasScheduledFrame == false)
+        #expect(
+            viewController.webSocketPreviewViewControllerForTesting
+                .snapshotForTesting.itemIdentifiers.isEmpty
+        )
+
+        let transactionBaseline = model.rawTransactionDeliveryCountForTesting
+        await context.apply(.webSocket(.handshakeResponse(
+            id: second.proxyID,
+            response: Network.Response(
+                url: second.url,
+                status: 101,
+                statusText: "Switching Protocols"
+            ),
+            timestamp: 16
+        )))
+        #expect(frameScheduler.hasScheduledFrame)
+        await fireWebSocketRenderingFrame(
+            frameScheduler,
+            in: viewController.webSocketPreviewViewControllerForTesting
+        )
+        #expect(
+            viewController.webSocketPreviewViewControllerForTesting
+                .snapshotForTesting.itemIdentifiers.count == 1
+        )
+        #expect(await model.waitForRawTransactionDeliveryForTesting(after: transactionBaseline))
+
+        let replacedWebSocket = try #require(second.webSocket)
+        let replacement = NetworkRequest(
+            request: Network.Request(
+                id: second.proxyID,
+                url: "wss://example.com/rebind-second-instance",
+                method: "GET"
+            ),
+            initiator: nil,
+            resourceType: .webSocket,
+            timestamp: 20,
+            chronologySequence: 2_000,
+            requestHeaderSource: .unavailable,
+            modelContext: context
+        )
+        _ = replacement.applyWebSocketHandshakeResponse(
+            Network.Response(
+                url: replacement.url,
+                status: 101,
+                statusText: "Switching Protocols"
+            ),
+            timestamp: 21,
+            chronologySequence: 2_001
+        )
+        model.upsertRequestForTesting(replacement)
+        #expect(await waitUntilWebSocketPreviewBound(to: replacement, in: viewController))
+        #expect(model.selectedRequest === replacement)
+        #expect(
+            viewController.webSocketPreviewViewControllerForTesting
+                .snapshotForTesting.itemIdentifiers.count == 1
+        )
+        replacedWebSocket.appendError(
+            "stale-replaced-instance",
+            timestamp: 22,
+            lifecycleRevision: second.lifecycleRevision,
+            chronologySequence: 2_002
+        )
+        #expect(frameScheduler.hasScheduledFrame == false)
+    }
+
+    @Test
+    func webSocketPreviewClearAndDeinitReleaseRenderingLifecycle() async throws {
+        let context = makeContext()
+        let request = try await applyWebSocket(
+            to: context,
+            requestID: "ws-clear",
+            url: "wss://example.com/clear"
+        )
+        let frameScheduler = ManualNetworkFrameScheduler()
+        var viewController: NetworkWebSocketPreviewViewController? =
+            NetworkWebSocketPreviewViewController(frameScheduler: frameScheduler)
+        viewController?.bind(to: request)
+        await resumeWebSocketPreview(try #require(viewController))
+        let observation = try #require(viewController?.timelineObservationDeliveryForTesting)
+
+        await context.apply(.webSocket(.frameReceived(
+            id: request.proxyID,
+            frame: Network.WebSocketFrame(
+                opcode: 1,
+                mask: false,
+                payloadData: "pending",
+                payloadLength: 7
+            ),
+            timestamp: 12
+        )))
+        #expect(frameScheduler.hasScheduledFrame)
+        viewController?.clear()
+        #expect(observation.isActive == false)
+        #expect(frameScheduler.hasScheduledFrame == false)
+        #expect(viewController?.boundRequestForTesting == nil)
+        #expect(viewController?.boundWebSocketForTesting == nil)
+        #expect(viewController?.snapshotForTesting.itemIdentifiers.isEmpty == true)
+
+        viewController?.bind(to: request)
+        viewController?.resumeRendering()
+        let deferredObservationStart = try #require(
+            viewController?.observationStartTaskForTesting
+        )
+        #expect(viewController?.hasPendingObservationStartForTesting == true)
+        viewController?.clear()
+        await deferredObservationStart.value
+        #expect(viewController?.timelineObservationDeliveryForTesting == nil)
+        #expect(viewController?.snapshotForTesting.itemIdentifiers.isEmpty == true)
+        #expect(frameScheduler.hasScheduledFrame == false)
+
+        var didDeinitialize = false
+        viewController?.setDeinitHandlerForTesting {
+            didDeinitialize = true
+        }
+        viewController = nil
+        #expect(didDeinitialize)
+        #expect(frameScheduler.invalidationCount == 1)
     }
 
     @Test
@@ -1067,6 +2898,95 @@ struct NetworkDetailViewControllerTests {
                 && viewController.currentPreviewRoleForTesting == .response
         }
         #expect(didFetch)
+    }
+
+    @Test
+    func securityModeOwnsSurfaceAfterInFlightResponseBodyFetchCompletes() async throws {
+        let fixture = try await makeLiveNetworkDetailFixture()
+        let context = fixture.context
+        let requestID = Network.Request.ID("security-in-flight-body")
+        let gate = WebInspectorTestGate()
+        await fixture.runtime.backend.hold(
+            domain: "Network",
+            method: "getResponseBody",
+            gate: gate
+        )
+        await fixture.runtime.backend.enqueue(
+            Network.Body(data: #"{"stale":true}"#, base64Encoded: false),
+            for: "Network",
+            method: "getResponseBody"
+        )
+        await context.apply(.requestWillBeSent(
+            id: requestID,
+            request: Network.Request(
+                id: requestID,
+                url: "https://example.test/security-body.json",
+                method: "GET"
+            ),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 1
+        ))
+        await context.apply(.responseReceived(
+            id: requestID,
+            response: Network.Response(
+                url: "https://example.test/security-body.json",
+                status: 200,
+                mimeType: "application/json"
+            ),
+            resourceType: .fetch,
+            timestamp: 2
+        ))
+        await context.apply(.loadingFinished(
+            id: requestID,
+            timestamp: 3,
+            sourceMapURL: nil,
+            metrics: nil
+        ))
+        let request = try #require(context.registeredRequest(forProxyID: requestID))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(request)
+        let viewController = makeNetworkDetailViewController(
+            model: model,
+            initialMode: .preview
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        _ = await fixture.runtime.backend.waitForRecordedCommands(
+            domain: "Network",
+            method: "getResponseBody",
+            count: 1
+        )
+        #expect(request.responseBody.phase == .fetching)
+        #expect(viewController.responseBodyFetchObservationDeliveryForTesting != nil)
+
+        selectMode(.security, on: viewController)
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.currentModeForTesting == .security
+                && viewController.securityViewControllerForTesting.view.isHidden == false
+                && viewController.previewViewForTesting.isHidden
+                && viewController.responseBodyFetchObservationDeliveryForTesting == nil
+        })
+        let securityItems = viewController.securityViewControllerForTesting
+            .snapshotForTesting.itemIdentifiers
+        let renderCount = viewController.selectedRequestRenderCountForTesting
+
+        await gate.open()
+        #expect(await waitForNetworkBodyPhase(in: request.responseBody) { $0 == .loaded } != nil)
+        #expect(viewController.currentModeForTesting == .security)
+        #expect(viewController.securityViewControllerForTesting.view.isHidden == false)
+        #expect(viewController.previewViewForTesting.isHidden)
+        #expect(
+            viewController.contentScrollView(for: .top)
+                === viewController.securityViewControllerForTesting.collectionView
+        )
+        #expect(
+            viewController.securityViewControllerForTesting.snapshotForTesting.itemIdentifiers
+                == securityItems
+        )
+        #expect(viewController.selectedRequestRenderCountForTesting == renderCount)
+        await context.stop()
     }
 
     @Test
@@ -2450,6 +4370,800 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func headersModeClearsSelectionWhenResponseSectionAppears() async throws {
+        let context = makeContext()
+        let request = try #require(await applyRequestWithoutResponse(
+            to: context,
+            requestID: "headers-response-selection",
+            url: "https://example.com/pending"
+        ))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(request)
+        let viewController = makeNetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.headersTextViewForTesting.renderedTextForTesting
+                .contains("GET /pending")
+        })
+        viewController.headersTextViewForTesting.selectedRangeForTesting = NSRange(
+            location: 2,
+            length: 4
+        )
+
+        await applyResponseReceived(
+            to: context,
+            requestID: "headers-response-selection",
+            url: request.url,
+            responseHeaders: ["x-response": "inserted"],
+            responseMimeType: "text/plain",
+            timestamp: 2
+        )
+
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.headersTextViewForTesting.renderedTextForTesting
+                .contains("x-response: inserted")
+        })
+        #expect(
+            viewController.headersTextViewForTesting.selectedRangeForTesting
+                == NSRange(location: 0, length: 0)
+        )
+    }
+
+    @Test
+    func headersDocumentShowsOutcomeContextAndOrderedQueryAndFormParameters() async throws {
+        let context = makeContext()
+        let canceledID = Network.Request.ID("headers-context-canceled")
+        let requestHeaders = ["Content-Type": "application/x-www-form-urlencoded"]
+        let url = "https://example.com/submit?alpha=one&empty=&bad=%GG&alpha=two#ignored"
+        await context.apply(
+            .requestWillBeSent(
+                id: canceledID,
+                request: Network.Request(
+                    id: canceledID,
+                    url: url,
+                    method: "POST",
+                    headers: requestHeaders,
+                    postData: "field=one&empty=&bad=%GG&field=two"
+                ),
+                initiator: Network.Initiator(
+                    kind: "script",
+                    url: "https://example.com/app.js",
+                    line: 1,
+                    nodeID: DOM.Node.ID("42", scopedToTargetRawValue: "page-target")
+                ),
+                resourceType: .xhr,
+                redirectResponse: nil,
+                timestamp: 1
+            ))
+        await context.apply(
+            .responseReceived(
+                id: canceledID,
+                response: Network.Response(
+                    url: url,
+                    status: 200,
+                    statusText: "OK",
+                    mimeType: "application/json",
+                    headers: ["content-type": "text/plain"],
+                    source: Network.Source(rawValue: "network"),
+                    requestHeaders: requestHeaders
+                ),
+                resourceType: .xhr,
+                timestamp: 2
+            ))
+        await context.apply(
+            .loadingFailed(
+                id: canceledID,
+                errorText: "The user canceled the upload",
+                canceled: true,
+                timestamp: 3
+            ))
+        let canceledRequest = try #require(context.registeredRequest(forProxyID: canceledID))
+
+        let failedID = Network.Request.ID("headers-context-failed")
+        await context.apply(
+            .requestWillBeSent(
+                id: failedID,
+                request: Network.Request(
+                    id: failedID,
+                    url: "https://example.com/failure",
+                    method: "GET"
+                ),
+                resourceType: .fetch,
+                redirectResponse: nil,
+                timestamp: 4
+            ))
+        await context.apply(
+            .loadingFailed(
+                id: failedID,
+                errorText: "The connection was reset",
+                canceled: false,
+                timestamp: 5
+            ))
+        let failedRequest = try #require(context.registeredRequest(forProxyID: failedID))
+
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(canceledRequest)
+        let viewController = makeNetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let overviewTitle = String(
+            localized: "network.detail.section.overview",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let requestTitle = String(
+            localized: "network.section.request",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let responseTitle = String(
+            localized: "network.section.response",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let queryTitle = String(
+            localized: "network.headers.section.query",
+            defaultValue: "Query String Parameters",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let requestDataTitle = String(
+            localized: "network.headers.section.request_data",
+            defaultValue: "Request Data",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let outcomeLabel = String(
+            localized: "network.headers.summary.outcome",
+            defaultValue: "Outcome",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let canceledValue = String(
+            localized: "network.headers.summary.outcome.canceled",
+            defaultValue: "Canceled",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let failedValue = String(
+            localized: "network.headers.summary.outcome.failed",
+            defaultValue: "Failed",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let failureReasonLabel = String(
+            localized: "network.headers.summary.failure_reason",
+            defaultValue: "Failure Reason",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let resourceTypeLabel = String(
+            localized: "network.headers.summary.resource_type",
+            defaultValue: "Resource Type",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let mimeTypeLabel = String(
+            localized: "network.headers.summary.mime_type",
+            defaultValue: "MIME Type",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let initiatorKindLabel = String(
+            localized: "network.headers.summary.initiator_kind",
+            defaultValue: "Initiator Kind",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let initiatorURLLabel = String(
+            localized: "network.headers.summary.initiator_url",
+            defaultValue: "Initiator URL",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let initiatorLineLabel = String(
+            localized: "network.headers.summary.initiator_line",
+            defaultValue: "Initiator Line",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let initiatorNodeLabel = String(
+            localized: "network.headers.summary.initiator_node",
+            defaultValue: "Initiator Node",
+            bundle: WebInspectorUILocalization.bundle
+        )
+
+        #expect(
+            await waitUntilRendered(in: viewController) {
+                let text = viewController.headersTextViewForTesting.renderedTextForTesting
+                return text.contains("\(outcomeLabel): \(canceledValue)")
+                    && text.contains("\(failureReasonLabel): The user canceled the upload")
+                    && text.contains("\(resourceTypeLabel): XHR")
+                    && text.contains("\(mimeTypeLabel): application/json")
+                    && text.contains("\(initiatorKindLabel): script")
+                    && text.contains("\(initiatorURLLabel): https://example.com/app.js")
+                    && text.contains("\(initiatorLineLabel): 1")
+                    && text.contains("\(initiatorNodeLabel): 42")
+                    && text.contains("page-target") == false
+                    && text.contains("\u{1E}") == false
+            })
+
+        let text = viewController.headersTextViewForTesting.renderedTextForTesting
+        let overviewRange = try #require(text.range(of: "\(overviewTitle)\n"))
+        let requestRange = try #require(
+            text.range(
+                of: "\(requestTitle)\n",
+                range: overviewRange.upperBound..<text.endIndex
+            ))
+        let responseRange = try #require(
+            text.range(
+                of: "\(responseTitle)\n",
+                range: requestRange.upperBound..<text.endIndex
+            ))
+        let queryRange = try #require(
+            text.range(
+                of: "\(queryTitle)\n",
+                range: responseRange.upperBound..<text.endIndex
+            ))
+        let requestDataRange = try #require(
+            text.range(
+                of: "\(requestDataTitle)\n",
+                range: queryRange.upperBound..<text.endIndex
+            ))
+        #expect(overviewRange.lowerBound < requestRange.lowerBound)
+        #expect(requestRange.lowerBound < responseRange.lowerBound)
+        #expect(responseRange.lowerBound < queryRange.lowerBound)
+        #expect(queryRange.lowerBound < requestDataRange.lowerBound)
+
+        let queryText = String(text[queryRange.upperBound..<requestDataRange.lowerBound])
+        let queryAlphaOne = try #require(queryText.range(of: "alpha: one"))
+        let queryEmpty = try #require(
+            queryText.range(
+                of: "empty: ",
+                range: queryAlphaOne.upperBound..<queryText.endIndex
+            ))
+        let queryMalformed = try #require(
+            queryText.range(
+                of: "bad=%GG",
+                range: queryEmpty.upperBound..<queryText.endIndex
+            ))
+        let queryAlphaTwo = try #require(
+            queryText.range(
+                of: "alpha: two",
+                range: queryMalformed.upperBound..<queryText.endIndex
+            ))
+        #expect(queryAlphaOne.lowerBound < queryEmpty.lowerBound)
+        #expect(queryEmpty.lowerBound < queryMalformed.lowerBound)
+        #expect(queryMalformed.lowerBound < queryAlphaTwo.lowerBound)
+        #expect(queryText.contains("ignored") == false)
+
+        let requestDataText = String(text[requestDataRange.upperBound...])
+        let formOne = try #require(requestDataText.range(of: "field: one"))
+        let formEmpty = try #require(
+            requestDataText.range(
+                of: "empty: ",
+                range: formOne.upperBound..<requestDataText.endIndex
+            ))
+        let formMalformed = try #require(
+            requestDataText.range(
+                of: "bad=%GG",
+                range: formEmpty.upperBound..<requestDataText.endIndex
+            ))
+        let formTwo = try #require(
+            requestDataText.range(
+                of: "field: two",
+                range: formMalformed.upperBound..<requestDataText.endIndex
+            ))
+        #expect(formOne.lowerBound < formEmpty.lowerBound)
+        #expect(formEmpty.lowerBound < formMalformed.lowerBound)
+        #expect(formMalformed.lowerBound < formTwo.lowerBound)
+        #expect(
+            requestDataText.contains(
+                String(
+                    localized: "network.headers.parameters.error.percent_escape",
+                    defaultValue: "Malformed percent escape",
+                    bundle: WebInspectorUILocalization.bundle
+                )))
+        #expect(viewController.headersTextViewForTesting.requestPreviewTagRangesForTesting.isEmpty)
+
+        model.selectRequest(failedRequest)
+        #expect(
+            await waitUntilRendered(in: viewController) {
+                let text = viewController.headersTextViewForTesting.renderedTextForTesting
+                return text.contains("\(outcomeLabel): \(failedValue)")
+                    && text.contains("\(failureReasonLabel): The connection was reset")
+                    && text.contains("\(outcomeLabel): \(canceledValue)") == false
+            })
+    }
+
+    @Test
+    func requestDataMetadataTagAndAtomicActionRenderTheExactRequestBody() async throws {
+        let context = makeContext()
+        let request = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "request-preview-action",
+                url: "https://example.com/upload",
+                requestHeaders: [
+                    "Content-Type":
+                        "multipart/form-data; boundary=\"A;=B\"; charset=utf-8; boundary=second; broken"
+                ],
+                postData: "raw-body-secret",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json",
+                finishes: false
+            ))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(request)
+        let bodyPreview = RecordingNetworkBodyPreviewViewController()
+        let viewController = makeNetworkDetailViewController(
+            model: model,
+            makeBodyViewController: { _ in bodyPreview }
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let mediaTypeLabel = String(
+            localized: "network.headers.request_data.media_type",
+            defaultValue: "Media Type",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let boundaryLabel = String(
+            localized: "network.headers.request_data.boundary",
+            defaultValue: "Boundary",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let encodingLabel = String(
+            localized: "network.headers.request_data.encoding",
+            defaultValue: "Encoding",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        let unparsedContentTypeParameterLabel = String(
+            localized: "network.headers.request_data.content_type_parameter_unparsed",
+            defaultValue: "Unparsed Content-Type Parameter",
+            bundle: WebInspectorUILocalization.bundle
+        )
+
+        #expect(
+            await waitUntilRendered(in: viewController) {
+                let headers = viewController.headersTextViewForTesting
+                let text = headers.renderedTextForTesting
+                return text.contains("\(mediaTypeLabel): multipart/form-data")
+                    && text.contains("\(boundaryLabel): A;=B")
+                    && text.contains("\(boundaryLabel): second")
+                    && text.contains("\(encodingLabel): utf-8")
+                    && text.contains("\(unparsedContentTypeParameterLabel):  broken")
+                    && text.contains("raw-body-secret") == false
+                    && headers.requestPreviewTagRangesForTesting.count == 1
+            })
+
+        let headers = viewController.headersTextViewForTesting
+        let tagRange = try #require(headers.requestPreviewTagRangesForTesting.first)
+        #expect(
+            (headers.renderedTextForTesting as NSString).substring(with: tagRange)
+                == String(
+                    localized: "network.headers.request_data.view_preview",
+                    defaultValue: "View Request Preview",
+                    bundle: WebInspectorUILocalization.bundle
+                )
+        )
+        let selectedRange = NSRange(location: 4, length: 8)
+        headers.selectedRangeForTesting = selectedRange
+        let initialFontSize = try #require(headers.requestPreviewFontPointSizeForTesting)
+        let initialAssignmentCount = headers.attributedTextAssignmentCountForTesting
+        viewController.traitOverrides.preferredContentSizeCategory = .accessibilityExtraExtraExtraLarge
+        viewController.updateTraitsIfNeeded()
+        headers.updateTraitsIfNeeded()
+        headers.layoutIfNeeded()
+        #expect(headers.attributedTextAssignmentCountForTesting > initialAssignmentCount)
+        #expect(try #require(headers.requestPreviewFontPointSizeForTesting) > initialFontSize)
+        #expect(headers.selectedRangeForTesting == selectedRange)
+
+        headers.semanticContentAttribute = .forceLeftToRight
+        headers.setNeedsLayout()
+        headers.layoutIfNeeded()
+        let leftToRightRuleX = try #require(headers.sectionRuleRectsForTesting.first).minX
+        headers.semanticContentAttribute = .forceRightToLeft
+        headers.setNeedsLayout()
+        headers.layoutIfNeeded()
+        let rightToLeftRuleX = try #require(headers.sectionRuleRectsForTesting.first).minX
+        #expect(headers.effectiveLayoutDirectionForTesting == .rightToLeft)
+        #expect(rightToLeftRuleX > leftToRightRuleX)
+
+        headers.activateRequestPreviewForTesting()
+
+        let requestBody = try #require(request.requestBody)
+        #expect(
+            await waitUntilRendered(in: viewController) {
+                viewController.currentModeForTesting == .preview
+                    && viewController.currentPreviewRoleForTesting == .request
+                    && model.selectedRequest === request
+                    && bodyPreview.currentBodyForTesting === requestBody
+                    && viewController.responseBodyFetchObservationDeliveryForTesting == nil
+            })
+        #expect(request.responseBody.phase == .available)
+    }
+
+    @Test
+    func groupedRequestPreviewActionPromotesRepresentativeInsteadOfRoutingToHLSSibling() async throws {
+        let context = makeContext()
+        let frameID = FrameID("headers-preview-group")
+        let nodeID = DOM.Node.ID("headers-preview-initiator")
+        installNavigationVisit(in: context, frameID: frameID)
+        let representative = try #require(
+            await applyGroupedRequest(
+                to: context,
+                requestID: "headers-preview-representative",
+                url: "https://example.com/submit.json",
+                frameID: frameID,
+                initiatorNodeID: nodeID,
+                requestHeaders: ["Content-Type": "application/json"],
+                postData: #"{"member":"representative"}"#,
+                responseHeaders: ["content-type": "application/json"],
+                responseMIMEType: "application/json",
+                resourceType: .fetch,
+                timestamp: 1
+            ))
+        let hlsSibling = try #require(
+            await applyGroupedRequest(
+                to: context,
+                requestID: "headers-preview-hls",
+                url: "https://media.example.com/master.m3u8",
+                frameID: frameID,
+                initiatorNodeID: nodeID,
+                requestHeaders: ["Content-Type": "application/json"],
+                postData: #"{"member":"hls"}"#,
+                responseHeaders: ["content-type": "application/vnd.apple.mpegurl"],
+                responseMIMEType: "application/vnd.apple.mpegurl",
+                resourceType: .media,
+                timestamp: 4
+            ))
+        let model = NetworkPanelModel(context: context)
+        try selectEntry(containing: hlsSibling, in: model)
+        let bodyPreview = RecordingNetworkBodyPreviewViewController()
+        let viewController = makeNetworkDetailViewController(
+            model: model,
+            makeBodyViewController: { _ in bodyPreview }
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(
+            await waitUntilRendered(in: viewController) {
+                let headers = viewController.headersTextViewForTesting
+                return model.selectedRequest === representative
+                    && headers.renderedTextForTesting.contains("1. submit.json")
+                    && headers.renderedTextForTesting.contains("2. master.m3u8")
+                    && headers.requestPreviewTagRangesForTesting.count == 1
+            })
+        let groupedHeaders = viewController.headersTextViewForTesting
+        let groupedText = groupedHeaders.renderedTextForTesting as NSString
+        let representativeHeadingRange = groupedText.range(of: "1. submit.json")
+        let hlsHeadingRange = groupedText.range(of: "2. master.m3u8")
+        let groupedTagRange = try #require(groupedHeaders.requestPreviewTagRangesForTesting.first)
+        #expect(representativeHeadingRange.location != NSNotFound)
+        #expect(hlsHeadingRange.location != NSNotFound)
+        #expect(groupedTagRange.location > representativeHeadingRange.location)
+        #expect(NSMaxRange(groupedTagRange) < hlsHeadingRange.location)
+
+        let renderCountBeforeRepresentativeAction = viewController
+            .selectedRequestRenderCountForTesting
+        viewController.headersTextViewForTesting.activateRequestPreviewForTesting()
+        let representativeBody = try #require(representative.requestBody)
+        #expect(
+            await waitUntilRendered(in: viewController) {
+                guard case let .request(_, requestID) = model.selection else {
+                    return false
+                }
+                return requestID == representative.id
+                    && model.selectedRequest === representative
+                    && viewController.currentModeForTesting == .preview
+                    && viewController.currentPreviewRoleForTesting == .request
+                    && bodyPreview.currentBodyForTesting === representativeBody
+            })
+        #expect(
+            viewController.selectedRequestRenderCountForTesting
+                == renderCountBeforeRepresentativeAction + 1
+        )
+        #expect(representative.responseBody.phase == .available)
+        #expect(hlsSibling.responseBody.phase == .available)
+
+        viewController.setModeForTesting(.headers)
+        model.selectRequest(hlsSibling)
+        #expect(
+            await waitUntilRendered(in: viewController) {
+                model.selectedRequest === hlsSibling
+                    && viewController.currentModeForTesting == .headers
+                    && viewController.headersTextViewForTesting.renderedTextForTesting
+                        .contains("master.m3u8")
+                    && viewController.headersTextViewForTesting.requestPreviewTagRangesForTesting.count == 1
+            })
+
+        viewController.headersTextViewForTesting.activateRequestPreviewForTesting()
+        let hlsRequestBody = try #require(hlsSibling.requestBody)
+        #expect(
+            await waitUntilRendered(in: viewController) {
+                model.selectedRequest === hlsSibling
+                    && viewController.currentModeForTesting == .preview
+                    && viewController.currentPreviewRoleForTesting == .request
+                    && bodyPreview.currentBodyForTesting === hlsRequestBody
+                    && viewController.responseBodyFetchObservationDeliveryForTesting == nil
+            })
+        #expect(representative.responseBody.phase == .available)
+        #expect(hlsSibling.responseBody.phase == .available)
+    }
+
+    @Test
+    func webSocketRequestDataNeverExposesBodyPreviewAction() async throws {
+        let context = makeContext()
+        let requestID = Network.Request.ID("headers-websocket-body")
+        await context.apply(
+            .webSocket(
+                .created(
+                    id: requestID,
+                    url: "wss://example.com/socket"
+                )))
+        await context.apply(
+            .webSocket(
+                .handshakeRequest(
+                    id: requestID,
+                    request: Network.Request(
+                        id: requestID,
+                        url: "wss://example.com/socket",
+                        method: "GET",
+                        headers: [
+                            "Content-Type": "application/json",
+                            "Upgrade": "websocket",
+                        ],
+                        postData: #"{"websocket":"secret"}"#
+                    ),
+                    timestamp: 1
+                )))
+        let request = try #require(context.registeredRequest(forProxyID: requestID))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(request)
+        let viewController = makeNetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        let requestDataTitle = String(
+            localized: "network.headers.section.request_data",
+            defaultValue: "Request Data",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        #expect(
+            await waitUntilRendered(in: viewController) {
+                let headers = viewController.headersTextViewForTesting
+                return headers.renderedTextForTesting.contains(requestDataTitle)
+                    && headers.renderedTextForTesting.contains(#"{"websocket":"secret"}"#) == false
+                    && headers.requestPreviewTagRangesForTesting.isEmpty
+            })
+
+        viewController.headersTextViewForTesting.activateRequestPreviewForTesting()
+        #expect(viewController.currentModeForTesting == .headers)
+        #expect(model.selectedRequest === request)
+    }
+
+    @Test
+    func hiddenHeadersCatchUpRequestDataClassificationAndSelectionClearRemovesAction() async throws {
+        let context = makeContext()
+        let request = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "hidden-request-data",
+                url: "https://example.com/submit",
+                requestHeaders: ["Content-Type": "application/json"],
+                postData: "field=value",
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json",
+                finishes: false
+            ))
+        let body = try #require(request.requestBody)
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(request)
+        let viewController = makeNetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(
+            await waitUntilRendered(in: viewController) {
+                viewController.headersTextViewForTesting.requestPreviewTagRangesForTesting.count == 1
+            })
+
+        viewController.beginAppearanceTransition(false, animated: false)
+        viewController.endAppearanceTransition()
+        let transactionBaseline = model.rawTransactionDeliveryCountForTesting
+        await applyLoadingFinished(
+            to: context,
+            requestID: "hidden-request-data",
+            timestamp: 4,
+            requestHeaders: ["Content-Type": "application/x-www-form-urlencoded"]
+        )
+        #expect(await model.waitForRawTransactionDeliveryForTesting(after: transactionBaseline))
+        #expect(request.requestBody === body)
+        #expect(viewController.headersTextViewForTesting.requestPreviewTagRangesForTesting.count == 1)
+        viewController.headersTextViewForTesting.activateRequestPreviewForTesting()
+        #expect(viewController.currentModeForTesting == .headers)
+        #expect(model.selectedRequest === request)
+
+        viewController.beginAppearanceTransition(true, animated: false)
+        viewController.endAppearanceTransition()
+        #expect(
+            await waitUntilRendered(in: viewController) {
+                viewController.headersTextViewForTesting.requestPreviewTagRangesForTesting.isEmpty
+                    && viewController.headersTextViewForTesting.renderedTextForTesting
+                        .contains("field: value")
+            })
+        #expect(request.requestBody === body)
+
+        model.selectRequest(nil)
+        #expect(
+            await waitUntilRendered(in: viewController) {
+                viewController.contentUnavailableConfiguration != nil
+                    && viewController.headersTextViewForTesting.renderedTextForTesting.isEmpty
+                    && viewController.headersTextViewForTesting.requestPreviewTagRangesForTesting.isEmpty
+            })
+    }
+
+    @Test
+    func headersRebindSameIDRequestDataActionAndIgnoreOldInstanceMutations() async throws {
+        let context = makeContext()
+        let original = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "headers-request-data-instance",
+                url: "https://example.com/original",
+                requestHeaders: ["Content-Type": "application/json"],
+                postData: #"{"instance":"original"}"#,
+                responseHeaders: ["content-type": "application/json"],
+                responseMimeType: "application/json",
+                finishes: false
+            ))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(original)
+        let bodyPreview = RecordingNetworkBodyPreviewViewController()
+        let viewController = makeNetworkDetailViewController(
+            model: model,
+            makeBodyViewController: { _ in bodyPreview }
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(
+            await waitUntilRendered(in: viewController) {
+                viewController.headersTextViewForTesting.requestPreviewTagRangesForTesting.count == 1
+            })
+
+        let proxyID = Network.Request.ID("headers-request-data-instance")
+        let replacement = NetworkRequest(
+            request: Network.Request(
+                id: proxyID,
+                url: "https://example.com/replacement",
+                method: "POST",
+                headers: [
+                    "Content-Type": "application/json",
+                    "content-type": "text/plain",
+                ],
+                postData: #"{"instance":"replacement"}"#
+            ),
+            initiator: original.initiator,
+            navigationVisit: original.navigationVisit,
+            resourceType: original.resourceType,
+            timestamp: original.logicalStartTimestamp,
+            chronologySequence: original.chronologySequence,
+            modelContext: context
+        )
+        model.upsertRequestForTesting(replacement)
+        let ambiguousContentTypeLabel = String(
+            localized: "network.headers.request_data.content_type_ambiguous",
+            defaultValue: "Ambiguous Content Type",
+            bundle: WebInspectorUILocalization.bundle
+        )
+
+        #expect(
+            await waitUntilRendered(in: viewController) {
+                model.selectedRequest === replacement
+                    && viewController.headersTextViewForTesting.renderedTextForTesting
+                        .contains("https://example.com/replacement")
+                    && viewController.headersTextViewForTesting.renderedTextForTesting
+                        .contains("\(ambiguousContentTypeLabel): application/json")
+                    && viewController.headersTextViewForTesting.renderedTextForTesting
+                        .contains("\(ambiguousContentTypeLabel): text/plain")
+                    && viewController.headersTextViewForTesting.requestPreviewTagRangesForTesting.count == 1
+            })
+
+        viewController.headersTextViewForTesting.activateRequestPreviewForTesting()
+        let replacementBody = try #require(replacement.requestBody)
+        #expect(
+            await waitUntilRendered(in: viewController) {
+                viewController.currentModeForTesting == .preview
+                    && model.selectedRequest === replacement
+                    && bodyPreview.currentBodyForTesting === replacementBody
+            })
+
+        viewController.setModeForTesting(.headers)
+        #expect(
+            await waitUntilRendered(in: viewController) {
+                viewController.currentModeForTesting == .headers
+                    && viewController.headersTextViewForTesting.requestPreviewTagRangesForTesting.count == 1
+            })
+
+        original.applyRequestWillBeSent(
+            request: Network.Request(
+                id: proxyID,
+                url: "https://example.com/stale",
+                method: "POST",
+                headers: ["Content-Type": "application/x-www-form-urlencoded"],
+                postData: "stale=value"
+            ),
+            initiator: original.initiator,
+            navigationVisit: original.navigationVisit,
+            resourceType: original.resourceType,
+            timestamp: 5,
+            chronologySequence: 5
+        )
+        #expect(
+            viewController.headersTextViewForTesting.renderedTextForTesting
+                .contains("https://example.com/stale") == false)
+        #expect(viewController.headersTextViewForTesting.requestPreviewTagRangesForTesting.count == 1)
+
+        replacement.applyRequestWillBeSent(
+            request: Network.Request(
+                id: proxyID,
+                url: "https://example.com/current",
+                method: "POST",
+                headers: ["Content-Type": "application/x-www-form-urlencoded"],
+                postData: "current=value"
+            ),
+            initiator: replacement.initiator,
+            navigationVisit: replacement.navigationVisit,
+            resourceType: replacement.resourceType,
+            timestamp: 6,
+            chronologySequence: 6
+        )
+        #expect(
+            await waitUntilRendered(in: viewController) {
+                viewController.headersTextViewForTesting.renderedTextForTesting
+                    .contains("https://example.com/current")
+                    && viewController.headersTextViewForTesting.renderedTextForTesting
+                        .contains("current: value")
+                    && viewController.headersTextViewForTesting.requestPreviewTagRangesForTesting.isEmpty
+            })
+    }
+
+    @Test
+    func headersSemanticSignatureTracksKeyValueAttributeBoundaries() async throws {
+        let context = makeContext()
+        let request = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "headers-semantic-signature",
+                url: "https://example.com/signature",
+                responseHeaders: ["a: b": ""],
+                responseMimeType: "text/plain",
+                finishes: false
+            ))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(request)
+        let viewController = makeNetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(
+            await waitUntilRendered(in: viewController) {
+                viewController.headersTextViewForTesting.renderedTextForTesting.contains("a: b\n")
+            })
+        let renderedText = viewController.headersTextViewForTesting.renderedTextForTesting
+        let assignmentCount = viewController.headersTextViewForTesting
+            .attributedTextAssignmentCountForTesting
+
+        await applyResponseReceived(
+            to: context,
+            requestID: "headers-semantic-signature",
+            url: request.url,
+            responseHeaders: ["a": "b"],
+            responseMimeType: "text/plain",
+            timestamp: 4
+        )
+
+        #expect(
+            await waitUntilRendered(in: viewController) {
+                viewController.headersTextViewForTesting.attributedTextAssignmentCountForTesting
+                    == assignmentCount + 1
+            })
+        #expect(viewController.headersTextViewForTesting.renderedTextForTesting == renderedText)
+    }
+
+    @Test
     func hiddenDetailKeepsHeadersAndRebindsSameSelectedRequestOnReturn() async throws {
         let context = makeContext()
         let request = try #require(
@@ -2582,11 +5296,22 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRenderFirst)
 
+        viewController.headersTextViewForTesting.selectedRangeForTesting = NSRange(
+            location: 2,
+            length: 4
+        )
         model.selectRequest(secondRequest)
         let didRenderSecond = await waitUntilRendered(in: viewController) {
             viewController.headersTextViewForTesting.renderedTextForTesting.contains("x-request: second")
         }
         #expect(didRenderSecond)
+        #expect(
+            viewController.headersTextViewForTesting.selectedRangeForTesting
+                == NSRange(location: 0, length: 0)
+        )
+
+        let currentSelection = NSRange(location: 3, length: 5)
+        viewController.headersTextViewForTesting.selectedRangeForTesting = currentSelection
 
         await applyResponseReceived(
             to: context,
@@ -2598,6 +5323,7 @@ struct NetworkDetailViewControllerTests {
         )
 
         #expect(viewController.headersTextViewForTesting.renderedTextForTesting.contains("x-old-request: stale") == false)
+        #expect(viewController.headersTextViewForTesting.selectedRangeForTesting == currentSelection)
 
         await applyResponseReceived(
             to: context,
@@ -2614,6 +5340,10 @@ struct NetworkDetailViewControllerTests {
                 && text.contains("x-old-request: stale") == false
         }
         #expect(didRenderCurrentUpdate)
+        #expect(
+            viewController.headersTextViewForTesting.selectedRangeForTesting
+                == NSRange(location: 0, length: 0)
+        )
     }
 
     @Test
@@ -3041,7 +5771,7 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(context: context)
         let selectedRequest = try #require(context.registeredRequest(for: selectedRequestID))
         model.selectRequest(selectedRequest)
-        let frameScheduler = ManualNetworkListFrameScheduler()
+        let frameScheduler = ManualNetworkFrameScheduler()
         let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let listViewController = NetworkListViewController(
             model: model,
@@ -3133,7 +5863,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         let request = try #require(context.registeredRequest(for: requestID))
-        let frameScheduler = ManualNetworkListFrameScheduler()
+        let frameScheduler = ManualNetworkFrameScheduler()
         let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let listViewController = NetworkListViewController(
             model: model,
@@ -3469,7 +6199,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         _ = try #require(context.registeredRequest(for: initialRequestID))
-        let frameScheduler = ManualNetworkListFrameScheduler()
+        let frameScheduler = ManualNetworkFrameScheduler()
         let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let applyCompletionScheduler = ManualNetworkListSnapshotApplyCompletionScheduler()
         let listViewController = NetworkListViewController(
@@ -3569,7 +6299,7 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(context: context)
         let selectedRequest = try #require(context.registeredRequest(for: selectedRequestID))
         model.selectRequest(selectedRequest)
-        let frameScheduler = ManualNetworkListFrameScheduler()
+        let frameScheduler = ManualNetworkFrameScheduler()
         let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let listViewController = NetworkListViewController(
             model: model,
@@ -3803,7 +6533,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         let firstRequest = try #require(context.registeredRequest(for: firstRequestID))
-        let frameScheduler = ManualNetworkListFrameScheduler()
+        let frameScheduler = ManualNetworkFrameScheduler()
         let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let listViewController = NetworkListViewController(
             model: model,
@@ -3995,7 +6725,7 @@ struct NetworkDetailViewControllerTests {
             responseMimeType: "video/mp4"
         ))
         let model = NetworkPanelModel(context: context)
-        let frameScheduler = ManualNetworkListFrameScheduler()
+        let frameScheduler = ManualNetworkFrameScheduler()
         let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let applyCompletionScheduler = ManualNetworkListSnapshotApplyCompletionScheduler()
         let listViewController = NetworkListViewController(
@@ -5196,6 +7926,46 @@ struct NetworkDetailViewControllerTests {
         #expect(weakViewController == nil)
     }
 
+    private func makeLiveNetworkDetailFixture() async throws -> (
+        runtime: WebInspectorProxyTestRuntime,
+        target: WebInspectorTarget,
+        context: WebInspectorContext
+    ) {
+        let runtime = try await WebInspectorProxyTestRuntime.start()
+        let target = try await runtime.proxy.waitForCurrentPage()
+        await runtime.backend.enqueue((), for: "Inspector", method: "enable")
+        await runtime.backend.enqueue((), for: "Inspector", method: "initialized")
+        await runtime.backend.enqueue((), for: "Page", method: "enable")
+        await runtime.backend.enqueue((), for: "Runtime", method: "enable")
+        await runtime.backend.enqueue((), for: "Network", method: "enable")
+        await runtime.backend.enqueue(
+            DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document"),
+            for: "DOM",
+            method: "getDocument"
+        )
+        await runtime.backend.enqueue((), for: "Console", method: "enable")
+
+        let container = WebInspectorContainer(proxy: runtime.proxy)
+        let context = container.mainContext
+        try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
+        try await runtime.backend.waitForSubscribers(domain: "Inspector", target: target, count: 1)
+        try await runtime.backend.waitForSubscribers(domain: "CSS", target: target, count: 1)
+        try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 1)
+        try await runtime.backend.waitForSubscribers(domain: "Console", target: target, count: 1)
+        try await runtime.backend.waitForSubscribers(domain: "Runtime", target: target, count: 1)
+        for await status in context.statusUpdates {
+            if status.state == .attached {
+                break
+            }
+            if status.state != .attaching {
+                Issue.record("Expected live Network context to attach; got \(status.state).")
+                break
+            }
+        }
+        #expect(context.state == .attached)
+        return (runtime, target, context)
+    }
+
     private func makeContext() -> WebInspectorContext {
         WebInspectorContext.preview(isolation: MainActor.shared)
     }
@@ -5397,6 +8167,78 @@ struct NetworkDetailViewControllerTests {
         return context.registeredRequest(forProxyID: requestID)
     }
 
+    private func applyWebSocket(
+        to context: WebInspectorContext,
+        requestID rawRequestID: String,
+        url: String,
+        requestTimestamp: Double? = 10,
+        responseTimestamp: Double? = 11
+    ) async throws -> NetworkRequest {
+        let requestID = Network.Request.ID(rawRequestID)
+        await context.apply(.webSocket(.created(id: requestID, url: url)))
+        await context.apply(.webSocket(.handshakeRequest(
+            id: requestID,
+            request: Network.Request(
+                id: requestID,
+                url: url,
+                method: "GET",
+                headers: ["Upgrade": "websocket"]
+            ),
+            timestamp: requestTimestamp
+        )))
+        await context.apply(.webSocket(.handshakeResponse(
+            id: requestID,
+            response: Network.Response(
+                url: url,
+                status: 101,
+                statusText: "Switching Protocols",
+                headers: ["Upgrade": "websocket"]
+            ),
+            timestamp: responseTimestamp
+        )))
+        return try #require(context.registeredRequest(forProxyID: requestID))
+    }
+
+    private func applyGroupedWebSocket(
+        to context: WebInspectorContext,
+        requestID rawRequestID: String,
+        url: String,
+        frameID: FrameID,
+        initiatorNodeID: DOM.Node.ID,
+        timestamp: Double
+    ) async throws -> NetworkRequest {
+        let requestID = Network.Request.ID(rawRequestID)
+        await context.apply(.requestWillBeSent(
+            id: requestID,
+            request: Network.Request(
+                id: requestID,
+                url: url,
+                method: "GET",
+                headers: ["Upgrade": "websocket"],
+                origin: Network.Request.Origin(
+                    frameID: frameID,
+                    loaderID: "loader",
+                    targetID: "page"
+                )
+            ),
+            initiator: Network.Initiator(kind: "script", nodeID: initiatorNodeID),
+            resourceType: .webSocket,
+            redirectResponse: nil,
+            timestamp: timestamp
+        ))
+        await context.apply(.webSocket(.handshakeResponse(
+            id: requestID,
+            response: Network.Response(
+                url: url,
+                status: 101,
+                statusText: "Switching Protocols",
+                headers: ["Upgrade": "websocket"]
+            ),
+            timestamp: timestamp + 1
+        )))
+        return try #require(context.registeredRequest(forProxyID: requestID))
+    }
+
     private func applyResponseReceived(
         to context: WebInspectorContext,
         requestID rawRequestID: String,
@@ -5443,14 +8285,17 @@ struct NetworkDetailViewControllerTests {
     private func applyLoadingFinished(
         to context: WebInspectorContext,
         requestID rawRequestID: String,
-        timestamp: Double
+        timestamp: Double,
+        requestHeaders: [String: String]? = nil
     ) async {
         await context.apply(
             .loadingFinished(
                 id: Network.Request.ID(rawRequestID),
                 timestamp: timestamp,
                 sourceMapURL: nil,
-                metrics: nil
+                metrics: requestHeaders.map {
+                    Network.Metrics().reporting(requestHeaders: $0)
+                }
             )
         )
     }
@@ -5462,6 +8307,125 @@ struct NetworkDetailViewControllerTests {
         base64Encoded: Bool = false
     ) {
         context.seedResponseBody(for: request.id, body: body, base64Encoded: base64Encoded)
+    }
+
+    private func renderCookies(
+        _ sections: NetworkCookieSections,
+        requestEpoch: NetworkCookiesViewController.RequestEpoch? = nil,
+        in viewController: NetworkCookiesViewController
+    ) async {
+        let requestEpoch = requestEpoch
+            ?? NetworkCookiesViewController.RequestEpoch.testing(viewController)
+        await withCheckedContinuation { continuation in
+            viewController.render(sections, requestEpoch: requestEpoch) {
+                continuation.resume()
+            }
+        }
+        viewController.collectionView.layoutIfNeeded()
+    }
+
+    private func resumeWebSocketPreview(
+        _ viewController: NetworkWebSocketPreviewViewController
+    ) async {
+        await withCheckedContinuation { continuation in
+            viewController.setNextSnapshotApplyCompletionForTesting {
+                continuation.resume()
+            }
+            viewController.resumeRendering()
+        }
+        viewController.collectionView.layoutIfNeeded()
+    }
+
+    private func fireWebSocketRenderingFrame(
+        _ frameScheduler: ManualNetworkFrameScheduler,
+        in viewController: NetworkWebSocketPreviewViewController
+    ) async {
+        await withCheckedContinuation { continuation in
+            viewController.setNextSnapshotApplyCompletionForTesting {
+                continuation.resume()
+            }
+            frameScheduler.fireScheduledFrame()
+        }
+        viewController.collectionView.layoutIfNeeded()
+    }
+
+    private func waitUntilWebSocketPreviewBound(
+        to request: NetworkRequest,
+        webSocket expectedWebSocket: WebSocketState? = nil,
+        in viewController: NetworkDetailViewController
+    ) async -> Bool {
+        let webSocketPreview = viewController.webSocketPreviewViewControllerForTesting
+        guard await waitUntilRendered(in: viewController, {
+            guard webSocketPreview.boundRequestForTesting === request else {
+                return false
+            }
+            guard let expectedWebSocket else {
+                return true
+            }
+            return webSocketPreview.boundWebSocketForTesting === expectedWebSocket
+        }) else {
+            return false
+        }
+        await webSocketPreview.waitForTimelineObservationStartForTesting()
+        webSocketPreview.collectionView.layoutIfNeeded()
+        return webSocketPreview.boundRequestForTesting === request
+            && webSocketPreview.timelineObservationDeliveryForTesting?.isActive == true
+    }
+
+    private func requestCookieName(in viewController: NetworkDetailViewController) -> String? {
+        requestCookieContent(in: viewController)?.fields.first?.value
+    }
+
+    private func requestCookieValue(in viewController: NetworkDetailViewController) -> String? {
+        guard let fields = requestCookieContent(in: viewController)?.fields,
+              fields.indices.contains(1) else {
+            return nil
+        }
+        return fields[1].value
+    }
+
+    private func isRequestCookieItem(
+        _ itemID: NetworkCookiesViewController.ItemID
+    ) -> Bool {
+        if case .requestCookie = itemID {
+            return true
+        }
+        return false
+    }
+
+    private func isResponseCookieItem(
+        _ itemID: NetworkCookiesViewController.ItemID
+    ) -> Bool {
+        if case .responseCookie = itemID {
+            return true
+        }
+        return false
+    }
+
+    private func isCookieStateItem(
+        _ itemID: NetworkCookiesViewController.ItemID,
+        section: NetworkCookiesViewController.SectionID,
+        kind: NetworkCookiesViewController.StateKind
+    ) -> Bool {
+        guard case let .state(_, itemSection, itemKind) = itemID else {
+            return false
+        }
+        return itemSection == section && itemKind == kind
+    }
+
+    private func requestCookieContent(
+        in viewController: NetworkDetailViewController
+    ) -> NetworkCookieRowContent? {
+        let cookies = viewController.cookiesViewControllerForTesting
+        guard let itemID = cookies.snapshotForTesting.itemIdentifiers(inSection: .request).first(where: {
+            if case .requestCookie = $0 {
+                return true
+            }
+            return false
+        }) else {
+            return nil
+        }
+        return cookies.cookieContentForTesting(itemID)
     }
 
     private func selectMode(
@@ -5632,6 +8596,8 @@ struct NetworkDetailViewControllerTests {
             viewController.modelObservationDeliveryForTesting,
             viewController.selectedRequestRenderObservationDeliveryForTesting,
             viewController.responseBodyFetchObservationDeliveryForTesting,
+            viewController.webSocketPreviewViewControllerForTesting
+                .timelineObservationDeliveryForTesting,
         ].compactMap { $0 }
         if let syntaxBodyViewController = viewController.bodyViewControllerForTesting as? NetworkBodyViewController {
             deliveries.append(contentsOf: [
@@ -5679,6 +8645,17 @@ struct NetworkDetailViewControllerTests {
         return bundle.localizedString(forKey: key, value: nil, table: nil)
     }
 
+    private func localized(
+        _ key: StaticString,
+        defaultValue: String.LocalizationValue
+    ) -> String {
+        String(
+            localized: key,
+            defaultValue: defaultValue,
+            bundle: WebInspectorUILocalization.bundle
+        )
+    }
+
     @MainActor
     private final class MoviePreviewPlayerFactorySpy {
         private(set) var players: [StubMoviePreviewPlayer] = []
@@ -5696,11 +8673,13 @@ struct NetworkDetailViewControllerTests {
 private func makeNetworkDetailViewController(
     model: NetworkPanelModel,
     initialMode: NetworkDetailViewController.Mode = .headers,
+    webSocketFrameScheduler: any NetworkFrameScheduling = NetworkDisplayLinkFrameScheduler(),
     makeBodyViewController: @escaping NetworkBodyViewControllerFactory = NetworkBodyPreviewFactory.make(scrollEdgeSink:)
 ) -> NetworkDetailViewController {
     NetworkDetailViewController(
         model: model,
         initialMode: initialMode,
+        webSocketFrameScheduler: webSocketFrameScheduler,
         makeBodyViewController: makeBodyViewController
     )
 }
@@ -5814,9 +8793,10 @@ private final class RecordingNetworkBodyPreviewViewController: UIViewController,
 }
 
 @MainActor
-private final class ManualNetworkListFrameScheduler: NetworkListFrameScheduling {
+private final class ManualNetworkFrameScheduler: NetworkFrameScheduling {
     private var pendingAction: (@MainActor () -> Void)?
     private(set) var scheduledFrameCount = 0
+    private(set) var invalidationCount = 0
 
     var hasScheduledFrame: Bool {
         pendingAction != nil
@@ -5835,12 +8815,13 @@ private final class ManualNetworkListFrameScheduler: NetworkListFrameScheduling 
     }
 
     func invalidate() {
+        invalidationCount += 1
         cancel()
     }
 
     func fireScheduledFrame() {
         guard let action = pendingAction else {
-            preconditionFailure("Expected a scheduled Network list projection frame.")
+            preconditionFailure("Expected a scheduled Network rendering frame.")
         }
         pendingAction = nil
         action()

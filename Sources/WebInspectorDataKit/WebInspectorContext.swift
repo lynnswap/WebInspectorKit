@@ -728,6 +728,7 @@ public final class WebInspectorContext {
         let previousStartupTask = startupTask
         let previousCurrentPageCleanupTask = currentPageCleanupTask
         previousStartupTask?.cancel()
+        stopEventPumps()
         currentPageRetargetTask?.cancel()
         currentPageRetargetTask = nil
         documentReloadTask?.cancel()
@@ -1052,6 +1053,10 @@ public final class WebInspectorContext {
 
     package var eventPumpAppliedSequenceForTesting: UInt64 {
         eventPumpAppliedSequenceForTestingStorage
+    }
+
+    package var networkRequestIndexSequenceForTesting: UInt64 {
+        networkRequestIndexSequence
     }
 
     package var orderedEventSubscriptionStateForTesting: (generation: UInt64, sequence: UInt64) {
@@ -2366,6 +2371,11 @@ public final class WebInspectorContext {
 
         do {
             let target = try await proxy.waitForCurrentPage()
+            guard Task.isCancelled == false,
+                  isCurrentPageGeneration(generation, isolation: isolation),
+                  domDocumentLoad?.id == documentLoadID else {
+                return
+            }
             currentPage = target
             await subscribe(to: target, isolation: isolation)
             await waitForCurrentPageEventSubscriptions(target, isolation: isolation)
@@ -6184,6 +6194,7 @@ extension WebInspectorContext {
                 resourceType: resourceType,
                 timestamp: timestamp,
                 chronologySequence: chronologySequence,
+                requestHeaderSource: .unavailable,
                 modelContext: self
             )
             requestsByID[id] = request
@@ -6246,6 +6257,7 @@ extension WebInspectorContext {
                 resourceType: resourceType,
                 timestamp: timestamp,
                 chronologySequence: chronologySequence,
+                requestHeaderSource: .unavailable,
                 modelContext: self
             )
             requestsByID[id] = request
@@ -6278,21 +6290,25 @@ extension WebInspectorContext {
             guard let networkRequest = networkRequest(for: id, method: "webSocketWillSendHandshakeRequest") else {
                 return
             }
-            networkRequest.applyWebSocketHandshakeRequest(
+            guard networkRequest.applyWebSocketHandshakeRequest(
                 request,
                 timestamp: timestamp,
                 chronologySequence: chronologySequence
-            )
+            ) else {
+                return
+            }
             await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
         case let .handshakeResponse(id, response, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketHandshakeResponseReceived") else {
                 return
             }
-            networkRequest.applyWebSocketHandshakeResponse(
+            guard networkRequest.applyWebSocketHandshakeResponse(
                 response,
                 timestamp: timestamp,
                 chronologySequence: chronologySequence
-            )
+            ) else {
+                return
+            }
             await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
         case let .frameSent(id, frame, timestamp):
             guard let networkRequest = networkRequest(for: id, method: "webSocketFrameSent") else {
@@ -6330,10 +6346,12 @@ extension WebInspectorContext {
             guard let networkRequest = networkRequest(for: id, method: "webSocketClosed") else {
                 return
             }
-            networkRequest.closeWebSocket(
+            guard networkRequest.closeWebSocket(
                 timestamp: timestamp,
                 chronologySequence: chronologySequence
-            )
+            ) else {
+                return
+            }
             await notifyNetworkRequestMutated(networkRequest, isolation: isolation)
         case .other:
             break
@@ -6361,13 +6379,14 @@ extension WebInspectorContext {
                 resourceType: .webSocket,
                 timestamp: nil,
                 chronologySequence: chronologySequence,
+                requestHeaderSource: .unavailable,
                 modelContext: self
             )
             requestsByID[id] = request
             appendNetworkRequestID(id)
             inserted = true
         }
-        request.applyWebSocketCreated(url: url)
+        request.applyWebSocketCreated(url: url, chronologySequence: chronologySequence)
         if inserted {
             await notifyNetworkRequestInserted(request, isolation: isolation)
         } else {

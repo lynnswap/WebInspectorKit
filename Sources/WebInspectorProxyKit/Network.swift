@@ -404,6 +404,9 @@ public enum Network {
         /// The remote address, if WebKit reported one.
         public let remoteAddress: String?
 
+        /// Request headers transmitted over the network, if WebKit reported them.
+        public let requestHeaders: [String: String]?
+
         /// Encoded bytes transferred over the network.
         public let encodedDataLength: Int?
 
@@ -427,7 +430,21 @@ public enum Network {
                 remoteAddress: remoteAddress,
                 encodedDataLength: encodedDataLength,
                 decodedBodyLength: decodedBodyLength,
+                requestHeaders: nil,
                 securityConnection: nil
+            )
+        }
+
+        /// Returns a copy that records request headers reported by WebKit.
+        public func reporting(requestHeaders: [String: String]) -> Metrics {
+            Metrics(
+                timestamp: timestamp,
+                networkProtocol: networkProtocol,
+                remoteAddress: remoteAddress,
+                encodedDataLength: encodedDataLength,
+                decodedBodyLength: decodedBodyLength,
+                requestHeaders: requestHeaders,
+                securityConnection: securityConnection
             )
         }
 
@@ -443,6 +460,7 @@ public enum Network {
                 remoteAddress: remoteAddress,
                 encodedDataLength: encodedDataLength,
                 decodedBodyLength: decodedBodyLength,
+                requestHeaders: requestHeaders,
                 securityConnection: securityConnection
             )
         }
@@ -453,6 +471,7 @@ public enum Network {
             remoteAddress: String? = nil,
             encodedDataLength: Int? = nil,
             decodedBodyLength: Int? = nil,
+            requestHeaders: [String: String]?,
             securityConnection: Security.Connection?
         ) {
             self.timestamp = timestamp
@@ -460,6 +479,7 @@ public enum Network {
             self.remoteAddress = remoteAddress
             self.encodedDataLength = encodedDataLength
             self.decodedBodyLength = decodedBodyLength
+            self.requestHeaders = requestHeaders
             self.securityConnection = securityConnection
         }
     }
