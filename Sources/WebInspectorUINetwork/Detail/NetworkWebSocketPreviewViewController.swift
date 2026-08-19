@@ -62,6 +62,7 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
     private var latestSnapshotApplyGeneration: UInt64 = 0
     private var userScrollRevision: UInt64 = 0
     private var isUserScrolling = false
+    private var isPerformingProgrammaticTailScroll = false
     private var textPayloadCopyHandler: @MainActor (String) -> Void
     private lazy var dataSource = makeDataSource()
     private lazy var byteCountFormatter: ByteCountFormatter = {
@@ -208,14 +209,13 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
     }
 
     override package func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        guard isUserScrolling
-                || scrollView.isTracking
-                || scrollView.isDragging
-                || scrollView.isDecelerating else {
+        guard isPerformingProgrammaticTailScroll == false else {
             return
         }
-        isUserScrolling = true
         advanceUserScrollRevision()
+        if scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating {
+            isUserScrolling = true
+        }
     }
 
     override package func scrollViewDidEndDragging(
@@ -228,6 +228,17 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
     }
 
     override package func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        isUserScrolling = false
+    }
+
+    override package func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
+        isUserScrolling = true
+        advanceUserScrollRevision()
+        return true
+    }
+
+    override package func scrollViewDidScrollToTop(_ scrollView: UIScrollView) {
+        advanceUserScrollRevision()
         isUserScrolling = false
     }
 
@@ -468,6 +479,9 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
             return
         }
         let indexPath = IndexPath(item: renderedEntryIDs.count - 1, section: 0)
+        precondition(isPerformingProgrammaticTailScroll == false)
+        isPerformingProgrammaticTailScroll = true
+        defer { isPerformingProgrammaticTailScroll = false }
         collectionView.scrollToItem(at: indexPath, at: .bottom, animated: false)
 #if DEBUG
         tailScrollCountStorageForTesting += 1

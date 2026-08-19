@@ -1431,6 +1431,7 @@ struct NetworkDetailViewControllerTests {
         viewController.collectionView.layoutIfNeeded()
         #expect(viewController.isFollowingTailForTesting)
         let scrollCountBeforePinnedAppend = viewController.tailScrollCountForTesting
+        let userScrollRevisionBeforePinnedAppend = viewController.userScrollRevisionForTesting
         await context.apply(.webSocket(.frameReceived(
             id: requestID,
             frame: Network.WebSocketFrame(
@@ -1444,7 +1445,7 @@ struct NetworkDetailViewControllerTests {
         await fireWebSocketRenderingFrame(frameScheduler, in: viewController)
         #expect(viewController.tailScrollCountForTesting == scrollCountBeforePinnedAppend + 1)
         #expect(viewController.isFollowingTailForTesting)
-        #expect(viewController.userScrollRevisionForTesting == priorUserScrollRevision)
+        #expect(viewController.userScrollRevisionForTesting == userScrollRevisionBeforePinnedAppend)
 
         let completedApplyGeneration = viewController.snapshotApplyGenerationForTesting
         let userScrollRevisionBeforeDrag = viewController.userScrollRevisionForTesting
@@ -1504,6 +1505,44 @@ struct NetworkDetailViewControllerTests {
             followsTail: true,
             applyGeneration: completedApplyGeneration,
             userScrollRevision: userScrollRevisionBeforeDeceleration
+        )
+        #expect(viewController.tailScrollCountForTesting == scrollCountBeforeDrag)
+
+        #expect(viewController.scrollViewShouldScrollToTop(viewController.collectionView))
+        let userScrollRevisionAtScrollToTopStart = viewController.userScrollRevisionForTesting
+        #expect(viewController.isUserScrollingForTesting)
+        viewController.invokeSnapshotApplyCompletionForTesting(
+            epoch: epoch,
+            followsTail: true,
+            applyGeneration: completedApplyGeneration,
+            userScrollRevision: userScrollRevisionAtScrollToTopStart
+        )
+        #expect(viewController.tailScrollCountForTesting == scrollCountBeforeDrag)
+        viewController.scrollViewDidScrollToTop(viewController.collectionView)
+        #expect(viewController.isUserScrollingForTesting == false)
+        #expect(
+            viewController.userScrollRevisionForTesting
+                > userScrollRevisionAtScrollToTopStart
+        )
+        viewController.invokeSnapshotApplyCompletionForTesting(
+            epoch: epoch,
+            followsTail: true,
+            applyGeneration: completedApplyGeneration,
+            userScrollRevision: userScrollRevisionAtScrollToTopStart
+        )
+        #expect(viewController.tailScrollCountForTesting == scrollCountBeforeDrag)
+
+        let userScrollRevisionBeforeNonDragScroll = viewController.userScrollRevisionForTesting
+        viewController.scrollViewDidScroll(viewController.collectionView)
+        #expect(
+            viewController.userScrollRevisionForTesting
+                > userScrollRevisionBeforeNonDragScroll
+        )
+        viewController.invokeSnapshotApplyCompletionForTesting(
+            epoch: epoch,
+            followsTail: true,
+            applyGeneration: completedApplyGeneration,
+            userScrollRevision: userScrollRevisionBeforeNonDragScroll
         )
         #expect(viewController.tailScrollCountForTesting == scrollCountBeforeDrag)
     }
