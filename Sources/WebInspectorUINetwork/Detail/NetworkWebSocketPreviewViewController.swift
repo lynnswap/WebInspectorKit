@@ -7,7 +7,7 @@ import UIKit
 
 @MainActor
 package final class NetworkWebSocketPreviewViewController: UICollectionViewController {
-    private static let maximumRenderedTextPayloadCharacters = 2_048
+    private static let maximumRenderedTextPayloadUTF8Bytes = 4_096
     private static let maximumTitleLineCount = 8
     private static let textPayloadTruncationMarker = "…"
 
@@ -59,6 +59,9 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
     private var rowContents: [ItemID: RowContent] = [:]
     private var isRenderingActive = false
     private var wasFollowingTailWhenSuspended: Bool?
+    private var latestSnapshotApplyGeneration: UInt64 = 0
+    private var userScrollRevision: UInt64 = 0
+    private var isUserScrolling = false
     private var textPayloadCopyHandler: @MainActor (String) -> Void
     private lazy var dataSource = makeDataSource()
     private lazy var byteCountFormatter: ByteCountFormatter = {
@@ -159,8 +162,10 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
     package func suspendKeepingSnapshot() {
         if isRenderingActive {
             wasFollowingTailWhenSuspended = isFollowingTail
+            _ = advanceSnapshotApplyGeneration()
         }
         isRenderingActive = false
+        isUserScrolling = false
         timelineObservation?.cancel()
         timelineObservation = nil
         cancelTimelineObservationStart()
@@ -179,6 +184,7 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
         renderedEntryIDs = []
         rowContents = [:]
         wasFollowingTailWhenSuspended = nil
+        isUserScrolling = false
         loadViewIfNeeded()
         applyEmptySnapshot()
     }
@@ -194,6 +200,40 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
             return nil
         }
         return contextMenuConfiguration(for: itemID)
+    }
+
+    override package func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        isUserScrolling = true
+        advanceUserScrollRevision()
+    }
+
+    override package func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard isUserScrolling
+                || scrollView.isTracking
+                || scrollView.isDragging
+                || scrollView.isDecelerating else {
+            return
+        }
+        isUserScrolling = true
+        advanceUserScrollRevision()
+    }
+
+    override package func scrollViewDidEndDragging(
+        _ scrollView: UIScrollView,
+        willDecelerate decelerate: Bool
+    ) {
+        if decelerate == false {
+            isUserScrolling = false
+        }
+    }
+
+    override package func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        isUserScrolling = false
+    }
+
+    private func advanceUserScrollRevision() {
+        precondition(userScrollRevision < UInt64.max, "WebSocket preview user-scroll revision overflowed.")
+        userScrollRevision += 1
     }
 
     private static func makeLayout() -> UICollectionViewLayout {
@@ -353,6 +393,8 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
         epoch: RequestEpoch,
         followsTail: Bool
     ) {
+        let applyGeneration = advanceSnapshotApplyGeneration()
+        let userScrollRevision = self.userScrollRevision
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
             guard let self else {
                 return
@@ -363,12 +405,39 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
             nextSnapshotApplyCompletionForTesting = nil
             defer { testCompletion?() }
 #endif
-            snapshotApplyDidFinish(epoch: epoch, followsTail: followsTail)
+            snapshotApplyDidFinish(
+                epoch: epoch,
+                followsTail: followsTail,
+                applyGeneration: applyGeneration,
+                userScrollRevision: userScrollRevision
+            )
         }
     }
 
-    private func snapshotApplyDidFinish(epoch: RequestEpoch, followsTail: Bool) {
-        guard requestEpoch == epoch else {
+    @discardableResult
+    private func advanceSnapshotApplyGeneration() -> UInt64 {
+        precondition(
+            latestSnapshotApplyGeneration < UInt64.max,
+            "WebSocket preview snapshot apply generation overflowed."
+        )
+        latestSnapshotApplyGeneration += 1
+        return latestSnapshotApplyGeneration
+    }
+
+    private func snapshotApplyDidFinish(
+        epoch: RequestEpoch,
+        followsTail: Bool,
+        applyGeneration: UInt64,
+        userScrollRevision: UInt64
+    ) {
+        guard isRenderingActive,
+              requestEpoch == epoch,
+              latestSnapshotApplyGeneration == applyGeneration,
+              self.userScrollRevision == userScrollRevision,
+              isUserScrolling == false,
+              collectionView.isTracking == false,
+              collectionView.isDragging == false,
+              collectionView.isDecelerating == false else {
             return
         }
         if followsTail {
@@ -377,6 +446,12 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
     }
 
     private var isFollowingTail: Bool {
+        guard isUserScrolling == false,
+              collectionView.isTracking == false,
+              collectionView.isDragging == false,
+              collectionView.isDecelerating == false else {
+            return false
+        }
         guard renderedEntryIDs.isEmpty == false else {
             return true
         }
@@ -601,14 +676,31 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
     }
 
     private static func textPayloadTruncationIndex(in payload: String) -> String.Index? {
-        guard let index = payload.index(
-            payload.startIndex,
-            offsetBy: maximumRenderedTextPayloadCharacters,
-            limitedBy: payload.endIndex
-        ), index != payload.endIndex else {
-            return nil
+        let scalars = payload.unicodeScalars
+        var index = scalars.startIndex
+        var encodedByteCount = 0
+        while index != scalars.endIndex {
+            let scalarByteCount = utf8ByteCount(of: scalars[index])
+            guard scalarByteCount <= maximumRenderedTextPayloadUTF8Bytes - encodedByteCount else {
+                return index
+            }
+            encodedByteCount += scalarByteCount
+            index = scalars.index(after: index)
         }
-        return index
+        return nil
+    }
+
+    private static func utf8ByteCount(of scalar: Unicode.Scalar) -> Int {
+        switch scalar.value {
+        case 0..<0x80:
+            return 1
+        case 0..<0x800:
+            return 2
+        case 0..<0x1_0000:
+            return 3
+        default:
+            return 4
+        }
     }
 
     private func configure(
@@ -687,9 +779,6 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
         guard case let .text(payload) = frame.payload else {
             preconditionFailure("A text WebSocket frame must carry a text payload.")
         }
-        guard Self.textPayloadTruncationIndex(in: payload) != nil else {
-            return nil
-        }
         return payload
     }
 
@@ -728,12 +817,16 @@ extension NetworkWebSocketPreviewViewController {
         listLayoutConfiguration
     }
 
-    package static var maximumRenderedTextPayloadCharactersForTesting: Int {
-        maximumRenderedTextPayloadCharacters
+    package static var maximumRenderedTextPayloadUTF8BytesForTesting: Int {
+        maximumRenderedTextPayloadUTF8Bytes
     }
 
     package static var maximumTitleLineCountForTesting: Int {
         maximumTitleLineCount
+    }
+
+    package static func renderedTextPayloadForTesting(_ payload: String) -> String {
+        renderedTextPayload(payload)
     }
 
     package var timelineObservationDeliveryForTesting: PortableObservationTracking.Token? {
@@ -788,6 +881,18 @@ extension NetworkWebSocketPreviewViewController {
         tailScrollCountStorageForTesting
     }
 
+    package var snapshotApplyGenerationForTesting: UInt64 {
+        latestSnapshotApplyGeneration
+    }
+
+    package var userScrollRevisionForTesting: UInt64 {
+        userScrollRevision
+    }
+
+    package var isUserScrollingForTesting: Bool {
+        isUserScrolling
+    }
+
     package var isFollowingTailForTesting: Bool {
         isFollowingTail
     }
@@ -814,9 +919,16 @@ extension NetworkWebSocketPreviewViewController {
 
     package func invokeSnapshotApplyCompletionForTesting(
         epoch: RequestEpoch,
-        followsTail: Bool
+        followsTail: Bool,
+        applyGeneration: UInt64,
+        userScrollRevision: UInt64
     ) {
-        snapshotApplyDidFinish(epoch: epoch, followsTail: followsTail)
+        snapshotApplyDidFinish(
+            epoch: epoch,
+            followsTail: followsTail,
+            applyGeneration: applyGeneration,
+            userScrollRevision: userScrollRevision
+        )
     }
 
     package func setDeinitHandlerForTesting(_ handler: @escaping @MainActor () -> Void) {

@@ -956,6 +956,11 @@ struct NetworkDetailViewControllerTests {
             defaultValue: "Text Frame",
             bundle: WebInspectorUILocalization.bundle
         )
+        let copy = String(
+            localized: "Copy",
+            defaultValue: "Copy",
+            bundle: WebInspectorUILocalization.bundle
+        )
         let handshakeResponse = String(
             localized: "network.websocket.handshake.response",
             defaultValue: "WebSocket Handshake Response",
@@ -974,9 +979,11 @@ struct NetworkDetailViewControllerTests {
         #expect(contents[2].subtitle.contains("+5 ms"))
         #expect(contents[2].accessibilityLabel == "hello\nworld")
         #expect(contents[2].accessibilityValue == contents[2].subtitle)
+        #expect(viewController.contextMenuConfigurationForTesting(itemIDs[2]) != nil)
         #expect(contents[3].style == .received)
         #expect(contents[3].symbolName == "arrow.down")
         #expect(contents[3].title.contains(13.formatted()))
+        #expect(viewController.contextMenuConfigurationForTesting(itemIDs[3]) == nil)
         #expect(contents[8].title.contains("15"))
         #expect(contents[9].style == .error)
         #expect(contents[9].title == "decode failed")
@@ -1009,6 +1016,7 @@ struct NetworkDetailViewControllerTests {
         )
         #expect(configuration.textProperties.adjustsFontForContentSizeCategory)
         #expect(configuration.secondaryTextProperties.numberOfLines == 0)
+        #expect(textCell.accessibilityCustomActions?.map(\.name) == [copy])
         viewController.collectionView.semanticContentAttribute = .forceRightToLeft
         #expect(viewController.collectionView.effectiveUserInterfaceLayoutDirection == .rightToLeft)
     }
@@ -1021,11 +1029,17 @@ struct NetworkDetailViewControllerTests {
             requestID: "ws-large-text",
             url: "wss://example.com/large-text"
         )
-        let limit = NetworkWebSocketPreviewViewController
-            .maximumRenderedTextPayloadCharactersForTesting
-        let payload = String(repeating: "a", count: limit - 1)
-            + "👩🏽‍💻"
-            + String(repeating: "z", count: 1_000_000)
+        let byteLimit = NetworkWebSocketPreviewViewController
+            .maximumRenderedTextPayloadUTF8BytesForTesting
+        let scalarBoundaryPayload = String(repeating: "a", count: byteLimit - 1)
+            + "💡"
+            + "scalar-boundary-tail"
+        let scalarBoundarySummary = NetworkWebSocketPreviewViewController
+            .renderedTextPayloadForTesting(scalarBoundaryPayload)
+        #expect(scalarBoundarySummary == String(repeating: "a", count: byteLimit - 1) + "…")
+        #expect(scalarBoundarySummary.contains("�") == false)
+        let payload = "a"
+            + String(repeating: "\u{0301}", count: 1_000_000)
             + "full-payload-tail"
         await context.apply(.webSocket(.frameReceived(
             id: request.proxyID,
@@ -1042,8 +1056,8 @@ struct NetworkDetailViewControllerTests {
             frame: Network.WebSocketFrame(
                 opcode: 2,
                 mask: false,
-                payloadData: String(repeating: "QQ==", count: limit),
-                payloadLength: limit * 3
+                payloadData: String(repeating: "QQ==", count: byteLimit),
+                payloadLength: byteLimit * 3
             ),
             timestamp: 13
         )))
@@ -1068,8 +1082,9 @@ struct NetworkDetailViewControllerTests {
         let textItemID = try #require(itemIDs.dropLast().last)
         let binaryItemID = try #require(itemIDs.last)
         let content = try #require(viewController.rowContentForTesting(textItemID))
-        #expect(content.title.count == limit + 1)
-        #expect(content.title.hasSuffix("👩🏽‍💻…"))
+        #expect(content.title.utf8.count <= byteLimit + "…".utf8.count)
+        #expect(Array(content.title.unicodeScalars.prefix(2).map(\.value)) == [0x61, 0x301])
+        #expect(content.title.hasSuffix("…"))
         #expect(content.title.contains("full-payload-tail") == false)
         #expect(content.accessibilityLabel == content.title)
         #expect(content.accessibilityValue.contains("full-payload-tail") == false)
@@ -1371,6 +1386,9 @@ struct NetworkDetailViewControllerTests {
         await resumeWebSocketPreview(viewController)
         #expect(viewController.tailScrollCountForTesting == 1)
         #expect(viewController.isFollowingTailForTesting)
+        let epoch = try #require(viewController.requestEpochForTesting)
+        let priorApplyGeneration = viewController.snapshotApplyGenerationForTesting
+        let priorUserScrollRevision = viewController.userScrollRevisionForTesting
 
         viewController.collectionView.setContentOffset(
             CGPoint(x: 0, y: -viewController.collectionView.adjustedContentInset.top),
@@ -1393,6 +1411,13 @@ struct NetworkDetailViewControllerTests {
         await fireWebSocketRenderingFrame(frameScheduler, in: viewController)
         #expect(viewController.tailScrollCountForTesting == scrollCountBeforeUnpinnedAppend)
         #expect(abs(viewController.collectionView.contentOffset.y - offsetBeforeUnpinnedAppend) < 0.5)
+        viewController.invokeSnapshotApplyCompletionForTesting(
+            epoch: epoch,
+            followsTail: true,
+            applyGeneration: priorApplyGeneration,
+            userScrollRevision: priorUserScrollRevision
+        )
+        #expect(viewController.tailScrollCountForTesting == scrollCountBeforeUnpinnedAppend)
 
         let lastIndexPath = IndexPath(
             item: viewController.snapshotForTesting.itemIdentifiers.count - 1,
@@ -1419,6 +1444,68 @@ struct NetworkDetailViewControllerTests {
         await fireWebSocketRenderingFrame(frameScheduler, in: viewController)
         #expect(viewController.tailScrollCountForTesting == scrollCountBeforePinnedAppend + 1)
         #expect(viewController.isFollowingTailForTesting)
+        #expect(viewController.userScrollRevisionForTesting == priorUserScrollRevision)
+
+        let completedApplyGeneration = viewController.snapshotApplyGenerationForTesting
+        let userScrollRevisionBeforeDrag = viewController.userScrollRevisionForTesting
+        let scrollCountBeforeDrag = viewController.tailScrollCountForTesting
+        viewController.scrollViewWillBeginDragging(viewController.collectionView)
+        viewController.invokeSnapshotApplyCompletionForTesting(
+            epoch: epoch,
+            followsTail: true,
+            applyGeneration: completedApplyGeneration,
+            userScrollRevision: userScrollRevisionBeforeDrag
+        )
+        #expect(viewController.tailScrollCountForTesting == scrollCountBeforeDrag)
+
+        let userScrollRevisionAtDragStart = viewController.userScrollRevisionForTesting
+        #expect(viewController.isUserScrollingForTesting)
+        viewController.invokeSnapshotApplyCompletionForTesting(
+            epoch: epoch,
+            followsTail: true,
+            applyGeneration: completedApplyGeneration,
+            userScrollRevision: userScrollRevisionAtDragStart
+        )
+        #expect(viewController.tailScrollCountForTesting == scrollCountBeforeDrag)
+        viewController.scrollViewDidScroll(viewController.collectionView)
+        #expect(viewController.userScrollRevisionForTesting > userScrollRevisionAtDragStart)
+        viewController.scrollViewDidEndDragging(
+            viewController.collectionView,
+            willDecelerate: false
+        )
+        #expect(viewController.isUserScrollingForTesting == false)
+        viewController.invokeSnapshotApplyCompletionForTesting(
+            epoch: epoch,
+            followsTail: true,
+            applyGeneration: completedApplyGeneration,
+            userScrollRevision: userScrollRevisionAtDragStart
+        )
+        #expect(viewController.tailScrollCountForTesting == scrollCountBeforeDrag)
+
+        viewController.scrollViewWillBeginDragging(viewController.collectionView)
+        let userScrollRevisionBeforeDeceleration = viewController.userScrollRevisionForTesting
+        viewController.scrollViewDidEndDragging(
+            viewController.collectionView,
+            willDecelerate: true
+        )
+        #expect(viewController.isUserScrollingForTesting)
+        viewController.invokeSnapshotApplyCompletionForTesting(
+            epoch: epoch,
+            followsTail: true,
+            applyGeneration: completedApplyGeneration,
+            userScrollRevision: userScrollRevisionBeforeDeceleration
+        )
+        #expect(viewController.tailScrollCountForTesting == scrollCountBeforeDrag)
+        viewController.scrollViewDidScroll(viewController.collectionView)
+        viewController.scrollViewDidEndDecelerating(viewController.collectionView)
+        #expect(viewController.isUserScrollingForTesting == false)
+        viewController.invokeSnapshotApplyCompletionForTesting(
+            epoch: epoch,
+            followsTail: true,
+            applyGeneration: completedApplyGeneration,
+            userScrollRevision: userScrollRevisionBeforeDeceleration
+        )
+        #expect(viewController.tailScrollCountForTesting == scrollCountBeforeDrag)
     }
 
     @Test
@@ -1608,6 +1695,13 @@ struct NetworkDetailViewControllerTests {
         )
         let snapshotBeforeHide = viewController.webSocketPreviewViewControllerForTesting
             .snapshotForTesting.itemIdentifiers
+        let requestEpochBeforeHide = try #require(
+            viewController.webSocketPreviewViewControllerForTesting.requestEpochForTesting
+        )
+        let applyGenerationBeforeHide = viewController.webSocketPreviewViewControllerForTesting
+            .snapshotApplyGenerationForTesting
+        let userScrollRevisionBeforeHide = viewController.webSocketPreviewViewControllerForTesting
+            .userScrollRevisionForTesting
 
         viewController.beginAppearanceTransition(false, animated: false)
         viewController.endAppearanceTransition()
@@ -1643,10 +1737,27 @@ struct NetworkDetailViewControllerTests {
             viewController.webSocketPreviewViewControllerForTesting
                 .timelineObservationDeliveryForTesting?.isActive == true
         )
+        let tailScrollCountAfterResume = viewController.webSocketPreviewViewControllerForTesting
+            .tailScrollCountForTesting
+        viewController.webSocketPreviewViewControllerForTesting
+            .invokeSnapshotApplyCompletionForTesting(
+                epoch: requestEpochBeforeHide,
+                followsTail: true,
+                applyGeneration: applyGenerationBeforeHide,
+                userScrollRevision: userScrollRevisionBeforeHide
+            )
+        #expect(
+            viewController.webSocketPreviewViewControllerForTesting
+                .tailScrollCountForTesting == tailScrollCountAfterResume
+        )
 
         let firstRequestEpoch = try #require(
             viewController.webSocketPreviewViewControllerForTesting.requestEpochForTesting
         )
+        let firstApplyGeneration = viewController.webSocketPreviewViewControllerForTesting
+            .snapshotApplyGenerationForTesting
+        let firstUserScrollRevision = viewController.webSocketPreviewViewControllerForTesting
+            .userScrollRevisionForTesting
         model.selectRequest(second)
         #expect(await waitUntilWebSocketPreviewBound(to: second, in: viewController))
         #expect(
@@ -1658,7 +1769,9 @@ struct NetworkDetailViewControllerTests {
         viewController.webSocketPreviewViewControllerForTesting
             .invokeSnapshotApplyCompletionForTesting(
                 epoch: firstRequestEpoch,
-                followsTail: true
+                followsTail: true,
+                applyGeneration: firstApplyGeneration,
+                userScrollRevision: firstUserScrollRevision
             )
         #expect(
             viewController.webSocketPreviewViewControllerForTesting
