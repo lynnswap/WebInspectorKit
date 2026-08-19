@@ -8,10 +8,11 @@ extension NetworkDetailViewController {
     package enum Mode: CaseIterable, Hashable {
         case preview
         case headers
+        case security
         case cookies
 
         nonisolated package static var allCases: [NetworkDetailViewController.Mode] {
-            [.headers, .preview, .cookies]
+            [.headers, .preview, .cookies, .security]
         }
 
         package var title: String {
@@ -20,6 +21,12 @@ extension NetworkDetailViewController {
                 String(localized: "network.detail.mode.preview", defaultValue: "Preview", bundle: WebInspectorUILocalization.bundle)
             case .headers:
                 String(localized: "network.section.headers", defaultValue: "Headers", bundle: WebInspectorUILocalization.bundle)
+            case .security:
+                String(
+                    localized: "network.detail.mode.security",
+                    defaultValue: "Security",
+                    bundle: WebInspectorUILocalization.bundle
+                )
             case .cookies:
                 String(localized: "network.detail.mode.cookies", defaultValue: "Cookies", bundle: WebInspectorUILocalization.bundle)
             }

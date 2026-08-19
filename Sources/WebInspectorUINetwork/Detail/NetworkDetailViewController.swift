@@ -83,6 +83,7 @@ package final class NetworkDetailViewController: UIViewController {
     private var isRenderingActive = false
     private var isBodyRenderingActive = false
     private lazy var bodyViewController = makeBodyViewController(scrollEdgeController)
+    private lazy var securityViewController = NetworkSecurityViewController()
     private lazy var cookiesViewController = NetworkCookiesViewController()
     private let webSocketPreviewViewController: NetworkWebSocketPreviewViewController
     private lazy var modeControlController: NetworkDetailModeControlController = {
@@ -293,6 +294,8 @@ package final class NetworkDetailViewController: UIViewController {
         view.backgroundColor = backgroundColor
         bodyViewController.view.backgroundColor = backgroundColor
         headersTextView.backgroundColor = backgroundColor
+        securityViewController.view.backgroundColor = backgroundColor
+        securityViewController.collectionView.backgroundColor = backgroundColor
         cookiesViewController.view.backgroundColor = backgroundColor
         webSocketPreviewViewController.view.backgroundColor = backgroundColor
         webSocketPreviewViewController.collectionView.backgroundColor = backgroundColor
@@ -300,11 +303,13 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func installContentViews() {
         addChild(bodyViewController)
+        addChild(securityViewController)
         addChild(cookiesViewController)
         addChild(webSocketPreviewViewController)
         view.addSubview(bodyViewController.view)
         view.addSubview(previewRoleControlController.containerView)
         view.addSubview(headersTextView)
+        view.addSubview(securityViewController.view)
         view.addSubview(cookiesViewController.view)
         view.addSubview(webSocketPreviewViewController.view)
         bodyViewController.view.translatesAutoresizingMaskIntoConstraints = false
@@ -315,7 +320,10 @@ package final class NetworkDetailViewController: UIViewController {
         webSocketPreviewViewController.view.translatesAutoresizingMaskIntoConstraints = false
         webSocketPreviewViewController.view.isHidden = true
         previewRoleControlController.containerView.translatesAutoresizingMaskIntoConstraints = false
+        securityViewController.view.translatesAutoresizingMaskIntoConstraints = false
+        securityViewController.view.isHidden = true
         bodyViewController.didMove(toParent: self)
+        securityViewController.didMove(toParent: self)
         cookiesViewController.didMove(toParent: self)
         webSocketPreviewViewController.didMove(toParent: self)
 
@@ -346,6 +354,14 @@ package final class NetworkDetailViewController: UIViewController {
             headersTextView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
             headersTextView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
             headersTextView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            securityViewController.view.topAnchor.constraint(equalTo: view.topAnchor),
+            securityViewController.view.leadingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.leadingAnchor
+            ),
+            securityViewController.view.trailingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.trailingAnchor
+            ),
+            securityViewController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             cookiesViewController.view.topAnchor.constraint(equalTo: view.topAnchor),
             cookiesViewController.view.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
             cookiesViewController.view.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
@@ -530,6 +546,10 @@ package final class NetworkDetailViewController: UIViewController {
                 }
                 renderHeadersSurface(request: request)
             }
+        case .security:
+            renderSecuritySurface(
+                request: activeRequest(for: selection, requests: requests)
+            )
         case .cookies:
             renderCookiesSurface(request: activeRequest(for: selection, requests: requests))
         }
@@ -597,6 +617,16 @@ package final class NetworkDetailViewController: UIViewController {
         cookiesViewController.render(
             request.cookieSections,
             requestEpoch: NetworkCookiesViewController.RequestEpoch(request: request)
+        )
+    }
+
+    private func renderSecuritySurface(request: NetworkRequest) {
+        observedRequest = request
+        title = request.displayName
+        showSecurity()
+        securityViewController.render(
+            request.securitySummary,
+            epoch: NetworkSecurityRequestEpoch(request: request)
         )
     }
 
@@ -760,6 +790,8 @@ package final class NetworkDetailViewController: UIViewController {
         previewRoleControlController.containerView.isHidden = true
         headersTextView.isHidden = true
         headersTextView.clear()
+        securityViewController.view.isHidden = true
+        securityViewController.clear()
         cookiesViewController.view.isHidden = true
         cookiesViewController.clear()
         webSocketPreviewViewController.view.isHidden = true
@@ -781,6 +813,7 @@ package final class NetworkDetailViewController: UIViewController {
         webSocketPreviewViewController.suspendKeepingSnapshot()
         webSocketPreviewViewController.view.isHidden = true
         headersTextView.isHidden = true
+        securityViewController.view.isHidden = true
         cookiesViewController.view.isHidden = true
         bodyViewController.view.isHidden = false
     }
@@ -795,6 +828,7 @@ package final class NetworkDetailViewController: UIViewController {
         scrollEdgeController.isPreviewRoleControlVisible = false
         bodyViewController.setSurface(.none)
         headersTextView.isHidden = false
+        securityViewController.view.isHidden = true
         cookiesViewController.view.isHidden = true
         scrollEdgeController.contentScrollView = headersTextView.contentScrollView
     }
@@ -809,8 +843,26 @@ package final class NetworkDetailViewController: UIViewController {
         scrollEdgeController.isPreviewRoleControlVisible = false
         bodyViewController.setSurface(.none)
         headersTextView.isHidden = true
+        securityViewController.view.isHidden = true
         cookiesViewController.view.isHidden = false
         scrollEdgeController.contentScrollView = cookiesViewController.collectionView
+    }
+
+    private func showSecurity() {
+        webSocketPreviewViewController.suspendKeepingSnapshot()
+        webSocketPreviewViewController.view.isHidden = true
+        setBodyRenderingActive(false)
+        bodyViewController.view.isHidden = true
+        bodyViewController.setSurface(.none)
+        unbindResponseBodyFetchObservation()
+        previewRoleControlController.containerView.isHidden = true
+        renderPreviewRoleControl(roles: [], selectedRole: nil)
+        updatePreviewRoleControlLayout(isVisible: false)
+        scrollEdgeController.isPreviewRoleControlVisible = false
+        headersTextView.isHidden = true
+        cookiesViewController.view.isHidden = true
+        securityViewController.view.isHidden = false
+        scrollEdgeController.contentScrollView = securityViewController.collectionView
     }
 
     private func showWebSocketPreview() {
@@ -820,7 +872,10 @@ package final class NetworkDetailViewController: UIViewController {
         unbindResponseBodyFetchObservation()
         previewRoleControlController.containerView.isHidden = true
         renderPreviewRoleControl(roles: [], selectedRole: nil)
+        updatePreviewRoleControlLayout(isVisible: false)
+        scrollEdgeController.isPreviewRoleControlVisible = false
         headersTextView.isHidden = true
+        securityViewController.view.isHidden = true
         cookiesViewController.view.isHidden = true
         webSocketPreviewViewController.view.isHidden = false
         scrollEdgeController.contentScrollView = webSocketPreviewViewController.collectionView
@@ -1215,6 +1270,10 @@ extension NetworkDetailViewController {
         headersTextView
     }
 
+    var securityViewControllerForTesting: NetworkSecurityViewController {
+        securityViewController
+    }
+
     var cookiesViewControllerForTesting: NetworkCookiesViewController {
         cookiesViewController
     }
@@ -1241,6 +1300,26 @@ extension NetworkDetailViewController {
 
     var isDetailModeControlEnabledForTesting: Bool {
         modeControlController.isEnabledForTesting
+    }
+
+    var detailModeControlViewForTesting: NetworkDetailModeControlView {
+        modeControlController.view
+    }
+
+    var detailModeControlPresentationForTesting: NetworkDetailModeControlView.Presentation {
+        modeControlController.presentationForTesting
+    }
+
+    var detailModeSegmentedControlForTesting: UISegmentedControl {
+        modeControlController.segmentedControlForTesting
+    }
+
+    var detailModeMenuButtonForTesting: UIButton {
+        modeControlController.menuButtonForTesting
+    }
+
+    var detailModeMenuActionTitlesForTesting: [String] {
+        modeControlController.menuActionTitlesForTesting
     }
 
     var isPreviewRoleControlHiddenForTesting: Bool {

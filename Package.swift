@@ -131,6 +131,7 @@ let package = Package(
             name: "WebInspectorUINetwork",
             dependencies: [
                 "WebInspectorDataKit",
+                "WebInspectorProxyKit",
                 "WebInspectorUIBase",
                 .product(name: "ObservationBridge", package: "ObservationBridge"),
                 .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS]))

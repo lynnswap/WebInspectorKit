@@ -5,40 +5,174 @@ import UIKit
 
 @MainActor
 final class NetworkDetailModeControlController {
-    let view: UISegmentedControl
+    let view: NetworkDetailModeControlView
     var selectionHandler: ((NetworkDetailViewController.Mode) -> Void)?
+    private let segmentedControl: UISegmentedControl
+    private let menuButton: UIButton
     private var mode: NetworkDetailViewController.Mode
     private var isEnabled = false
 
     init(initialMode: NetworkDetailViewController.Mode) {
         mode = initialMode
-        view = UISegmentedControl(items: NetworkDetailViewController.Mode.allCases.map(\.title))
-        view.selectedSegmentIndex = Self.index(for: initialMode)
-        view.accessibilityIdentifier = "WebInspector.Network.DetailModeSegmentedControl"
-        view.addTarget(self, action: #selector(valueChanged(_:)), for: .valueChanged)
+        let segmentedControl = UISegmentedControl(
+            items: NetworkDetailViewController.Mode.allCases.map(\.title)
+        )
+        segmentedControl.accessibilityIdentifier = "WebInspector.Network.DetailModeSegmentedControl"
+        let menuButton = UIButton(type: .system)
+        menuButton.accessibilityIdentifier = "WebInspector.Network.DetailModeMenuButton"
+        menuButton.showsMenuAsPrimaryAction = true
+        self.segmentedControl = segmentedControl
+        self.menuButton = menuButton
+        view = NetworkDetailModeControlView(
+            segmentedControl: segmentedControl,
+            menuButton: menuButton
+        )
+        view.presentationChangeHandler = { [weak self] in
+            self?.renderControls()
+        }
+        segmentedControl.addTarget(self, action: #selector(valueChanged(_:)), for: .valueChanged)
+        renderControls()
     }
 
     func render(mode: NetworkDetailViewController.Mode, isEnabled: Bool) {
         self.mode = mode
         self.isEnabled = isEnabled
-        view.isEnabled = isEnabled
-        view.selectedSegmentIndex = Self.index(for: mode)
-        view.accessibilityLabel = mode.title
-        for index in NetworkDetailViewController.Mode.allCases.indices {
-            view.setEnabled(isEnabled, forSegmentAt: index)
-        }
+        renderControls()
     }
 
     @objc private func valueChanged(_ sender: UISegmentedControl) {
         guard NetworkDetailViewController.Mode.allCases.indices.contains(sender.selectedSegmentIndex) else {
-            render(mode: mode, isEnabled: isEnabled)
+            renderControls()
             return
         }
-        selectionHandler?(NetworkDetailViewController.Mode.allCases[sender.selectedSegmentIndex])
+        select(NetworkDetailViewController.Mode.allCases[sender.selectedSegmentIndex])
+    }
+
+    private func select(_ selectedMode: NetworkDetailViewController.Mode) {
+        guard isEnabled else {
+            renderControls()
+            return
+        }
+        selectionHandler?(selectedMode)
+    }
+
+    private func renderControls() {
+        let accessibilityLabel = String(
+            localized: "network.detail.mode.label",
+            defaultValue: "Detail Mode",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        segmentedControl.isEnabled = isEnabled
+        segmentedControl.selectedSegmentIndex = Self.index(for: mode)
+        segmentedControl.accessibilityLabel = accessibilityLabel
+        segmentedControl.accessibilityValue = mode.title
+        for index in NetworkDetailViewController.Mode.allCases.indices {
+            segmentedControl.setEnabled(isEnabled, forSegmentAt: index)
+        }
+
+        var buttonConfiguration = menuButton.configuration ?? .plain()
+        buttonConfiguration.title = mode.title
+        buttonConfiguration.image = UIImage(systemName: "chevron.down")
+        buttonConfiguration.imagePlacement = .trailing
+        buttonConfiguration.imagePadding = 6
+        menuButton.configuration = buttonConfiguration
+        menuButton.isEnabled = isEnabled
+        menuButton.accessibilityLabel = accessibilityLabel
+        menuButton.accessibilityValue = mode.title
+        menuButton.menu = UIMenu(
+            options: .singleSelection,
+            children: NetworkDetailViewController.Mode.allCases.map { candidate in
+                UIAction(
+                    title: candidate.title,
+                    state: candidate == mode ? .on : .off
+                ) { [weak self] _ in
+                    self?.select(candidate)
+                }
+            }
+        )
+        view.invalidateIntrinsicContentSize()
     }
 
     private static func index(for mode: NetworkDetailViewController.Mode) -> Int {
         NetworkDetailViewController.Mode.allCases.firstIndex(of: mode) ?? UISegmentedControl.noSegment
+    }
+}
+
+@MainActor
+final class NetworkDetailModeControlView: UIView {
+    enum Presentation: Equatable {
+        case segmented
+        case menu
+    }
+
+    var presentationChangeHandler: (() -> Void)?
+    private(set) var presentation: Presentation
+    private let segmentedControl: UISegmentedControl
+    private let menuButton: UIButton
+
+    init(segmentedControl: UISegmentedControl, menuButton: UIButton) {
+        self.segmentedControl = segmentedControl
+        self.menuButton = menuButton
+        presentation = Self.presentation(for: UITraitCollection())
+        super.init(frame: .zero)
+        let stackView = UIStackView(arrangedSubviews: [segmentedControl, menuButton])
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stackView)
+        NSLayoutConstraint.activate([
+            stackView.topAnchor.constraint(equalTo: topAnchor),
+            stackView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stackView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stackView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        updatePresentation()
+        registerForTraitChanges([
+            UITraitHorizontalSizeClass.self,
+            UITraitPreferredContentSizeCategory.self,
+        ]) { (self: NetworkDetailModeControlView, _) in
+            self.updatePresentation()
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override var intrinsicContentSize: CGSize {
+        activeControl.intrinsicContentSize
+    }
+
+    override func sizeThatFits(_ size: CGSize) -> CGSize {
+        activeControl.sizeThatFits(size)
+    }
+
+    private var activeControl: UIControl {
+        switch presentation {
+        case .segmented:
+            segmentedControl
+        case .menu:
+            menuButton
+        }
+    }
+
+    private func updatePresentation() {
+        let nextPresentation = Self.presentation(for: traitCollection)
+        let didChange = presentation != nextPresentation
+        presentation = nextPresentation
+        segmentedControl.isHidden = presentation != .segmented
+        menuButton.isHidden = presentation != .menu
+        invalidateIntrinsicContentSize()
+        if didChange {
+            presentationChangeHandler?()
+        }
+    }
+
+    private static func presentation(for traitCollection: UITraitCollection) -> Presentation {
+        if traitCollection.horizontalSizeClass == .regular,
+           traitCollection.preferredContentSizeCategory.isAccessibilityCategory == false {
+            return .segmented
+        }
+        return .menu
     }
 }
 
@@ -169,16 +303,31 @@ final class NetworkDetailSegmentedControlContentView: UIView {
 #if DEBUG
 extension NetworkDetailModeControlController {
     var isEnabledForTesting: Bool {
-        view.isEnabled
+        isEnabled
     }
 
     func isModeEnabledForTesting(_ mode: NetworkDetailViewController.Mode) -> Bool {
-        view.isEnabledForSegment(at: Self.index(for: mode))
+        NetworkDetailViewController.Mode.allCases.contains(mode) && isEnabled
     }
 
     func selectModeForTesting(_ mode: NetworkDetailViewController.Mode) {
-        view.selectedSegmentIndex = Self.index(for: mode)
-        valueChanged(view)
+        select(mode)
+    }
+
+    var presentationForTesting: NetworkDetailModeControlView.Presentation {
+        view.presentation
+    }
+
+    var segmentedControlForTesting: UISegmentedControl {
+        segmentedControl
+    }
+
+    var menuButtonForTesting: UIButton {
+        menuButton
+    }
+
+    var menuActionTitlesForTesting: [String] {
+        menuButton.menu?.children.compactMap { ($0 as? UIAction)?.title } ?? []
     }
 }
 
