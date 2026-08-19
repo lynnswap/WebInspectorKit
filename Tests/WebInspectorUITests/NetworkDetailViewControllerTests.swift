@@ -2986,7 +2986,13 @@ struct NetworkDetailViewControllerTests {
                 == securityItems
         )
         #expect(viewController.selectedRequestRenderCountForTesting == renderCount)
+        await fixture.runtime.backend.enqueue((), for: "Console", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Runtime", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Network", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Page", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Inspector", method: "disable")
         await context.stop()
+        #expect(context.state == .detached)
     }
 
     @Test
