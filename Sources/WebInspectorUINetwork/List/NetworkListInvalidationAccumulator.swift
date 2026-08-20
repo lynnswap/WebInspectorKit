@@ -1,18 +1,18 @@
 #if canImport(UIKit)
-package struct NetworkListFrameRequest: Sendable {}
+struct NetworkListFrameRequest: Sendable {}
 
-package actor NetworkListInvalidationAccumulator {
-    package nonisolated let frameRequests: AsyncStream<NetworkListFrameRequest>
+actor NetworkListInvalidationAccumulator {
+    nonisolated let frameRequests: AsyncStream<NetworkListFrameRequest>
 
     private let frameRequestContinuation: AsyncStream<NetworkListFrameRequest>.Continuation
     private var latestVersion: NetworkPanelListVersion?
     private var lastCapturedRevision: UInt64 = 0
-    private var frameRequestOutstanding = false
+    private var outstandingRevision: UInt64?
 #if DEBUG
     private var frameRequestPublicationCount = 0
 #endif
 
-    package init() {
+    init() {
         let pair = AsyncStream<NetworkListFrameRequest>.makeStream(
             bufferingPolicy: .bufferingNewest(1)
         )
@@ -20,7 +20,7 @@ package actor NetworkListInvalidationAccumulator {
         frameRequestContinuation = pair.continuation
     }
 
-    package func consume(
+    func consume(
         _ invalidations: AsyncStream<NetworkPanelListInvalidation>
     ) async {
         for await invalidation in invalidations {
@@ -28,9 +28,12 @@ package actor NetworkListInvalidationAccumulator {
         }
     }
 
-    package func didCapture(_ version: NetworkPanelListVersion) {
+    func didCapture(_ version: NetworkPanelListVersion) {
         lastCapturedRevision = max(lastCapturedRevision, version.revision)
-        frameRequestOutstanding = false
+        if let outstandingRevision,
+           version.revision >= outstandingRevision {
+            self.outstandingRevision = nil
+        }
         requestFrameIfNeeded()
     }
 
@@ -48,10 +51,10 @@ package actor NetworkListInvalidationAccumulator {
     private func requestFrameIfNeeded() {
         guard let latestVersion,
               latestVersion.revision > lastCapturedRevision,
-              frameRequestOutstanding == false else {
+              outstandingRevision == nil else {
             return
         }
-        frameRequestOutstanding = true
+        outstandingRevision = latestVersion.revision
 #if DEBUG
         frameRequestPublicationCount += 1
 #endif
@@ -65,22 +68,22 @@ package actor NetworkListInvalidationAccumulator {
 
 #if DEBUG
 extension NetworkListInvalidationAccumulator {
-    package struct StateForTesting: Equatable, Sendable {
-        package let latestVersion: NetworkPanelListVersion?
-        package let lastCapturedRevision: UInt64
-        package let frameRequestOutstanding: Bool
-        package let frameRequestPublicationCount: Int
+    struct StateForTesting: Equatable, Sendable {
+        let latestVersion: NetworkPanelListVersion?
+        let lastCapturedRevision: UInt64
+        let outstandingRevision: UInt64?
+        let frameRequestPublicationCount: Int
     }
 
-    package func receiveForTesting(_ invalidation: NetworkPanelListInvalidation) {
+    func receiveForTesting(_ invalidation: NetworkPanelListInvalidation) {
         receive(invalidation)
     }
 
-    package var stateForTesting: StateForTesting {
+    var stateForTesting: StateForTesting {
         StateForTesting(
             latestVersion: latestVersion,
             lastCapturedRevision: lastCapturedRevision,
-            frameRequestOutstanding: frameRequestOutstanding,
+            outstandingRevision: outstandingRevision,
             frameRequestPublicationCount: frameRequestPublicationCount
         )
     }

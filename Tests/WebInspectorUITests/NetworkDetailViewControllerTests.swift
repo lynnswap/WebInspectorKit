@@ -6523,7 +6523,7 @@ struct NetworkDetailViewControllerTests {
             entryIdentityGeneration: 1
         ))
         #expect(state.frameRequestPublicationCount == 1)
-        #expect(state.frameRequestOutstanding)
+        #expect(state.outstandingRevision == 1)
 
         await accumulator.didCapture(NetworkPanelListVersion(
             revision: 2_305,
@@ -6531,7 +6531,37 @@ struct NetworkDetailViewControllerTests {
         ))
         state = await accumulator.stateForTesting
         #expect(state.frameRequestPublicationCount == 1)
-        #expect(state.frameRequestOutstanding == false)
+        #expect(state.outstandingRevision == nil)
+    }
+
+    @Test
+    func staleListCaptureAcknowledgementCannotClearANewerFrameRequest() async {
+        let accumulator = NetworkListInvalidationAccumulator()
+        let version1 = NetworkPanelListVersion(revision: 1, entryIdentityGeneration: 0)
+        let version2 = NetworkPanelListVersion(revision: 2, entryIdentityGeneration: 0)
+        let version3 = NetworkPanelListVersion(revision: 3, entryIdentityGeneration: 1)
+
+        await accumulator.receiveForTesting(NetworkPanelListInvalidation(version: version1))
+        await accumulator.didCapture(version2)
+        await accumulator.receiveForTesting(NetworkPanelListInvalidation(version: version3))
+
+        var state = await accumulator.stateForTesting
+        #expect(state.lastCapturedRevision == 2)
+        #expect(state.outstandingRevision == 3)
+        #expect(state.frameRequestPublicationCount == 2)
+
+        await accumulator.didCapture(version1)
+
+        state = await accumulator.stateForTesting
+        #expect(state.lastCapturedRevision == 2)
+        #expect(state.outstandingRevision == 3)
+        #expect(state.frameRequestPublicationCount == 2)
+
+        await accumulator.didCapture(version3)
+        state = await accumulator.stateForTesting
+        #expect(state.lastCapturedRevision == 3)
+        #expect(state.outstandingRevision == nil)
+        #expect(state.frameRequestPublicationCount == 2)
     }
 
     @Test
@@ -6615,13 +6645,432 @@ struct NetworkDetailViewControllerTests {
 
         #expect(artifact.snapshot.itemIdentifiers == entryIDs)
         #expect(Set(artifact.snapshot.reconfiguredItemIdentifiers) == Set(entryIDs))
-        #expect(artifact.cleanSnapshot.reconfiguredItemIdentifiers.isEmpty)
+        let cleanBaseline = artifact.makeSubmittedBaseline(generation: 4)
+        let cleanArtifact = try await NetworkListSnapshotBuilder().build(
+            makeNetworkListSnapshotBuildInput(
+                baseline: cleanBaseline,
+                target: input.target
+            )
+        )
+        #expect(cleanArtifact.snapshot.reconfiguredItemIdentifiers.isEmpty)
         #expect(artifact.changeCounts == NetworkListSnapshotChangeCounts(
             inserted: 0,
             deleted: 0,
             moved: 0,
             reconfigured: entryIDs.count
         ))
+    }
+
+    @Test
+    func listSnapshotBaselineConstructsOneCanonicalMainSection() async throws {
+        let context = makeContext()
+        for index in 0..<3 {
+            context.seedNetworkRequest(
+                requestID: "canonical-baseline-\(index)",
+                url: "https://example.test/canonical-baseline-\(index).json",
+                resourceTypeRawValue: "Fetch",
+                responseMIMEType: "application/json",
+                responseStatus: 200,
+                responseStatusText: "OK",
+                timestamp: Double(index)
+            )
+        }
+        let entryIDs = NetworkPanelModel(context: context).displayEntryIDs
+        let version = NetworkPanelListVersion(revision: 20, entryIdentityGeneration: 0)
+        let baseline = makeNetworkListSnapshotBaseline(
+            entryIDs: entryIDs,
+            version: version,
+            generation: 8
+        )
+
+        let artifact = try await NetworkListSnapshotBuilder().build(
+            makeNetworkListSnapshotBuildInput(
+                baseline: baseline,
+                target: NetworkPanelListProjection(version: version, entryIDs: entryIDs)
+            )
+        )
+
+        #expect(baseline.entryIDs == entryIDs)
+        #expect(artifact.snapshot.sectionIdentifiers == [.main])
+        #expect(artifact.snapshot.itemIdentifiers == entryIDs)
+        #expect(artifact.changeCounts.requiresApply == false)
+    }
+
+    @Test
+    func listSnapshotStateOwnsNoOpAndBothFreshnessBoundaries() async throws {
+        let context = makeContext()
+        for index in 0..<2 {
+            context.seedNetworkRequest(
+                requestID: "state-freshness-\(index)",
+                url: "https://example.test/state-freshness-\(index).json",
+                resourceTypeRawValue: "Fetch",
+                responseMIMEType: "application/json",
+                responseStatus: 200,
+                responseStatusText: "OK",
+                timestamp: Double(index)
+            )
+        }
+        let allEntryIDs = NetworkPanelModel(context: context).displayEntryIDs
+        let baselineEntryIDs = Array(allEntryIDs.prefix(1))
+        let version1 = NetworkPanelListVersion(revision: 21, entryIdentityGeneration: 0)
+        let version2 = NetworkPanelListVersion(revision: 22, entryIdentityGeneration: 0)
+        let version3 = NetworkPanelListVersion(revision: 23, entryIdentityGeneration: 0)
+        let version4 = NetworkPanelListVersion(revision: 24, entryIdentityGeneration: 0)
+        let originalBaseline = makeNetworkListSnapshotBaseline(
+            entryIDs: baselineEntryIDs,
+            version: version1,
+            generation: 4
+        )
+        var state = NetworkListViewController.SnapshotState(
+            submittedBaseline: originalBaseline
+        )
+        let noOpArtifact = try await NetworkListSnapshotBuilder().build(
+            makeNetworkListSnapshotBuildInput(
+                baseline: originalBaseline,
+                target: NetworkPanelListProjection(
+                    version: version2,
+                    entryIDs: baselineEntryIDs
+                )
+            )
+        )
+
+        let noOpResult = state.receive(noOpArtifact, currentVersion: version2)
+        #expect(noOpResult == .unchanged)
+        #expect(state.submittedBaseline.generation == originalBaseline.generation)
+        #expect(state.submittedBaseline.version == version2)
+        #expect(state.submittedBaseline.entryIDs == baselineEntryIDs)
+        #expect(state.hasReadyArtifact == false)
+
+        let oldBaselineArtifact = try await NetworkListSnapshotBuilder().build(
+            makeNetworkListSnapshotBuildInput(
+                baseline: originalBaseline,
+                target: NetworkPanelListProjection(
+                    version: version3,
+                    entryIDs: allEntryIDs
+                )
+            )
+        )
+        let staleBaselineResult = state.receive(
+            oldBaselineArtifact,
+            currentVersion: version3
+        )
+        #expect(staleBaselineResult == .stale)
+        #expect(state.hasReadyArtifact == false)
+
+        let currentArtifact = try await NetworkListSnapshotBuilder().build(
+            makeNetworkListSnapshotBuildInput(
+                baseline: state.submittedBaseline,
+                target: NetworkPanelListProjection(
+                    version: version3,
+                    entryIDs: allEntryIDs
+                )
+            )
+        )
+        let currentResult = state.receive(currentArtifact, currentVersion: version3)
+        #expect(currentResult == .ready)
+        guard case .stale = state.prepare(currentVersion: version4) else {
+            Issue.record("A ready artifact must be rejected when its target version becomes stale.")
+            return
+        }
+        #expect(state.isApplying == false)
+        #expect(state.hasReadyArtifact == false)
+        #expect(state.submittedBaseline.version == version2)
+    }
+
+    @Test
+    func staleIncomingSnapshotArtifactPreservesAnExistingCurrentReadyArtifact() async throws {
+        let context = makeContext()
+        for index in 0..<2 {
+            context.seedNetworkRequest(
+                requestID: "state-ready-\(index)",
+                url: "https://example.test/state-ready-\(index).json",
+                resourceTypeRawValue: "Fetch",
+                responseMIMEType: "application/json",
+                responseStatus: 200,
+                responseStatusText: "OK",
+                timestamp: Double(index)
+            )
+        }
+        let allEntryIDs = NetworkPanelModel(context: context).displayEntryIDs
+        let baselineEntryIDs = Array(allEntryIDs.prefix(1))
+        let version1 = NetworkPanelListVersion(revision: 25, entryIdentityGeneration: 0)
+        let version2 = NetworkPanelListVersion(revision: 26, entryIdentityGeneration: 0)
+        let baseline = makeNetworkListSnapshotBaseline(
+            entryIDs: baselineEntryIDs,
+            version: version1,
+            generation: 2
+        )
+        var state = NetworkListViewController.SnapshotState(submittedBaseline: baseline)
+        let currentArtifact = try await NetworkListSnapshotBuilder().build(
+            makeNetworkListSnapshotBuildInput(
+                baseline: baseline,
+                target: NetworkPanelListProjection(
+                    version: version2,
+                    entryIDs: allEntryIDs
+                )
+            )
+        )
+        let staleArtifact = try await NetworkListSnapshotBuilder().build(
+            makeNetworkListSnapshotBuildInput(
+                baseline: baseline,
+                target: NetworkPanelListProjection(
+                    version: version1,
+                    entryIDs: baselineEntryIDs
+                )
+            )
+        )
+
+        let currentResult = state.receive(currentArtifact, currentVersion: version2)
+        #expect(currentResult == .ready)
+        let preservedReadyResult = state.receive(staleArtifact, currentVersion: version2)
+        #expect(preservedReadyResult == .ready)
+        #expect(state.hasReadyArtifact)
+        guard case .apply(let application) = state.prepare(currentVersion: version2) else {
+            Issue.record("The current ready artifact must remain available after a stale arrival.")
+            return
+        }
+        #expect(application.snapshot.itemIdentifiers == allEntryIDs)
+        let finishResult = state.finish(application.id)
+        #expect(finishResult == .idle)
+    }
+
+    @Test
+    func listSnapshotStateSerializesReadyArtifactsAndRejectsOldApplicationCompletions() async throws {
+        let context = makeContext()
+        context.seedNetworkRequest(
+            requestID: "state-application-id",
+            url: "https://example.test/state-application-id.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 0
+        )
+        let entryIDs = NetworkPanelModel(context: context).displayEntryIDs
+        let version1 = NetworkPanelListVersion(revision: 27, entryIdentityGeneration: 0)
+        let version2 = NetworkPanelListVersion(revision: 28, entryIdentityGeneration: 1)
+        let version3 = NetworkPanelListVersion(revision: 29, entryIdentityGeneration: 2)
+        let baseline = makeNetworkListSnapshotBaseline(
+            entryIDs: entryIDs,
+            version: version1,
+            generation: 0
+        )
+        var state = NetworkListViewController.SnapshotState(submittedBaseline: baseline)
+        let firstArtifact = try await NetworkListSnapshotBuilder().build(
+            makeNetworkListSnapshotBuildInput(
+                baseline: baseline,
+                target: NetworkPanelListProjection(version: version2, entryIDs: entryIDs)
+            )
+        )
+        let firstReceiveResult = state.receive(firstArtifact, currentVersion: version2)
+        #expect(firstReceiveResult == .ready)
+        guard case .apply(let firstApplication) = state.prepare(currentVersion: version2) else {
+            Issue.record("The first reconfiguration must begin applying.")
+            return
+        }
+        #expect(state.isApplying)
+        #expect(state.submittedBaseline.generation == 1)
+
+        let secondArtifact = try await NetworkListSnapshotBuilder().build(
+            makeNetworkListSnapshotBuildInput(
+                baseline: state.submittedBaseline,
+                target: NetworkPanelListProjection(version: version3, entryIDs: entryIDs)
+            )
+        )
+        let secondReceiveResult = state.receive(secondArtifact, currentVersion: version3)
+        #expect(secondReceiveResult == .ready)
+        let preservedQueuedResult = state.receive(firstArtifact, currentVersion: version3)
+        #expect(preservedQueuedResult == .ready)
+        #expect(state.hasReadyArtifact)
+        guard case .none = state.prepare(currentVersion: version3) else {
+            Issue.record("A second artifact must wait for the active UIKit application.")
+            return
+        }
+        let firstFinishResult = state.finish(firstApplication.id)
+        #expect(firstFinishResult == .ready)
+        guard case .apply(let secondApplication) = state.prepare(currentVersion: version3) else {
+            Issue.record("The queued artifact must apply after the first completion.")
+            return
+        }
+        #expect(secondApplication.id != firstApplication.id)
+        let staleFinishResult = state.finish(firstApplication.id)
+        #expect(staleFinishResult == .stale)
+        #expect(state.isApplying)
+        let secondFinishResult = state.finish(secondApplication.id)
+        #expect(secondFinishResult == .idle)
+        #expect(state.isApplying == false)
+
+        let cleanArtifact = try await NetworkListSnapshotBuilder().build(
+            makeNetworkListSnapshotBuildInput(
+                baseline: state.submittedBaseline,
+                target: NetworkPanelListProjection(version: version3, entryIDs: entryIDs)
+            )
+        )
+        #expect(cleanArtifact.changeCounts.requiresApply == false)
+        #expect(cleanArtifact.snapshot.reconfiguredItemIdentifiers.isEmpty)
+    }
+
+    @Test
+    func listSnapshotStateNoOpAndDiscardSupersedeQueuedArtifacts() async throws {
+        let context = makeContext()
+        for index in 0..<2 {
+            context.seedNetworkRequest(
+                requestID: "state-discard-\(index)",
+                url: "https://example.test/state-discard-\(index).json",
+                resourceTypeRawValue: "Fetch",
+                responseMIMEType: "application/json",
+                responseStatus: 200,
+                responseStatusText: "OK",
+                timestamp: Double(index)
+            )
+        }
+        let allEntryIDs = NetworkPanelModel(context: context).displayEntryIDs
+        let baselineEntryIDs = Array(allEntryIDs.prefix(1))
+        let version1 = NetworkPanelListVersion(revision: 30, entryIdentityGeneration: 0)
+        let version2 = NetworkPanelListVersion(revision: 31, entryIdentityGeneration: 0)
+        let version3 = NetworkPanelListVersion(revision: 32, entryIdentityGeneration: 0)
+        let version4 = NetworkPanelListVersion(revision: 33, entryIdentityGeneration: 0)
+        let version5 = NetworkPanelListVersion(revision: 34, entryIdentityGeneration: 0)
+        let baseline = makeNetworkListSnapshotBaseline(
+            entryIDs: baselineEntryIDs,
+            version: version1,
+            generation: 0
+        )
+        var state = NetworkListViewController.SnapshotState(submittedBaseline: baseline)
+        let readyArtifact = try await NetworkListSnapshotBuilder().build(
+            makeNetworkListSnapshotBuildInput(
+                baseline: baseline,
+                target: NetworkPanelListProjection(version: version2, entryIDs: allEntryIDs)
+            )
+        )
+        let noOpArtifact = try await NetworkListSnapshotBuilder().build(
+            makeNetworkListSnapshotBuildInput(
+                baseline: baseline,
+                target: NetworkPanelListProjection(version: version3, entryIDs: baselineEntryIDs)
+            )
+        )
+
+        let readyResult = state.receive(readyArtifact, currentVersion: version2)
+        #expect(readyResult == .ready)
+        let noOpResult = state.receive(noOpArtifact, currentVersion: version3)
+        #expect(noOpResult == .unchanged)
+        #expect(state.hasReadyArtifact == false)
+        #expect(state.submittedBaseline.version == version3)
+
+        let applyingArtifact = try await NetworkListSnapshotBuilder().build(
+            makeNetworkListSnapshotBuildInput(
+                baseline: state.submittedBaseline,
+                target: NetworkPanelListProjection(version: version4, entryIDs: allEntryIDs)
+            )
+        )
+        let applyingResult = state.receive(applyingArtifact, currentVersion: version4)
+        #expect(applyingResult == .ready)
+        guard case .apply(let application) = state.prepare(currentVersion: version4) else {
+            Issue.record("The current artifact must begin applying.")
+            return
+        }
+        let queuedArtifact = try await NetworkListSnapshotBuilder().build(
+            makeNetworkListSnapshotBuildInput(
+                baseline: state.submittedBaseline,
+                target: NetworkPanelListProjection(
+                    version: version5,
+                    entryIDs: baselineEntryIDs
+                )
+            )
+        )
+        let queuedResult = state.receive(queuedArtifact, currentVersion: version5)
+        #expect(queuedResult == .ready)
+        let discardedReadyArtifact = state.discardReadyArtifact()
+        #expect(discardedReadyArtifact)
+        #expect(state.hasReadyArtifact == false)
+        #expect(state.isApplying)
+        let finishResult = state.finish(application.id)
+        #expect(finishResult == .idle)
+        guard case .none = state.prepare(currentVersion: version5) else {
+            Issue.record("Discarding queued work must leave no application to prepare.")
+            return
+        }
+    }
+
+    @Test
+    func listSnapshotStateNoOpSupersedesQueuedWorkWithoutFinishingTheActiveApplication() async throws {
+        let context = makeContext()
+        for index in 0..<3 {
+            context.seedNetworkRequest(
+                requestID: "state-applying-no-op-\(index)",
+                url: "https://example.test/state-applying-no-op-\(index).json",
+                resourceTypeRawValue: "Fetch",
+                responseMIMEType: "application/json",
+                responseStatus: 200,
+                responseStatusText: "OK",
+                timestamp: Double(index)
+            )
+        }
+        let allEntryIDs = NetworkPanelModel(context: context).displayEntryIDs
+        let baselineEntryIDs = Array(allEntryIDs.prefix(1))
+        let applyingEntryIDs = Array(allEntryIDs.prefix(2))
+        let version1 = NetworkPanelListVersion(revision: 35, entryIdentityGeneration: 0)
+        let version2 = NetworkPanelListVersion(revision: 36, entryIdentityGeneration: 0)
+        let version3 = NetworkPanelListVersion(revision: 37, entryIdentityGeneration: 0)
+        let version4 = NetworkPanelListVersion(revision: 38, entryIdentityGeneration: 0)
+        let baseline = makeNetworkListSnapshotBaseline(
+            entryIDs: baselineEntryIDs,
+            version: version1,
+            generation: 0
+        )
+        var state = NetworkListViewController.SnapshotState(submittedBaseline: baseline)
+        let applyingArtifact = try await NetworkListSnapshotBuilder().build(
+            makeNetworkListSnapshotBuildInput(
+                baseline: baseline,
+                target: NetworkPanelListProjection(
+                    version: version2,
+                    entryIDs: applyingEntryIDs
+                )
+            )
+        )
+        let applyingReceiveResult = state.receive(
+            applyingArtifact,
+            currentVersion: version2
+        )
+        #expect(applyingReceiveResult == .ready)
+        guard case .apply(let application) = state.prepare(currentVersion: version2) else {
+            Issue.record("The first artifact must begin applying.")
+            return
+        }
+        let submittedGeneration = state.submittedBaseline.generation
+
+        let queuedArtifact = try await NetworkListSnapshotBuilder().build(
+            makeNetworkListSnapshotBuildInput(
+                baseline: state.submittedBaseline,
+                target: NetworkPanelListProjection(version: version3, entryIDs: allEntryIDs)
+            )
+        )
+        let noOpArtifact = try await NetworkListSnapshotBuilder().build(
+            makeNetworkListSnapshotBuildInput(
+                baseline: state.submittedBaseline,
+                target: NetworkPanelListProjection(
+                    version: version4,
+                    entryIDs: applyingEntryIDs
+                )
+            )
+        )
+        let queuedResult = state.receive(queuedArtifact, currentVersion: version3)
+        #expect(queuedResult == .ready)
+        let noOpResult = state.receive(noOpArtifact, currentVersion: version4)
+
+        #expect(noOpResult == .unchanged)
+        #expect(state.isApplying)
+        #expect(state.hasReadyArtifact == false)
+        #expect(state.submittedBaseline.generation == submittedGeneration)
+        #expect(state.submittedBaseline.version == version4)
+        #expect(state.submittedBaseline.entryIDs == applyingEntryIDs)
+
+        let finishResult = state.finish(application.id)
+        #expect(finishResult == .idle)
+        guard case .none = state.prepare(currentVersion: version4) else {
+            Issue.record("A no-op must supersede queued work without creating another apply.")
+            return
+        }
     }
 
     @Test
@@ -6741,7 +7190,10 @@ struct NetworkDetailViewControllerTests {
         let artifact = try await NetworkListSnapshotBuilder().build(input)
 
         #expect(artifact.snapshot.itemIdentifiers == targetEntryIDs)
-        #expect(artifact.cleanSnapshot.itemIdentifiers == targetEntryIDs)
+        #expect(
+            artifact.makeSubmittedBaseline(generation: 5).entryIDs
+                == targetEntryIDs
+        )
         #expect(artifact.changeCounts.inserted == 10)
         #expect(artifact.changeCounts.deleted == 10)
         #expect(artifact.changeCounts.moved > 0)
@@ -7395,6 +7847,141 @@ struct NetworkDetailViewControllerTests {
         #expect(listViewController.displayedRequestIDsForTesting == [request.id])
         #expect(listViewController.displayRequestIDsEvaluationCountForTesting == evaluationCountBeforeHiddenUpdate + 1)
         #expect(applyCompletionScheduler.pendingCompletionCount == 0)
+    }
+
+    @Test
+    func listSnapshotStateSurvivesCompactToRegularReparentDuringDelayedApply() async throws {
+        let context = makeContext()
+        let firstRequestID = context.seedNetworkRequest(
+            requestID: "reparent-first",
+            url: "https://example.test/reparent-first.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 0
+        )
+        let model = NetworkPanelModel(context: context)
+        let firstRequest = try #require(context.registeredRequest(for: firstRequestID))
+        model.selectRequest(firstRequest)
+        let selectedSubject = try #require(model.detailSubject)
+        let frameScheduler = ManualNetworkFrameScheduler()
+        let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
+        let applyCompletionScheduler = ManualNetworkListSnapshotApplyCompletionScheduler()
+        let listViewController = NetworkListViewController(
+            model: model,
+            listFrameScheduler: frameScheduler,
+            listSnapshotBuilderFactory: snapshotBuilder,
+            snapshotApplyCompletionScheduler: applyCompletionScheduler
+        )
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let compactViewController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        let window = showInWindow(compactViewController, makeVisible: false)
+        defer { window.isHidden = true }
+        listViewController.resumeRenderingForTesting()
+
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(1)
+        await snapshotBuilder.releaseBuild(1)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await applyCompletionScheduler.waitUntilScheduledCompletionCount(1)
+        #expect(listViewController.snapshotApplyCountForTesting == 1)
+        #expect(applyCompletionScheduler.pendingCompletionCount == 1)
+
+        let transactionDeliveryBaseline = listViewController
+            .fetchedResultsTransactionDeliveryCountForTesting
+        let secondRequestID = context.seedNetworkRequest(
+            requestID: "reparent-second",
+            url: "https://example.test/reparent-second.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 1
+        )
+        let secondRequest = try #require(context.registeredRequest(for: secondRequestID))
+        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+            after: transactionDeliveryBaseline
+        ))
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(2)
+        await snapshotBuilder.releaseBuild(2)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        #expect(listViewController.hasPendingSnapshotUpdateForTesting)
+        #expect(listViewController.snapshotApplyCountForTesting == 1)
+        try #require(frameScheduler.hasScheduledFrame)
+
+        listViewController.suspendRenderingForTesting()
+        #expect(listViewController.hasPendingSnapshotUpdateForTesting == false)
+        #expect(frameScheduler.hasScheduledFrame == false)
+        #expect(applyCompletionScheduler.pendingCompletionCount == 1)
+
+        let splitViewController = NetworkSplitViewController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        window.rootViewController = splitViewController
+        splitViewController.loadViewIfNeeded()
+        splitViewController.view.frame = window.bounds
+        window.layoutIfNeeded()
+        let primaryNavigationController = try #require(
+            splitViewController.viewController(for: .primary) as? UINavigationController
+        )
+        #expect(primaryNavigationController.viewControllers.first === listViewController)
+        #expect(compactViewController.viewControllers.contains(where: { $0 === listViewController }) == false)
+
+        listViewController.resumeRenderingForTesting()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await snapshotBuilder.waitUntilStartedBuildCount(3)
+        await snapshotBuilder.releaseBuild(3)
+        await listViewController.waitForListSnapshotBuildIdleForTesting()
+        #expect(listViewController.hasPendingSnapshotUpdateForTesting)
+        #expect(listViewController.snapshotApplyCountForTesting == 1)
+
+        applyCompletionScheduler.runNextCompletion()
+        try #require(frameScheduler.hasScheduledFrame)
+        frameScheduler.fireScheduledFrame()
+        await applyCompletionScheduler.waitUntilScheduledCompletionCount(2)
+        #expect(listViewController.snapshotApplyCountForTesting == 2)
+        #expect(
+            listViewController.displayedRequestIDsForTesting
+                == [secondRequest.id, firstRequest.id]
+        )
+
+        applyCompletionScheduler.runNextCompletion()
+        await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
+
+        #expect(listViewController.displayedEntryIDsForTesting == model.displayEntryIDs)
+        #expect(model.detailSubject?.hasSameIdentity(as: selectedSubject) == true)
+        let selectedEntryID = try #require(model.selectedEntryID)
+        #expect(
+            listViewController.collectionViewForTesting.indexPathsForSelectedItems
+                == [IndexPath(
+                    item: try #require(
+                        model.displayEntryIDs.firstIndex(of: selectedEntryID)
+                    ),
+                    section: 0
+                )]
+        )
+        #expect(applyCompletionScheduler.pendingCompletionCount == 0)
+        #expect(listViewController.hasPendingSnapshotUpdateForTesting == false)
+        #expect(listViewController.hasActiveListSnapshotBuildForTesting == false)
+        #expect(listViewController.hasDeferredListSnapshotBuildForTesting == false)
+        #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 0)
+        let buildStatistics = await snapshotBuilder.statistics()
+        #expect(buildStatistics.startedBuildCount == 3)
+        #expect(buildStatistics.activeBuildCount == 0)
+        #expect(buildStatistics.maximumActiveBuildCount == 1)
     }
 
     @Test
@@ -9493,14 +10080,10 @@ private func makeNetworkListSnapshotBaseline(
     ),
     generation: UInt64 = 0
 ) -> NetworkListSnapshotBaseline {
-    var snapshot = NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>()
-    snapshot.appendSections([.main])
-    snapshot.appendItems(entryIDs, toSection: .main)
-    return NetworkListSnapshotBaseline(
+    NetworkListSnapshotBaseline(
         generation: generation,
         version: version,
-        entryIDs: entryIDs,
-        snapshot: snapshot
+        entryIDs: entryIDs
     )
 }
 

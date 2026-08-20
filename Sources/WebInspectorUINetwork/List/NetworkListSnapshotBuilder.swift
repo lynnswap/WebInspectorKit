@@ -1,34 +1,50 @@
 #if canImport(UIKit)
 import UIKit
 
-package enum NetworkListSnapshotSection: Hashable, Sendable {
+enum NetworkListSnapshotSection: Hashable, Sendable {
     case main
 }
 
-package struct NetworkListSnapshotBaseline: Sendable {
-    package let generation: UInt64
-    package let version: NetworkPanelListVersion
-    package let entryIDs: [NetworkListEntry.ID]
-    package let snapshot: NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>
+struct NetworkListSnapshotBaseline: Sendable {
+    let generation: UInt64
+    let version: NetworkPanelListVersion
+    fileprivate let snapshot: NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>
 
-    package init(
+    init(
         generation: UInt64,
         version: NetworkPanelListVersion,
-        entryIDs: [NetworkListEntry.ID],
-        snapshot: NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>
+        entryIDs: [NetworkListEntry.ID]
+    ) {
+        var snapshot = NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>()
+        snapshot.appendSections([.main])
+        snapshot.appendItems(entryIDs, toSection: .main)
+        self.init(
+            generation: generation,
+            version: version,
+            cleanSnapshot: snapshot
+        )
+    }
+
+    fileprivate init(
+        generation: UInt64,
+        version: NetworkPanelListVersion,
+        cleanSnapshot: NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>
     ) {
         self.generation = generation
         self.version = version
-        self.entryIDs = entryIDs
-        self.snapshot = snapshot
+        snapshot = cleanSnapshot
+    }
+
+    var entryIDs: [NetworkListEntry.ID] {
+        snapshot.itemIdentifiers
     }
 }
 
-package struct NetworkListSnapshotBuildInput: Equatable, Sendable {
-    package let baseline: NetworkListSnapshotBaseline
-    package let target: NetworkPanelListProjection
+struct NetworkListSnapshotBuildInput: Equatable, Sendable {
+    let baseline: NetworkListSnapshotBaseline
+    let target: NetworkPanelListProjection
 
-    package init(
+    init(
         baseline: NetworkListSnapshotBaseline,
         target: NetworkPanelListProjection
     ) {
@@ -36,35 +52,36 @@ package struct NetworkListSnapshotBuildInput: Equatable, Sendable {
         self.target = target
     }
 
-    package static func == (
+    // Do not compare row arrays here: their owners advance these versions before
+    // publishing a different baseline or target, keeping 10k-row submission O(1).
+    static func == (
         lhs: NetworkListSnapshotBuildInput,
         rhs: NetworkListSnapshotBuildInput
     ) -> Bool {
         lhs.baseline.generation == rhs.baseline.generation
             && lhs.baseline.version == rhs.baseline.version
-            && lhs.baseline.entryIDs == rhs.baseline.entryIDs
-            && lhs.target == rhs.target
+            && lhs.target.version == rhs.target.version
     }
 }
 
-package struct NetworkListSnapshotChangeCounts: Equatable, Sendable {
-    package let inserted: Int
-    package let deleted: Int
-    package let moved: Int
-    package let reconfigured: Int
+struct NetworkListSnapshotChangeCounts: Equatable, Sendable {
+    let inserted: Int
+    let deleted: Int
+    let moved: Int
+    let reconfigured: Int
 
-    package var requiresApply: Bool {
+    var requiresApply: Bool {
         inserted > 0 || deleted > 0 || moved > 0 || reconfigured > 0
     }
 }
 
-package struct NetworkListSnapshotArtifact: Sendable {
-    package let input: NetworkListSnapshotBuildInput
-    package let snapshot: NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>
-    package let cleanSnapshot: NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>
-    package let changeCounts: NetworkListSnapshotChangeCounts
+struct NetworkListSnapshotArtifact: Sendable {
+    let input: NetworkListSnapshotBuildInput
+    let snapshot: NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>
+    let changeCounts: NetworkListSnapshotChangeCounts
+    private let cleanSnapshot: NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>
 
-    package init(
+    fileprivate init(
         input: NetworkListSnapshotBuildInput,
         snapshot: NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>,
         cleanSnapshot: NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>,
@@ -75,44 +92,43 @@ package struct NetworkListSnapshotArtifact: Sendable {
         self.cleanSnapshot = cleanSnapshot
         self.changeCounts = changeCounts
     }
+
+    func makeSubmittedBaseline(generation: UInt64) -> NetworkListSnapshotBaseline {
+        NetworkListSnapshotBaseline(
+            generation: generation,
+            version: input.target.version,
+            cleanSnapshot: cleanSnapshot
+        )
+    }
 }
 
-package protocol NetworkListSnapshotBuilding: Actor {
+protocol NetworkListSnapshotBuilding: Actor {
     func build(
         _ input: NetworkListSnapshotBuildInput
     ) async throws(CancellationError) -> NetworkListSnapshotArtifact
 }
 
-package protocol NetworkListSnapshotBuilderMaking: Sendable {
+protocol NetworkListSnapshotBuilderMaking: Sendable {
     func makeBuilder() -> any NetworkListSnapshotBuilding
 }
 
-package struct NetworkListSnapshotBuilderFactory: NetworkListSnapshotBuilderMaking {
-    package init() {}
+struct NetworkListSnapshotBuilderFactory: NetworkListSnapshotBuilderMaking {
+    init() {}
 
-    package func makeBuilder() -> any NetworkListSnapshotBuilding {
+    func makeBuilder() -> any NetworkListSnapshotBuilding {
         NetworkListSnapshotBuilder()
     }
 }
 
-package actor NetworkListSnapshotBuilder: NetworkListSnapshotBuilding {
+actor NetworkListSnapshotBuilder: NetworkListSnapshotBuilding {
     private static let cooperativeBatchSize = 256
 
-    package init() {}
+    init() {}
 
-    package func build(
+    func build(
         _ input: NetworkListSnapshotBuildInput
     ) async throws(CancellationError) -> NetworkListSnapshotArtifact {
         try checkCancellation()
-        precondition(
-            input.baseline.snapshot.sectionIdentifiers == [.main],
-            "A Network list snapshot baseline must contain exactly the main section."
-        )
-        precondition(
-            input.baseline.snapshot.itemIdentifiers == input.baseline.entryIDs,
-            "A Network list snapshot baseline must own its declared row order."
-        )
-
         let baselineEntryIDs = input.baseline.entryIDs
         let targetEntryIDs = input.target.entryIDs
         let baselineEntryIDSet = try await uniqueEntryIDs(in: baselineEntryIDs)

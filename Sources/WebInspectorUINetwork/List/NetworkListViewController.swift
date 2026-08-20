@@ -205,7 +205,6 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private struct SnapshotCoordinator {
         var isRenderingActive = false
         var needsReloadOnNextAppearance = true
-        var readyArtifact: NetworkListSnapshotArtifact?
         var state = NetworkListViewController.SnapshotState()
 
         mutating func resumeRendering() {
@@ -214,10 +213,9 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
         mutating func suspendRendering() {
             isRenderingActive = false
-            if readyArtifact != nil {
+            if state.discardReadyArtifact() {
                 needsReloadOnNextAppearance = true
             }
-            readyArtifact = nil
         }
 
         mutating func markNeedsReloadOnNextAppearance() {
@@ -289,7 +287,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         )
     }
 
-    package convenience init(
+    convenience init(
         model: NetworkPanelModel,
         listFrameScheduler: any NetworkFrameScheduling,
         listSnapshotBuilderFactory: any NetworkListSnapshotBuilderMaking,
@@ -632,72 +630,70 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             snapshotCoordinator.markNeedsReloadOnNextAppearance()
             return
         }
-        guard artifact.input.target.version == model.listProjectionVersion,
-              artifact.input.baseline.generation
-                == snapshotCoordinator.state.submittedBaseline.generation else {
+        switch snapshotCoordinator.state.receive(
+            artifact,
+            currentVersion: model.listProjectionVersion
+        ) {
+        case .stale:
             requestListProjectionCapture()
-            return
+        case .unchanged:
+            snapshotCoordinator.needsReloadOnNextAppearance = false
+        case .ready:
+            snapshotCoordinator.needsReloadOnNextAppearance = false
+            scheduleListRenderingFrameIfNeeded()
         }
-        snapshotCoordinator.needsReloadOnNextAppearance = false
-        guard artifact.changeCounts.requiresApply else {
-            snapshotCoordinator.state.acknowledgeUnchanged(artifact)
-            snapshotCoordinator.readyArtifact = nil
-            return
-        }
-        snapshotCoordinator.readyArtifact = artifact
-        scheduleListRenderingFrameIfNeeded()
     }
 
     private func applyReadySnapshotArtifactOnDisplayFrameIfNeeded() {
         guard snapshotCoordinator.isRenderingActive else {
-            if snapshotCoordinator.readyArtifact != nil {
-                snapshotCoordinator.readyArtifact = nil
+            if snapshotCoordinator.state.discardReadyArtifact() {
                 snapshotCoordinator.markNeedsReloadOnNextAppearance()
             }
             return
         }
-        guard !snapshotCoordinator.state.isApplying,
-              let artifact = snapshotCoordinator.readyArtifact else {
+        let application: NetworkListViewController.SnapshotState.Application
+        switch snapshotCoordinator.state.prepare(
+            currentVersion: model.listProjectionVersion
+        ) {
+        case .none:
             return
-        }
-        guard artifact.input.target.version == model.listProjectionVersion,
-              artifact.input.baseline.generation
-                == snapshotCoordinator.state.submittedBaseline.generation else {
-            snapshotCoordinator.readyArtifact = nil
+        case .stale:
             requestListProjectionCapture()
             return
+        case .apply(let preparedApplication):
+            application = preparedApplication
         }
-        precondition(
-            artifact.changeCounts.requiresApply,
-            "A ready Network list snapshot artifact must change UIKit state."
-        )
-        snapshotCoordinator.readyArtifact = nil
-        let rows = snapshotCoordinator.state.beginApplying(artifact)
 
+        let applicationID = application.id
+        let snapshot = application.snapshot
         let completion: @MainActor @Sendable () -> Void = { [weak self] in
-            self?.snapshotUpdateDidFinish(appliedRows: rows)
+            self?.snapshotUpdateDidFinish(applicationID: applicationID)
         }
 #if DEBUG
         snapshotApplyCountStorageForTesting += 1
 #endif
         let snapshotApplyCompletionScheduler = self.snapshotApplyCompletionScheduler
-        dataSource.apply(artifact.snapshot, animatingDifferences: false) {
+        dataSource.apply(snapshot, animatingDifferences: false) {
             snapshotApplyCompletionScheduler.schedule(completion)
         }
     }
 
     private func snapshotUpdateDidFinish(
-        appliedRows: NetworkListViewController.SnapshotRows
+        applicationID: NetworkListViewController.SnapshotState.Application.ID
     ) {
 #if DEBUG
         defer {
             resumeSnapshotUpdateCompletionWaitersForTesting()
         }
 #endif
-        snapshotCoordinator.state.finishApplying(appliedRows)
+        switch snapshotCoordinator.state.finish(applicationID) {
+        case .stale:
+            return
+        case .idle, .ready:
+            break
+        }
         guard snapshotCoordinator.isRenderingActive else {
-            if snapshotCoordinator.readyArtifact != nil {
-                snapshotCoordinator.readyArtifact = nil
+            if snapshotCoordinator.state.discardReadyArtifact() {
                 snapshotCoordinator.markNeedsReloadOnNextAppearance()
             }
             return
@@ -720,7 +716,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private func scheduleListRenderingFrameIfNeeded() {
         guard snapshotCoordinator.isRenderingActive,
-              needsListProjectionCapture || snapshotCoordinator.readyArtifact != nil else {
+              needsListProjectionCapture || snapshotCoordinator.state.hasReadyArtifact else {
             return
         }
         listFrameScheduler.schedule { [weak self] in
@@ -730,9 +726,9 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private func listRenderingDisplayFrameDidFire() {
         guard snapshotCoordinator.isRenderingActive else {
-            if needsListProjectionCapture || snapshotCoordinator.readyArtifact != nil {
+            let discardedReadyArtifact = snapshotCoordinator.state.discardReadyArtifact()
+            if needsListProjectionCapture || discardedReadyArtifact {
                 needsListProjectionCapture = false
-                snapshotCoordinator.readyArtifact = nil
                 snapshotCoordinator.markNeedsReloadOnNextAppearance()
             }
             return
@@ -930,7 +926,7 @@ extension NetworkListViewController {
     }
 
     package var hasPendingSnapshotUpdateForTesting: Bool {
-        snapshotCoordinator.readyArtifact != nil
+        snapshotCoordinator.state.hasReadyArtifact
     }
 
     package var hasActiveListSnapshotBuildForTesting: Bool {
@@ -960,7 +956,7 @@ extension NetworkListViewController {
                 await waitForSnapshotUpdateCompletionForTesting()
                 return
             }
-            if needsListProjectionCapture || snapshotCoordinator.readyArtifact != nil {
+            if needsListProjectionCapture || snapshotCoordinator.state.hasReadyArtifact {
                 listFrameScheduler.cancel()
                 listRenderingDisplayFrameDidFire()
                 continue
