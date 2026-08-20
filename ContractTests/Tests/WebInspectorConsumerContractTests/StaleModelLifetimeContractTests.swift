@@ -12,7 +12,16 @@ func retainedFetchedResultsFinishStreamsAndReportStaleUpdatesFromConsumerPackage
         try #require(container),
         isolation: MainActor.shared
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = try #require(context?.fetchedResults())
+    let retainedQuery = NetworkRequestQuery(
+        filter: .method(equals: "GET"),
+        sortBy: [.requestSentTimestamp(order: .reverse)],
+        sectionBy: .method,
+        fetchLimit: 10,
+        fetchOffset: 1
+    )
+    let results: WebInspectorFetchedResults<NetworkRequest> = try #require(
+        context?.network.fetchedResults(for: retainedQuery)
+    )
     let controller = WebInspectorFetchedResultsController(fetchedResults: results)
     var activeTransactions = controller.transactions.makeAsyncIterator()
     weak let releasedContext = context
@@ -26,14 +35,16 @@ func retainedFetchedResultsFinishStreamsAndReportStaleUpdatesFromConsumerPackage
     #expect(await lateTransactions.next() == nil)
     #expect(results.items.isEmpty)
     #expect(controller.snapshot.itemIDs.isEmpty)
+    #expect(results.query == retainedQuery)
+    #expect(controller.query == retainedQuery)
     let error = WebInspectorProxyError.disconnected(
         "WebInspectorFetchedResults is not registered in this WebInspectorContext."
     )
     #expect(throws: error) {
-        try results.updateFetchDescriptor(WebInspectorFetchDescriptor(fetchLimit: 1))
+        try results.updateQuery(NetworkRequestQuery(fetchLimit: 1))
     }
     #expect(throws: error) {
-        try controller.updateFetchDescriptor(WebInspectorFetchDescriptor(fetchLimit: 1))
+        try controller.updateQuery(NetworkRequestQuery(fetchLimit: 1))
     }
     await runtime.proxy.close()
 }

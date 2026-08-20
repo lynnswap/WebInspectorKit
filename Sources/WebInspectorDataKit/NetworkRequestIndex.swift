@@ -60,13 +60,10 @@ package actor NetworkRequestIndex {
 
     package func delta(
         plan: NetworkRequestQueryPlan,
-        sectionBy: WebInspectorSectionDescriptor<NetworkRequest>?,
+        sectionBy: NetworkRequestQuery.Section?,
         oldSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID>,
         changedID: NetworkRequest.ID?
     ) -> NetworkResultSetDelta? {
-        guard plan.requiresModelPredicate == false else {
-            return nil
-        }
         let newSnapshot = snapshot(plan: plan, sectionBy: sectionBy)
         guard oldSnapshot != newSnapshot else {
             return nil
@@ -81,7 +78,7 @@ package actor NetworkRequestIndex {
 
     private func snapshot(
         plan: NetworkRequestQueryPlan,
-        sectionBy: WebInspectorSectionDescriptor<NetworkRequest>?
+        sectionBy: NetworkRequestQuery.Section?
     ) -> WebInspectorFetchedResultsSnapshot<NetworkRequest.ID> {
         let matchingRecords = visibleRecords(plan: plan)
         guard matchingRecords.isEmpty == false else {
@@ -140,34 +137,26 @@ package actor NetworkRequestIndex {
         }
 
         let lowerBound = min(plan.fetchOffset, records.count)
-        let upperBound: Int
-        if let fetchLimit = plan.fetchLimit {
-            upperBound = min(lowerBound + fetchLimit, records.count)
-        } else {
-            upperBound = records.count
-        }
+        let remainingCount = records.count - lowerBound
+        let visibleCount = min(plan.fetchLimit ?? remainingCount, remainingCount)
+        let upperBound = lowerBound + visibleCount
         return Array(records[lowerBound..<upperBound])
     }
 
     private func sectionIdentity(
         for record: NetworkRequestRecord,
-        sectionBy: WebInspectorSectionDescriptor<NetworkRequest>
+        sectionBy: NetworkRequestQuery.Section
     ) -> (id: WebInspectorFetchSectionID, title: String?) {
         let value: String?
-        switch sectionBy.key {
-        case .networkMethod:
+        switch sectionBy.storage {
+        case .method:
             value = record.method
-        case .networkResourceType:
+        case .resourceType:
             value = record.resourceTypeRawValue
-        case .networkResourceCategory:
+        case .resourceCategory:
             value = record.resourceCategory.rawValue
-        case .networkMIMEType:
+        case .mimeType:
             value = record.mimeType
-        case .consoleSource,
-             .consoleLevel,
-             .consoleKind,
-             .consoleURL:
-            preconditionFailure("Console section descriptors cannot be applied to NetworkRequest results.")
         }
 
         let title = value ?? ""

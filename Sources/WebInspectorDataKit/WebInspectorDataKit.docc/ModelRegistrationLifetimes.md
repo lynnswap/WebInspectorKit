@@ -43,23 +43,23 @@ not retain their originating context. When that context is released:
 
 - their active transaction streams finish;
 - transaction streams created later are already finished;
-- their final descriptor, items, sections, and controller snapshot remain
+- their final query, items, sections, and controller snapshot remain
   readable;
-- changing the descriptor throws `WebInspectorProxyError.disconnected`.
+- changing the query throws `WebInspectorProxyError.disconnected`.
 
 Detaching, restarting, or failing an inspection context does not itself
 invalidate fetched results while the context object remains alive.
 
-## Updating Fetch Descriptors
+## Updating Queries
 
-Descriptor updates now report stale registration, so call them with `try`:
+Query updates report stale registration, so call them with `try`:
 
 ```swift
-try results.updateFetchDescriptor(
-    WebInspectorFetchDescriptor(fetchLimit: 100)
+try results.updateQuery(
+    NetworkRequestQuery(fetchLimit: 100)
 )
 
-try controller.updateFetchDescriptor(
-    WebInspectorFetchDescriptor(fetchOffset: 100)
+try controller.updateQuery(
+    NetworkRequestQuery(fetchOffset: 100)
 )
 ```

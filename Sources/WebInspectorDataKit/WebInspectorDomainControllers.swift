@@ -293,21 +293,19 @@ public final class NetworkModelController {
 
     /// Creates observable network request results.
     public func fetchedResults(
-        for descriptor: WebInspectorFetchDescriptor<NetworkRequest> = .init(),
-        sectionBy: WebInspectorSectionDescriptor<NetworkRequest>? = nil,
+        for query: NetworkRequestQuery = .init(),
         isolation: isolated (any Actor) = #isolation
     ) -> WebInspectorFetchedResults<NetworkRequest> {
-        context.fetchedResults(for: descriptor, sectionBy: sectionBy, isolation: isolation)
+        context.networkFetchedResults(for: query, isolation: isolation)
     }
 
     /// Creates a controller for observable network request results.
     public func fetchedResultsController(
-        for descriptor: WebInspectorFetchDescriptor<NetworkRequest> = .init(),
-        sectionBy: WebInspectorSectionDescriptor<NetworkRequest>? = nil,
+        for query: NetworkRequestQuery = .init(),
         isolation: isolated (any Actor) = #isolation
     ) -> WebInspectorFetchedResultsController<NetworkRequest> {
         WebInspectorFetchedResultsController(
-            fetchedResults: fetchedResults(for: descriptor, sectionBy: sectionBy, isolation: isolation)
+            fetchedResults: fetchedResults(for: query, isolation: isolation)
         )
     }
 
@@ -327,19 +325,19 @@ public final class ConsoleModelController {
 
     /// Creates observable console message results.
     public func fetchedResults(
-        for descriptor: WebInspectorFetchDescriptor<ConsoleMessage> = .init(),
+        for query: ConsoleMessageQuery = .init(),
         isolation: isolated (any Actor) = #isolation
     ) -> WebInspectorFetchedResults<ConsoleMessage> {
-        context.fetchedResults(for: descriptor, isolation: isolation)
+        context.consoleFetchedResults(for: query, isolation: isolation)
     }
 
     /// Creates a controller for observable console message results.
     public func fetchedResultsController(
-        for descriptor: WebInspectorFetchDescriptor<ConsoleMessage> = .init(),
+        for query: ConsoleMessageQuery = .init(),
         isolation: isolated (any Actor) = #isolation
     ) -> WebInspectorFetchedResultsController<ConsoleMessage> {
         WebInspectorFetchedResultsController(
-            fetchedResults: fetchedResults(for: descriptor, isolation: isolation)
+            fetchedResults: fetchedResults(for: query, isolation: isolation)
         )
     }
 }

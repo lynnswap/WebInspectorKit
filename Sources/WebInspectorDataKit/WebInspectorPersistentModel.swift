@@ -23,6 +23,3 @@ extension WebInspectorPersistentModel {
         hasher.combine(ObjectIdentifier(self))
     }
 }
-
-/// Marker protocol for DataKit models that can be returned by fetch descriptors.
-public protocol WebInspectorFetchableModel: WebInspectorPersistentModel {}

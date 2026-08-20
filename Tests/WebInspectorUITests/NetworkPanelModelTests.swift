@@ -1399,11 +1399,7 @@ func removedExplicitRequestClearsSelectionInsteadOfSelectingGroupedSibling() asy
     let model = NetworkPanelModel(context: context)
     let groupedEntryID = try #require(model.entryID(containing: firstID))
     var rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
-    try model.requests.updateFetchDescriptor(WebInspectorFetchDescriptor(
-        predicate: #Predicate { request in
-            request.method == "GET"
-        }
-    ))
+    try model.requests.updateQuery(NetworkRequestQuery(filter: .method(equals: "GET")))
     #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
 
     model.selectRequest(context.registeredRequest(for: secondID))

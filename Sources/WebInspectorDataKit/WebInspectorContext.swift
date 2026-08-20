@@ -1815,209 +1815,71 @@ public final class WebInspectorContext {
         )
     }
 
-    /// Creates observable fetched results for a supported model type.
-    public func fetchedResults<Model: WebInspectorFetchableModel>(
-        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
-        sectionBy: WebInspectorSectionDescriptor<Model>? = nil,
+    package func networkFetchedResults(
+        for query: NetworkRequestQuery,
         isolation: isolated (any Actor) = #isolation
-    ) -> WebInspectorFetchedResults<Model> {
+    ) -> WebInspectorFetchedResults<NetworkRequest> {
         requireOwner(isolation)
-        requireSupportedFetchDescriptor(descriptor)
-        let results = WebInspectorFetchedResults(fetchDescriptor: descriptor, sectionBy: sectionBy, modelContext: self)
-        switch descriptor.kind {
-        case .networkRequests:
-            guard let networkResults = results as? WebInspectorFetchedResults<NetworkRequest> else {
-                preconditionFailure("NetworkRequest descriptors can only fetch NetworkRequest models.")
-            }
-            let plan = NetworkRequestQueryPlan(descriptor: networkResults.fetchDescriptor, context: self)
-            networkResults.setNetworkItems(
-                currentNetworkRequests(),
-                plan: plan,
-                lookup: { id in self.requestsByID[id] }
-            )
-            networkFetchedResults.append(WeakWebInspectorFetchedResults(networkResults))
-        case .consoleMessages:
-            guard let consoleResults = results as? WebInspectorFetchedResults<ConsoleMessage> else {
-                preconditionFailure("ConsoleMessage descriptors can only fetch ConsoleMessage models.")
-            }
-            consoleResults.setItems(consoleMessages(for: consoleResults.fetchDescriptor))
-            consoleFetchedResults.append(WeakWebInspectorFetchedResults(consoleResults))
-        }
+        let results = WebInspectorFetchedResults<NetworkRequest>(
+            query: query,
+            modelContext: self
+        )
+        let plan = NetworkRequestQueryPlan(query: query)
+        results.setNetworkItems(
+            currentNetworkRequests(),
+            plan: plan,
+            lookup: { id in self.requestsByID[id] }
+        )
+        networkFetchedResults.append(WeakWebInspectorFetchedResults(results))
         return results
     }
 
-    /// Creates observable fetched results from a mutable fetch request.
-    public func fetchedResults<Model: WebInspectorFetchableModel>(
-        for request: WebInspectorFetchRequest<Model>,
-        sectionBy: WebInspectorSectionDescriptor<Model>? = nil,
+    package func consoleFetchedResults(
+        for query: ConsoleMessageQuery,
         isolation: isolated (any Actor) = #isolation
-    ) -> WebInspectorFetchedResults<Model> {
-        fetchedResults(for: request.fetchDescriptor, sectionBy: sectionBy, isolation: isolation)
-    }
-
-    /// Creates observable fetched results sectioned by a string key path.
-    public func fetchedResults<Model: WebInspectorFetchableModel>(
-        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
-        sectionBy keyPath: KeyPath<Model, String>,
-        isolation: isolated (any Actor) = #isolation
-    ) -> WebInspectorFetchedResults<Model> {
-        fetchedResults(
-            for: descriptor,
-            sectionBy: WebInspectorSectionDescriptor(keyPath),
-            isolation: isolation
-        )
-    }
-
-    /// Creates observable fetched results sectioned by an optional string key path.
-    public func fetchedResults<Model: WebInspectorFetchableModel>(
-        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
-        sectionBy keyPath: KeyPath<Model, String?>,
-        isolation: isolated (any Actor) = #isolation
-    ) -> WebInspectorFetchedResults<Model> {
-        fetchedResults(
-            for: descriptor,
-            sectionBy: WebInspectorSectionDescriptor(keyPath),
-            isolation: isolation
-        )
-    }
-
-    /// Creates observable fetched results sectioned by a raw-representable string key path.
-    public func fetchedResults<
-        Model: WebInspectorFetchableModel,
-        Value: RawRepresentable & Hashable & Sendable
-    >(
-        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
-        sectionBy keyPath: KeyPath<Model, Value>,
-        isolation: isolated (any Actor) = #isolation
-    ) -> WebInspectorFetchedResults<Model> where Value.RawValue == String {
-        fetchedResults(
-            for: descriptor,
-            sectionBy: WebInspectorSectionDescriptor(keyPath),
-            isolation: isolation
-        )
-    }
-
-    /// Creates observable fetched results sectioned by an optional raw-representable string key path.
-    public func fetchedResults<
-        Model: WebInspectorFetchableModel,
-        Value: RawRepresentable & Hashable & Sendable
-    >(
-        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
-        sectionBy keyPath: KeyPath<Model, Value?>,
-        isolation: isolated (any Actor) = #isolation
-    ) -> WebInspectorFetchedResults<Model> where Value.RawValue == String {
-        fetchedResults(
-            for: descriptor,
-            sectionBy: WebInspectorSectionDescriptor(keyPath),
-            isolation: isolation
-        )
-    }
-
-    /// Creates a fetched-results controller for a supported model type.
-    public func fetchedResultsController<Model: WebInspectorFetchableModel>(
-        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
-        sectionBy: WebInspectorSectionDescriptor<Model>? = nil,
-        isolation: isolated (any Actor) = #isolation
-    ) -> WebInspectorFetchedResultsController<Model> {
+    ) -> WebInspectorFetchedResults<ConsoleMessage> {
         requireOwner(isolation)
-        return WebInspectorFetchedResultsController(
-            fetchedResults: fetchedResults(for: descriptor, sectionBy: sectionBy, isolation: isolation)
+        let results = WebInspectorFetchedResults<ConsoleMessage>(
+            query: query,
+            modelContext: self
         )
+        results.setItems(consoleMessages(for: query))
+        consoleFetchedResults.append(WeakWebInspectorFetchedResults(results))
+        return results
     }
 
-    /// Creates a fetched-results controller from a mutable fetch request.
-    public func fetchedResultsController<Model: WebInspectorFetchableModel>(
-        for request: WebInspectorFetchRequest<Model>,
-        sectionBy: WebInspectorSectionDescriptor<Model>? = nil,
-        isolation: isolated (any Actor) = #isolation
-    ) -> WebInspectorFetchedResultsController<Model> {
-        WebInspectorFetchedResultsController(
-            fetchedResults: fetchedResults(for: request, sectionBy: sectionBy, isolation: isolation)
-        )
-    }
-
-    /// Creates a fetched-results controller sectioned by a string key path.
-    public func fetchedResultsController<Model: WebInspectorFetchableModel>(
-        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
-        sectionBy keyPath: KeyPath<Model, String>,
-        isolation: isolated (any Actor) = #isolation
-    ) -> WebInspectorFetchedResultsController<Model> {
-        WebInspectorFetchedResultsController(
-            fetchedResults: fetchedResults(for: descriptor, sectionBy: keyPath, isolation: isolation)
-        )
-    }
-
-    /// Creates a fetched-results controller sectioned by an optional string key path.
-    public func fetchedResultsController<Model: WebInspectorFetchableModel>(
-        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
-        sectionBy keyPath: KeyPath<Model, String?>,
-        isolation: isolated (any Actor) = #isolation
-    ) -> WebInspectorFetchedResultsController<Model> {
-        WebInspectorFetchedResultsController(
-            fetchedResults: fetchedResults(for: descriptor, sectionBy: keyPath, isolation: isolation)
-        )
-    }
-
-    /// Creates a fetched-results controller sectioned by a raw-representable string key path.
-    public func fetchedResultsController<
-        Model: WebInspectorFetchableModel,
-        Value: RawRepresentable & Hashable & Sendable
-    >(
-        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
-        sectionBy keyPath: KeyPath<Model, Value>,
-        isolation: isolated (any Actor) = #isolation
-    ) -> WebInspectorFetchedResultsController<Model> where Value.RawValue == String {
-        WebInspectorFetchedResultsController(
-            fetchedResults: fetchedResults(for: descriptor, sectionBy: keyPath, isolation: isolation)
-        )
-    }
-
-    /// Creates a fetched-results controller sectioned by an optional raw-representable string key path.
-    public func fetchedResultsController<
-        Model: WebInspectorFetchableModel,
-        Value: RawRepresentable & Hashable & Sendable
-    >(
-        for descriptor: WebInspectorFetchDescriptor<Model> = .init(),
-        sectionBy keyPath: KeyPath<Model, Value?>,
-        isolation: isolated (any Actor) = #isolation
-    ) -> WebInspectorFetchedResultsController<Model> where Value.RawValue == String {
-        WebInspectorFetchedResultsController(
-            fetchedResults: fetchedResults(for: descriptor, sectionBy: keyPath, isolation: isolation)
-        )
-    }
-
-    func updateFetchDescriptor<Model: WebInspectorFetchableModel>(
-        _ descriptor: WebInspectorFetchDescriptor<Model>,
-        for results: WebInspectorFetchedResults<Model>,
+    package func updateNetworkQuery(
+        _ query: NetworkRequestQuery,
+        for results: WebInspectorFetchedResults<NetworkRequest>,
         isolation: isolated (any Actor) = #isolation
     ) throws {
         requireOwner(isolation)
-        requireSupportedFetchDescriptor(descriptor)
         guard results.modelContext === self else {
             throw WebInspectorProxyError.disconnected(
                 "WebInspectorFetchedResults is not registered in this WebInspectorContext."
             )
         }
-        switch descriptor.kind {
-        case .networkRequests:
-            guard let networkDescriptor = descriptor as? WebInspectorFetchDescriptor<NetworkRequest>,
-                  let networkResults = results as? WebInspectorFetchedResults<NetworkRequest> else {
-                preconditionFailure("NetworkRequest descriptors can only update NetworkRequest fetched results.")
-            }
-            let plan = NetworkRequestQueryPlan(descriptor: networkDescriptor, context: self)
-            networkResults.applyNetworkFetchDescriptor(
-                networkDescriptor,
-                plan: plan,
-                requests: currentNetworkRequests(),
-                lookup: { id in self.requestsByID[id] }
+        let plan = NetworkRequestQueryPlan(query: query)
+        results.applyNetworkQuery(
+            query,
+            plan: plan,
+            requests: currentNetworkRequests(),
+            lookup: { id in self.requestsByID[id] }
+        )
+    }
+
+    package func updateConsoleQuery(
+        _ query: ConsoleMessageQuery,
+        for results: WebInspectorFetchedResults<ConsoleMessage>,
+        isolation: isolated (any Actor) = #isolation
+    ) throws {
+        requireOwner(isolation)
+        guard results.modelContext === self else {
+            throw WebInspectorProxyError.disconnected(
+                "WebInspectorFetchedResults is not registered in this WebInspectorContext."
             )
-        case .consoleMessages:
-            guard let consoleDescriptor = descriptor as? WebInspectorFetchDescriptor<ConsoleMessage>,
-                  let consoleResults = results as? WebInspectorFetchedResults<ConsoleMessage> else {
-                preconditionFailure("ConsoleMessage descriptors can only update ConsoleMessage fetched results.")
-            }
-            consoleResults.applyFetchDescriptor(consoleDescriptor, items: consoleMessages(for: consoleDescriptor))
         }
+        results.applyConsoleQuery(query, items: consoleMessages(for: query))
     }
 
     private func invalidateFetchedResultsRegistrations() {
@@ -2030,19 +1892,6 @@ public final class WebInspectorContext {
         }
         for results in consoleResults {
             results.invalidateRegistration()
-        }
-    }
-
-    private func requireSupportedFetchDescriptor<Model: WebInspectorFetchableModel>(
-        _ descriptor: WebInspectorFetchDescriptor<Model>
-    ) {
-        if descriptor.kind == .networkRequests || descriptor.kind == .consoleMessages {
-            return
-        }
-        guard descriptor.requiresRecordBackedQuery == false else {
-            preconditionFailure(
-                "Predicate, sort, limit, and offset fetch descriptors require a record-backed DataKit query index."
-            )
         }
     }
 
@@ -5999,8 +5848,8 @@ extension WebInspectorContext {
             guard let results = registration.value else {
                 continue
             }
-            let plan = results.currentNetworkQueryPlan(context: self)
-            if plan.requiresQuery == false, results.sectionBy == nil {
+            let plan = results.currentNetworkQueryPlan()
+            if plan.requiresQuery == false, results.networkQuery.sectionBy == nil {
                 guard let itemIndex = networkRequestOrderIndicesByID[request.id] else {
                     preconditionFailure("An unfiltered Network request must have a registered order index.")
                 }
@@ -6651,8 +6500,8 @@ extension WebInspectorContext {
             guard let results = registration.value else {
                 continue
             }
-            let plan = results.currentNetworkQueryPlan(context: self)
-            if plan.requiresQuery == false, results.sectionBy == nil {
+            let plan = results.currentNetworkQueryPlan()
+            if plan.requiresQuery == false, results.networkQuery.sectionBy == nil {
                 guard let itemIndex = networkRequestOrderIndicesByID[request.id] else {
                     preconditionFailure("An unfiltered Network request must have a registered order index.")
                 }
@@ -6664,26 +6513,12 @@ extension WebInspectorContext {
                 )
                 continue
             }
-            if plan.requiresModelPredicate {
-                if inserted {
-                    results.insertNetworkRequest(
-                        request,
-                        lookup: { id in self.requestsByID[id] }
-                    )
-                } else {
-                    results.refreshNetworkRequestAfterMutation(
-                        request,
-                        lookup: { id in self.requestsByID[id] }
-                    )
-                }
-                continue
-            }
             let oldSnapshot = results.networkSnapshotForDelta
             let resultTopologyRevision = results.topologyRevision
             let indexSequence = networkRequestIndexSequence
             guard let delta = await networkRequestIndex.delta(
                 plan: plan,
-                sectionBy: results.sectionBy,
+                sectionBy: results.networkQuery.sectionBy,
                 oldSnapshot: oldSnapshot,
                 changedID: request.id
             ) else {
@@ -6840,21 +6675,15 @@ extension WebInspectorContext {
         orderedConsoleMessageIDs.compactMap { consoleMessagesByID[$0] }
     }
 
-    private func consoleMessages(for descriptor: WebInspectorFetchDescriptor<ConsoleMessage>) -> [ConsoleMessage] {
+    private func consoleMessages(for query: ConsoleMessageQuery) -> [ConsoleMessage] {
         var items = currentConsoleMessages()
-        if let predicate = descriptor.predicate {
-            items = items.filter { message in
-                do {
-                    return try predicate.evaluate(message)
-                } catch {
-                    preconditionFailure("ConsoleMessage predicate evaluation failed: \(error)")
-                }
-            }
+        if let filter = query.filter {
+            items = items.filter(filter.matches)
         }
-        if descriptor.sortBy.isEmpty == false {
+        if query.sortBy.isEmpty == false {
             items.sort { lhs, rhs in
-                for sortDescriptor in descriptor.sortBy {
-                    switch sortDescriptor.compare(lhs, rhs) {
+                for sort in query.sortBy {
+                    switch sort.compare(lhs, rhs) {
                     case .orderedAscending:
                         return true
                     case .orderedDescending:
@@ -6866,13 +6695,10 @@ extension WebInspectorContext {
                 return lhs.id < rhs.id
             }
         }
-        let lowerBound = min(descriptor.fetchOffset, items.count)
-        let upperBound: Int
-        if let fetchLimit = descriptor.fetchLimit {
-            upperBound = min(lowerBound + fetchLimit, items.count)
-        } else {
-            upperBound = items.count
-        }
+        let lowerBound = min(query.fetchOffsetAsInt, items.count)
+        let remainingCount = items.count - lowerBound
+        let visibleCount = min(query.fetchLimitAsInt ?? remainingCount, remainingCount)
+        let upperBound = lowerBound + visibleCount
         return Array(items[lowerBound..<upperBound])
     }
 
@@ -6882,7 +6708,7 @@ extension WebInspectorContext {
             guard let results = registration.value else {
                 continue
             }
-            results.setItems(consoleMessages(for: results.fetchDescriptor), updatedItemIDs: updatedItemIDs)
+            results.setItems(consoleMessages(for: results.consoleQuery), updatedItemIDs: updatedItemIDs)
         }
     }
 }
