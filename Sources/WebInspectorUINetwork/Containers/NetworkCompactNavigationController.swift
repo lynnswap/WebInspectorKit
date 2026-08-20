@@ -6,30 +6,34 @@ import UIKit
 
 @MainActor
 package final class NetworkCompactNavigationController: UINavigationController, UINavigationControllerDelegate {
-    private enum StackTarget {
+    private enum StackTarget: Equatable {
         case list
         case detail
     }
 
-    private enum SelectionCommit {
-        case none
-        case clearIfStillSelected(NetworkPanelSelectionIntent.ID)
+    private enum StackTransition {
+        case showingList
+        case showingDetail
+        case removingDetailForModel
+        case removingDetailForUser(capturedIntentID: NetworkPanelSelectionIntent.ID?)
 
-        @MainActor
-        func apply(to model: NetworkPanelModel) {
+        var target: StackTarget {
             switch self {
-            case .none:
-                return
-            case .clearIfStillSelected(let intentID):
-                model.clearSelection(ifIntentUnchanged: intentID)
+            case .showingDetail:
+                .detail
+            case .showingList, .removingDetailForModel, .removingDetailForUser:
+                .list
             }
         }
-    }
 
-    private struct StackTransition {
-        var target: StackTarget
-        var removesDetail: Bool
-        var selectionCommit: SelectionCommit
+        var removesDetail: Bool {
+            switch self {
+            case .showingList, .showingDetail:
+                false
+            case .removingDetailForModel, .removingDetailForUser:
+                true
+            }
+        }
     }
 
     private struct DeferredStackSync {
@@ -98,15 +102,22 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         willShow viewController: UIViewController,
         animated: Bool
     ) {
-        guard viewController === listViewController,
-              activeTransition == nil,
-              transitionCoordinator?.viewController(forKey: .from) === detailViewController else {
+        guard viewController === listViewController else {
             return
         }
-        activeTransition = StackTransition(
-            target: .list,
-            removesDetail: true,
-            selectionCommit: userPopSelectionCommit()
+        let sourceViewController = activeTransition?.target == .detail
+            ? detailViewController
+            : transitionCoordinator?.viewController(forKey: .from)
+        beginUserDetailRemovalIfNeeded(from: sourceViewController)
+    }
+
+    private func beginUserDetailRemovalIfNeeded(from sourceViewController: UIViewController?) {
+        guard sourceViewController === detailViewController,
+              activeTransition?.target != .list else {
+            return
+        }
+        activeTransition = .removingDetailForUser(
+            capturedIntentID: model.detailSubject?.intentID
         )
     }
 
@@ -116,10 +127,12 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         animated: Bool
     ) {
         let shownTarget = stackTarget(for: viewController)
-        if finishActiveTransitionIfNeeded(shownTarget: shownTarget) == false {
-            finishUntrackedDetailRemovalIfNeeded(shownTarget: shownTarget)
-        }
+        finishActiveTransitionIfNeeded(shownTarget: shownTarget)
+        let hadDeferredStackSync = deferredStackSync != nil
         performDeferredStackSyncIfNeeded()
+        if hadDeferredStackSync == false {
+            syncStack(to: desiredStackTarget(), animated: false)
+        }
     }
 
     private func startObservingSelection() {
@@ -161,11 +174,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         }
         detailViewController.webInspectorDetachFromContainerForReuse()
         let shouldAnimate = animated && viewControllers.first === listViewController
-        activeTransition = StackTransition(
-            target: .detail,
-            removesDetail: false,
-            selectionCommit: .none
-        )
+        activeTransition = .showingDetail
         if viewControllers.first === listViewController {
             setViewControllers([listViewController, detailViewController], animated: shouldAnimate)
         } else {
@@ -178,11 +187,9 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         guard viewControllers.count != 1 || viewControllers.first !== listViewController else {
             return
         }
-        activeTransition = StackTransition(
-            target: .list,
-            removesDetail: viewControllers.contains { $0 === detailViewController },
-            selectionCommit: .none
-        )
+        activeTransition = viewControllers.contains { $0 === detailViewController }
+            ? .removingDetailForModel
+            : .showingList
         setViewControllers([listViewController], animated: animated)
         finishActiveTransitionIfNoCoordinator()
     }
@@ -230,39 +237,26 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         guard transitionCoordinator == nil else {
             return
         }
-        _ = finishActiveTransitionIfNeeded(shownTarget: currentStackTarget())
+        finishActiveTransitionIfNeeded(shownTarget: currentStackTarget())
     }
 
-    @discardableResult
-    private func finishActiveTransitionIfNeeded(shownTarget: StackTarget?) -> Bool {
+    private func finishActiveTransitionIfNeeded(shownTarget: StackTarget?) {
         guard let transition = activeTransition else {
-            return false
+            return
         }
         activeTransition = nil
         guard shownTarget == transition.target else {
-            return false
+            return
         }
 
         commit(transition)
-        return true
-    }
-
-    private func finishUntrackedDetailRemovalIfNeeded(shownTarget: StackTarget?) {
-        guard shownTarget == .list,
-              model.detailSubject != nil else {
-            return
-        }
-        commit(
-            StackTransition(
-                target: .list,
-                removesDetail: true,
-                selectionCommit: userPopSelectionCommit()
-            )
-        )
     }
 
     private func commit(_ transition: StackTransition) {
-        transition.selectionCommit.apply(to: model)
+        if case .removingDetailForUser(let capturedIntentID) = transition,
+           let capturedIntentID {
+            model.clearSelection(ifIntentUnchanged: capturedIntentID)
+        }
         guard transition.removesDetail else {
             return
         }
@@ -287,13 +281,6 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         return nil
     }
 
-    private func userPopSelectionCommit() -> SelectionCommit {
-        guard let intentID = model.detailSubject?.intentID else {
-            return .none
-        }
-        return .clearIfStillSelected(intentID)
-    }
-
     private func applyBackgroundFromTraits() {
         webInspectorApplyNavigationControllerBackground(to: self)
     }
@@ -316,24 +303,23 @@ extension NetworkCompactNavigationController {
     }
 
     @discardableResult
-    package func popDetailWhilePushTransitionIsStillTrackedForTesting()
+    package func popDetailWhilePushTransitionIsStillTrackedForTesting(
+        beforeTransitionCompletion: () -> Void = {}
+    )
         -> UIViewController?
     {
         guard viewControllers.last === detailViewController else {
             return nil
         }
 
-        activeTransition = StackTransition(
-            target: .detail,
-            removesDetail: false,
-            selectionCommit: .none
-        )
+        activeTransition = .showingDetail
         navigationController(
             self,
             willShow: listViewController,
             animated: false
         )
         let poppedViewController = popViewController(animated: false)
+        beforeTransitionCompletion()
         navigationController(
             self,
             didShow: listViewController,
@@ -350,14 +336,12 @@ extension NetworkCompactNavigationController {
             return nil
         }
 
-        activeTransition = StackTransition(
-            target: .list,
-            removesDetail: true,
-            selectionCommit: userPopSelectionCommit()
+        activeTransition = .removingDetailForUser(
+            capturedIntentID: model.detailSubject?.intentID
         )
         let poppedViewController = popViewController(animated: false)
         beforeTransitionCompletion()
-        _ = finishActiveTransitionIfNeeded(shownTarget: .list)
+        finishActiveTransitionIfNeeded(shownTarget: .list)
         performDeferredStackSyncIfNeeded()
         return poppedViewController
     }
@@ -369,14 +353,33 @@ extension NetworkCompactNavigationController {
             return
         }
 
-        activeTransition = StackTransition(
-            target: .list,
-            removesDetail: true,
-            selectionCommit: userPopSelectionCommit()
+        activeTransition = .removingDetailForUser(
+            capturedIntentID: model.detailSubject?.intentID
         )
         beforeTransitionCompletion()
-        _ = finishActiveTransitionIfNeeded(shownTarget: .detail)
+        finishActiveTransitionIfNeeded(shownTarget: .detail)
         performDeferredStackSyncIfNeeded()
+    }
+
+    package func cancelDetailPopWhilePushTransitionIsStillTrackedForTesting(
+        beforeTransitionCompletion: () -> Void = {}
+    ) {
+        guard viewControllers.last === detailViewController else {
+            return
+        }
+
+        activeTransition = .showingDetail
+        navigationController(
+            self,
+            willShow: listViewController,
+            animated: false
+        )
+        beforeTransitionCompletion()
+        navigationController(
+            self,
+            didShow: detailViewController,
+            animated: false
+        )
     }
 }
 #endif

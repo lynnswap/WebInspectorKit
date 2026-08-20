@@ -5822,6 +5822,45 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func compactContainerKeepsReplacementAfterCancelledPopOvertakesPush() async throws {
+        let context = makeContext()
+        let firstRequest = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "cancel-first",
+                url: "https://example.com/first.js"
+            )
+        )
+        let secondRequest = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "cancel-second",
+                url: "https://example.com/second.js"
+            )
+        )
+        let model = NetworkPanelModel(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectRequest(firstRequest)
+        let originalIntentID = try #require(model.detailSubject?.intentID)
+        navigationController.syncStackForTesting()
+
+        navigationController.cancelDetailPopWhilePushTransitionIsStillTrackedForTesting {
+            model.selectRequest(secondRequest)
+            navigationController.syncStackForTesting()
+        }
+
+        #expect(model.detailSubject?.intentID != originalIntentID)
+        #expect(model.selectedRequest === secondRequest)
+        #expect(navigationController.viewControllers == [listViewController, detailViewController])
+    }
+
+    @Test
     func compactContainerConvergesToReplacementSelectionAfterUserPop() async throws {
         let context = makeContext()
         let firstRequest = try #require(
@@ -5839,14 +5878,17 @@ struct NetworkDetailViewControllerTests {
             detailViewController: detailViewController
         )
         model.selectRequest(firstRequest)
+        let originalIntentID = try #require(model.detailSubject?.intentID)
         navigationController.syncStackForTesting()
 
-        let poppedViewController = navigationController.popDetailFromUserNavigationForTesting {
+        let poppedViewController = navigationController
+            .popDetailWhilePushTransitionIsStillTrackedForTesting {
+            model.selectRequest(nil)
             model.selectRequest(secondRequest)
-            navigationController.syncStackForTesting()
         }
 
         #expect(poppedViewController === detailViewController)
+        #expect(model.detailSubject?.intentID != originalIntentID)
         #expect(model.selectedRequest === secondRequest)
         #expect(navigationController.viewControllers == [listViewController, detailViewController])
     }
@@ -5873,7 +5915,8 @@ struct NetworkDetailViewControllerTests {
         let originalIntentID = try #require(model.detailSubject?.intentID)
         navigationController.syncStackForTesting()
 
-        let poppedViewController = navigationController.popDetailFromUserNavigationForTesting {
+        let poppedViewController = navigationController
+            .popDetailWhilePushTransitionIsStillTrackedForTesting {
             model.selectRequest(request)
             navigationController.syncStackForTesting()
         }
@@ -5908,7 +5951,8 @@ struct NetworkDetailViewControllerTests {
         let originalIntentID = try #require(model.detailSubject?.intentID)
         navigationController.syncStackForTesting()
 
-        let poppedViewController = navigationController.popDetailFromUserNavigationForTesting {
+        let poppedViewController = navigationController
+            .popDetailWhilePushTransitionIsStillTrackedForTesting {
             model.selectEntry(entry)
             navigationController.syncStackForTesting()
         }
@@ -5952,7 +5996,8 @@ struct NetworkDetailViewControllerTests {
         let intentID = try #require(model.detailSubject?.intentID)
         navigationController.syncStackForTesting()
 
-        let poppedViewController = navigationController.popDetailFromUserNavigationForTesting {
+        let poppedViewController = navigationController
+            .popDetailWhilePushTransitionIsStillTrackedForTesting {
             request.applyRequestWillBeSent(
                 request: Network.Request(
                     id: request.proxyID,
