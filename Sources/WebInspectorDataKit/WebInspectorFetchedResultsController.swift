@@ -476,6 +476,9 @@ extension WebInspectorFetchedResultsIndexPath: Comparable {
 }
 
 /// Controller wrapper around ``WebInspectorFetchedResults``.
+///
+/// The controller shares the fetched results' registration and transaction
+/// stream lifetime. See <doc:ModelRegistrationLifetimes>.
 public final class WebInspectorFetchedResultsController<Model: WebInspectorFetchableModel> {
     /// The observable fetched-results model.
     public let fetchedResults: WebInspectorFetchedResults<Model>
@@ -496,6 +499,10 @@ public final class WebInspectorFetchedResultsController<Model: WebInspectorFetch
     }
 
     /// Stream of transactions emitted after result changes.
+    ///
+    /// The stream finishes when the fetched results are no longer registered
+    /// because their originating context was released. A stream created after
+    /// that point is already finished.
     public var transactions: AsyncStream<WebInspectorFetchedResultsTransaction<Model>> {
         fetchedResults.makeTransactionStream()
     }
@@ -506,10 +513,13 @@ public final class WebInspectorFetchedResultsController<Model: WebInspectorFetch
     }
 
     /// Replaces the fetch descriptor and updates the result contents.
+    ///
+    /// - Throws: `WebInspectorProxyError.disconnected` when the underlying
+    ///   fetched results are no longer registered in their originating context.
     public func updateFetchDescriptor(
         _ descriptor: WebInspectorFetchDescriptor<Model>,
         isolation: isolated (any Actor) = #isolation
-    ) {
-        fetchedResults.updateFetchDescriptor(descriptor, isolation: isolation)
+    ) throws {
+        try fetchedResults.updateFetchDescriptor(descriptor, isolation: isolation)
     }
 }

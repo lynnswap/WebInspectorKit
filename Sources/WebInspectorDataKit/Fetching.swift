@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import WebInspectorProxyKit
 
 /// Value configuration for fetching DataKit model objects.
 ///
@@ -299,6 +300,9 @@ private enum WebInspectorKnownKeyPaths {
 }
 
 /// Observable collection of models produced by a fetch descriptor.
+///
+/// The collection can outlive its registration in a
+/// ``WebInspectorContext``. See <doc:ModelRegistrationLifetimes>.
 @Observable
 public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel> {
     /// The descriptor currently used by the results.
@@ -353,6 +357,11 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
         transactionRelay.makeStream()
     }
 
+    func invalidateRegistration() {
+        modelContext = nil
+        transactionRelay.finish()
+    }
+
     func setItems(_ items: [Model], updatedItemIDs: Set<Model.ID> = []) {
         let oldSnapshot = currentSnapshot
         self.items = items
@@ -396,14 +405,23 @@ public final class WebInspectorFetchedResults<Model: WebInspectorFetchableModel>
     }
 
     /// Replaces the fetch descriptor and updates the result contents.
+    ///
+    /// Retaining fetched results does not retain their originating context. If
+    /// that context has been released, the last descriptor, items, and sections
+    /// remain readable and transaction streams finish.
+    ///
+    /// - Throws: `WebInspectorProxyError.disconnected` when these results
+    ///   are no longer registered in their originating context.
     public func updateFetchDescriptor(
         _ descriptor: WebInspectorFetchDescriptor<Model>,
         isolation: isolated (any Actor) = #isolation
-    ) {
+    ) throws {
         guard let modelContext else {
-            preconditionFailure("WebInspectorFetchedResults is not registered in a WebInspectorContext.")
+            throw WebInspectorProxyError.disconnected(
+                "WebInspectorFetchedResults is not registered in this WebInspectorContext."
+            )
         }
-        modelContext.updateFetchDescriptor(descriptor, for: self, isolation: isolation)
+        try modelContext.updateFetchDescriptor(descriptor, for: self, isolation: isolation)
     }
 
     private var currentSnapshot: WebInspectorFetchedResultsSnapshot<Model.ID> {

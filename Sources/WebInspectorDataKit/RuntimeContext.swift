@@ -10,7 +10,10 @@ public final class RuntimeContext: WebInspectorPersistentModel {
         var targetRevision: UInt64
     }
 
-    /// Stable identity for an execution context within a context.
+    /// Stable identity for this Runtime context model.
+    ///
+    /// A later Runtime generation can reuse the protocol identity for a
+    /// different model without reviving this instance.
     public struct ID: Hashable, Sendable {
         let proxyID: Runtime.ExecutionContext.ID
 

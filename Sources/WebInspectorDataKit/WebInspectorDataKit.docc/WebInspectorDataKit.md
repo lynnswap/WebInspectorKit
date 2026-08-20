@@ -67,6 +67,10 @@ access with no model layer.
 
 ## Topics
 
+### Essentials
+
+- <doc:ModelRegistrationLifetimes>
+
 ### Creating a Model Context
 
 - ``WebInspectorContainer``

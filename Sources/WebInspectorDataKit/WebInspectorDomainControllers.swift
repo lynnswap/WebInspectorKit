@@ -72,6 +72,10 @@ public struct DOMMutationResult: Sendable, Hashable {
 ///
 /// Use this controller instead of dispatching ProxyKit DOM commands directly
 /// when working with DataKit-owned DOM nodes.
+///
+/// Node IDs address the currently registered model in this controller's
+/// context. They do not revive a retained ``DOMNode`` from an earlier document
+/// or from another context. See <doc:ModelRegistrationLifetimes>.
 public final class DOMModelController {
     private let context: WebInspectorContext
 
