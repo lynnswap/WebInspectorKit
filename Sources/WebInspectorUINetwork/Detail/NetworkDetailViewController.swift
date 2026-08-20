@@ -116,10 +116,8 @@ package final class NetworkDetailViewController: UIViewController {
     }()
     private var previewRoles: [NetworkBody.Role] = []
     private var hasBoundSelection = false
-    private var observedSelection: NetworkPanelSelection?
-    private weak var observedEntry: NetworkListEntry?
+    private var observedSubject: NetworkDetailSubject?
     private weak var observedRequest: NetworkRequest?
-    private var observedRequests: [NetworkRequest] = []
     private weak var presentedRequestPicker: NetworkDetailRequestPickerViewController?
     private var bodyTopToPreviewContainerConstraint: NSLayoutConstraint?
     private var bodyTopToPreviewRoleControlConstraint: NSLayoutConstraint?
@@ -132,8 +130,11 @@ package final class NetworkDetailViewController: UIViewController {
         let view = NetworkHeadersTextView()
         view.translatesAutoresizingMaskIntoConstraints = false
         view.isHidden = true
-        view.requestPreviewAction = { [weak self] in
-            self?.activateRequestPreviewFromHeaders()
+        view.requestPreviewAction = { [weak self] subject, request in
+            self?.activateRequestPreviewFromHeaders(
+                subject: subject,
+                request: request
+            )
         }
         return view
     }()
@@ -216,14 +217,10 @@ package final class NetworkDetailViewController: UIViewController {
         modelObservation?.cancel()
         let token = withPortableContinuousObservation { [weak self] _ in
             guard let self else { return }
-            let selection = model.selection
-            let selectedEntry = model.selectedEntry
-            _ = selectedEntry?.requests
-            let selectedRequest = model.selectedRequest
-            bindSelection(
-                selection,
-                entry: selectedEntry,
-                selectedRequest: selectedRequest,
+            let subject = model.detailSubject
+            _ = subject?.renderRequests
+            bindSubject(
+                subject,
                 force: selectedRequestRenderObservation == nil
             )
         }
@@ -235,22 +232,15 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func resumeRendering() {
         guard isRenderingActive == false else {
-            bindSelection(
-                model.selection,
-                entry: model.selectedEntry,
-                selectedRequest: model.selectedRequest,
+            bindSubject(
+                model.detailSubject,
                 force: selectedRequestRenderObservation == nil
             )
             updateBodyRenderingActiveForCurrentSurface()
             return
         }
         isRenderingActive = true
-        bindSelection(
-            model.selection,
-            entry: model.selectedEntry,
-            selectedRequest: model.selectedRequest,
-            force: true
-        )
+        bindSubject(model.detailSubject, force: true)
         startObservingModel()
         updateBodyRenderingActiveForCurrentSurface()
     }
@@ -403,56 +393,33 @@ package final class NetworkDetailViewController: UIViewController {
         renderModeControl()
     }
 
-    private func bindSelection(
-        _ selection: NetworkPanelSelection?,
-        entry: NetworkListEntry?,
-        selectedRequest: NetworkRequest?,
+    private func bindSubject(
+        _ subject: NetworkDetailSubject?,
         force: Bool = false
     ) {
         guard isRenderingActive else {
             return
         }
-
-        let requests: [NetworkRequest]
-        switch selection {
-        case .entry:
-            requests = entry?.requests ?? []
-        case .request:
-            requests = selectedRequest.map { [$0] } ?? []
-        case nil:
-            requests = []
-        }
-        renderRequestPickerItem(entry: entry)
+        renderRequestPickerItem(subject: subject)
 
         guard force
             || hasBoundSelection == false
-            || observedSelection != selection
-            || observedEntry !== entry
-            || requestInstancesMatch(observedRequests, requests) == false else {
-            renderModeControl(selectedRequest: selectedRequest)
+            || subjectsHaveSameIdentity(observedSubject, subject) == false else {
+            renderModeControl(selectedRequest: subject?.activeRequest)
             return
         }
 
-        guard let selection,
-              let entry,
-              let selectedRequest,
-              requests.isEmpty == false else {
+        guard let subject else {
             clearSelectedRequestPresentation(bodySurface: .none)
             return
-        }
-
-        guard selection.entryID == entry.id else {
-            preconditionFailure("A Network detail selection must reference its selected entry.")
         }
 
         hasBoundSelection = true
         selectedRequestRenderObservation?.cancel()
         selectedRequestRenderObservation = nil
         unbindResponseBodyFetchObservation()
-        observedSelection = selection
-        observedEntry = entry
-        observedRequest = selectedRequest
-        observedRequests = requests
+        observedSubject = subject
+        observedRequest = subject.activeRequest
 #if DEBUG
         selectedRequestRenderObservationDelivery = nil
 #endif
@@ -460,8 +427,8 @@ package final class NetworkDetailViewController: UIViewController {
         if contentUnavailableConfiguration != nil {
             contentUnavailableConfiguration = nil
         }
-        renderModeControl(selectedRequest: selectedRequest)
-        bindSelectedRequestRendering(selection: selection, requests: requests)
+        renderModeControl(selectedRequest: subject.activeRequest)
+        bindSelectedRequestRendering(subject: subject)
     }
 
     private func rebindSelectedRequestRendering() {
@@ -474,30 +441,27 @@ package final class NetworkDetailViewController: UIViewController {
         guard isRenderingActive else {
             return
         }
-        guard let observedSelection,
-              observedRequests.isEmpty == false else {
+        guard let observedSubject else {
             return
         }
-        bindSelectedRequestRendering(selection: observedSelection, requests: observedRequests)
+        bindSelectedRequestRendering(subject: observedSubject)
     }
 
     private func bindSelectedRequestRendering(
-        selection: NetworkPanelSelection,
-        requests: [NetworkRequest]
+        subject: NetworkDetailSubject
     ) {
         guard isRenderingActive else {
             return
         }
         let token = withPortableContinuousObservation { [weak self] _ in
             guard let self,
-                  observedSelection == selection,
-                  requestInstancesMatch(observedRequests, requests) else {
+                  observedSubject?.hasSameIdentity(as: subject) == true else {
                 return
             }
 #if DEBUG
             selectedRequestRenderCountStorageForTesting += 1
 #endif
-            renderSelection(selection, requests: observedRequests)
+            renderSubject(subject)
         }
         selectedRequestRenderObservation = token
 #if DEBUG
@@ -505,72 +469,32 @@ package final class NetworkDetailViewController: UIViewController {
 #endif
     }
 
-    private func renderSelection(
-        _ selection: NetworkPanelSelection,
-        requests: [NetworkRequest]
-    ) {
+    private func renderSubject(_ subject: NetworkDetailSubject) {
         guard isRenderingActive else {
             return
         }
+        let activeRequest = subject.activeRequest
         switch mode {
         case .preview:
-            let activeRequest = activeRequest(for: selection, requests: requests)
-            let activeWebSocket = activeRequest.webSocket
-            if activeWebSocket != nil {
+            if activeRequest.webSocket != nil {
                 renderWebSocketPreviewSurface(request: activeRequest)
                 return
             }
             let candidate: PreviewCandidate
-            switch selection {
+            switch subject.scope {
             case .entry:
-                guard let groupedCandidate = previewCandidate(in: requests) else {
-                    preconditionFailure("A selected Network entry must contain at least one request.")
-                }
-                candidate = groupedCandidate
+                candidate = previewCandidate(in: subject.renderRequests)
+                    ?? .standard(activeRequest)
             case .request:
-                guard requests.count == 1,
-                      let request = requests.first else {
-                    preconditionFailure("An explicit Network request selection must render exactly one request.")
-                }
-                candidate = previewCandidate(for: request) ?? .standard(request)
+                candidate = previewCandidate(for: activeRequest) ?? .standard(activeRequest)
             }
             renderPreviewSurface(candidate: candidate)
         case .headers:
-            switch selection {
-            case .entry:
-                renderHeadersSurface(entryRequests: requests)
-            case .request:
-                guard requests.count == 1,
-                      let request = requests.first else {
-                    preconditionFailure("An explicit Network request selection must render exactly one request.")
-                }
-                renderHeadersSurface(request: request)
-            }
+            renderHeadersSurface(subject: subject)
         case .security:
-            renderSecuritySurface(
-                request: activeRequest(for: selection, requests: requests)
-            )
+            renderSecuritySurface(request: activeRequest)
         case .cookies:
-            renderCookiesSurface(request: activeRequest(for: selection, requests: requests))
-        }
-    }
-
-    private func activeRequest(
-        for selection: NetworkPanelSelection,
-        requests: [NetworkRequest]
-    ) -> NetworkRequest {
-        switch selection {
-        case .entry:
-            guard let representativeRequest = requests.first else {
-                preconditionFailure("A selected Network entry must contain at least one request.")
-            }
-            return representativeRequest
-        case .request:
-            guard requests.count == 1,
-                  let selectedRequest = requests.first else {
-                preconditionFailure("An explicit Network request selection must render exactly one request.")
-            }
-            return selectedRequest
+            renderCookiesSurface(request: activeRequest)
         }
     }
 
@@ -590,24 +514,12 @@ package final class NetworkDetailViewController: UIViewController {
         showWebSocketPreview()
     }
 
-    private func renderHeadersSurface(entryRequests requests: [NetworkRequest]) {
-        guard let representativeRequest = requests.first else {
-            preconditionFailure("A selected Network entry must contain at least one request.")
-        }
-        observedRequest = representativeRequest
-        title = representativeRequest.displayName
-        showHeaders()
-        headersTextView.render(
-            requests: requests,
-            activeRequest: representativeRequest
-        )
-    }
-
-    private func renderHeadersSurface(request: NetworkRequest) {
+    private func renderHeadersSurface(subject: NetworkDetailSubject) {
+        let request = subject.activeRequest
         observedRequest = request
         title = request.displayName
         showHeaders()
-        headersTextView.render(request: request, activeRequest: request)
+        headersTextView.render(subject: subject)
     }
 
     private func renderCookiesSurface(request: NetworkRequest) {
@@ -658,57 +570,31 @@ package final class NetworkDetailViewController: UIViewController {
         rebindSelectedRequestRendering()
     }
 
-    private func activateRequestPreviewFromHeaders() {
+    private func activateRequestPreviewFromHeaders(
+        subject: NetworkDetailSubject,
+        request activeRequest: NetworkRequest
+    ) {
         guard mode == .headers,
               isRenderingActive,
-              let selection = model.selection,
-              let entry = model.selectedEntry,
-              let selectedRequest = model.selectedRequest else {
+              observedSubject?.hasSameIdentity(as: subject) == true else {
             return
         }
-        let currentRequests: [NetworkRequest] = switch selection {
-        case .entry:
-            entry.requests
-        case .request:
-            [selectedRequest]
-        }
-        let activeRequest = activeRequest(for: selection, requests: currentRequests)
         guard activeRequest.webSocket == nil,
               let requestData = activeRequest.headersContext.requestData,
               case .body = requestData else {
             return
         }
 
-        previewRole = .request
-        let explicitRequest = promoteHeadersActiveRequestToExplicitSelection(
+        guard let explicitSubject = model.selectRequest(
             activeRequest,
-            expectedEntryID: entry.id
-        )
-
-        mode = .preview
-        bindSelection(
-            model.selection,
-            entry: model.selectedEntry,
-            selectedRequest: explicitRequest,
-            force: true
-        )
-    }
-
-    private func promoteHeadersActiveRequestToExplicitSelection(
-        _ request: NetworkRequest,
-        expectedEntryID: NetworkListEntry.ID
-    ) -> NetworkRequest {
-        model.selectRequest(request)
-        guard case let .request(entryID, requestID) = model.selection,
-              entryID == expectedEntryID,
-              requestID == request.id,
-              let selectedRequest = model.selectedRequest,
-              selectedRequest === request else {
-            preconditionFailure(
-                "A current Network headers request must become the exact explicit selection."
-            )
+            ifSubjectUnchanged: subject
+        ) else {
+            return
         }
-        return selectedRequest
+
+        previewRole = .request
+        mode = .preview
+        bindSubject(explicitSubject, force: true)
     }
 
     private func renderModeControl(selectedRequest request: NetworkRequest? = nil) {
@@ -721,45 +607,50 @@ package final class NetworkDetailViewController: UIViewController {
         selectedRequestRenderObservation?.cancel()
         selectedRequestRenderObservation = nil
         unbindResponseBodyFetchObservation()
-        observedSelection = nil
-        observedEntry = nil
+        observedSubject = nil
         observedRequest = nil
-        observedRequests = []
 #if DEBUG
         selectedRequestRenderObservationDelivery = nil
 #endif
         title = nil
-        renderRequestPickerItem(entry: nil)
+        renderRequestPickerItem(subject: nil)
         showEmptySelection(bodySurface: bodySurface)
         renderModeControl(selectedRequest: nil)
     }
 
-    private func requestInstancesMatch(
-        _ lhs: [NetworkRequest],
-        _ rhs: [NetworkRequest]
+    private func subjectsHaveSameIdentity(
+        _ lhs: NetworkDetailSubject?,
+        _ rhs: NetworkDetailSubject?
     ) -> Bool {
-        lhs.count == rhs.count && zip(lhs, rhs).allSatisfy { $0 === $1 }
+        switch (lhs, rhs) {
+        case let (.some(lhs), .some(rhs)):
+            lhs.hasSameIdentity(as: rhs)
+        case (.none, .none):
+            true
+        case (.some, .none), (.none, .some):
+            false
+        }
     }
 
-    private func renderRequestPickerItem(entry: NetworkListEntry?) {
-        guard let entry,
-              entry.requests.count > 1 else {
+    private func renderRequestPickerItem(subject: NetworkDetailSubject?) {
+        guard let subject,
+              subject.entryRequests.count > 1 else {
             navigationItem.rightBarButtonItem = nil
             dismissRequestPicker(animated: false)
             return
         }
         navigationItem.rightBarButtonItem = requestPickerItem
-        requestPickerItem.accessibilityValue = String(entry.requests.count)
+        requestPickerItem.accessibilityValue = String(subject.entryRequests.count)
     }
 
     @objc private func presentRequestPicker() {
         guard presentedRequestPicker == nil,
-              let entry = model.selectedEntry,
-              entry.requests.count > 1 else {
+              let subject = model.detailSubject,
+              subject.entryRequests.count > 1 else {
             return
         }
 
-        let picker = NetworkDetailRequestPickerViewController(model: model, entryID: entry.id)
+        let picker = NetworkDetailRequestPickerViewController(model: model, subject: subject)
         let navigationController = UINavigationController(rootViewController: picker)
         navigationController.modalPresentationStyle = .popover
         navigationController.preferredContentSize = picker.preferredContentSize
@@ -968,16 +859,21 @@ package final class NetworkDetailViewController: UIViewController {
         responseBodyFetchObservationBinding.cancel()
     }
 
-    private func fetchResponseBodyIfNeededForVisibleResponse(_ request: NetworkRequest) {
+    func fetchResponseBodyIfNeededForVisibleResponse(_ request: NetworkRequest) {
         guard isRenderingActive,
               mode == .preview,
+              let currentSubject = model.detailSubject,
+              observedSubject?.hasSameIdentity(as: currentSubject) == true,
               observedRequest === request,
               selectedPreviewRole(from: availablePreviewRoles(in: request)) == .response,
               (previewCandidate(for: request)?.allowsResponseBodySurface ?? true),
               request.canFetchResponseBody else {
             return
         }
-        model.fetchResponseBodyIfNeeded(for: request)
+        model.fetchResponseBodyIfNeeded(
+            for: request,
+            ifSubjectUnchanged: currentSubject
+        )
     }
 
     private func body(in request: NetworkRequest, for role: NetworkBody.Role) -> NetworkBody? {
@@ -1341,6 +1237,7 @@ extension NetworkDetailViewController {
     var responseBodyFetchObservationDeliveryForTesting: PortableObservationTracking.Token? {
         responseBodyFetchObservationBinding.observationDelivery
     }
+
 
     var previewRequestIDForTesting: NetworkRequest.ID? {
         observedRequest?.id

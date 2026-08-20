@@ -500,14 +500,19 @@ struct NetworkDetailViewControllerTests {
         })
 
         let entryID = try #require(model.entryID(containing: explicit.id))
-        let picker = NetworkDetailRequestPickerViewController(model: model, entryID: entryID)
+        let picker = NetworkDetailRequestPickerViewController(
+            model: model,
+            subject: try #require(model.detailSubject)
+        )
+        let pickerWindow = showInWindow(picker, useUIKitVisibility: true)
+        defer { pickerWindow.isHidden = true }
         picker.resumeRenderingForTesting()
         let explicitIndex = try #require(
             picker.itemIDsForTesting.firstIndex(of: .request(explicit.id))
         )
-        picker.collectionView(
-            picker.collectionView,
-            didSelectItemAt: IndexPath(item: explicitIndex, section: 0)
+        try selectPickerItem(
+            at: IndexPath(item: explicitIndex, section: 0),
+            in: picker
         )
         #expect(await waitUntilRendered(in: viewController) {
             let security = viewController.securityViewControllerForTesting
@@ -4281,6 +4286,145 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func groupedPreviewFetchesTheVisibleNonRepresentativeResponseBody() async throws {
+        let fixture = try await makeLiveNetworkDetailFixture()
+        let frameID = FrameID("grouped-response-fetch-frame")
+        let nodeID = DOM.Node.ID("grouped-response-fetch-node")
+        installNavigationVisit(in: fixture.context, frameID: frameID)
+        let representative = try #require(await applyGroupedRequest(
+            to: fixture.context,
+            requestID: "grouped-response-representative",
+            url: "https://example.test/representative.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "application/json"],
+            responseMIMEType: "application/json",
+            resourceType: .xhr,
+            timestamp: 1
+        ))
+        let visibleCandidate = try #require(await applyGroupedRequest(
+            to: fixture.context,
+            requestID: "grouped-response-visible-candidate",
+            url: "https://example.test/visible.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "application/json"],
+            responseMIMEType: "application/json",
+            resourceType: .xhr,
+            timestamp: 4
+        ))
+        await fixture.runtime.backend.enqueue(
+            Network.Body(data: #"{"visible":true}"#, base64Encoded: false),
+            for: "Network",
+            method: "getResponseBody"
+        )
+        let model = NetworkPanelModel(context: fixture.context)
+        try selectEntry(containing: visibleCandidate, in: model)
+        let viewController = makeNetworkDetailViewController(
+            model: model,
+            initialMode: .preview
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(model.detailSubject?.activeRequest === representative)
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == visibleCandidate.id
+        })
+        let commands = await fixture.runtime.backend.waitForRecordedCommands(
+            domain: "Network",
+            method: "getResponseBody",
+            count: 1
+        )
+        #expect(commands.count == 1)
+        #expect(
+            await waitForNetworkBodyPhase(in: visibleCandidate.responseBody) {
+                $0 == .loaded
+            } != nil
+        )
+        #expect(visibleCandidate.responseBody.text == #"{"visible":true}"#)
+        #expect(representative.responseBody.phase == .available)
+        #expect(await fixture.runtime.backend.recordedCommands().filter {
+            $0.domain == "Network" && $0.method == "getResponseBody"
+        }.count == 1)
+
+        await fixture.runtime.backend.enqueue((), for: "Console", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Runtime", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Network", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Page", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Inspector", method: "disable")
+        await fixture.context.stop()
+        #expect(fixture.context.state == .detached)
+    }
+
+    @Test
+    func supersededResponseObservationCannotFetchThePreviouslySelectedRequest() async throws {
+        let fixture = try await makeLiveNetworkDetailFixture()
+        let first = try #require(await applyRequest(
+            to: fixture.context,
+            requestID: "stale-fetch-first",
+            url: "https://example.test/first.json",
+            responseHeaders: ["content-type": "application/json"],
+            responseMimeType: "application/json",
+            finishes: false
+        ))
+        let second = try #require(await applyRequest(
+            to: fixture.context,
+            requestID: "stale-fetch-second",
+            url: "https://example.test/second.json",
+            responseHeaders: ["content-type": "application/json"],
+            responseMimeType: "application/json",
+            finishes: false
+        ))
+        let model = NetworkPanelModel(context: fixture.context)
+        model.selectRequest(first)
+        let viewController = makeNetworkDetailViewController(
+            model: model,
+            initialMode: .preview
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == first.id
+                && viewController.responseBodyFetchObservationDeliveryForTesting != nil
+        })
+        model.selectRequest(second)
+        first.finish(timestamp: 3, sourceMapURL: nil, metrics: nil)
+        viewController.fetchResponseBodyIfNeededForVisibleResponse(first)
+
+        #expect(await fixture.runtime.backend.recordedCommands().filter {
+            $0.domain == "Network" && $0.method == "getResponseBody"
+        }.isEmpty)
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == second.id
+                && viewController.responseBodyFetchObservationDeliveryForTesting != nil
+        })
+        await fixture.runtime.backend.enqueue(
+            Network.Body(data: #"{"current":true}"#, base64Encoded: false),
+            for: "Network",
+            method: "getResponseBody"
+        )
+
+        second.finish(timestamp: 4, sourceMapURL: nil, metrics: nil)
+        viewController.fetchResponseBodyIfNeededForVisibleResponse(second)
+
+        let responseBodyCommands = await fixture.runtime.backend.waitForRecordedCommands(
+            domain: "Network",
+            method: "getResponseBody",
+            count: 1
+        )
+        #expect(responseBodyCommands.count == 1)
+        #expect(await waitForNetworkBodyPhase(in: second.responseBody) { $0 == .loaded } != nil)
+        await fixture.runtime.backend.enqueue((), for: "Console", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Runtime", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Network", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Page", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Inspector", method: "disable")
+        await fixture.context.stop()
+        #expect(fixture.context.state == .detached)
+    }
+
+    @Test
     func failedResponseBodyDoesNotRefetchFromRendering() async throws {
         let context = makeContext()
         let request = try #require(
@@ -4907,6 +5051,100 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func staleHeadersPreviewActionCannotPromoteAReplacementSelection() async throws {
+        let context = makeContext()
+        let first = try #require(await applyRequest(
+            to: context,
+            requestID: "headers-stale-action-first",
+            url: "https://example.com/first",
+            requestHeaders: ["Content-Type": "application/json"],
+            postData: #"{"request":"first"}"#,
+            finishes: false
+        ))
+        let second = try #require(await applyRequest(
+            to: context,
+            requestID: "headers-stale-action-second",
+            url: "https://example.com/second",
+            requestHeaders: ["Content-Type": "application/json"],
+            postData: #"{"request":"second"}"#,
+            finishes: false
+        ))
+        let model = NetworkPanelModel(context: context)
+        model.selectRequest(first)
+        let viewController = makeNetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.headersTextViewForTesting.requestPreviewTagRangesForTesting.count == 1
+        })
+        let staleAction = try #require(
+            viewController.headersTextViewForTesting.captureRequestPreviewActionForTesting()
+        )
+
+        model.selectRequest(second)
+        let replacementSubject = try #require(model.detailSubject)
+        staleAction()
+
+        #expect(model.detailSubject?.hasSameIdentity(as: replacementSubject) == true)
+        #expect(model.detailSubject?.activeRequest === second)
+        #expect(viewController.currentModeForTesting == .headers)
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.headersTextViewForTesting.renderedTextForTesting
+                .contains("https://example.com/second")
+        })
+    }
+
+    @Test
+    func capturedHeadersActionKeepsTheExactRepresentativeShownByItsDocument() async throws {
+        let context = makeContext()
+        let frameID = FrameID("headers-captured-representative-frame")
+        let nodeID = DOM.Node.ID("headers-captured-representative-node")
+        installNavigationVisit(in: context, frameID: frameID)
+        let originalRepresentative = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "headers-captured-representative",
+            url: "https://example.com/original-representative",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            requestHeaders: ["Content-Type": "application/json"],
+            postData: #"{"request":"original"}"#,
+            timestamp: 10
+        ))
+        let model = NetworkPanelModel(context: context)
+        try selectEntry(containing: originalRepresentative, in: model)
+        let originalIntentID = try #require(model.detailSubject?.intentID)
+        let viewController = makeNetworkDetailViewController(model: model)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.headersTextViewForTesting.requestPreviewTagRangesForTesting.count == 1
+        })
+        let capturedAction = try #require(
+            viewController.headersTextViewForTesting.captureRequestPreviewActionForTesting()
+        )
+
+        let transactionBaseline = model.rawTransactionDeliveryCountForTesting
+        let newRepresentative = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "headers-new-representative",
+            url: "https://example.com/new-representative",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 5
+        ))
+        #expect(await model.waitForRawTransactionDeliveryForTesting(after: transactionBaseline))
+        #expect(model.detailSubject?.intentID == originalIntentID)
+        #expect(model.detailSubject?.activeRequest === newRepresentative)
+
+        capturedAction()
+
+        #expect(model.detailSubject?.scope == .request)
+        #expect(model.detailSubject?.activeRequest === originalRepresentative)
+        #expect(viewController.currentModeForTesting == .preview)
+        #expect(viewController.currentPreviewRoleForTesting == .request)
+    }
+
+    @Test
     func webSocketRequestDataNeverExposesBodyPreviewAction() async throws {
         let context = makeContext()
         let requestID = Network.Request.ID("headers-websocket-body")
@@ -5437,7 +5675,11 @@ struct NetworkDetailViewControllerTests {
             listViewController: listViewController,
             detailViewController: detailViewController
         )
-        let window = showInWindow(navigationController, makeVisible: true)
+        let window = showInWindow(
+            navigationController,
+            makeVisible: true,
+            useUIKitVisibility: true
+        )
         defer { window.isHidden = true }
 
         model.selectRequest(request)
@@ -5473,8 +5715,9 @@ struct NetworkDetailViewControllerTests {
 
         await listViewController.flushPendingSnapshotUpdateForTesting()
         #expect(listViewController.displayedRequestIDsForTesting.count == 1)
+        let entry = try #require(model.displayEntries.first)
 
-        selectListItem(at: IndexPath(item: 0, section: 0), in: listViewController)
+        model.selectEntry(entry)
         let didPush = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers.last === detailViewController
         }
@@ -5492,7 +5735,7 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didReturnToList)
 
-        selectListItem(at: IndexPath(item: 0, section: 0), in: listViewController)
+        model.selectEntry(entry)
         let didPushAgain = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers.last === detailViewController
         }
@@ -5554,6 +5797,117 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func compactContainerClearsSelectionAfterUntrackedNonanimatedPop() async throws {
+        let context = makeContext()
+        let request = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "untracked-pop",
+                url: "https://example.com/untracked.js"
+            )
+        )
+        let model = NetworkPanelModel(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectRequest(request)
+        navigationController.syncStackForTesting()
+
+        let poppedViewController = navigationController
+            .popDetailWithoutTrackedTransitionForTesting()
+
+        #expect(poppedViewController === detailViewController)
+        #expect(model.detailSubject == nil)
+        #expect(navigationController.viewControllers == [listViewController])
+    }
+
+    @Test
+    func compactContainerKeepsReplacementAfterUntrackedNonanimatedPop() async throws {
+        let context = makeContext()
+        let firstRequest = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "untracked-pop-first",
+                url: "https://example.com/first.js"
+            )
+        )
+        let secondRequest = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "untracked-pop-second",
+                url: "https://example.com/second.js"
+            )
+        )
+        let model = NetworkPanelModel(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectRequest(firstRequest)
+        let originalIntentID = try #require(model.detailSubject?.intentID)
+        navigationController.syncStackForTesting()
+
+        let poppedViewController = navigationController
+            .popDetailWithoutTrackedTransitionForTesting {
+            model.selectRequest(secondRequest)
+        }
+
+        #expect(poppedViewController === detailViewController)
+        #expect(model.detailSubject?.intentID != originalIntentID)
+        #expect(model.selectedRequest === secondRequest)
+        #expect(navigationController.viewControllers == [listViewController, detailViewController])
+    }
+
+    @Test
+    func compactContainerKeepsReplacementAfterCancelledUntrackedNonanimatedPop() async throws {
+        let context = makeContext()
+        let firstRequest = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "untracked-cancel-first",
+                url: "https://example.com/first.js"
+            )
+        )
+        let secondRequest = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "untracked-cancel-second",
+                url: "https://example.com/second.js"
+            )
+        )
+        let model = NetworkPanelModel(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectRequest(firstRequest)
+        navigationController.syncStackForTesting()
+
+        navigationController.cancelDetailPopWithoutTrackedTransitionForTesting {
+            model.selectRequest(secondRequest)
+        }
+
+        #expect(model.selectedRequest === secondRequest)
+        #expect(navigationController.viewControllers == [listViewController, detailViewController])
+
+        let poppedViewController = navigationController
+            .popDetailWithoutTrackedTransitionForTesting()
+        #expect(poppedViewController === detailViewController)
+        #expect(model.detailSubject == nil)
+        #expect(navigationController.viewControllers == [listViewController])
+    }
+
+    @Test
     func compactContainerKeepsDetailAfterCancelledUserPop() async throws {
         let context = makeContext()
         let request = try #require(
@@ -5579,6 +5933,45 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func compactContainerKeepsReplacementAfterCancelledPopOvertakesPush() async throws {
+        let context = makeContext()
+        let firstRequest = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "cancel-first",
+                url: "https://example.com/first.js"
+            )
+        )
+        let secondRequest = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "cancel-second",
+                url: "https://example.com/second.js"
+            )
+        )
+        let model = NetworkPanelModel(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectRequest(firstRequest)
+        let originalIntentID = try #require(model.detailSubject?.intentID)
+        navigationController.syncStackForTesting()
+
+        navigationController.cancelDetailPopWhilePushTransitionIsStillTrackedForTesting {
+            model.selectRequest(secondRequest)
+            navigationController.syncStackForTesting()
+        }
+
+        #expect(model.detailSubject?.intentID != originalIntentID)
+        #expect(model.selectedRequest === secondRequest)
+        #expect(navigationController.viewControllers == [listViewController, detailViewController])
+    }
+
+    @Test
     func compactContainerConvergesToReplacementSelectionAfterUserPop() async throws {
         let context = makeContext()
         let firstRequest = try #require(
@@ -5596,16 +5989,152 @@ struct NetworkDetailViewControllerTests {
             detailViewController: detailViewController
         )
         model.selectRequest(firstRequest)
+        let originalIntentID = try #require(model.detailSubject?.intentID)
         navigationController.syncStackForTesting()
 
-        let poppedViewController = navigationController.popDetailFromUserNavigationForTesting {
+        let poppedViewController = navigationController
+            .popDetailWhilePushTransitionIsStillTrackedForTesting {
+            model.selectRequest(nil)
             model.selectRequest(secondRequest)
+        }
+
+        #expect(poppedViewController === detailViewController)
+        #expect(model.detailSubject?.intentID != originalIntentID)
+        #expect(model.selectedRequest === secondRequest)
+        #expect(navigationController.viewControllers == [listViewController, detailViewController])
+    }
+
+    @Test
+    func compactBackDoesNotClearTheSameRequestExplicitlyReselectedDuringThePop() async throws {
+        let context = makeContext()
+        let request = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "compact-reselect",
+                url: "https://example.com/reselect.js"
+            )
+        )
+        let model = NetworkPanelModel(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectRequest(request)
+        let originalIntentID = try #require(model.detailSubject?.intentID)
+        navigationController.syncStackForTesting()
+
+        let poppedViewController = navigationController
+            .popDetailWhilePushTransitionIsStillTrackedForTesting {
+            model.selectRequest(request)
             navigationController.syncStackForTesting()
         }
 
         #expect(poppedViewController === detailViewController)
-        #expect(model.selectedRequest === secondRequest)
+        #expect(model.detailSubject?.intentID != originalIntentID)
+        #expect(model.detailSubject?.activeRequest === request)
         #expect(navigationController.viewControllers == [listViewController, detailViewController])
+    }
+
+    @Test
+    func compactBackDoesNotClearTheSameEntryExplicitlyReselectedDuringThePop() async throws {
+        let context = makeContext()
+        let request = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "compact-entry-reselect",
+                url: "https://example.com/entry-reselect.js"
+            )
+        )
+        let model = NetworkPanelModel(context: context)
+        let entryID = try #require(model.entryID(containing: request.id))
+        let entry = try #require(model.entry(for: entryID))
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectEntry(entry)
+        let originalIntentID = try #require(model.detailSubject?.intentID)
+        navigationController.syncStackForTesting()
+
+        let poppedViewController = navigationController
+            .popDetailWhilePushTransitionIsStillTrackedForTesting {
+            model.selectEntry(entry)
+            navigationController.syncStackForTesting()
+        }
+
+        #expect(poppedViewController === detailViewController)
+        #expect(model.detailSubject?.intentID != originalIntentID)
+        #expect(model.detailSubject?.entry === entry)
+        #expect(navigationController.viewControllers == [listViewController, detailViewController])
+    }
+
+    @Test
+    func compactBackClearsAnAutomaticallyRegroupedRequestWithTheCapturedIntent() async throws {
+        let context = makeContext()
+        let request = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "compact-regroup",
+                url: "https://example.com/regroup.js"
+            )
+        )
+        let frameID = FrameID("compact-regroup-frame")
+        let nodeID = DOM.Node.ID("compact-regroup-node")
+        installNavigationVisit(in: context, frameID: frameID)
+        let groupedSibling = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "compact-regroup-sibling",
+            url: "https://example.com/sibling.js",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 10
+        ))
+        let model = NetworkPanelModel(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectRequest(request)
+        let intentID = try #require(model.detailSubject?.intentID)
+        navigationController.syncStackForTesting()
+
+        let poppedViewController = navigationController
+            .popDetailWhilePushTransitionIsStillTrackedForTesting {
+            request.applyRequestWillBeSent(
+                request: Network.Request(
+                    id: request.proxyID,
+                    url: request.url,
+                    method: request.method,
+                    origin: Network.Request.Origin(
+                        frameID: frameID,
+                        loaderID: "loader",
+                        targetID: "page"
+                    )
+                ),
+                initiator: groupedSibling.initiator,
+                navigationVisit: groupedSibling.navigationVisit,
+                resourceType: request.resourceType,
+                timestamp: 20,
+                chronologySequence: 20
+            )
+            model.upsertRequestForTesting(request)
+            #expect(model.detailSubject?.intentID == intentID)
+            #expect(model.detailSubject?.entry.id == model.entryID(containing: request.id))
+            navigationController.syncStackForTesting()
+        }
+
+        #expect(poppedViewController === detailViewController)
+        #expect(model.detailSubject == nil)
+        #expect(navigationController.viewControllers == [listViewController])
     }
 
     @Test
@@ -6127,6 +6656,51 @@ struct NetworkDetailViewControllerTests {
         let rebuiltEntry = try #require(model.entry(for: entryID))
         #expect(rebuiltEntry !== originalEntry)
         #expect(cell.observedEntryForTesting === rebuiltEntry)
+    }
+
+    @Test
+    func staleVisibleListCellCannotSelectARebuiltSameIDEntry() async throws {
+        let context = makeContext()
+        let request = try #require(await applyRequest(
+            to: context,
+            requestID: "stale-list-entry",
+            url: "https://example.test/stale-list-entry.json"
+        ))
+        let model = NetworkPanelModel(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let window = showInWindow(listViewController, makeVisible: true)
+        defer { window.isHidden = true }
+        await listViewController.flushPendingSnapshotUpdateForTesting()
+        listViewController.collectionViewForTesting.layoutIfNeeded()
+        let indexPath = try #require(
+            listViewController.collectionViewForTesting.indexPathsForVisibleItems.first
+        )
+        let cell = try #require(listViewController.networkListCellForTesting(at: indexPath))
+        let oldEntry = try #require(cell.observedEntryForTesting)
+        let entryID = try #require(model.entryID(containing: request.id))
+
+        model.rebuildEntriesForTesting()
+        let rebuiltEntry = try #require(model.entry(for: entryID))
+        #expect(rebuiltEntry !== oldEntry)
+        #expect(cell.observedEntryForTesting === oldEntry)
+
+        listViewController.collectionViewForTesting.selectItem(
+            at: indexPath,
+            animated: false,
+            scrollPosition: []
+        )
+        #expect(
+            listViewController.collectionViewForTesting.indexPathsForSelectedItems == [indexPath]
+        )
+        listViewController.collectionView(
+            listViewController.collectionViewForTesting,
+            didSelectItemAt: indexPath
+        )
+
+        #expect(model.detailSubject == nil)
+        #expect(
+            (listViewController.collectionViewForTesting.indexPathsForSelectedItems ?? []).isEmpty
+        )
     }
 
     @Test
@@ -7191,8 +7765,11 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(context: context)
         let entryID = try #require(model.entryID(containing: firstRequest.id))
         let entry = try #require(model.entry(for: entryID))
-        model.selectEntry(entryID)
-        let picker = NetworkDetailRequestPickerViewController(model: model, entryID: entryID)
+        model.selectEntry(entry)
+        let picker = NetworkDetailRequestPickerViewController(
+            model: model,
+            subject: try #require(model.detailSubject)
+        )
         let window = showInWindow(picker, useUIKitVisibility: true)
         defer { window.isHidden = true }
         picker.resumeRenderingForTesting()
@@ -7310,8 +7887,11 @@ struct NetworkDetailViewControllerTests {
         let entryID = try #require(model.entryID(containing: firstRequest.id))
         let entry = try #require(model.entry(for: entryID))
         let originalRequestIDs = entry.requests.map(\.id)
-        model.selectEntry(entryID)
-        let picker = NetworkDetailRequestPickerViewController(model: model, entryID: entryID)
+        model.selectEntry(entry)
+        let picker = NetworkDetailRequestPickerViewController(
+            model: model,
+            subject: try #require(model.detailSubject)
+        )
         picker.resumeRenderingForTesting()
         let emptyQueryObservation = try #require(picker.modelObservationDeliveryForTesting)
 
@@ -7362,6 +7942,157 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func stalePickerRequestRowCannotSelectARequestThatLeftItsBoundEntry() async throws {
+        let context = makeContext()
+        let frameID = FrameID("picker-stale-frame")
+        let nodeID = DOM.Node.ID("picker-stale-node")
+        installNavigationVisit(in: context, frameID: frameID)
+        let first = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "picker-stale-first",
+            url: "https://example.com/first.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 1
+        ))
+        _ = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "picker-stale-second",
+            url: "https://example.com/second.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 4
+        ))
+        let model = NetworkPanelModel(context: context)
+        let entryID = try #require(model.entryID(containing: first.id))
+        let entry = try #require(model.entry(for: entryID))
+        model.selectEntry(entry)
+        let subject = try #require(model.detailSubject)
+        let picker = NetworkDetailRequestPickerViewController(model: model, subject: subject)
+        let window = showInWindow(picker, useUIKitVisibility: true)
+        defer { window.isHidden = true }
+        picker.resumeRenderingForTesting()
+        let firstIndex = try #require(
+            picker.itemIDsForTesting.firstIndex(of: .request(first.id))
+        )
+        let firstCell = try #require(picker.requestCellForTesting(requestID: first.id))
+        #expect(firstCell.boundRequest === first)
+        picker.suspendRenderingForTesting()
+
+        first.applyRequestWillBeSent(
+            request: Network.Request(
+                id: first.proxyID,
+                url: first.url,
+                method: first.method
+            ),
+            initiator: nil,
+            navigationVisit: nil,
+            resourceType: first.resourceType,
+            timestamp: 20,
+            chronologySequence: 20
+        )
+        model.upsertRequestForTesting(first)
+        let currentSubject = try #require(model.detailSubject)
+        #expect(currentSubject.intentID == subject.intentID)
+        #expect(currentSubject.entry === entry)
+
+        try selectPickerItem(
+            at: IndexPath(item: firstIndex, section: 0),
+            in: picker
+        )
+
+        #expect(model.detailSubject?.hasSameIdentity(as: currentSubject) == true)
+        #expect(model.selection == .entry(entryID))
+        #expect(model.entryID(containing: first.id) != entryID)
+    }
+
+    @Test
+    func pickerCarriesExactQueryResetLineageButRejectsNewGenerationSameIDs() async throws {
+        let context = makeContext()
+        let frameID = FrameID("picker-lineage-frame")
+        let nodeID = DOM.Node.ID("picker-lineage-node")
+        installNavigationVisit(in: context, frameID: frameID)
+        let first = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "picker-lineage-first",
+            url: "https://example.com/first.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 1
+        ))
+        _ = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "picker-lineage-second",
+            url: "https://example.com/second.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 4
+        ))
+        let model = NetworkPanelModel(context: context)
+        let entryID = try #require(model.entryID(containing: first.id))
+        let entry = try #require(model.entry(for: entryID))
+        model.selectEntry(entry)
+        let initialSubject = try #require(model.detailSubject)
+        let picker = NetworkDetailRequestPickerViewController(
+            model: model,
+            subject: initialSubject
+        )
+        picker.resumeRenderingForTesting()
+        let observation = try #require(picker.modelObservationDeliveryForTesting)
+        let reboundEntry = await observation.values {
+            guard let currentEntry = model.detailSubject?.entry else {
+                return false
+            }
+            return picker.renderedEntryForTesting === currentEntry
+                && picker.renderedEntryForTesting !== entry
+        }
+        defer { reboundEntry.cancel() }
+        let resetBaseline = model.rawTransactionDeliveryCountForTesting
+
+        try model.requests.updateQuery(NetworkRequestQuery())
+
+        #expect(await model.waitForRawTransactionDeliveryForTesting(after: resetBaseline))
+        #expect(await reboundEntry.waitUntilValue(true))
+        #expect(picker.isObservingModelForTesting)
+        #expect(picker.renderedIntentIDForTesting == initialSubject.intentID)
+        let carriedSubject = try #require(model.detailSubject)
+        let stalePicker = NetworkDetailRequestPickerViewController(
+            model: model,
+            subject: carriedSubject
+        )
+
+        let generationBaseline = model.rawTransactionDeliveryCountForTesting
+        context.clearNetworkRequests()
+        let replacementFirst = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "picker-lineage-first",
+            url: "https://example.com/replacement-first.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 20
+        ))
+        _ = try #require(await applyGroupedRequest(
+            to: context,
+            requestID: "picker-lineage-second",
+            url: "https://example.com/replacement-second.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            timestamp: 23
+        ))
+        #expect(await model.waitForRawTransactionDeliveryForTesting(after: generationBaseline + 6))
+        let replacementEntryID = try #require(model.entryID(containing: replacementFirst.id))
+        let replacementEntry = try #require(model.entry(for: replacementEntryID))
+        #expect(replacementEntryID == entryID)
+        model.selectEntry(replacementEntry)
+        #expect(model.detailSubject?.intentID != carriedSubject.intentID)
+
+        stalePicker.resumeRenderingForTesting()
+
+        #expect(stalePicker.isObservingModelForTesting == false)
+        #expect(stalePicker.renderedEntryForTesting === carriedSubject.entry)
+    }
+
+    @Test
     func requestPickerUsesStableEntryAndRequestItemsWithSearch() async throws {
         let context = makeContext()
         let frameID = FrameID("main-frame")
@@ -7402,11 +8133,17 @@ struct NetworkDetailViewControllerTests {
         ))
         let model = NetworkPanelModel(context: context)
         let entryID = try #require(model.entryID(containing: firstRequest.id))
-        model.selectEntry(entryID)
+        let entry = try #require(model.entry(for: entryID))
+        model.selectEntry(entry)
         let detailViewController = makeNetworkDetailViewController(model: model)
         let window = showInWindow(detailViewController)
         defer { window.isHidden = true }
-        let picker = NetworkDetailRequestPickerViewController(model: model, entryID: entryID)
+        let picker = NetworkDetailRequestPickerViewController(
+            model: model,
+            subject: try #require(model.detailSubject)
+        )
+        let pickerWindow = showInWindow(picker, useUIKitVisibility: true)
+        defer { pickerWindow.isHidden = true }
         let presentationController = UIPresentationController(
             presentedViewController: picker,
             presenting: nil
@@ -7444,20 +8181,14 @@ struct NetworkDetailViewControllerTests {
             .request(secondRequest.id),
         ])
 
-        picker.collectionView(
-            picker.collectionView,
-            didSelectItemAt: IndexPath(item: 1, section: 0)
-        )
+        try selectPickerItem(at: IndexPath(item: 1, section: 0), in: picker)
 
         #expect(model.selection == .request(entryID: entryID, requestID: secondRequest.id))
         #expect(picker.isObservingModelForTesting == false)
 
         picker.setSearchTextForTesting("")
         picker.resumeRenderingForTesting()
-        picker.collectionView(
-            picker.collectionView,
-            didSelectItemAt: IndexPath(item: 0, section: 0)
-        )
+        try selectPickerItem(at: IndexPath(item: 0, section: 0), in: picker)
 
         #expect(model.selection == .entry(entryID))
 
@@ -7503,8 +8234,9 @@ struct NetworkDetailViewControllerTests {
         ])
         let originalItemIDs = picker.itemIDsForTesting
         let otherEntryID = try #require(model.entryID(containing: otherFirstRequest.id))
+        let otherEntry = try #require(model.entry(for: otherEntryID))
 
-        model.selectEntry(otherEntryID)
+        model.selectEntry(otherEntry)
 
         #expect(await stoppedObserving.waitUntilValue(true))
         #expect(picker.isObservingModelForTesting == false)
@@ -7531,8 +8263,12 @@ struct NetworkDetailViewControllerTests {
         }
         let model = NetworkPanelModel(context: context)
         let entryID = try #require(model.displayEntryIDs.first)
-        model.selectEntry(entryID)
-        let picker = NetworkDetailRequestPickerViewController(model: model, entryID: entryID)
+        let entry = try #require(model.entry(for: entryID))
+        model.selectEntry(entry)
+        let picker = NetworkDetailRequestPickerViewController(
+            model: model,
+            subject: try #require(model.detailSubject)
+        )
 
         picker.resumeRenderingForTesting()
 
@@ -8001,7 +8737,7 @@ struct NetworkDetailViewControllerTests {
         let entryID: NetworkListEntry.ID = try #require(
             model.entryID(containing: request.id)
         )
-        model.selectEntry(entryID)
+        model.selectEntry(try #require(model.entry(for: entryID)))
     }
 
     private func installNavigationVisit(
@@ -8474,11 +9210,16 @@ struct NetworkDetailViewControllerTests {
         viewController.selectModeForTesting(mode)
     }
 
-    private func selectListItem(
+    private func selectPickerItem(
         at indexPath: IndexPath,
-        in viewController: NetworkListViewController
-    ) {
-        let collectionView = viewController.collectionViewForTesting
+        in viewController: NetworkDetailRequestPickerViewController
+    ) throws {
+        let collectionView = try #require(viewController.collectionView)
+        collectionView.scrollToItem(at: indexPath, at: .centeredVertically, animated: false)
+        collectionView.layoutIfNeeded()
+        _ = try #require(
+            collectionView.cellForItem(at: indexPath) as? NetworkDetailRequestPickerCell
+        )
         collectionView.selectItem(at: indexPath, animated: false, scrollPosition: [])
         viewController.collectionView(collectionView, didSelectItemAt: indexPath)
     }

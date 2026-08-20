@@ -165,14 +165,114 @@ package struct NetworkPanelListProjection: Equatable, Sendable {
     package let entryIDs: [NetworkListEntry.ID]
 }
 
-package enum NetworkPanelSelection: Equatable, Sendable {
+enum NetworkPanelSelection: Equatable, Sendable {
     case entry(NetworkListEntry.ID)
     case request(entryID: NetworkListEntry.ID, requestID: NetworkRequest.ID)
 
-    package var entryID: NetworkListEntry.ID {
+    var entryID: NetworkListEntry.ID {
         switch self {
         case .entry(let entryID), .request(let entryID, _):
             entryID
+        }
+    }
+}
+
+enum NetworkPanelSelectionIntent {
+    struct ID: Equatable, Hashable, Sendable {
+        fileprivate let rawValue: UInt64
+    }
+}
+
+@MainActor
+struct NetworkDetailSubject {
+    enum Scope: Equatable, Sendable {
+        case entry
+        case request
+    }
+
+    private enum Storage {
+        case entry(NetworkListEntry)
+        case request(entry: NetworkListEntry, request: NetworkRequest)
+    }
+
+    let intentID: NetworkPanelSelectionIntent.ID
+    private let storage: Storage
+
+    fileprivate init(
+        entry: NetworkListEntry,
+        intentID: NetworkPanelSelectionIntent.ID
+    ) {
+        storage = .entry(entry)
+        self.intentID = intentID
+    }
+
+    fileprivate init(
+        entry: NetworkListEntry,
+        request: NetworkRequest,
+        intentID: NetworkPanelSelectionIntent.ID
+    ) {
+        storage = .request(entry: entry, request: request)
+        self.intentID = intentID
+    }
+
+    var scope: Scope {
+        switch storage {
+        case .entry:
+            .entry
+        case .request:
+            .request
+        }
+    }
+
+    var entry: NetworkListEntry {
+        switch storage {
+        case .entry(let entry), .request(let entry, _):
+            entry
+        }
+    }
+
+    var activeRequest: NetworkRequest {
+        switch storage {
+        case .entry(let entry):
+            entry.representativeRequest
+        case .request(_, let request):
+            request
+        }
+    }
+
+    var renderRequests: [NetworkRequest] {
+        switch storage {
+        case .entry(let entry):
+            entry.requests
+        case .request(_, let request):
+            [request]
+        }
+    }
+
+    var entryRequests: [NetworkRequest] {
+        entry.requests
+    }
+
+    var selection: NetworkPanelSelection {
+        switch storage {
+        case .entry(let entry):
+            .entry(entry.id)
+        case .request(let entry, let request):
+            .request(entryID: entry.id, requestID: request.id)
+        }
+    }
+
+    func hasSameIdentity(as other: Self) -> Bool {
+        guard intentID == other.intentID else {
+            return false
+        }
+        switch (storage, other.storage) {
+        case let (.entry(lhsEntry), .entry(rhsEntry)):
+            return lhsEntry === rhsEntry
+        case let (.request(lhsEntry, lhsRequest), .request(rhsEntry, rhsRequest)):
+            return lhsEntry === rhsEntry && lhsRequest === rhsRequest
+        case (.entry, .request), (.request, .entry):
+            return false
         }
     }
 }
@@ -249,27 +349,32 @@ package final class NetworkPanelModel {
         var lifecycleRevision: UInt64
     }
 
+    private struct RequestRegistration {
+        var request: NetworkRequest
+        var entry: NetworkListEntry
+        var statusSeverity: NetworkDisplay.StatusSeverity
+        var creation: RequestCreationMetadata
+    }
+
     package let context: WebInspectorContext
     package let requests: WebInspectorFetchedResults<NetworkRequest>
     private let fetchedResultsController: WebInspectorFetchedResultsController<NetworkRequest>
     private let collectionState: NetworkRequestStore
 
-    package private(set) var selection: NetworkPanelSelection?
+    private(set) var detailSubject: NetworkDetailSubject?
     package private(set) var searchText = ""
     package private(set) var activeResourceFilters: Set<NetworkDisplay.ResourceFilter> = []
 
     @ObservationIgnored private let listInvalidationRelay = NetworkPanelListInvalidationRelay()
     @ObservationIgnored private var fetchedResultsTransactionTask: Task<Void, Never>?
     @ObservationIgnored private var entriesByID: [NetworkListEntry.ID: NetworkListEntry] = [:]
-    @ObservationIgnored private var entryIDByRequestID: [NetworkRequest.ID: NetworkListEntry.ID] = [:]
-    @ObservationIgnored private var requestsByID: [NetworkRequest.ID: NetworkRequest] = [:]
-    @ObservationIgnored private var requestStatusSeverityByID: [NetworkRequest.ID: NetworkDisplay.StatusSeverity] = [:]
-    @ObservationIgnored private var requestCreationMetadataByID: [NetworkRequest.ID: RequestCreationMetadata] = [:]
+    @ObservationIgnored private var registrationsByRequestID: [NetworkRequest.ID: RequestRegistration] = [:]
     @ObservationIgnored private var orderedEntryIDs: [NetworkListEntry.ID] = []
     @ObservationIgnored private var visibleEntryIDs: [NetworkListEntry.ID] = []
     @ObservationIgnored private var visibleEntryIDSet: Set<NetworkListEntry.ID> = []
     @ObservationIgnored private var nextListTransactionRevision: UInt64 = 0
     @ObservationIgnored private var listEntryIdentityGeneration: UInt64 = 0
+    @ObservationIgnored private var nextSelectionIntentID: UInt64 = 0
 #if DEBUG
     private struct RawTransactionDeliveryWaiter {
         var id: Int
@@ -353,39 +458,28 @@ package final class NetworkPanelModel {
         NetworkDisplay.ResourceFilter.normalizedSelection(activeResourceFilters)
     }
 
-    package var selectedEntry: NetworkListEntry? {
-        guard let selectedEntryID else {
-            return nil
-        }
-        return entriesByID[selectedEntryID]
+    var selection: NetworkPanelSelection? {
+        detailSubject?.selection
     }
 
-    package var selectedRequest: NetworkRequest? {
-        guard let selection else {
-            return nil
-        }
-        switch selection {
-        case .entry:
-            return selectedEntry?.representativeRequest
-        case let .request(entryID, requestID):
-            guard entryIDByRequestID[requestID] == entryID,
-                  let request = requestsByID[requestID] else {
-                preconditionFailure("A selected Network request must belong to its selected entry.")
-            }
-            return request
-        }
+    var selectedEntry: NetworkListEntry? {
+        detailSubject?.entry
     }
 
-    package var selectedEntryRequests: [NetworkRequest] {
-        selectedEntry?.requests ?? []
+    var selectedRequest: NetworkRequest? {
+        detailSubject?.activeRequest
     }
 
-    package var selectedEntryID: NetworkListEntry.ID? {
-        selection?.entryID
+    var selectedEntryRequests: [NetworkRequest] {
+        detailSubject?.entryRequests ?? []
     }
 
-    package var selectedRequestID: NetworkRequest.ID? {
-        selectedRequest?.id
+    var selectedEntryID: NetworkListEntry.ID? {
+        detailSubject?.entry.id
+    }
+
+    var selectedRequestID: NetworkRequest.ID? {
+        detailSubject?.activeRequest.id
     }
 
     package func entry(for id: NetworkListEntry.ID) -> NetworkListEntry? {
@@ -393,44 +487,86 @@ package final class NetworkPanelModel {
     }
 
     package func entryID(containing requestID: NetworkRequest.ID) -> NetworkListEntry.ID? {
-        entryIDByRequestID[requestID]
+        registrationsByRequestID[requestID]?.entry.id
     }
 
     package func request(for id: NetworkRequest.ID) -> NetworkRequest? {
-        requestsByID[id] ?? context.registeredRequest(for: id)
+        registrationsByRequestID[id]?.request
     }
 
-    package func selectEntry(_ id: NetworkListEntry.ID?) {
-        guard let id else {
-            selection = nil
+    func selectEntry(_ entry: NetworkListEntry?) {
+        guard let entry else {
+            detailSubject = nil
             return
         }
-        guard entriesByID[id] != nil else {
-            selection = nil
+        guard entriesByID[entry.id] === entry else {
             return
         }
-        selection = .entry(id)
+        detailSubject = NetworkDetailSubject(
+            entry: entry,
+            intentID: takeSelectionIntentID()
+        )
     }
 
-    package func selectRequest(_ request: NetworkRequest?) {
-        selectRequest(id: request?.id)
-    }
-
-    package func selectRequest(id requestID: NetworkRequest.ID?) {
-        guard let requestID,
-              requestsByID[requestID] != nil,
-              let entryID = entryIDByRequestID[requestID] else {
-            selection = nil
+    func selectRequest(_ request: NetworkRequest?) {
+        guard let request else {
+            detailSubject = nil
             return
         }
-        selection = .request(entryID: entryID, requestID: requestID)
-    }
-
-    package func clearSelection(ifUnchanged expectedSelection: NetworkPanelSelection) {
-        guard selection == expectedSelection else {
+        guard let registration = registrationsByRequestID[request.id],
+              registration.request === request else {
             return
         }
-        selection = nil
+        detailSubject = NetworkDetailSubject(
+            entry: registration.entry,
+            request: request,
+            intentID: takeSelectionIntentID()
+        )
+    }
+
+    func selectRequest(
+        _ request: NetworkRequest,
+        ifSubjectUnchanged expectedSubject: NetworkDetailSubject
+    ) -> NetworkDetailSubject? {
+        guard detailSubject?.hasSameIdentity(as: expectedSubject) == true,
+              let registration = registrationsByRequestID[request.id],
+              registration.request === request,
+              registration.entry === expectedSubject.entry else {
+            return nil
+        }
+        let subject = NetworkDetailSubject(
+            entry: registration.entry,
+            request: request,
+            intentID: takeSelectionIntentID()
+        )
+        detailSubject = subject
+        return subject
+    }
+
+    func selectEntry(
+        _ entry: NetworkListEntry,
+        ifSubjectUnchanged expectedSubject: NetworkDetailSubject
+    ) -> NetworkDetailSubject? {
+        guard detailSubject?.hasSameIdentity(as: expectedSubject) == true,
+              expectedSubject.entry === entry,
+              entriesByID[entry.id] === entry else {
+            return nil
+        }
+        let subject = NetworkDetailSubject(
+            entry: entry,
+            intentID: takeSelectionIntentID()
+        )
+        detailSubject = subject
+        return subject
+    }
+
+    func clearSelection(
+        ifIntentUnchanged expectedIntentID: NetworkPanelSelectionIntent.ID
+    ) {
+        guard detailSubject?.intentID == expectedIntentID else {
+            return
+        }
+        detailSubject = nil
     }
 
     package func setSearchText(_ text: String) {
@@ -465,16 +601,49 @@ package final class NetworkPanelModel {
     }
 
     package func clearRequests() {
-        selection = nil
+        detailSubject = nil
         context.network.clearRequests()
     }
 
-    package func fetchResponseBodyIfNeeded(for request: NetworkRequest) {
-        guard request.canFetchResponseBody else {
-            return
+    @discardableResult
+    package func fetchResponseBodyIfNeeded(for request: NetworkRequest) -> Bool {
+        guard registrationsByRequestID[request.id]?.request === request,
+              request.canFetchResponseBody else {
+            return false
         }
         Task { @MainActor in
             await request.fetchResponseBody()
+        }
+        return true
+    }
+
+    @discardableResult
+    func fetchResponseBodyIfNeeded(
+        for request: NetworkRequest,
+        ifSubjectUnchanged expectedSubject: NetworkDetailSubject
+    ) -> Bool {
+        guard let currentSubject = detailSubject,
+              currentSubject.hasSameIdentity(as: expectedSubject),
+              isRegistered(request, in: currentSubject) else {
+            return false
+        }
+        return fetchResponseBodyIfNeeded(for: request)
+    }
+
+    private func isRegistered(
+        _ request: NetworkRequest,
+        in subject: NetworkDetailSubject
+    ) -> Bool {
+        guard let registration = registrationsByRequestID[request.id],
+              registration.request === request,
+              registration.entry === subject.entry else {
+            return false
+        }
+        switch subject.scope {
+        case .entry:
+            return true
+        case .request:
+            return subject.activeRequest === request
         }
     }
 
@@ -495,10 +664,10 @@ package final class NetworkPanelModel {
         rawTransactionDeliveryCountStorageForTesting &+= 1
         resolveRawTransactionDeliveryWaitersForTesting(result: true)
 #endif
-        let selectionBeforeTransaction = selection
+        let subjectBeforeTransaction = detailSubject
         if transaction.isReset {
             rebuildEntries(from: requests.items)
-            reconcileSelection(selectionBeforeTransaction, forceRebind: true)
+            reconcileSubjectAfterReset(subjectBeforeTransaction)
             publishListTransaction(
                 topologyChangedEntryIDs: Set(visibleEntryIDs),
                 rebindsStableEntries: true
@@ -525,7 +694,8 @@ package final class NetworkPanelModel {
             case let .insert(requestID, _),
                  let .move(requestID, _, _),
                  let .update(requestID, _):
-                guard let request = context.registeredRequest(for: requestID) else {
+                guard let request = registrationsByRequestID[requestID]?.request
+                    ?? context.registeredRequest(for: requestID) else {
                     continue
                 }
                 upsertRequest(
@@ -545,7 +715,7 @@ package final class NetworkPanelModel {
             )
         }
 
-        reconcileSelection(selectionBeforeTransaction)
+        reconcileSubjectAfterIncrementalChange(subjectBeforeTransaction)
 
         publishListTransaction(
             topologyChangedEntryIDs: topologyChangedEntryIDs,
@@ -558,10 +728,7 @@ package final class NetworkPanelModel {
         fullEntryRebuildCountStorageForTesting &+= 1
 #endif
         entriesByID.removeAll(keepingCapacity: true)
-        entryIDByRequestID.removeAll(keepingCapacity: true)
-        requestsByID.removeAll(keepingCapacity: true)
-        requestStatusSeverityByID.removeAll(keepingCapacity: true)
-        requestCreationMetadataByID.removeAll(keepingCapacity: true)
+        registrationsByRequestID.removeAll(keepingCapacity: true)
         orderedEntryIDs.removeAll(keepingCapacity: true)
         visibleEntryIDs.removeAll(keepingCapacity: true)
         visibleEntryIDSet.removeAll(keepingCapacity: true)
@@ -590,23 +757,33 @@ package final class NetworkPanelModel {
     }
 
     private func insertRequestWithoutPublishing(_ request: NetworkRequest) {
-        requestCreationMetadataByID[request.id] = RequestCreationMetadata(
+        let creation = RequestCreationMetadata(
             timestamp: request.logicalStartTimestamp,
             sequence: request.chronologySequence,
             lifecycleRevision: request.lifecycleRevision
         )
-        requestsByID[request.id] = request
-        requestStatusSeverityByID[request.id] = request.statusSeverity
         let entryID = listEntryID(for: request)
-        entryIDByRequestID[request.id] = entryID
         if let entry = entriesByID[entryID] {
+            registrationsByRequestID[request.id] = RequestRegistration(
+                request: request,
+                entry: entry,
+                statusSeverity: request.statusSeverity,
+                creation: creation
+            )
             entry.appendRequest(request)
         } else {
-            entriesByID[entryID] = NetworkListEntry(
+            let entry = NetworkListEntry(
                 id: entryID,
                 request: request,
                 chronologyTimestamp: request.logicalStartTimestamp,
                 chronologySequence: request.chronologySequence
+            )
+            entriesByID[entryID] = entry
+            registrationsByRequestID[request.id] = RequestRegistration(
+                request: request,
+                entry: entry,
+                statusSeverity: request.statusSeverity,
+                creation: creation
             )
             orderedEntryIDs.append(entryID)
         }
@@ -617,84 +794,102 @@ package final class NetworkPanelModel {
         affectedEntryIDs: inout Set<NetworkListEntry.ID>,
         topologyChangedEntryIDs: inout Set<NetworkListEntry.ID>
     ) {
-        let previousRequest = requestsByID[request.id]
-        let previousStatusSeverity = requestStatusSeverityByID[request.id]
-        let lifecycleRestarted: Bool
-        let chronologyChanged: Bool
-        if var metadata = requestCreationMetadataByID[request.id] {
-            lifecycleRestarted = metadata.lifecycleRevision != request.lifecycleRevision
-            chronologyChanged = metadata.timestamp != request.logicalStartTimestamp
-                || metadata.sequence != request.chronologySequence
-            if lifecycleRestarted || chronologyChanged {
-                metadata = RequestCreationMetadata(
-                    timestamp: request.logicalStartTimestamp,
-                    sequence: request.chronologySequence,
-                    lifecycleRevision: request.lifecycleRevision
-                )
-                requestCreationMetadataByID[request.id] = metadata
-            }
-        } else {
-            lifecycleRestarted = false
-            chronologyChanged = false
-            requestCreationMetadataByID[request.id] = RequestCreationMetadata(
-                timestamp: request.logicalStartTimestamp,
-                sequence: request.chronologySequence,
-                lifecycleRevision: request.lifecycleRevision
-            )
-        }
-        requestsByID[request.id] = request
-        requestStatusSeverityByID[request.id] = request.statusSeverity
+        let creation = RequestCreationMetadata(
+            timestamp: request.logicalStartTimestamp,
+            sequence: request.chronologySequence,
+            lifecycleRevision: request.lifecycleRevision
+        )
         let nextEntryID = listEntryID(for: request)
-        if let currentEntryID = entryIDByRequestID[request.id],
-           currentEntryID == nextEntryID {
-            guard let previousRequest,
-                  let previousStatusSeverity,
-                  let entry = entriesByID[currentEntryID] else {
-                preconditionFailure("A registered Network request must belong to a registered entry.")
+        guard var registration = registrationsByRequestID[request.id] else {
+            if let entry = entriesByID[nextEntryID] {
+                registrationsByRequestID[request.id] = RequestRegistration(
+                    request: request,
+                    entry: entry,
+                    statusSeverity: request.statusSeverity,
+                    creation: creation
+                )
+                insertRequest(request, into: entry)
+                refreshEntryChronologyAndOrdering(
+                    entry,
+                    topologyChangedEntryIDs: &topologyChangedEntryIDs
+                )
+                if hasActiveDisplayCriteria {
+                    affectedEntryIDs.insert(nextEntryID)
+                }
+            } else {
+                let entry = NetworkListEntry(
+                    id: nextEntryID,
+                    request: request,
+                    chronologyTimestamp: creation.timestamp,
+                    chronologySequence: creation.sequence
+                )
+                registrationsByRequestID[request.id] = RequestRegistration(
+                    request: request,
+                    entry: entry,
+                    statusSeverity: request.statusSeverity,
+                    creation: creation
+                )
+                entriesByID[nextEntryID] = entry
+                insertOrderedEntryID(nextEntryID)
+                topologyChangedEntryIDs.insert(nextEntryID)
+                affectedEntryIDs.insert(nextEntryID)
             }
-            entry.updateStatusSeverity(
+            return
+        }
+
+        let previousRequest = registration.request
+        let previousEntry = registration.entry
+        let previousStatusSeverity = registration.statusSeverity
+        let lifecycleRestarted = registration.creation.lifecycleRevision != creation.lifecycleRevision
+        let chronologyChanged = registration.creation.timestamp != creation.timestamp
+            || registration.creation.sequence != creation.sequence
+
+        if previousEntry.id == nextEntryID {
+            registration.request = request
+            registration.statusSeverity = request.statusSeverity
+            registration.creation = creation
+            registrationsByRequestID[request.id] = registration
+            previousEntry.updateStatusSeverity(
                 from: previousStatusSeverity,
                 to: request.statusSeverity
             )
             if previousRequest !== request || lifecycleRestarted || chronologyChanged {
 #if DEBUG
-                memberTraversalCountStorageForTesting += entry.requests.count
+                memberTraversalCountStorageForTesting += previousEntry.requests.count
 #endif
-                guard let index = entry.requests.firstIndex(where: { $0.id == request.id }) else {
+                guard let index = previousEntry.requests.firstIndex(where: { $0.id == request.id }) else {
                     preconditionFailure("A registered Network request must be present in its entry.")
                 }
                 if previousRequest !== request {
-                    entry.replaceRequest(at: index, with: request)
+                    previousEntry.replaceRequest(at: index, with: request)
                 }
                 if lifecycleRestarted || chronologyChanged {
-                    repositionRequest(at: index, in: entry)
+                    repositionRequest(at: index, in: previousEntry)
                     refreshEntryChronologyAndOrdering(
-                        entry,
+                        previousEntry,
                         topologyChangedEntryIDs: &topologyChangedEntryIDs
                     )
                 }
             }
             if hasActiveDisplayCriteria {
-                affectedEntryIDs.insert(currentEntryID)
+                affectedEntryIDs.insert(previousEntry.id)
             }
             return
         }
 
-        if let currentEntryID = entryIDByRequestID[request.id] {
-            guard let previousStatusSeverity else {
-                preconditionFailure("A registered Network request must have cached status severity.")
-            }
-            removeRequestFromEntry(
-                request.id,
-                entryID: currentEntryID,
-                statusSeverity: previousStatusSeverity,
-                affectedEntryIDs: &affectedEntryIDs,
-                topologyChangedEntryIDs: &topologyChangedEntryIDs
-            )
-        }
-
-        entryIDByRequestID[request.id] = nextEntryID
+        removeRequestFromEntry(
+            request.id,
+            entry: previousEntry,
+            statusSeverity: previousStatusSeverity,
+            affectedEntryIDs: &affectedEntryIDs,
+            topologyChangedEntryIDs: &topologyChangedEntryIDs
+        )
         if let entry = entriesByID[nextEntryID] {
+            registration.request = request
+            registration.entry = entry
+            registration.statusSeverity = request.statusSeverity
+            registration.creation = creation
+            registrationsByRequestID[request.id] = registration
             insertRequest(request, into: entry)
             refreshEntryChronologyAndOrdering(
                 entry,
@@ -704,15 +899,17 @@ package final class NetworkPanelModel {
                 affectedEntryIDs.insert(nextEntryID)
             }
         } else {
-            guard let metadata = requestCreationMetadataByID[request.id] else {
-                preconditionFailure("A Network request must have creation metadata before entry insertion.")
-            }
             let entry = NetworkListEntry(
                 id: nextEntryID,
                 request: request,
-                chronologyTimestamp: metadata.timestamp,
-                chronologySequence: metadata.sequence
+                chronologyTimestamp: creation.timestamp,
+                chronologySequence: creation.sequence
             )
+            registration.request = request
+            registration.entry = entry
+            registration.statusSeverity = request.statusSeverity
+            registration.creation = creation
+            registrationsByRequestID[request.id] = registration
             entriesByID[nextEntryID] = entry
             insertOrderedEntryID(nextEntryID)
             topologyChangedEntryIDs.insert(nextEntryID)
@@ -726,18 +923,13 @@ package final class NetworkPanelModel {
         affectedEntryIDs: inout Set<NetworkListEntry.ID>,
         topologyChangedEntryIDs: inout Set<NetworkListEntry.ID>
     ) {
-        guard let entryID = entryIDByRequestID.removeValue(forKey: requestID) else {
+        guard let registration = registrationsByRequestID.removeValue(forKey: requestID) else {
             return
         }
-        requestsByID.removeValue(forKey: requestID)
-        guard let statusSeverity = requestStatusSeverityByID.removeValue(forKey: requestID) else {
-            preconditionFailure("A registered Network request must have cached status severity.")
-        }
-        requestCreationMetadataByID.removeValue(forKey: requestID)
         removeRequestFromEntry(
             requestID,
-            entryID: entryID,
-            statusSeverity: statusSeverity,
+            entry: registration.entry,
+            statusSeverity: registration.statusSeverity,
             affectedEntryIDs: &affectedEntryIDs,
             topologyChangedEntryIDs: &topologyChangedEntryIDs
         )
@@ -746,21 +938,21 @@ package final class NetworkPanelModel {
 
     private func removeRequestFromEntry(
         _ requestID: NetworkRequest.ID,
-        entryID: NetworkListEntry.ID,
+        entry: NetworkListEntry,
         statusSeverity: NetworkDisplay.StatusSeverity,
         affectedEntryIDs: inout Set<NetworkListEntry.ID>,
         topologyChangedEntryIDs: inout Set<NetworkListEntry.ID>
     ) {
-        guard let entry = entriesByID[entryID] else {
+        guard entriesByID[entry.id] === entry else {
             preconditionFailure("A Network request referenced an unregistered entry.")
         }
         let remainingRequests = entry.requests.filter { $0.id != requestID }
         if remainingRequests.isEmpty {
-            entriesByID.removeValue(forKey: entryID)
-            orderedEntryIDs.removeAll { $0 == entryID }
-            if visibleEntryIDSet.remove(entryID) != nil {
-                visibleEntryIDs.removeAll { $0 == entryID }
-                topologyChangedEntryIDs.insert(entryID)
+            entriesByID.removeValue(forKey: entry.id)
+            orderedEntryIDs.removeAll { $0 == entry.id }
+            if visibleEntryIDSet.remove(entry.id) != nil {
+                visibleEntryIDs.removeAll { $0 == entry.id }
+                topologyChangedEntryIDs.insert(entry.id)
             }
         } else {
 #if DEBUG
@@ -773,33 +965,89 @@ package final class NetworkPanelModel {
                 topologyChangedEntryIDs: &topologyChangedEntryIDs
             )
             if hasActiveDisplayCriteria {
-                affectedEntryIDs.insert(entryID)
+                affectedEntryIDs.insert(entry.id)
             }
         }
     }
 
-    private func reconcileSelection(
-        _ previousSelection: NetworkPanelSelection?,
-        forceRebind: Bool = false
+    private func reconcileSubjectAfterIncrementalChange(
+        _ previousSubject: NetworkDetailSubject?
     ) {
-        let reconciledSelection: NetworkPanelSelection?
-        switch previousSelection {
-        case .entry(let entryID):
-            reconciledSelection = entriesByID[entryID] == nil ? nil : previousSelection
-        case .request(_, let requestID):
-            guard requestsByID[requestID] != nil,
-                  let entryID = entryIDByRequestID[requestID] else {
-                reconciledSelection = nil
-                break
-            }
-            reconciledSelection = .request(entryID: entryID, requestID: requestID)
-        case nil:
-            reconciledSelection = nil
-        }
-        guard forceRebind || selection != reconciledSelection else {
+        guard detailSubject?.intentID == previousSubject?.intentID else {
             return
         }
-        selection = reconciledSelection
+        guard let previousSubject else {
+            return
+        }
+        let subject: NetworkDetailSubject
+        switch previousSubject.scope {
+        case .entry:
+            guard entriesByID[previousSubject.entry.id] === previousSubject.entry else {
+                detailSubject = nil
+                return
+            }
+            subject = NetworkDetailSubject(
+                entry: previousSubject.entry,
+                intentID: previousSubject.intentID
+            )
+        case .request:
+            guard let registration = registrationsByRequestID[previousSubject.activeRequest.id] else {
+                detailSubject = nil
+                return
+            }
+            subject = NetworkDetailSubject(
+                entry: registration.entry,
+                request: registration.request,
+                intentID: previousSubject.intentID
+            )
+        }
+        if previousSubject.hasSameIdentity(as: subject) == false {
+            detailSubject = subject
+        }
+    }
+
+    private func reconcileSubjectAfterReset(
+        _ previousSubject: NetworkDetailSubject?
+    ) {
+        guard detailSubject?.intentID == previousSubject?.intentID else {
+            return
+        }
+        guard let previousSubject else {
+            detailSubject = nil
+            return
+        }
+        switch previousSubject.scope {
+        case .entry:
+            guard let entry = entriesByID[previousSubject.entry.id] else {
+                detailSubject = nil
+                return
+            }
+            let previousRequestIdentities = Set(
+                previousSubject.entryRequests.map(ObjectIdentifier.init)
+            )
+            guard entry.requests.contains(where: {
+                previousRequestIdentities.contains(ObjectIdentifier($0))
+            }) else {
+                detailSubject = nil
+                return
+            }
+            detailSubject = NetworkDetailSubject(
+                entry: entry,
+                intentID: previousSubject.intentID
+            )
+        case .request:
+            let previousRequest = previousSubject.activeRequest
+            guard let registration = registrationsByRequestID[previousRequest.id],
+                  registration.request === previousRequest else {
+                detailSubject = nil
+                return
+            }
+            detailSubject = NetworkDetailSubject(
+                entry: registration.entry,
+                request: registration.request,
+                intentID: previousSubject.intentID
+            )
+        }
     }
 
     private func reapplyDisplayCriteria() {
@@ -957,12 +1205,12 @@ package final class NetworkPanelModel {
     private func entryChronology(
         for entry: NetworkListEntry
     ) -> (timestamp: Double?, sequence: UInt64) {
-        guard let representativeMetadata = requestCreationMetadataByID[entry.representativeRequest.id] else {
+        guard let representativeMetadata = registrationsByRequestID[entry.representativeRequest.id]?.creation else {
             preconditionFailure("A Network entry representative must have creation metadata.")
         }
         var sequence = representativeMetadata.sequence
         for request in entry.requests.dropFirst() {
-            guard let metadata = requestCreationMetadataByID[request.id] else {
+            guard let metadata = registrationsByRequestID[request.id]?.creation else {
                 preconditionFailure("A Network entry member must have creation metadata.")
             }
             sequence = min(sequence, metadata.sequence)
@@ -974,8 +1222,8 @@ package final class NetworkPanelModel {
 #if DEBUG
         requestOrderComparisonCountStorageForTesting &+= 1
 #endif
-        guard let lhsMetadata = requestCreationMetadataByID[lhs.id],
-              let rhsMetadata = requestCreationMetadataByID[rhs.id] else {
+        guard let lhsMetadata = registrationsByRequestID[lhs.id]?.creation,
+              let rhsMetadata = registrationsByRequestID[rhs.id]?.creation else {
             preconditionFailure("A Network request must have creation metadata before sorting.")
         }
         return chronologyOrdersBefore(
@@ -1071,12 +1319,21 @@ package final class NetworkPanelModel {
 #endif
         listInvalidationRelay.yield(invalidation)
     }
+
+    private func takeSelectionIntentID() -> NetworkPanelSelectionIntent.ID {
+        precondition(
+            nextSelectionIntentID < UInt64.max,
+            "Network panel selection intent identity exhausted."
+        )
+        defer { nextSelectionIntentID += 1 }
+        return NetworkPanelSelectionIntent.ID(rawValue: nextSelectionIntentID)
+    }
 }
 
 #if DEBUG
 extension NetworkPanelModel {
     package func upsertRequestForTesting(_ request: NetworkRequest) {
-        let selectionBeforeTransaction = selection
+        let subjectBeforeTransaction = detailSubject
         var affectedEntryIDs: Set<NetworkListEntry.ID> = []
         var topologyChangedEntryIDs: Set<NetworkListEntry.ID> = []
         upsertRequest(
@@ -1090,7 +1347,7 @@ extension NetworkPanelModel {
                 topologyChangedEntryIDs: &topologyChangedEntryIDs
             )
         }
-        reconcileSelection(selectionBeforeTransaction)
+        reconcileSubjectAfterIncrementalChange(subjectBeforeTransaction)
         publishListTransaction(
             topologyChangedEntryIDs: topologyChangedEntryIDs,
             rebindsStableEntries: false
@@ -1098,9 +1355,9 @@ extension NetworkPanelModel {
     }
 
     package func rebuildEntriesForTesting() {
-        let selectionBeforeRebuild = selection
+        let subjectBeforeRebuild = detailSubject
         rebuildEntries(from: requests.items)
-        reconcileSelection(selectionBeforeRebuild, forceRebind: true)
+        reconcileSubjectAfterReset(subjectBeforeRebuild)
         publishListTransaction(
             topologyChangedEntryIDs: Set(visibleEntryIDs),
             rebindsStableEntries: true

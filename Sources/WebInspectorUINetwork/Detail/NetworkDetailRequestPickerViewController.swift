@@ -9,6 +9,11 @@ final class NetworkDetailRequestPickerViewController: UICollectionViewController
     UISearchResultsUpdating,
     UIPopoverPresentationControllerDelegate
 {
+    private struct RenderedProjection {
+        let subject: NetworkDetailSubject
+        let visibleRequestsByID: [NetworkRequest.ID: NetworkRequest]
+    }
+
     enum ItemID: Hashable {
         case entry(NetworkListEntry.ID)
         case request(NetworkRequest.ID)
@@ -20,14 +25,21 @@ final class NetworkDetailRequestPickerViewController: UICollectionViewController
 
     private let model: NetworkPanelModel
     private let boundEntryID: NetworkListEntry.ID
+    private var renderedProjection: RenderedProjection?
     private var modelObservation: PortableObservationTracking.Token?
     private var isRenderingActive = false
     private var searchText = ""
     private lazy var dataSource = makeDataSource()
 
-    init(model: NetworkPanelModel, entryID: NetworkListEntry.ID) {
+    init(model: NetworkPanelModel, subject: NetworkDetailSubject) {
         self.model = model
-        boundEntryID = entryID
+        boundEntryID = subject.entry.id
+        renderedProjection = RenderedProjection(
+            subject: subject,
+            visibleRequestsByID: Dictionary(
+                uniqueKeysWithValues: subject.entryRequests.map { ($0.id, $0) }
+            )
+        )
 
         var configuration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
         configuration.showsSeparators = true
@@ -96,20 +108,40 @@ final class NetworkDetailRequestPickerViewController: UICollectionViewController
         guard let itemID = dataSource.itemIdentifier(for: indexPath) else {
             return
         }
+        guard let renderedProjection,
+              model.detailSubject?.hasSameIdentity(as: renderedProjection.subject) == true else {
+            renderCurrentEntry(animatingDifferences: false)
+            return
+        }
+        let subject = renderedProjection.subject
+        let resolvedSubject: NetworkDetailSubject?
         switch itemID {
         case .entry(let entryID):
             guard entryID == boundEntryID,
-                  model.entry(for: entryID) != nil else {
+                  subject.entry.id == entryID else {
                 renderCurrentEntry(animatingDifferences: false)
                 return
             }
-            model.selectEntry(entryID)
+            resolvedSubject = model.selectEntry(
+                subject.entry,
+                ifSubjectUnchanged: subject
+            )
         case .request(let requestID):
-            guard model.entryID(containing: requestID) == boundEntryID else {
+            guard let cell = collectionView.cellForItem(at: indexPath)
+                    as? NetworkDetailRequestPickerCell,
+                  let request = cell.boundRequest,
+                  request.id == requestID else {
                 renderCurrentEntry(animatingDifferences: false)
                 return
             }
-            model.selectRequest(id: requestID)
+            resolvedSubject = model.selectRequest(
+                request,
+                ifSubjectUnchanged: subject
+            )
+        }
+        guard resolvedSubject != nil else {
+            renderCurrentEntry(animatingDifferences: false)
+            return
         }
         dismissPicker(animated: true)
     }
@@ -125,20 +157,23 @@ final class NetworkDetailRequestPickerViewController: UICollectionViewController
         isRenderingActive = true
         setVisibleCellRenderingActive(true)
         modelObservation?.cancel()
-        modelObservation = withPortableContinuousObservation { [weak self] event in
+        let token = withPortableContinuousObservation { [weak self] event in
             guard let self else {
                 return
             }
-            let selection = model.selection
-            let entry = model.selectedEntry
-            let requests = entry?.requests ?? []
+            let subject = model.detailSubject
+            _ = subject?.entryRequests
             render(
-                selection: selection,
-                entry: entry,
-                requests: requests,
+                subject: subject,
                 animatingDifferences: event.kind != .initial
             )
         }
+        guard isRenderingActive else {
+            token.cancel()
+            modelObservation = nil
+            return
+        }
+        modelObservation = token
     }
 
     private func stopObservingSelection() {
@@ -160,45 +195,46 @@ final class NetworkDetailRequestPickerViewController: UICollectionViewController
     }
 
     private func renderCurrentEntry(animatingDifferences: Bool) {
-        let selection = model.selection
-        let entry = model.selectedEntry
         render(
-            selection: selection,
-            entry: entry,
-            requests: entry?.requests ?? [],
+            subject: model.detailSubject,
             animatingDifferences: animatingDifferences
         )
     }
 
     private func render(
-        selection: NetworkPanelSelection?,
-        entry: NetworkListEntry?,
-        requests: [NetworkRequest],
+        subject: NetworkDetailSubject?,
         animatingDifferences: Bool
     ) {
-        guard let selection,
-              let entry,
-              requests.count > 1 else {
+        guard let subject,
+              subject.entryRequests.count > 1 else {
             dismissPicker(animated: true)
             return
         }
 
-        guard selection.entryID == boundEntryID else {
+        guard subject.entry.id == boundEntryID else {
             dismissPicker(animated: true)
             return
         }
-        guard entry.id == boundEntryID else {
-            preconditionFailure("The Network request picker must render the selected entry.")
+        if let previousSubject = renderedProjection?.subject,
+           previousSubject.entry !== subject.entry,
+           previousSubject.intentID != subject.intentID {
+            dismissPicker(animated: true)
+            return
         }
-
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let visibleRequests = requests.filter { request in
+        let visibleRequests = subject.entryRequests.filter { request in
             request.matchesDisplaySearchText(query)
         }
+        renderedProjection = RenderedProjection(
+            subject: subject,
+            visibleRequestsByID: Dictionary(
+                uniqueKeysWithValues: visibleRequests.map { ($0.id, $0) }
+            )
+        )
 
         var snapshot = NSDiffableDataSourceSnapshot<Section, ItemID>()
         snapshot.appendSections([.requests])
-        snapshot.appendItems([.entry(entry.id)])
+        snapshot.appendItems([.entry(boundEntryID)])
         snapshot.appendItems(visibleRequests.map { .request($0.id) })
         let preservesVisibleItemIdentity = dataSource.snapshot().itemIdentifiers
             == snapshot.itemIdentifiers
@@ -206,8 +242,11 @@ final class NetworkDetailRequestPickerViewController: UICollectionViewController
             guard let self else {
                 return
             }
+            guard renderedProjection?.subject.hasSameIdentity(as: subject) == true else {
+                return
+            }
             rebindVisibleRequestCells()
-            renderSelection(selection)
+            renderSelection(subject.selection)
         }
         if preservesVisibleItemIdentity {
             rebindVisibleRequestCells()
@@ -271,12 +310,12 @@ final class NetworkDetailRequestPickerViewController: UICollectionViewController
         switch itemID {
         case .entry(let entryID):
             guard entryID == boundEntryID else {
-                preconditionFailure("The Network request picker received an entry from another binding.")
+                cell.unbind()
+                return
             }
             cell.bindAllRequests(renderingActive: isRenderingActive)
         case .request(let requestID):
-            guard model.entryID(containing: requestID) == boundEntryID,
-                  let request = model.request(for: requestID) else {
+            guard let request = renderedProjection?.visibleRequestsByID[requestID] else {
                 cell.unbind()
                 return
             }
@@ -319,6 +358,14 @@ extension NetworkDetailRequestPickerViewController {
 
     var boundEntryIDForTesting: NetworkListEntry.ID {
         boundEntryID
+    }
+
+    var renderedEntryForTesting: NetworkListEntry? {
+        renderedProjection?.subject.entry
+    }
+
+    var renderedIntentIDForTesting: NetworkPanelSelectionIntent.ID? {
+        renderedProjection?.subject.intentID
     }
 
     func requestCellForTesting(

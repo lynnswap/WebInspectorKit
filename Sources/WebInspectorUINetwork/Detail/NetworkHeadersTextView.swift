@@ -39,9 +39,8 @@ final class NetworkHeadersTextView: UIView {
     }()
     private var sectionRules: [SectionRule] = []
     private var renderedSignature: NetworkHeadersTextDocumentSignature?
-    private var renderedRequests: [NetworkRequest] = []
-    private weak var renderedActiveRequest: NetworkRequest?
-    var requestPreviewAction: (@MainActor () -> Void)?
+    private var renderedSubject: NetworkDetailSubject?
+    var requestPreviewAction: (@MainActor (NetworkDetailSubject, NetworkRequest) -> Void)?
 #if DEBUG
     private var attributedTextAssignmentCount = 0
 #endif
@@ -61,30 +60,21 @@ final class NetworkHeadersTextView: UIView {
         updateSectionRuleRuns()
     }
 
-    func render(request: NetworkRequest, activeRequest: NetworkRequest) {
-        render(requests: [request], activeRequest: activeRequest)
-    }
-
-    func render(requests: [NetworkRequest], activeRequest: NetworkRequest) {
+    func render(subject: NetworkDetailSubject) {
         render(
-            requests: requests,
-            activeRequest: activeRequest,
+            subject: subject,
             forceDocumentAssignment: false
         )
     }
 
     private func render(
-        requests: [NetworkRequest],
-        activeRequest: NetworkRequest,
+        subject: NetworkDetailSubject,
         forceDocumentAssignment: Bool
     ) {
-        precondition(requests.isEmpty == false, "Network headers require at least one request.")
-        precondition(requests.contains { $0 === activeRequest })
-        renderedRequests = requests
-        renderedActiveRequest = activeRequest
+        renderedSubject = subject
         let document = NetworkHeadersTextDocumentBuilder(
-            requests: requests,
-            activeRequest: activeRequest,
+            requests: subject.renderRequests,
+            activeRequest: subject.activeRequest,
             traitCollection: traitCollection
         ).makeDocument()
         if forceDocumentAssignment == false, renderedSignature == document.signature {
@@ -112,8 +102,7 @@ final class NetworkHeadersTextView: UIView {
     }
 
     func clear() {
-        renderedRequests = []
-        renderedActiveRequest = nil
+        renderedSubject = nil
         renderedSignature = nil
         sectionRules = []
         textView.attributedText = NSAttributedString()
@@ -149,15 +138,11 @@ final class NetworkHeadersTextView: UIView {
     }
 
     private func rerenderIfNeeded() {
-        guard renderedRequests.isEmpty == false else {
+        guard let renderedSubject else {
             return
         }
-        guard let renderedActiveRequest else {
-            preconditionFailure("Rendered Network headers must retain an active request.")
-        }
         render(
-            requests: renderedRequests,
-            activeRequest: renderedActiveRequest,
+            subject: renderedSubject,
             forceDocumentAssignment: true
         )
     }
@@ -258,19 +243,34 @@ extension NetworkHeadersTextView: UITextViewDelegate {
         guard case .tag(Self.requestPreviewTagIdentifier) = textItem.content else {
             return defaultAction
         }
+        guard let action = capturedRequestPreviewAction() else {
+            return defaultAction
+        }
         let title = String(
             localized: "network.headers.request_data.view_preview",
             defaultValue: "View Request Preview",
             bundle: WebInspectorUILocalization.bundle
         )
-        return UIAction(title: title) { [weak self] _ in
-            self?.requestPreviewAction?()
+        return UIAction(title: title) { _ in
+            action()
         }
     }
 
     nonisolated func scrollViewDidScroll(_ scrollView: UIScrollView) {
         MainActor.assumeIsolated {
             updateSectionRuleRuns()
+        }
+    }
+}
+
+extension NetworkHeadersTextView {
+    private func capturedRequestPreviewAction() -> (@MainActor () -> Void)? {
+        guard let subject = renderedSubject else {
+            return nil
+        }
+        let request = subject.activeRequest
+        return { [weak self] in
+            self?.requestPreviewAction?(subject, request)
         }
     }
 }
@@ -367,7 +367,11 @@ extension NetworkHeadersTextView {
     }
 
     func activateRequestPreviewForTesting() {
-        requestPreviewAction?()
+        capturedRequestPreviewAction()?()
+    }
+
+    func captureRequestPreviewActionForTesting() -> (@MainActor () -> Void)? {
+        capturedRequestPreviewAction()
     }
 }
 #endif

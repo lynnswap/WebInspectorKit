@@ -81,6 +81,10 @@ final class NetworkDetailRequestPickerCell: UICollectionViewListCell {
         render(title: nil, subtitle: nil)
     }
 
+    var boundRequest: NetworkRequest? {
+        observedRequest
+    }
+
     private func startRequestObservationIfNeeded() {
         guard requestObservation == nil,
               let observedRequest else {
