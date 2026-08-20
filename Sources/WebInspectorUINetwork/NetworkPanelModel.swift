@@ -252,7 +252,7 @@ package final class NetworkPanelModel {
     package let context: WebInspectorContext
     package let requests: WebInspectorFetchedResults<NetworkRequest>
     private let fetchedResultsController: WebInspectorFetchedResultsController<NetworkRequest>
-    private let collectionState: NetworkRequestCollectionState
+    private let collectionState: NetworkRequestStore
 
     package private(set) var selection: NetworkPanelSelection?
     package private(set) var searchText = ""

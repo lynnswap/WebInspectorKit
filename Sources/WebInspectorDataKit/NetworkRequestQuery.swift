@@ -31,6 +31,13 @@ package struct NetworkRequestRecordInput: Hashable, Sendable {
         requestSentTimestamp = request.requestSentTimestamp
         hasResponse = request.hasResponse
     }
+
+    init(registration: NetworkRequestStore.Registration) {
+        self.init(
+            request: registration.request,
+            orderIndex: registration.orderIndex
+        )
+    }
 }
 
 package struct NetworkRequestRecord: Hashable, Sendable {
@@ -149,28 +156,22 @@ package struct NetworkRequestQueryState {
         insertMatchingID(record.id)
     }
 
-    package mutating func upsert(request: NetworkRequest) {
-        let orderIndex = recordsByID[request.id]?.orderIndex ?? recordsByID.count
-        upsert(request: request, orderIndex: orderIndex)
-    }
-
     package func visibleRequests(
-        lookup: (NetworkRequest.ID) -> NetworkRequest?
+        lookup: (NetworkRequest.ID) -> NetworkRequest
     ) -> [NetworkRequest] {
-        plan.visibleIDs(from: matchingIDs).compactMap(lookup)
+        plan.visibleIDs(from: matchingIDs).map(lookup)
     }
 
     private mutating func insertMatchingID(_ id: NetworkRequest.ID) {
         guard let record = recordsByID[id] else {
-            return
+            preconditionFailure("Network query membership must reference an owned record.")
         }
         var lowerBound = 0
         var upperBound = matchingIDs.count
         while lowerBound < upperBound {
             let midpoint = (lowerBound + upperBound) / 2
             guard let midpointRecord = recordsByID[matchingIDs[midpoint]] else {
-                lowerBound = midpoint + 1
-                continue
+                preconditionFailure("Network query membership must reference an owned record.")
             }
             if plan.ordersBefore(midpointRecord, record) {
                 lowerBound = midpoint + 1

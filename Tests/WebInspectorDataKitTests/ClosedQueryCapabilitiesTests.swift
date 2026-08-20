@@ -373,10 +373,7 @@ func contentOnlyNetworkDeltaKeepsMaterializedTopologyAndLookupWorkUnchanged() as
             changedID: filteredID
         ) == nil)
 
-    let results = WebInspectorFetchedResults<NetworkRequest>(
-        query: query,
-        items: [visibleRequest]
-    )
+    let results = context.network.fetchedResults(for: query)
     let controller = WebInspectorFetchedResultsController(fetchedResults: results)
     var transactions = controller.transactions.makeAsyncIterator()
     let topologyRevision = results.topologyRevision
@@ -385,7 +382,8 @@ func contentOnlyNetworkDeltaKeepsMaterializedTopologyAndLookupWorkUnchanged() as
 
     results.applyNetworkDelta(delta) { id in
         lookupCount += 1
-        return context.registeredRequest(for: id)
+        #expect(id == visibleID)
+        return visibleRequest
     }
 
     #expect(try #require(await transactions.next()) == delta.transaction)

@@ -1787,6 +1787,10 @@ struct NetworkDetailViewControllerTests {
             )))
         }
 
+        #expect(await waitUntilWebSocketRenderingFrameScheduled(
+            frameScheduler,
+            in: viewController
+        ))
         #expect(frameScheduler.scheduledFrameCount == scheduledFrameBaseline + 1)
         #expect(frameScheduler.hasScheduledFrame)
         #expect(viewController.snapshotForTesting.itemIdentifiers == initialIDs)
@@ -1857,6 +1861,10 @@ struct NetworkDetailViewControllerTests {
             ),
             timestamp: 50
         )))
+        #expect(await waitUntilWebSocketRenderingFrameScheduled(
+            frameScheduler,
+            in: viewController
+        ))
         await fireWebSocketRenderingFrame(frameScheduler, in: viewController)
         #expect(viewController.tailScrollCountForTesting == scrollCountBeforeUnpinnedAppend)
         #expect(abs(viewController.collectionView.contentOffset.y - offsetBeforeUnpinnedAppend) < 0.5)
@@ -1891,6 +1899,10 @@ struct NetworkDetailViewControllerTests {
             ),
             timestamp: 51
         )))
+        #expect(await waitUntilWebSocketRenderingFrameScheduled(
+            frameScheduler,
+            in: viewController
+        ))
         await fireWebSocketRenderingFrame(frameScheduler, in: viewController)
         #expect(viewController.tailScrollCountForTesting == scrollCountBeforePinnedAppend + 1)
         #expect(viewController.isFollowingTailForTesting)
@@ -2387,7 +2399,10 @@ struct NetworkDetailViewControllerTests {
             ),
             timestamp: 16
         )))
-        #expect(frameScheduler.hasScheduledFrame)
+        #expect(await waitUntilWebSocketRenderingFrameScheduled(
+            frameScheduler,
+            in: viewController.webSocketPreviewViewControllerForTesting
+        ))
         await fireWebSocketRenderingFrame(
             frameScheduler,
             in: viewController.webSocketPreviewViewControllerForTesting
@@ -2462,7 +2477,10 @@ struct NetworkDetailViewControllerTests {
             ),
             timestamp: 12
         )))
-        #expect(frameScheduler.hasScheduledFrame)
+        #expect(await waitUntilWebSocketRenderingFrameScheduled(
+            frameScheduler,
+            in: try #require(viewController)
+        ))
         viewController?.clear()
         #expect(observation.isActive == false)
         #expect(frameScheduler.hasScheduledFrame == false)
@@ -8353,6 +8371,20 @@ struct NetworkDetailViewControllerTests {
             frameScheduler.fireScheduledFrame()
         }
         viewController.collectionView.layoutIfNeeded()
+    }
+
+    private func waitUntilWebSocketRenderingFrameScheduled(
+        _ frameScheduler: ManualNetworkFrameScheduler,
+        in viewController: NetworkWebSocketPreviewViewController
+    ) async -> Bool {
+        await waitForObservedCondition(
+            deliveries: {
+                [viewController.timelineObservationDeliveryForTesting].compactMap { $0 }
+            },
+            sample: {
+                frameScheduler.hasScheduledFrame
+            }
+        )
     }
 
     private func waitUntilWebSocketPreviewBound(
