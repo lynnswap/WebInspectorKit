@@ -46,6 +46,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
     private var selectionObservation: PortableObservationTracking.Token?
     private var activeTransition: StackTransition?
     private var deferredStackSync: DeferredStackSync?
+    private var lastShownTarget = StackTarget.list
 
     package init(
         model: NetworkPanelModel,
@@ -105,14 +106,17 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         guard viewController === listViewController else {
             return
         }
-        let sourceViewController = activeTransition?.target == .detail
-            ? detailViewController
-            : transitionCoordinator?.viewController(forKey: .from)
-        beginUserDetailRemovalIfNeeded(from: sourceViewController)
+        let coordinatorSource = stackTarget(
+            for: transitionCoordinator?.viewController(forKey: .from)
+        )
+        let sourceTarget = activeTransition?.target == .detail
+            ? StackTarget.detail
+            : coordinatorSource ?? lastShownTarget
+        beginUserDetailRemovalIfNeeded(from: sourceTarget)
     }
 
-    private func beginUserDetailRemovalIfNeeded(from sourceViewController: UIViewController?) {
-        guard sourceViewController === detailViewController,
+    private func beginUserDetailRemovalIfNeeded(from sourceTarget: StackTarget?) {
+        guard sourceTarget == .detail,
               activeTransition?.target != .list else {
             return
         }
@@ -127,6 +131,9 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         animated: Bool
     ) {
         let shownTarget = stackTarget(for: viewController)
+        if let shownTarget {
+            lastShownTarget = shownTarget
+        }
         finishActiveTransitionIfNeeded(shownTarget: shownTarget)
         let hadDeferredStackSync = deferredStackSync != nil
         performDeferredStackSyncIfNeeded()
@@ -237,7 +244,9 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         guard transitionCoordinator == nil else {
             return
         }
-        finishActiveTransitionIfNeeded(shownTarget: currentStackTarget())
+        let shownTarget = currentStackTarget()
+        lastShownTarget = shownTarget
+        finishActiveTransitionIfNeeded(shownTarget: shownTarget)
     }
 
     private func finishActiveTransitionIfNeeded(shownTarget: StackTarget?) {
@@ -369,6 +378,51 @@ extension NetworkCompactNavigationController {
         }
 
         activeTransition = .showingDetail
+        navigationController(
+            self,
+            willShow: listViewController,
+            animated: false
+        )
+        beforeTransitionCompletion()
+        navigationController(
+            self,
+            didShow: detailViewController,
+            animated: false
+        )
+    }
+
+    @discardableResult
+    package func popDetailWithoutTrackedTransitionForTesting(
+        beforeTransitionCompletion: () -> Void = {}
+    ) -> UIViewController? {
+        guard viewControllers.last === detailViewController else {
+            return nil
+        }
+
+        activeTransition = nil
+        navigationController(
+            self,
+            willShow: listViewController,
+            animated: false
+        )
+        let poppedViewController = popViewController(animated: false)
+        beforeTransitionCompletion()
+        navigationController(
+            self,
+            didShow: listViewController,
+            animated: false
+        )
+        return poppedViewController
+    }
+
+    package func cancelDetailPopWithoutTrackedTransitionForTesting(
+        beforeTransitionCompletion: () -> Void = {}
+    ) {
+        guard viewControllers.last === detailViewController else {
+            return
+        }
+
+        activeTransition = nil
         navigationController(
             self,
             willShow: listViewController,

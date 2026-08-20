@@ -5797,6 +5797,117 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func compactContainerClearsSelectionAfterUntrackedNonanimatedPop() async throws {
+        let context = makeContext()
+        let request = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "untracked-pop",
+                url: "https://example.com/untracked.js"
+            )
+        )
+        let model = NetworkPanelModel(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectRequest(request)
+        navigationController.syncStackForTesting()
+
+        let poppedViewController = navigationController
+            .popDetailWithoutTrackedTransitionForTesting()
+
+        #expect(poppedViewController === detailViewController)
+        #expect(model.detailSubject == nil)
+        #expect(navigationController.viewControllers == [listViewController])
+    }
+
+    @Test
+    func compactContainerKeepsReplacementAfterUntrackedNonanimatedPop() async throws {
+        let context = makeContext()
+        let firstRequest = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "untracked-pop-first",
+                url: "https://example.com/first.js"
+            )
+        )
+        let secondRequest = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "untracked-pop-second",
+                url: "https://example.com/second.js"
+            )
+        )
+        let model = NetworkPanelModel(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectRequest(firstRequest)
+        let originalIntentID = try #require(model.detailSubject?.intentID)
+        navigationController.syncStackForTesting()
+
+        let poppedViewController = navigationController
+            .popDetailWithoutTrackedTransitionForTesting {
+            model.selectRequest(secondRequest)
+        }
+
+        #expect(poppedViewController === detailViewController)
+        #expect(model.detailSubject?.intentID != originalIntentID)
+        #expect(model.selectedRequest === secondRequest)
+        #expect(navigationController.viewControllers == [listViewController, detailViewController])
+    }
+
+    @Test
+    func compactContainerKeepsReplacementAfterCancelledUntrackedNonanimatedPop() async throws {
+        let context = makeContext()
+        let firstRequest = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "untracked-cancel-first",
+                url: "https://example.com/first.js"
+            )
+        )
+        let secondRequest = try #require(
+            await applyRequest(
+                to: context,
+                requestID: "untracked-cancel-second",
+                url: "https://example.com/second.js"
+            )
+        )
+        let model = NetworkPanelModel(context: context)
+        let listViewController = NetworkListViewController(model: model)
+        let detailViewController = makeNetworkDetailViewController(model: model)
+        let navigationController = NetworkCompactNavigationController(
+            model: model,
+            listViewController: listViewController,
+            detailViewController: detailViewController
+        )
+        model.selectRequest(firstRequest)
+        navigationController.syncStackForTesting()
+
+        navigationController.cancelDetailPopWithoutTrackedTransitionForTesting {
+            model.selectRequest(secondRequest)
+        }
+
+        #expect(model.selectedRequest === secondRequest)
+        #expect(navigationController.viewControllers == [listViewController, detailViewController])
+
+        let poppedViewController = navigationController
+            .popDetailWithoutTrackedTransitionForTesting()
+        #expect(poppedViewController === detailViewController)
+        #expect(model.detailSubject == nil)
+        #expect(navigationController.viewControllers == [listViewController])
+    }
+
+    @Test
     func compactContainerKeepsDetailAfterCancelledUserPop() async throws {
         let context = makeContext()
         let request = try #require(
