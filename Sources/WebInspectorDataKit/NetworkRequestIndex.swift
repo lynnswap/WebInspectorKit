@@ -5,6 +5,84 @@ package struct NetworkResultSetDelta: Sendable {
     package var transaction: WebInspectorFetchedResultsTransaction<NetworkRequest>
 }
 
+struct NetworkResultProjectionInput: Sendable {
+    var plan: NetworkRequestQueryPlan
+    var sectionBy: NetworkRequestQuery.Section?
+    var oldSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID>
+    var changedIDs: Set<NetworkRequest.ID>
+}
+
+struct NetworkRequestIndexClient: Sendable {
+    final class Identity: Sendable {}
+
+    let identity: Identity
+    private let replaceBody: @Sendable ([NetworkRequestRecordInput], UInt64) async -> Void
+    private let upsertBody: @Sendable (NetworkRequestRecordInput, UInt64) async -> Void
+    private let deltasBody: @Sendable (
+        [NetworkResultProjectionInput],
+        UInt64
+    ) async -> [NetworkResultSetDelta?]?
+    private let fullProjectionRecordVisitCountBody: @Sendable () async -> Int
+
+    init(
+        identity: Identity = Identity(),
+        replace: @escaping @Sendable ([NetworkRequestRecordInput], UInt64) async -> Void,
+        upsert: @escaping @Sendable (NetworkRequestRecordInput, UInt64) async -> Void,
+        deltas: @escaping @Sendable (
+            [NetworkResultProjectionInput],
+            UInt64
+        ) async -> [NetworkResultSetDelta?]?,
+        fullProjectionRecordVisitCount: @escaping @Sendable () async -> Int
+    ) {
+        self.identity = identity
+        replaceBody = replace
+        upsertBody = upsert
+        deltasBody = deltas
+        fullProjectionRecordVisitCountBody = fullProjectionRecordVisitCount
+    }
+
+    static func live() -> NetworkRequestIndexClient {
+        let index = NetworkRequestIndex()
+        return NetworkRequestIndexClient(
+            replace: { inputs, sequence in
+                await index.replace(with: inputs, sequence: sequence)
+            },
+            upsert: { input, sequence in
+                await index.upsert(input, sequence: sequence)
+            },
+            deltas: { inputs, sequence in
+                await index.deltas(for: inputs, sequence: sequence)
+            },
+            fullProjectionRecordVisitCount: {
+#if DEBUG
+                await index.fullProjectionRecordVisitCountForTesting
+#else
+                0
+#endif
+            }
+        )
+    }
+
+    func replace(with inputs: [NetworkRequestRecordInput], sequence: UInt64) async {
+        await replaceBody(inputs, sequence)
+    }
+
+    func upsert(_ input: NetworkRequestRecordInput, sequence: UInt64) async {
+        await upsertBody(input, sequence)
+    }
+
+    func deltas(
+        for inputs: [NetworkResultProjectionInput],
+        sequence: UInt64
+    ) async -> [NetworkResultSetDelta?]? {
+        await deltasBody(inputs, sequence)
+    }
+
+    func fullProjectionRecordVisitCount() async -> Int {
+        await fullProjectionRecordVisitCountBody()
+    }
+}
+
 package actor NetworkRequestIndex {
     private var recordsByID: [NetworkRequest.ID: NetworkRequestRecord] = [:]
     private var orderedIDs: [NetworkRequest.ID] = []
@@ -54,8 +132,25 @@ package actor NetworkRequestIndex {
         let record = NetworkRequestRecord(input: input)
         recordsByID[record.id] = record
         if isNewRecord {
-            orderedIDs.append(record.id)
+            insertOrderedID(record.id, orderIndex: record.orderIndex)
         }
+    }
+
+    private func insertOrderedID(_ id: NetworkRequest.ID, orderIndex: Int) {
+        var lowerBound = 0
+        var upperBound = orderedIDs.count
+        while lowerBound < upperBound {
+            let midpoint = (lowerBound + upperBound) / 2
+            guard let midpointRecord = recordsByID[orderedIDs[midpoint]] else {
+                preconditionFailure("NetworkRequestIndex order must reference an owned record.")
+            }
+            if midpointRecord.orderIndex < orderIndex {
+                lowerBound = midpoint + 1
+            } else {
+                upperBound = midpoint
+            }
+        }
+        orderedIDs.insert(id, at: lowerBound)
     }
 
     package func delta(
@@ -68,11 +163,31 @@ package actor NetworkRequestIndex {
         guard let transaction = NetworkResultSetTransactionBuilder.transaction(
             oldSnapshot: oldSnapshot,
             newSnapshot: newSnapshot,
-            changedID: changedID
+            changedIDs: changedID.map { [$0] } ?? []
         ) else {
             return nil
         }
         return NetworkResultSetDelta(snapshot: newSnapshot, transaction: transaction)
+    }
+
+    func deltas(
+        for inputs: [NetworkResultProjectionInput],
+        sequence: UInt64
+    ) -> [NetworkResultSetDelta?]? {
+        guard lastAppliedSequence == sequence else {
+            return nil
+        }
+        return inputs.map { input in
+            let newSnapshot = snapshot(plan: input.plan, sectionBy: input.sectionBy)
+            guard let transaction = NetworkResultSetTransactionBuilder.transaction(
+                oldSnapshot: input.oldSnapshot,
+                newSnapshot: newSnapshot,
+                changedIDs: input.changedIDs
+            ) else {
+                return nil
+            }
+            return NetworkResultSetDelta(snapshot: newSnapshot, transaction: transaction)
+        }
     }
 
     private func snapshot(
@@ -121,7 +236,7 @@ package actor NetworkRequestIndex {
             fullProjectionRecordVisitCountForTestingStorage &+= 1
 #endif
             guard let record = recordsByID[id] else {
-                continue
+                preconditionFailure("NetworkRequestIndex order must reference an owned record.")
             }
             guard plan.matches(record: record) == true else {
                 continue
@@ -170,10 +285,14 @@ private enum NetworkResultSetTransactionBuilder {
     static func transaction(
         oldSnapshot: Snapshot,
         newSnapshot: Snapshot,
-        changedID: ItemID?
+        changedIDs: Set<ItemID>
     ) -> WebInspectorFetchedResultsTransaction<NetworkRequest>? {
         let sectionChanges = sectionChanges(from: oldSnapshot, to: newSnapshot)
-        let itemChanges = itemChanges(from: oldSnapshot, to: newSnapshot, changedID: changedID)
+        let itemChanges = itemChanges(
+            from: oldSnapshot,
+            to: newSnapshot,
+            changedIDs: changedIDs
+        )
         let transaction = WebInspectorFetchedResultsTransaction<NetworkRequest>(
             oldSnapshot: oldSnapshot,
             newSnapshot: newSnapshot,
@@ -229,7 +348,7 @@ private enum NetworkResultSetTransactionBuilder {
     private static func itemChanges(
         from oldSnapshot: Snapshot,
         to newSnapshot: Snapshot,
-        changedID: ItemID?
+        changedIDs: Set<ItemID>
     ) -> [WebInspectorFetchedResultsItemChange<ItemID>] {
         let oldPositions = indexItems(oldSnapshot)
         let newPositions = indexItems(newSnapshot)
@@ -266,13 +385,16 @@ private enum NetworkResultSetTransactionBuilder {
             to: newSnapshot,
             oldPositions: oldPositions,
             newPositions: newPositions,
-            changedID: changedID,
+            changedIDs: changedIDs,
             excludedItemIDs: Set(sectionMembershipChanges.map(itemID))
         )
         let updates = updateChanges(
             from: oldPositions,
             to: newPositions,
-            changedID: changedID
+            changedIDs: changedIDs,
+            excludedItemIDs: Set(
+                (deletes + inserts + sectionMembershipChanges + moves).map(itemID)
+            )
         )
 
         return deletes + inserts + sectionMembershipChanges + moves + updates
@@ -281,16 +403,22 @@ private enum NetworkResultSetTransactionBuilder {
     private static func updateChanges(
         from oldPositions: [ItemID: ItemPosition],
         to newPositions: [ItemID: ItemPosition],
-        changedID: ItemID?
+        changedIDs: Set<ItemID>,
+        excludedItemIDs: Set<ItemID>
     ) -> [WebInspectorFetchedResultsItemChange<ItemID>] {
-        guard let changedID,
-              let oldPosition = oldPositions[changedID],
-              let newPosition = newPositions[changedID],
-              oldPosition.sectionID == newPosition.sectionID,
-              oldPosition.indexPath == newPosition.indexPath else {
-            return []
+        changedIDs.compactMap { changedID -> (ItemID, WebInspectorFetchedResultsIndexPath)? in
+            guard excludedItemIDs.contains(changedID) == false,
+                  let oldPosition = oldPositions[changedID],
+                  let newPosition = newPositions[changedID],
+                  oldPosition.sectionID == newPosition.sectionID else {
+                return nil
+            }
+            return (changedID, newPosition.indexPath)
+        }.sorted { lhs, rhs in
+            lhs.1 < rhs.1
+        }.map { changedID, indexPath in
+            .update(itemID: changedID, indexPath: indexPath)
         }
-        return [.update(itemID: changedID, indexPath: newPosition.indexPath)]
     }
 
     private static func sectionMembershipChanges(
@@ -334,7 +462,7 @@ private enum NetworkResultSetTransactionBuilder {
         to newSnapshot: Snapshot,
         oldPositions: [ItemID: ItemPosition],
         newPositions: [ItemID: ItemPosition],
-        changedID: ItemID?,
+        changedIDs: Set<ItemID>,
         excludedItemIDs: Set<ItemID>
     ) -> [WebInspectorFetchedResultsItemChange<ItemID>] {
         let oldCommonOrder = oldSnapshot.itemIDs.filter { newPositions[$0] != nil }
@@ -343,7 +471,8 @@ private enum NetworkResultSetTransactionBuilder {
             return []
         }
 
-        if let changedID,
+        if changedIDs.count == 1,
+           let changedID = changedIDs.first,
            excludedItemIDs.contains(changedID) == false,
            let oldPosition = oldPositions[changedID],
            let newPosition = newPositions[changedID],

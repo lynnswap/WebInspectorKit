@@ -10,6 +10,20 @@ final class WeakWebInspectorFetchedResults<Model: WebInspectorPersistentModel> {
     }
 }
 
+private struct NetworkUnfilteredFetchedResultsProjection {
+    var generation: NetworkRequestStore.ProjectionGeneration
+}
+
+private struct NetworkIndexedFetchedResultsProjection {
+    var plan: NetworkRequestQueryPlan
+    var snapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID>
+}
+
+private enum NetworkFetchedResultsProjection {
+    case unfiltered(NetworkUnfilteredFetchedResultsProjection)
+    case indexed(NetworkIndexedFetchedResultsProjection)
+}
+
 /// Stable identity for a fetched-results section.
 public struct WebInspectorFetchSectionID: RawRepresentable, Hashable, Sendable, Codable,
     CustomStringConvertible, ExpressibleByStringLiteral
@@ -74,11 +88,7 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
         WebInspectorFetchedResultsTransaction<Model>
     >()
     @ObservationIgnored weak var modelContext: WebInspectorContext?
-    @ObservationIgnored private var networkQueryPlan: NetworkRequestQueryPlan?
-    @ObservationIgnored private var networkQueryState: NetworkRequestQueryState?
-    @ObservationIgnored private var networkResultSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID>?
-    @ObservationIgnored private var networkUnfilteredSnapshotLedger:
-        WebInspectorFetchedResultsSingleSectionSnapshotLedger<NetworkRequest.ID>?
+    @ObservationIgnored private var networkProjection: NetworkFetchedResultsProjection?
 #if DEBUG
     @ObservationIgnored package private(set) var networkFullMembershipVisitCountForTesting = 0
 #endif
@@ -93,10 +103,7 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
         sections = Self.sections(for: items, queryStorage: queryStorage)
         self.modelContext = modelContext
         topologyRevision = 0
-        networkQueryPlan = nil
-        networkQueryState = nil
-        networkResultSnapshot = nil
-        networkUnfilteredSnapshotLedger = nil
+        networkProjection = nil
     }
 
     deinit {
@@ -319,9 +326,21 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
     convenience init(
         query: NetworkRequestQuery,
         items: [NetworkRequest] = [],
+        generation: NetworkRequestStore.ProjectionGeneration,
         modelContext: WebInspectorContext? = nil
     ) {
         self.init(queryStorage: .network(query), items: items, modelContext: modelContext)
+        let plan = NetworkRequestQueryPlan(query: query)
+        if Self.usesUnfilteredProjection(query: query, plan: plan) {
+            networkProjection = .unfiltered(NetworkUnfilteredFetchedResultsProjection(
+                generation: generation
+            ))
+        } else {
+            networkProjection = .indexed(NetworkIndexedFetchedResultsProjection(
+                plan: plan,
+                snapshot: WebInspectorFetchedResultsSnapshot(sections: sections)
+            ))
+        }
     }
 
     var networkQuery: NetworkRequestQuery {
@@ -332,240 +351,189 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
     }
 
     var networkSnapshotForDelta: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID> {
-        if let networkUnfilteredSnapshotLedger {
-            return networkUnfilteredSnapshotLedger.snapshot(at: items.count)
+        switch requiredNetworkProjection {
+        case let .unfiltered(projection):
+            return projection.generation.ledger.snapshot(at: items.count)
+        case let .indexed(projection):
+            return projection.snapshot
         }
-        if let networkResultSnapshot {
-            return networkResultSnapshot
-        }
-        let snapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
-        networkResultSnapshot = snapshot
-        return snapshot
     }
 
     func currentNetworkQueryPlan() -> NetworkRequestQueryPlan {
-        if let networkQueryPlan {
-            return networkQueryPlan
+        switch requiredNetworkProjection {
+        case .unfiltered:
+            return NetworkRequestQueryPlan(query: networkQuery)
+        case let .indexed(projection):
+            return projection.plan
         }
-        let plan = NetworkRequestQueryPlan(query: networkQuery)
-        networkQueryPlan = plan
-        return plan
+    }
+
+    var usesUnfilteredNetworkProjection: Bool {
+        guard case .unfiltered = requiredNetworkProjection else {
+            return false
+        }
+        return true
     }
 
     func setNetworkItems(
         _ requests: [NetworkRequest],
         plan: NetworkRequestQueryPlan,
-        lookup: (NetworkRequest.ID) -> NetworkRequest?
+        generation: NetworkRequestStore.ProjectionGeneration
     ) {
-        networkQueryPlan = plan
-        if plan.requiresQuery {
-            let state = NetworkRequestQueryState(plan: plan, requests: requests)
-            networkQueryState = state
-            setItems(state.visibleRequests(lookup: lookup))
-        } else {
-            networkQueryState = nil
+        if Self.usesUnfilteredProjection(query: networkQuery, plan: plan) {
+            networkProjection = .unfiltered(NetworkUnfilteredFetchedResultsProjection(
+                generation: generation
+            ))
             setItems(requests)
+        } else {
+            let projected = Self.projectedRequests(requests, plan: plan)
+            setItems(projected)
+            networkProjection = .indexed(NetworkIndexedFetchedResultsProjection(
+                plan: plan,
+                snapshot: WebInspectorFetchedResultsSnapshot(sections: sections)
+            ))
         }
-        configureNetworkSnapshotStorage(plan: plan)
     }
 
     func applyNetworkQuery(
         _ query: NetworkRequestQuery,
         plan: NetworkRequestQueryPlan,
         requests: [NetworkRequest],
-        lookup: (NetworkRequest.ID) -> NetworkRequest?
+        generation: NetworkRequestStore.ProjectionGeneration
     ) {
         queryStorage = .network(query)
-        networkQueryPlan = plan
-        if plan.requiresQuery {
-            let state = NetworkRequestQueryState(plan: plan, requests: requests)
-            networkQueryState = state
-            resetItems(state.visibleRequests(lookup: lookup))
-        } else {
-            networkQueryState = nil
+        if Self.usesUnfilteredProjection(query: query, plan: plan) {
+            networkProjection = .unfiltered(NetworkUnfilteredFetchedResultsProjection(
+                generation: generation
+            ))
             resetItems(requests)
-        }
-        configureNetworkSnapshotStorage(plan: plan)
-    }
-
-    func resetNetworkItems() {
-        if let state = networkQueryState {
-            networkQueryState = NetworkRequestQueryState(plan: state.plan, requests: [])
-        }
-        resetItems([])
-        if networkQueryPlan?.requiresQuery == false, networkQuery.sectionBy == nil {
-            networkUnfilteredSnapshotLedger = WebInspectorFetchedResultsSingleSectionSnapshotLedger(
-                itemIDs: []
-            )
-            networkResultSnapshot = nil
         } else {
-            networkUnfilteredSnapshotLedger = nil
-            networkResultSnapshot = WebInspectorFetchedResultsSnapshot()
+            let projected = Self.projectedRequests(requests, plan: plan)
+            resetItems(projected)
+            networkProjection = .indexed(NetworkIndexedFetchedResultsProjection(
+                plan: plan,
+                snapshot: WebInspectorFetchedResultsSnapshot(sections: sections)
+            ))
         }
     }
 
-    func insertNetworkRequest(
-        _ request: NetworkRequest,
-        lookup: (NetworkRequest.ID) -> NetworkRequest?
-    ) {
-        guard var state = networkQueryState else {
-            if networkQuery.sectionBy == nil, networkQueryPlan?.requiresQuery == false {
-                insertUnfilteredNetworkRequest(request)
-            } else {
-                insertItem(request)
-                networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
-            }
-            return
+    func resetNetworkItems(to generation: NetworkRequestStore.ProjectionGeneration) {
+        let plan = currentNetworkQueryPlan()
+        resetItems([])
+        if Self.usesUnfilteredProjection(query: networkQuery, plan: plan) {
+            networkProjection = .unfiltered(NetworkUnfilteredFetchedResultsProjection(
+                generation: generation
+            ))
+        } else {
+            networkProjection = .indexed(NetworkIndexedFetchedResultsProjection(
+                plan: plan,
+                snapshot: WebInspectorFetchedResultsSnapshot()
+            ))
         }
-        state.upsert(request: request)
-        networkQueryState = state
-        setItems(state.visibleRequests(lookup: lookup))
-        networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
     }
 
-    func refreshNetworkRequestAfterMutation(
-        _ request: NetworkRequest,
-        lookup: (NetworkRequest.ID) -> NetworkRequest?
+    func applySynchronousIndexedNetworkChange(
+        _ change: NetworkRequestStore.Change,
+        allRequests: [NetworkRequest]
     ) {
-#if DEBUG
-        networkFullMembershipVisitCountForTesting += items.count
-#endif
-        guard var state = networkQueryState else {
-            refreshAfterItemMutation(request)
-            networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
-            return
+        guard case var .indexed(projection) = requiredNetworkProjection else {
+            preconditionFailure("A synchronous indexed change requires indexed projection state.")
         }
-        state.upsert(request: request)
-        networkQueryState = state
-        setItems(state.visibleRequests(lookup: lookup), updatedItemIDs: [request.id])
-        networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
+        let projected = Self.projectedRequests(allRequests, plan: projection.plan)
+        let updatedItemIDs: Set<NetworkRequest.ID> = change.publishesContentUpdate
+            ? [change.registration.request.id]
+            : []
+        setItems(projected, updatedItemIDs: updatedItemIDs)
+        projection.snapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
+        networkProjection = .indexed(projection)
     }
 
-    func applyUnfilteredNetworkRequestChange(
-        _ request: NetworkRequest,
-        at itemIndex: Int,
-        publishesContentUpdate: Bool,
-        requestAtIndex: (Int) -> NetworkRequest
-    ) {
-        precondition(
-            networkQueryState == nil,
-            "An unfiltered Network change cannot have query state."
-        )
-        precondition(
-            networkQuery.sectionBy == nil,
-            "An unfiltered Network change must not have a section query."
-        )
-        precondition(itemIndex >= 0, "An unfiltered Network change must have a valid item index.")
+    func resetSynchronousIndexedNetworkItems(_ allRequests: [NetworkRequest]) {
+        guard case var .indexed(projection) = requiredNetworkProjection else {
+            preconditionFailure("A synchronous indexed reset requires indexed projection state.")
+        }
+        let projected = Self.projectedRequests(allRequests, plan: projection.plan)
+        resetItems(projected)
+        projection.snapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
+        networkProjection = .indexed(projection)
+    }
 
-        while items.count <= itemIndex {
-            let nextIndex = items.count
-            let nextRequest = requestAtIndex(nextIndex)
-            insertUnfilteredNetworkRequest(nextRequest)
+    func applyUnfilteredNetworkChange(_ change: NetworkRequestStore.Change) {
+        guard case let .unfiltered(projection) = requiredNetworkProjection else {
+            preconditionFailure("An unfiltered Network change requires unfiltered projection state.")
         }
+        let registration = change.registration
         precondition(
-            items.indices.contains(itemIndex) && items[itemIndex] === request,
-            "An unfiltered Network change must reference its registered item position."
+            change.projectionGeneration.id == projection.generation.id,
+            "An unfiltered Network change must belong to the current store generation."
         )
-        guard publishesContentUpdate else {
-            return
+        if change.isInsertion {
+            applyUnfilteredNetworkInsert(registration, projection: projection)
+        } else {
+            applyUnfilteredNetworkUpdate(registration, projection: projection)
         }
-        guard let networkUnfilteredSnapshotLedger else {
-            preconditionFailure("An unfiltered Network change must have append-only snapshot storage.")
-        }
-        let itemCount = items.count
-        precondition(
-            networkUnfilteredSnapshotLedger.itemID(
-                at: itemIndex,
-                expectedCount: itemCount
-            ) == request.id,
-            "An unfiltered Network change must preserve its existing snapshot position."
-        )
-        guard transactionRelay.hasContinuations else {
-            return
-        }
-        transactionRelay.yield(WebInspectorFetchedResultsTransaction<NetworkRequest>(
-            singleSectionLedger: networkUnfilteredSnapshotLedger,
-            oldCount: itemCount,
-            newCount: itemCount,
-            itemChanges: [
-                .update(
-                    itemID: request.id,
-                    indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: itemIndex)
-                ),
-            ]
-        ))
     }
 
     func applyNetworkDelta(
         _ delta: NetworkResultSetDelta,
-        lookup: (NetworkRequest.ID) -> NetworkRequest?
+        lookup: (NetworkRequest.ID) -> NetworkRequest
     ) {
-        let oldSnapshot = networkSnapshotForDelta
+        guard case var .indexed(projection) = requiredNetworkProjection else {
+            preconditionFailure("A Network result delta requires indexed projection state.")
+        }
+        let oldSnapshot = projection.snapshot
         if oldSnapshot != delta.snapshot {
 #if DEBUG
             networkFullMembershipVisitCountForTesting &+= delta.snapshot.itemIDs.count
 #endif
-            items = delta.snapshot.itemIDs.compactMap(lookup)
+            items = delta.snapshot.itemIDs.map(lookup)
             sections = delta.snapshot.sections.map { section in
                 WebInspectorFetchSection(
                     id: section.id,
                     title: section.title,
-                    items: section.itemIDs.compactMap(lookup)
+                    items: section.itemIDs.map(lookup)
                 )
             }
-            networkUnfilteredSnapshotLedger = nil
-            networkResultSnapshot = delta.snapshot
             bumpTopologyRevision()
         }
+        projection.snapshot = delta.snapshot
+        networkProjection = .indexed(projection)
         guard transactionRelay.hasContinuations else {
             return
         }
         transactionRelay.yield(delta.transaction)
     }
 
-    func insertUnfilteredNetworkRequest(_ request: NetworkRequest) {
-        precondition(networkQueryState == nil, "An unfiltered Network insert cannot have query state.")
-        precondition(
-            networkQueryPlan?.requiresQuery == false,
-            "An unfiltered Network insert must not require query evaluation."
-        )
-        precondition(
-            networkQuery.sectionBy == nil,
-            "An unfiltered Network insert must not have a section query."
-        )
-        guard let networkUnfilteredSnapshotLedger else {
-            preconditionFailure("An unfiltered Network insert must have append-only snapshot storage.")
-        }
-
+    private func applyUnfilteredNetworkInsert(
+        _ registration: NetworkRequestStore.Registration,
+        projection: NetworkUnfilteredFetchedResultsProjection
+    ) {
         let oldCount = items.count
-        let newCount = networkUnfilteredSnapshotLedger.append(
-            request.id,
-            expectedCount: oldCount
+        let newCount = oldCount + 1
+        precondition(
+            registration.orderIndex == oldCount,
+            "An unfiltered Network insertion must advance the registered order by one."
         )
-        precondition(newCount == oldCount + 1, "An unfiltered Network insert must append one item.")
-
-        items.append(request)
+        precondition(
+            projection.generation.ledger.itemID(
+                at: registration.orderIndex,
+                expectedCount: newCount
+            ) == registration.request.id,
+            "An unfiltered Network insertion must match the store ledger."
+        )
+        items.append(registration.request)
         if oldCount == 0 {
-            precondition(sections.isEmpty, "An empty unfiltered result cannot have sections.")
             sections = [
                 WebInspectorFetchSection(
                     id: .defaultSection,
                     title: nil,
-                    items: [request]
+                    items: [registration.request]
                 ),
             ]
         } else {
-            precondition(
-                sections.count == 1
-                    && sections[0].id == .defaultSection
-                    && sections[0].items.count == oldCount,
-                "An unfiltered Network result must preserve its single section."
-            )
-            sections[0].items.append(request)
+            sections[0].items.append(registration.request)
         }
-        networkResultSnapshot = nil
         bumpTopologyRevision()
-
         guard transactionRelay.hasContinuations else {
             return
         }
@@ -573,13 +541,13 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
             ? [.insert(sectionID: .defaultSection, index: 0)]
             : []
         transactionRelay.yield(WebInspectorFetchedResultsTransaction<NetworkRequest>(
-            singleSectionLedger: networkUnfilteredSnapshotLedger,
+            singleSectionLedger: projection.generation.ledger,
             oldCount: oldCount,
             newCount: newCount,
             sectionChanges: sectionChanges,
             itemChanges: [
                 .insert(
-                    itemID: request.id,
+                    itemID: registration.request.id,
                     indexPath: WebInspectorFetchedResultsIndexPath(
                         section: 0,
                         item: oldCount
@@ -589,15 +557,67 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
         ))
     }
 
-    private func configureNetworkSnapshotStorage(plan: NetworkRequestQueryPlan) {
-        if plan.requiresQuery == false, networkQuery.sectionBy == nil {
-            networkUnfilteredSnapshotLedger = WebInspectorFetchedResultsSingleSectionSnapshotLedger(
-                itemIDs: items.map(\.id)
-            )
-            networkResultSnapshot = nil
-        } else {
-            networkUnfilteredSnapshotLedger = nil
-            networkResultSnapshot = WebInspectorFetchedResultsSnapshot(sections: sections)
+    private func applyUnfilteredNetworkUpdate(
+        _ registration: NetworkRequestStore.Registration,
+        projection: NetworkUnfilteredFetchedResultsProjection
+    ) {
+        precondition(
+            items.indices.contains(registration.orderIndex)
+                && items[registration.orderIndex] === registration.request,
+            "An unfiltered Network update must preserve its registered position."
+        )
+        let itemCount = items.count
+        precondition(
+            projection.generation.ledger.itemID(
+                at: registration.orderIndex,
+                expectedCount: itemCount
+            ) == registration.request.id,
+            "An unfiltered Network update must match the store ledger."
+        )
+        guard transactionRelay.hasContinuations else {
+            return
+        }
+        transactionRelay.yield(WebInspectorFetchedResultsTransaction<NetworkRequest>(
+            singleSectionLedger: projection.generation.ledger,
+            oldCount: itemCount,
+            newCount: itemCount,
+            itemChanges: [
+                .update(
+                    itemID: registration.request.id,
+                    indexPath: WebInspectorFetchedResultsIndexPath(
+                        section: 0,
+                        item: registration.orderIndex
+                    )
+                ),
+            ]
+        ))
+    }
+
+    private var requiredNetworkProjection: NetworkFetchedResultsProjection {
+        guard let networkProjection else {
+            preconditionFailure("NetworkRequest results must own Network projection state.")
+        }
+        return networkProjection
+    }
+
+    private static func usesUnfilteredProjection(
+        query: NetworkRequestQuery,
+        plan: NetworkRequestQueryPlan
+    ) -> Bool {
+        plan.requiresQuery == false && query.sectionBy == nil
+    }
+
+    private static func projectedRequests(
+        _ requests: [NetworkRequest],
+        plan: NetworkRequestQueryPlan
+    ) -> [NetworkRequest] {
+        let requestsByID = Dictionary(uniqueKeysWithValues: requests.map { ($0.id, $0) })
+        let state = NetworkRequestQueryState(plan: plan, requests: requests)
+        return state.visibleRequests { id in
+            guard let request = requestsByID[id] else {
+                preconditionFailure("A projected Network request must remain registered.")
+            }
+            return request
         }
     }
 }
