@@ -79,6 +79,10 @@ private actor DataKitImportOnlyActor {
         _ = messagesByLevel.sections.first?.id
         _ = messageController.snapshot
         _ = messageController.transactions
+        try requests.updateFetchDescriptor(WebInspectorFetchDescriptor(fetchLimit: 50))
+        try requestController.updateFetchDescriptor(WebInspectorFetchDescriptor(fetchOffset: 1))
+        try messages.updateFetchDescriptor(WebInspectorFetchDescriptor(fetchLimit: 50))
+        try messageController.updateFetchDescriptor(WebInspectorFetchDescriptor(fetchOffset: 1))
         _ = try await context.evaluate("1 + 1").object.description
 
         let request = NetworkRequestSnapshot(url: "https://example.com", method: "GET")

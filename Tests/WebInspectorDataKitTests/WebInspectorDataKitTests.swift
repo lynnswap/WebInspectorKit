@@ -12802,7 +12802,7 @@ func consoleFetchedResultsHonorDescriptorsForInitialUpdatesAndDescriptorChanges(
         warningResults.items.map(\.text) == ["zebra", "omega"]
     }
 
-    warningResults.updateFetchDescriptor(WebInspectorFetchDescriptor<ConsoleMessage>(
+    try warningResults.updateFetchDescriptor(WebInspectorFetchDescriptor<ConsoleMessage>(
         sortBy: [SortDescriptor(\.text)],
         fetchLimit: 2,
         fetchOffset: 1

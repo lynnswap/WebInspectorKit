@@ -5,7 +5,10 @@ import WebInspectorProxyKit
 /// Observable model for a DOM node owned by a ``WebInspectorContext``.
 @Observable
 public final class DOMNode: WebInspectorPersistentModel {
-    /// Stable identity for a DOM node within a context.
+    /// Stable identity for this DOM node model.
+    ///
+    /// WebKit can reuse the same protocol identity in a later document. A
+    /// retained model with that ID does not become the later document's node.
     public struct ID: Hashable, Sendable {
         let proxyID: DOM.Node.ID
 
@@ -198,41 +201,58 @@ public final class DOMNode: WebInspectorPersistentModel {
     }
 
     /// Requests regular child nodes for this node.
+    ///
+    /// This operation does nothing when the node is no longer registered in
+    /// its originating context. Retaining a node does not extend its document
+    /// registration lifetime, and a different node with the same ID from a
+    /// later document is not used as a replacement.
     public func requestChildren(
         depth: Int = 1,
         isolation: isolated (any Actor) = #isolation
     ) async {
         guard let modelContext else {
-            preconditionFailure("DOMNode is not registered in a WebInspectorContext.")
+            return
         }
         await modelContext.requestChildren(for: self, depth: depth, isolation: isolation)
     }
 
     /// Returns copied text for the node in the requested format.
+    ///
+    /// - Throws: `WebInspectorProxyError.disconnected` when the node is
+    ///   no longer registered in its originating context.
     public func copyText(
         _ kind: CopyTextKind,
         isolation: isolated (any Actor) = #isolation
     ) async throws -> String {
-        guard let modelContext else {
-            preconditionFailure("DOMNode is not registered in a WebInspectorContext.")
-        }
+        let modelContext = try requiredModelContext()
         return try await modelContext.copyText(kind, for: self, isolation: isolation)
     }
 
     /// Removes this node from the inspected document.
+    ///
+    /// - Throws: `WebInspectorProxyError.disconnected` when the node is
+    ///   no longer registered in its originating context.
     public func delete(isolation: isolated (any Actor) = #isolation) async throws {
-        guard let modelContext else {
-            preconditionFailure("DOMNode is not registered in a WebInspectorContext.")
-        }
+        let modelContext = try requiredModelContext()
         try await modelContext.delete(self, isolation: isolation)
     }
 
     /// Highlights this node in the inspected page.
+    ///
+    /// - Throws: `WebInspectorProxyError.disconnected` when the node is
+    ///   no longer registered in its originating context.
     public func highlight(isolation: isolated (any Actor) = #isolation) async throws {
-        guard let modelContext else {
-            preconditionFailure("DOMNode is not registered in a WebInspectorContext.")
-        }
+        let modelContext = try requiredModelContext()
         try await modelContext.highlight(self, isolation: isolation)
+    }
+
+    private func requiredModelContext() throws -> WebInspectorContext {
+        guard let modelContext else {
+            throw WebInspectorProxyError.disconnected(
+                "DOMNode is not registered in this WebInspectorContext."
+            )
+        }
+        return modelContext
     }
 
     func update(from node: DOM.Node) {

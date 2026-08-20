@@ -702,6 +702,7 @@ public final class WebInspectorContext {
     }
 
     deinit {
+        invalidateFetchedResultsRegistrations()
         startupTask?.cancel()
         currentPageRetargetTask?.cancel()
         currentPageCleanupTask?.cancel()
@@ -816,6 +817,14 @@ public final class WebInspectorContext {
         requireOwner(isolation)
         return await networkRequestIndex.fullProjectionRecordVisitCountForTesting
     }
+
+    package func domTreeRegistrationCountForTesting(
+        isolation: isolated (any Actor) = #isolation
+    ) -> Int {
+        requireOwner(isolation)
+        pruneReleasedTreeStates()
+        return treeStates.count
+    }
 #endif
 
     /// Clears retained Network requests and emits reset transactions.
@@ -834,6 +843,10 @@ public final class WebInspectorContext {
     }
 
     /// Selects a DOM node and reveals it in registered tree controllers.
+    ///
+    /// Passing `nil` clears the selection. Passing a node that is no longer
+    /// registered in this context, including a node from another context, does
+    /// nothing and preserves the current selection.
     public func select(_ node: DOMNode?, isolation: isolated (any Actor) = #isolation) {
         select(node, reveal: .selectAndScroll, isolation: isolation)
     }
@@ -845,7 +858,7 @@ public final class WebInspectorContext {
     ) {
         requireOwner(isolation)
         if let node, nodesByID[node.id] !== node {
-            preconditionFailure("DOMNode is not registered in this WebInspectorContext.")
+            return
         }
         pendingInspectedNodeID = nil
         inspectorInspectResolutionTask?.cancel()
@@ -1692,16 +1705,32 @@ public final class WebInspectorContext {
     }
 
     /// Creates a live DOM tree controller rooted at a node or the document root.
+    ///
+    /// - Throws: `WebInspectorProxyError.disconnected` when an explicit
+    ///   root is no longer registered in this context or belongs to another
+    ///   context.
     public func treeController(
         root requestedRoot: DOMNode? = nil,
         isolation: isolated (any Actor) = #isolation
     ) async throws -> DOMTreeController {
         requireOwner(isolation)
-        guard let root = requestedRoot ?? rootNode else {
-            throw WebInspectorProxyError.disconnected("WebInspectorDataKit has no DOM root node.")
-        }
-        guard nodesByID[root.id] === root else {
-            preconditionFailure("DOMTreeController root is not registered in this WebInspectorContext.")
+        let root: DOMNode
+        if let requestedRoot {
+            guard nodesByID[requestedRoot.id] === requestedRoot else {
+                throw WebInspectorProxyError.disconnected(
+                    "DOMTreeController root is not registered in this WebInspectorContext."
+                )
+            }
+            root = requestedRoot
+        } else {
+            guard let currentRoot = rootNode else {
+                throw WebInspectorProxyError.disconnected("WebInspectorDataKit has no DOM root node.")
+            }
+            precondition(
+                nodesByID[currentRoot.id] === currentRoot,
+                "The current DOM root must remain registered in its WebInspectorContext."
+            )
+            root = currentRoot
         }
 
         let tree = DOMTreeState(rootNode: root, selectedNode: selectedNode)
@@ -1719,6 +1748,10 @@ public final class WebInspectorContext {
     }
 
     /// Selects the Runtime execution context used by default evaluation calls.
+    ///
+    /// Passing `nil` clears the selection. Passing a Runtime context that is no
+    /// longer registered in this context, including one from another context,
+    /// does nothing and preserves the current selection.
     public func selectContext(_ context: RuntimeContext?, isolation: isolated (any Actor) = #isolation) {
         requireOwner(isolation)
         guard let context else {
@@ -1726,7 +1759,7 @@ public final class WebInspectorContext {
             return
         }
         guard runtimeContextsByID[context.id] === context else {
-            preconditionFailure("RuntimeContext is not registered in this WebInspectorContext.")
+            return
         }
         selectedContext = context
     }
@@ -1957,11 +1990,13 @@ public final class WebInspectorContext {
         _ descriptor: WebInspectorFetchDescriptor<Model>,
         for results: WebInspectorFetchedResults<Model>,
         isolation: isolated (any Actor) = #isolation
-    ) {
+    ) throws {
         requireOwner(isolation)
         requireSupportedFetchDescriptor(descriptor)
         guard results.modelContext === self else {
-            preconditionFailure("WebInspectorFetchedResults is not registered in this WebInspectorContext.")
+            throw WebInspectorProxyError.disconnected(
+                "WebInspectorFetchedResults is not registered in this WebInspectorContext."
+            )
         }
         switch descriptor.kind {
         case .networkRequests:
@@ -1982,6 +2017,19 @@ public final class WebInspectorContext {
                 preconditionFailure("ConsoleMessage descriptors can only update ConsoleMessage fetched results.")
             }
             consoleResults.applyFetchDescriptor(consoleDescriptor, items: consoleMessages(for: consoleDescriptor))
+        }
+    }
+
+    private func invalidateFetchedResultsRegistrations() {
+        let networkResults = networkFetchedResults.compactMap(\.value)
+        let consoleResults = consoleFetchedResults.compactMap(\.value)
+        networkFetchedResults.removeAll()
+        consoleFetchedResults.removeAll()
+        for results in networkResults {
+            results.invalidateRegistration()
+        }
+        for results in consoleResults {
+            results.invalidateRegistration()
         }
     }
 
