@@ -63,6 +63,10 @@ package final class NetworkListCell: UICollectionViewListCell {
         render(displayName: "", statusSeverity: .neutral, fileTypeLabel: "")
     }
 
+    var boundEntry: NetworkListEntry? {
+        observedEntry
+    }
+
     private func startRequestObservationIfNeeded() {
         guard entryObservation == nil,
               let observedEntry else {

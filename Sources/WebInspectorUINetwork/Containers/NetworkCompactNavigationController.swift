@@ -13,15 +13,15 @@ package final class NetworkCompactNavigationController: UINavigationController, 
 
     private enum SelectionCommit {
         case none
-        case clearIfStillSelected(NetworkPanelSelection)
+        case clearIfStillSelected(NetworkPanelSelectionIntent.ID)
 
         @MainActor
         func apply(to model: NetworkPanelModel) {
             switch self {
             case .none:
                 return
-            case .clearIfStillSelected(let selection):
-                model.clearSelection(ifUnchanged: selection)
+            case .clearIfStillSelected(let intentID):
+                model.clearSelection(ifIntentUnchanged: intentID)
             }
         }
     }
@@ -58,8 +58,8 @@ package final class NetworkCompactNavigationController: UINavigationController, 
         navigationBar.compactScrollEdgeAppearance = navigationBar.compactAppearance ?? navigationBar.standardAppearance
         webInspectorApplyNavigationControllerBackground(to: self)
         delegate = self
-        listViewController.setEntrySelectionAction { [weak model] entryID in
-            model?.selectEntry(entryID)
+        listViewController.setEntrySelectionAction { [weak model] entry in
+            model?.selectEntry(entry)
         }
     }
 
@@ -249,7 +249,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
 
     private func finishUntrackedDetailRemovalIfNeeded(shownTarget: StackTarget?) {
         guard shownTarget == .list,
-              model.selection != nil else {
+              model.detailSubject != nil else {
             return
         }
         commit(
@@ -270,7 +270,7 @@ package final class NetworkCompactNavigationController: UINavigationController, 
     }
 
     private func desiredStackTarget() -> StackTarget {
-        model.selection == nil ? .list : .detail
+        model.detailSubject == nil ? .list : .detail
     }
 
     private func currentStackTarget() -> StackTarget {
@@ -288,10 +288,10 @@ package final class NetworkCompactNavigationController: UINavigationController, 
     }
 
     private func userPopSelectionCommit() -> SelectionCommit {
-        guard let selection = model.selection else {
+        guard let intentID = model.detailSubject?.intentID else {
             return .none
         }
-        return .clearIfStillSelected(selection)
+        return .clearIfStillSelected(intentID)
     }
 
     private func applyBackgroundFromTraits() {

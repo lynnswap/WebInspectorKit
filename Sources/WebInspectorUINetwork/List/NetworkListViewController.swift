@@ -7,7 +7,7 @@ import UIKit
 
 @MainActor
 package final class NetworkListViewController: UICollectionViewController, UISearchResultsUpdating {
-    package typealias EntrySelectionAction = @MainActor (NetworkListEntry.ID?) -> Void
+    package typealias EntrySelectionAction = @MainActor (NetworkListEntry?) -> Void
 
     @MainActor
     private final class ListSnapshotBuildCoordinator {
@@ -317,8 +317,8 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             builderFactory: snapshotBuilderFactory
         )
         self.snapshotApplyCompletionScheduler = snapshotApplyCompletionScheduler
-        entrySelectionAction = { [model] entryID in
-            model.selectEntry(entryID)
+        entrySelectionAction = { [model] entry in
+            model.selectEntry(entry)
         }
         super.init(collectionViewLayout: Self.makeListLayout())
         startObservingModel()
@@ -856,7 +856,15 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     override package func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-        entrySelectionAction(dataSource.itemIdentifier(for: indexPath))
+        guard let entryID = dataSource.itemIdentifier(for: indexPath),
+              let cell = collectionView.cellForItem(at: indexPath) as? NetworkListCell,
+              let entry = cell.boundEntry,
+              entry.id == entryID else {
+            renderSelectedEntryID(model.selectedEntryID)
+            return
+        }
+        entrySelectionAction(entry)
+        renderSelectedEntryID(model.selectedEntryID)
     }
 }
 
