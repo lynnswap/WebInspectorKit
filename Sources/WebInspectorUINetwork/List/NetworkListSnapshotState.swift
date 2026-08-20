@@ -1,96 +1,203 @@
 #if canImport(UIKit)
-import WebInspectorUIBase
 import WebInspectorDataKit
 import UIKit
 
 extension NetworkListViewController {
-    struct SnapshotRows: Equatable, Sendable {
-        let entryIDs: [NetworkListEntry.ID]
-
-        init(entryIDs: [NetworkListEntry.ID]) {
-            self.entryIDs = entryIDs
-        }
-    }
-}
-
-extension NetworkListViewController {
     @MainActor
     struct SnapshotState {
-        private(set) var appliedRows = NetworkListViewController.SnapshotRows(entryIDs: [])
-        private(set) var applyingRows: NetworkListViewController.SnapshotRows?
+        struct Application {
+            struct ID: Equatable, Sendable {
+                fileprivate let rawValue: UInt64
+            }
+
+            let id: ID
+            let snapshot: NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>
+        }
+
+        enum ReceiveResult: Equatable {
+            case stale
+            case unchanged
+            case ready
+        }
+
+        enum PrepareResult {
+            case none
+            case stale
+            case apply(Application)
+        }
+
+        enum FinishResult: Equatable {
+            case stale
+            case idle
+            case ready
+        }
+
+        private struct ReadyArtifact {
+            let artifact: NetworkListSnapshotArtifact
+        }
+
+        private enum Phase {
+            case idle
+            case ready(ReadyArtifact)
+            case applying(Application.ID, readyArtifact: ReadyArtifact?)
+        }
+
         private(set) var submittedBaseline: NetworkListSnapshotBaseline
-        private var nextBaselineGeneration: UInt64 = 0
+        private var phase = Phase.idle
 
         init() {
-            var snapshot = NSDiffableDataSourceSnapshot<NetworkListSnapshotSection, NetworkListEntry.ID>()
-            snapshot.appendSections([.main])
-            submittedBaseline = NetworkListSnapshotBaseline(
+            self.init(submittedBaseline: NetworkListSnapshotBaseline(
                 generation: 0,
                 version: NetworkPanelListVersion(revision: 0, entryIdentityGeneration: 0),
-                entryIDs: [],
-                snapshot: snapshot
-            )
+                entryIDs: []
+            ))
+        }
+
+        init(submittedBaseline: NetworkListSnapshotBaseline) {
+            self.submittedBaseline = submittedBaseline
         }
 
         var isApplying: Bool {
-            applyingRows != nil
+            guard case .applying = phase else {
+                return false
+            }
+            return true
         }
 
-        mutating func beginApplying(
-            _ artifact: NetworkListSnapshotArtifact
-        ) -> NetworkListViewController.SnapshotRows {
-            precondition(
-                applyingRows == nil,
-                "A Network list snapshot apply must finish before another begins."
-            )
-            precondition(
-                artifact.input.baseline.generation == submittedBaseline.generation,
-                "A Network list snapshot apply must start from the submitted UIKit baseline."
-            )
-            precondition(
-                nextBaselineGeneration < UInt64.max,
-                "Network list snapshot baseline generation overflowed."
-            )
-            nextBaselineGeneration += 1
-            let rows = NetworkListViewController.SnapshotRows(
-                entryIDs: artifact.input.target.entryIDs
-            )
-            submittedBaseline = NetworkListSnapshotBaseline(
-                generation: nextBaselineGeneration,
-                version: artifact.input.target.version,
-                entryIDs: artifact.input.target.entryIDs,
-                snapshot: artifact.cleanSnapshot
-            )
-            applyingRows = rows
-            return rows
+        var hasReadyArtifact: Bool {
+            switch phase {
+            case .idle:
+                false
+            case .ready:
+                true
+            case .applying(_, let readyArtifact):
+                readyArtifact != nil
+            }
         }
 
-        mutating func acknowledgeUnchanged(
-            _ artifact: NetworkListSnapshotArtifact
-        ) {
-            precondition(
-                artifact.changeCounts.requiresApply == false,
-                "Only a no-op Network list delta may advance without a UIKit apply."
-            )
-            precondition(
-                artifact.input.baseline.generation == submittedBaseline.generation,
-                "A no-op Network list delta must start from the submitted UIKit baseline."
-            )
-            submittedBaseline = NetworkListSnapshotBaseline(
-                generation: submittedBaseline.generation,
-                version: artifact.input.target.version,
-                entryIDs: artifact.input.target.entryIDs,
-                snapshot: artifact.cleanSnapshot
-            )
+        mutating func receive(
+            _ artifact: NetworkListSnapshotArtifact,
+            currentVersion: NetworkPanelListVersion
+        ) -> ReceiveResult {
+            guard isCurrent(artifact, currentVersion: currentVersion) else {
+                return preserveCurrentReadyArtifact(currentVersion: currentVersion)
+                    ? .ready
+                    : .stale
+            }
+
+            guard artifact.changeCounts.requiresApply else {
+                submittedBaseline = artifact.makeSubmittedBaseline(
+                    generation: submittedBaseline.generation
+                )
+                switch phase {
+                case .idle, .ready:
+                    phase = .idle
+                case .applying(let applicationID, _):
+                    phase = .applying(applicationID, readyArtifact: nil)
+                }
+                return .unchanged
+            }
+
+            let readyArtifact = ReadyArtifact(artifact: artifact)
+            switch phase {
+            case .idle, .ready:
+                phase = .ready(readyArtifact)
+            case .applying(let applicationID, _):
+                phase = .applying(applicationID, readyArtifact: readyArtifact)
+            }
+            return .ready
         }
 
-        mutating func finishApplying(_ rows: NetworkListViewController.SnapshotRows) {
+        mutating func prepare(
+            currentVersion: NetworkPanelListVersion
+        ) -> PrepareResult {
+            guard case .ready(let readyArtifact) = phase else {
+                return .none
+            }
+            phase = .idle
+
+            let artifact = readyArtifact.artifact
+            guard isCurrent(artifact, currentVersion: currentVersion) else {
+                return .stale
+            }
             precondition(
-                applyingRows == rows,
-                "A Network list snapshot apply must finish the rows it started."
+                submittedBaseline.generation < UInt64.max,
+                "Network list snapshot application identity exhausted."
             )
-            applyingRows = nil
-            appliedRows = rows
+            let applicationID = Application.ID(
+                rawValue: submittedBaseline.generation + 1
+            )
+            submittedBaseline = artifact.makeSubmittedBaseline(
+                generation: applicationID.rawValue
+            )
+            phase = .applying(applicationID, readyArtifact: nil)
+            return .apply(Application(id: applicationID, snapshot: artifact.snapshot))
+        }
+
+        mutating func finish(_ applicationID: Application.ID) -> FinishResult {
+            guard case .applying(let currentApplicationID, let readyArtifact) = phase,
+                  currentApplicationID == applicationID else {
+                return .stale
+            }
+            if let readyArtifact {
+                phase = .ready(readyArtifact)
+                return .ready
+            }
+            phase = .idle
+            return .idle
+        }
+
+        @discardableResult
+        mutating func discardReadyArtifact() -> Bool {
+            switch phase {
+            case .idle:
+                return false
+            case .ready:
+                phase = .idle
+                return true
+            case .applying(let applicationID, let readyArtifact):
+                phase = .applying(applicationID, readyArtifact: nil)
+                return readyArtifact != nil
+            }
+        }
+
+        private func isCurrent(
+            _ artifact: NetworkListSnapshotArtifact,
+            currentVersion: NetworkPanelListVersion
+        ) -> Bool {
+            artifact.input.target.version == currentVersion
+                && artifact.input.baseline.generation == submittedBaseline.generation
+                && artifact.input.baseline.version == submittedBaseline.version
+        }
+
+        private mutating func preserveCurrentReadyArtifact(
+            currentVersion: NetworkPanelListVersion
+        ) -> Bool {
+            switch phase {
+            case .idle:
+                return false
+            case .ready(let readyArtifact):
+                guard isCurrent(
+                    readyArtifact.artifact,
+                    currentVersion: currentVersion
+                ) else {
+                    phase = .idle
+                    return false
+                }
+                return true
+            case .applying(let applicationID, let readyArtifact):
+                guard let readyArtifact else {
+                    return false
+                }
+                guard isCurrent(
+                    readyArtifact.artifact,
+                    currentVersion: currentVersion
+                ) else {
+                    phase = .applying(applicationID, readyArtifact: nil)
+                    return false
+                }
+                return true
+            }
         }
     }
 }
