@@ -2404,7 +2404,11 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
         ]
     )
     let (target, context) = try await startContext(runtime: runtime, document: oldDocument)
-    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
+    let networkResults = context.network.fetchedResults(
+        for: NetworkRequestQuery(filter: .all([]))
+    )
+    let networkController = WebInspectorFetchedResultsController(fetchedResults: networkResults)
+    var networkTransactions = networkController.transactions.makeAsyncIterator()
     let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
 
     let seedAppliedBaseline = context.eventPumpAppliedSequenceForTesting
@@ -2459,6 +2463,12 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
     #expect(oldElement.attributes["data-generation"] == "old")
     #expect(oldConsoleMessage.text == "old-console")
     #expect(oldRuntimeContext.id == RuntimeContext.ID(oldRuntimeID))
+    #expect(try #require(await networkTransactions.next()).itemChanges == [
+        .insert(
+            itemID: NetworkRequest.ID(oldRequestID),
+            indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+        ),
+    ])
 
     let supersededSubscription = context.orderedEventSubscriptionStateForTesting
     let appliedBaseline = context.eventPumpAppliedSequenceForTesting
@@ -2475,6 +2485,9 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
     #expect(linearizedSubscription.sequence == supersededSubscription.sequence)
     #expect(networkResults.items.isEmpty)
     #expect(context.registeredRequest(forProxyID: oldRequestID) == nil)
+    let resetTransaction = try #require(await networkTransactions.next())
+    #expect(resetTransaction.isReset)
+    #expect(resetTransaction.newSnapshot.itemIDs.isEmpty)
 
     _ = await runtime.backend.waitForRecordedCommands(
         domain: "Console",
@@ -2598,6 +2611,12 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
     #expect(freshSubscription.sequence > supersededSubscription.sequence)
     #expect(networkResults.items.count == 1)
     #expect(context.registeredRequest(forProxyID: freshRequestID) != nil)
+    #expect(try #require(await networkTransactions.next()).itemChanges == [
+        .insert(
+            itemID: NetworkRequest.ID(freshRequestID),
+            indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+        ),
+    ])
     #expect(freshElement.attributes["data-generation"] == "fresh")
     #expect(freshStyles.phase == .needsRefresh)
     #expect(consoleResults.items.map(\.text) == ["fresh-console"])

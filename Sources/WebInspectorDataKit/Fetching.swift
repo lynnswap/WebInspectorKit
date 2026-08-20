@@ -500,29 +500,27 @@ extension WebInspectorFetchedResults where Model == NetworkRequest {
         _ delta: NetworkResultSetDelta,
         lookup: (NetworkRequest.ID) -> NetworkRequest?
     ) {
-#if DEBUG
-        networkFullMembershipVisitCountForTesting &+= delta.snapshot.itemIDs.count
-#endif
         let oldSnapshot = networkSnapshotForDelta
-        items = delta.snapshot.itemIDs.compactMap(lookup)
-        sections = delta.snapshot.sections.map { section in
-            WebInspectorFetchSection(
-                id: section.id,
-                title: section.title,
-                items: section.itemIDs.compactMap(lookup)
-            )
-        }
-        networkUnfilteredSnapshotLedger = nil
-        networkResultSnapshot = delta.snapshot
         if oldSnapshot != delta.snapshot {
+#if DEBUG
+            networkFullMembershipVisitCountForTesting &+= delta.snapshot.itemIDs.count
+#endif
+            items = delta.snapshot.itemIDs.compactMap(lookup)
+            sections = delta.snapshot.sections.map { section in
+                WebInspectorFetchSection(
+                    id: section.id,
+                    title: section.title,
+                    items: section.itemIDs.compactMap(lookup)
+                )
+            }
+            networkUnfilteredSnapshotLedger = nil
+            networkResultSnapshot = delta.snapshot
             bumpTopologyRevision()
         }
-        guard transactionRelay.hasContinuations,
-              let transaction = delta.transaction,
-              transaction.hasChanges else {
+        guard transactionRelay.hasContinuations else {
             return
         }
-        transactionRelay.yield(transaction)
+        transactionRelay.yield(delta.transaction)
     }
 
     func insertUnfilteredNetworkRequest(_ request: NetworkRequest) {

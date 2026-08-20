@@ -158,6 +158,323 @@ func everyClosedSectionCapabilityProducesCurrentSections() {
 
 @MainActor
 @Test
+func closedNetworkQueryPublishesOnlyVisibleContentUpdatesExactlyOnce() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let results = context.network.fetchedResults(
+        for: NetworkRequestQuery(
+            filter: .method(equals: "GET"),
+            sortBy: [.requestSentTimestamp()],
+            fetchLimit: 2
+        )
+    )
+    let controller = WebInspectorFetchedResultsController(fetchedResults: results)
+    var transactions = controller.transactions.makeAsyncIterator()
+    let firstID = Network.Request.ID("closed-visible-first")
+    let filteredID = Network.Request.ID("closed-filtered")
+    let secondID = Network.Request.ID("closed-visible-second")
+    let outsideWindowID = Network.Request.ID("closed-outside-window")
+
+    await context.apply(
+        .requestWillBeSent(
+            id: firstID,
+            request: Network.Request(
+                id: firstID,
+                url: "https://example.test/first",
+                method: "GET"
+            ),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 1
+        ))
+    #expect(
+        try #require(await transactions.next()).itemChanges == [
+            .insert(
+                itemID: NetworkRequest.ID(firstID),
+                indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+            )
+        ])
+
+    await context.apply(
+        .requestWillBeSent(
+            id: filteredID,
+            request: Network.Request(
+                id: filteredID,
+                url: "https://example.test/filtered",
+                method: "POST"
+            ),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 2
+        ))
+    await context.apply(
+        .requestWillBeSent(
+            id: secondID,
+            request: Network.Request(
+                id: secondID,
+                url: "https://example.test/second",
+                method: "GET"
+            ),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 3
+        ))
+    #expect(
+        try #require(await transactions.next()).itemChanges == [
+            .insert(
+                itemID: NetworkRequest.ID(secondID),
+                indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 1)
+            )
+        ])
+
+    await context.apply(
+        .requestWillBeSent(
+            id: outsideWindowID,
+            request: Network.Request(
+                id: outsideWindowID,
+                url: "https://example.test/outside",
+                method: "GET"
+            ),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 4
+        ))
+    await context.apply(
+        .responseReceived(
+            id: firstID,
+            response: Network.Response(
+                url: "https://example.test/first",
+                status: 201,
+                mimeType: "application/json"
+            ),
+            resourceType: .fetch,
+            timestamp: 5
+        ))
+    #expect(
+        try #require(await transactions.next()).itemChanges == [
+            .update(
+                itemID: NetworkRequest.ID(firstID),
+                indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+            )
+        ])
+
+    await context.apply(
+        .responseReceived(
+            id: filteredID,
+            response: Network.Response(
+                url: "https://example.test/filtered",
+                status: 202
+            ),
+            resourceType: .fetch,
+            timestamp: 6
+        ))
+    await context.apply(
+        .dataReceived(
+            id: outsideWindowID,
+            dataLength: 7,
+            encodedDataLength: 7,
+            timestamp: 7
+        ))
+    await context.apply(
+        .responseReceived(
+            id: secondID,
+            response: Network.Response(
+                url: "https://example.test/second",
+                status: 203
+            ),
+            resourceType: .fetch,
+            timestamp: 8
+        ))
+    #expect(
+        try #require(await transactions.next()).itemChanges == [
+            .update(
+                itemID: NetworkRequest.ID(secondID),
+                indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 1)
+            )
+        ])
+
+    await context.apply(
+        .dataReceived(
+            id: firstID,
+            dataLength: 9,
+            encodedDataLength: 9,
+            timestamp: 9
+        ))
+    #expect(
+        try #require(await transactions.next()).itemChanges == [
+            .update(
+                itemID: NetworkRequest.ID(firstID),
+                indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+            )
+        ])
+    #expect(results.items.map(\.id) == [NetworkRequest.ID(firstID), NetworkRequest.ID(secondID)])
+}
+
+@MainActor
+@Test
+func contentOnlyNetworkDeltaKeepsMaterializedTopologyAndLookupWorkUnchanged() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let visibleID = context.seedNetworkRequest(
+        requestID: "closed-index-visible",
+        url: "https://example.test/visible",
+        method: "GET",
+        resourceTypeRawValue: "Fetch",
+        responseMIMEType: "application/json",
+        responseStatus: 200,
+        responseStatusText: "OK",
+        timestamp: 1
+    )
+    let filteredID = context.seedNetworkRequest(
+        requestID: "closed-index-filtered",
+        url: "https://example.test/filtered",
+        method: "POST",
+        resourceTypeRawValue: "Fetch",
+        responseMIMEType: "application/json",
+        responseStatus: 200,
+        responseStatusText: "OK",
+        timestamp: 2
+    )
+    let visibleRequest = try #require(context.registeredRequest(for: visibleID))
+    let filteredRequest = try #require(context.registeredRequest(for: filteredID))
+    let query = NetworkRequestQuery(filter: .method(equals: "GET"))
+    let plan = NetworkRequestQueryPlan(query: query)
+    let index = NetworkRequestIndex()
+    await index.replace(
+        with: [
+            NetworkRequestRecordInput(request: visibleRequest, orderIndex: 0),
+            NetworkRequestRecordInput(request: filteredRequest, orderIndex: 1),
+        ],
+        sequence: 1
+    )
+    let oldSnapshot = WebInspectorFetchedResultsSnapshot<NetworkRequest.ID>(
+        itemIDs: [visibleID]
+    )
+    let delta = try #require(
+        await index.delta(
+            plan: plan,
+            sectionBy: nil,
+            oldSnapshot: oldSnapshot,
+            changedID: visibleID
+        ))
+    #expect(delta.snapshot == oldSnapshot)
+    #expect(delta.transaction.oldSnapshot == oldSnapshot)
+    #expect(delta.transaction.newSnapshot == oldSnapshot)
+    #expect(
+        delta.transaction.itemChanges == [
+            .update(
+                itemID: visibleID,
+                indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+            )
+        ])
+    #expect(
+        await index.delta(
+            plan: plan,
+            sectionBy: nil,
+            oldSnapshot: oldSnapshot,
+            changedID: filteredID
+        ) == nil)
+
+    let results = WebInspectorFetchedResults<NetworkRequest>(
+        query: query,
+        items: [visibleRequest]
+    )
+    let controller = WebInspectorFetchedResultsController(fetchedResults: results)
+    var transactions = controller.transactions.makeAsyncIterator()
+    let topologyRevision = results.topologyRevision
+    let membershipVisits = results.networkFullMembershipVisitCountForTesting
+    var lookupCount = 0
+
+    results.applyNetworkDelta(delta) { id in
+        lookupCount += 1
+        return context.registeredRequest(for: id)
+    }
+
+    #expect(try #require(await transactions.next()) == delta.transaction)
+    #expect(results.items.first === visibleRequest)
+    #expect(results.topologyRevision == topologyRevision)
+    #expect(results.networkFullMembershipVisitCountForTesting == membershipVisits)
+    #expect(lookupCount == 0)
+}
+
+@MainActor
+@Test
+func closedConsoleQueryPublishesOnlyVisibleContentUpdatesExactlyOnce() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let warning = Console.Level(rawValue: "warning")
+    let log = Console.Level(rawValue: "log")
+    let results = context.console.fetchedResults(
+        for: ConsoleMessageQuery(
+            filter: .level(warning),
+            sectionBy: .level,
+            fetchLimit: 2
+        )
+    )
+    let controller = WebInspectorFetchedResultsController(fetchedResults: results)
+    var transactions = controller.transactions.makeAsyncIterator()
+    let firstTarget = WebInspectorTarget.ID("closed-console-first")
+    let filteredTarget = WebInspectorTarget.ID("closed-console-filtered")
+    let secondTarget = WebInspectorTarget.ID("closed-console-second")
+
+    context.apply(
+        .messageAdded(Console.Message(source: .init(rawValue: "console-api"), level: warning, text: "first")),
+        targetID: firstTarget
+    )
+    let firstID = try #require(results.items.first?.id)
+    #expect(
+        try #require(await transactions.next()).itemChanges == [
+            .insert(
+                itemID: firstID,
+                indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+            )
+        ])
+
+    context.apply(
+        .messageAdded(Console.Message(source: .init(rawValue: "console-api"), level: log, text: "filtered")),
+        targetID: filteredTarget
+    )
+    context.apply(
+        .messageAdded(Console.Message(source: .init(rawValue: "console-api"), level: warning, text: "second")),
+        targetID: secondTarget
+    )
+    let secondID = try #require(results.items.last?.id)
+    #expect(
+        try #require(await transactions.next()).itemChanges == [
+            .insert(
+                itemID: secondID,
+                indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 1)
+            )
+        ])
+
+    context.apply(.messageRepeatCountUpdated(count: 2, timestamp: 2), targetID: firstTarget)
+    #expect(
+        try #require(await transactions.next()).itemChanges == [
+            .update(
+                itemID: firstID,
+                indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+            )
+        ])
+
+    context.apply(.messageRepeatCountUpdated(count: 3, timestamp: 3), targetID: filteredTarget)
+    context.apply(.messageRepeatCountUpdated(count: 4, timestamp: 4), targetID: secondTarget)
+    #expect(
+        try #require(await transactions.next()).itemChanges == [
+            .update(
+                itemID: secondID,
+                indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 1)
+            )
+        ])
+
+    context.apply(.messageRepeatCountUpdated(count: 5, timestamp: 5), targetID: firstTarget)
+    #expect(
+        try #require(await transactions.next()).itemChanges == [
+            .update(
+                itemID: firstID,
+                indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+            )
+        ])
+}
+
+@MainActor
+@Test
 func maximumQueryWindowsCannotOverflowNetworkOrConsoleBounds() {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
     for index in 0..<3 {

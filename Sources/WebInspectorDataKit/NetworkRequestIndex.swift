@@ -2,7 +2,7 @@ import Foundation
 
 package struct NetworkResultSetDelta: Sendable {
     package var snapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID>
-    package var transaction: WebInspectorFetchedResultsTransaction<NetworkRequest>?
+    package var transaction: WebInspectorFetchedResultsTransaction<NetworkRequest>
 }
 
 package actor NetworkRequestIndex {
@@ -65,14 +65,13 @@ package actor NetworkRequestIndex {
         changedID: NetworkRequest.ID?
     ) -> NetworkResultSetDelta? {
         let newSnapshot = snapshot(plan: plan, sectionBy: sectionBy)
-        guard oldSnapshot != newSnapshot else {
-            return nil
-        }
-        let transaction = NetworkResultSetTransactionBuilder.transaction(
+        guard let transaction = NetworkResultSetTransactionBuilder.transaction(
             oldSnapshot: oldSnapshot,
             newSnapshot: newSnapshot,
             changedID: changedID
-        )
+        ) else {
+            return nil
+        }
         return NetworkResultSetDelta(snapshot: newSnapshot, transaction: transaction)
     }
 
@@ -270,8 +269,28 @@ private enum NetworkResultSetTransactionBuilder {
             changedID: changedID,
             excludedItemIDs: Set(sectionMembershipChanges.map(itemID))
         )
+        let updates = updateChanges(
+            from: oldPositions,
+            to: newPositions,
+            changedID: changedID
+        )
 
-        return deletes + inserts + sectionMembershipChanges + moves
+        return deletes + inserts + sectionMembershipChanges + moves + updates
+    }
+
+    private static func updateChanges(
+        from oldPositions: [ItemID: ItemPosition],
+        to newPositions: [ItemID: ItemPosition],
+        changedID: ItemID?
+    ) -> [WebInspectorFetchedResultsItemChange<ItemID>] {
+        guard let changedID,
+              let oldPosition = oldPositions[changedID],
+              let newPosition = newPositions[changedID],
+              oldPosition.sectionID == newPosition.sectionID,
+              oldPosition.indexPath == newPosition.indexPath else {
+            return []
+        }
+        return [.update(itemID: changedID, indexPath: newPosition.indexPath)]
     }
 
     private static func sectionMembershipChanges(
