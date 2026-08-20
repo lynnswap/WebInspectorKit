@@ -864,7 +864,6 @@ package final class NetworkDetailViewController: UIViewController {
               mode == .preview,
               let currentSubject = model.detailSubject,
               observedSubject?.hasSameIdentity(as: currentSubject) == true,
-              currentSubject.activeRequest === request,
               observedRequest === request,
               selectedPreviewRole(from: availablePreviewRoles(in: request)) == .response,
               (previewCandidate(for: request)?.allowsResponseBodySurface ?? true),

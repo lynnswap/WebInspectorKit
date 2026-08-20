@@ -4286,6 +4286,78 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
+    func groupedPreviewFetchesTheVisibleNonRepresentativeResponseBody() async throws {
+        let fixture = try await makeLiveNetworkDetailFixture()
+        let frameID = FrameID("grouped-response-fetch-frame")
+        let nodeID = DOM.Node.ID("grouped-response-fetch-node")
+        installNavigationVisit(in: fixture.context, frameID: frameID)
+        let representative = try #require(await applyGroupedRequest(
+            to: fixture.context,
+            requestID: "grouped-response-representative",
+            url: "https://example.test/representative.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "application/json"],
+            responseMIMEType: "application/json",
+            resourceType: .xhr,
+            timestamp: 1
+        ))
+        let visibleCandidate = try #require(await applyGroupedRequest(
+            to: fixture.context,
+            requestID: "grouped-response-visible-candidate",
+            url: "https://example.test/visible.json",
+            frameID: frameID,
+            initiatorNodeID: nodeID,
+            responseHeaders: ["content-type": "application/json"],
+            responseMIMEType: "application/json",
+            resourceType: .xhr,
+            timestamp: 4
+        ))
+        await fixture.runtime.backend.enqueue(
+            Network.Body(data: #"{"visible":true}"#, base64Encoded: false),
+            for: "Network",
+            method: "getResponseBody"
+        )
+        let model = NetworkPanelModel(context: fixture.context)
+        try selectEntry(containing: visibleCandidate, in: model)
+        let viewController = makeNetworkDetailViewController(
+            model: model,
+            initialMode: .preview
+        )
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        #expect(model.detailSubject?.activeRequest === representative)
+        #expect(await waitUntilRendered(in: viewController) {
+            viewController.previewRequestIDForTesting == visibleCandidate.id
+        })
+        let commands = await fixture.runtime.backend.waitForRecordedCommands(
+            domain: "Network",
+            method: "getResponseBody",
+            count: 1
+        )
+        #expect(commands.count == 1)
+        #expect(
+            await waitForNetworkBodyPhase(in: visibleCandidate.responseBody) {
+                $0 == .loaded
+            } != nil
+        )
+        #expect(visibleCandidate.responseBody.text == #"{"visible":true}"#)
+        #expect(representative.responseBody.phase == .available)
+        #expect(await fixture.runtime.backend.recordedCommands().filter {
+            $0.domain == "Network" && $0.method == "getResponseBody"
+        }.count == 1)
+
+        await fixture.runtime.backend.enqueue((), for: "Console", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Runtime", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Network", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Page", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Inspector", method: "disable")
+        await fixture.context.stop()
+        #expect(fixture.context.state == .detached)
+    }
+
+    @Test
     func supersededResponseObservationCannotFetchThePreviouslySelectedRequest() async throws {
         let fixture = try await makeLiveNetworkDetailFixture()
         let first = try #require(await applyRequest(

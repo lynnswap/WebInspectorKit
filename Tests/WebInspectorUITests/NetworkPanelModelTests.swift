@@ -1424,6 +1424,112 @@ func resolvedSubjectsCarryExactValuesAndEveryExplicitSelectionGetsANewIntent() a
 
 @Test
 @MainActor
+func conditionalResponseFetchUsesExactScopeAndRegistrationOwnership() async throws {
+    let context = makeContext()
+    let frameID = FrameID("response-fetch-ownership-frame")
+    let nodeID = DOM.Node.ID("response-fetch-ownership-node")
+    context.apply(WebInspectorTargetLifecycleEvent.frameNavigated(WebInspectorPageFrameLifecycle(
+        id: frameID,
+        parentID: nil,
+        pageBindingID: "page",
+        loaderID: "loader",
+        name: "Main",
+        url: "https://example.test",
+        securityOrigin: "https://example.test",
+        mimeType: "text/html"
+    )))
+    let firstID = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "response-fetch-first",
+        frameID: frameID,
+        loaderID: "loader",
+        pageBindingID: "page",
+        initiatorNodeID: nodeID,
+        timestamp: 1
+    )
+    let secondID = await applyOriginatedPendingRequest(
+        to: context,
+        requestID: "response-fetch-second",
+        frameID: frameID,
+        loaderID: "loader",
+        pageBindingID: "page",
+        initiatorNodeID: nodeID,
+        timestamp: 2
+    )
+    await applyResponseReceived(
+        to: context,
+        requestID: "response-fetch-first",
+        url: "https://example.test/first",
+        resourceType: .fetch,
+        mimeType: "application/json",
+        timestamp: 3
+    )
+    await applyLoadingFinished(to: context, requestID: "response-fetch-first", timestamp: 4)
+    await applyResponseReceived(
+        to: context,
+        requestID: "response-fetch-second",
+        url: "https://example.test/second",
+        resourceType: .fetch,
+        mimeType: "application/json",
+        timestamp: 5
+    )
+    await applyLoadingFinished(to: context, requestID: "response-fetch-second", timestamp: 6)
+    let model = NetworkPanelModel(context: context)
+    let first = try #require(context.registeredRequest(for: firstID))
+    let second = try #require(context.registeredRequest(for: secondID))
+    let groupedEntryID = try #require(model.entryID(containing: firstID))
+    let groupedEntry = try #require(model.entry(for: groupedEntryID))
+
+    model.selectRequest(first)
+    let requestSubject = try #require(model.detailSubject)
+    let requestScopeTraversalBaseline = model.memberTraversalCountForTesting
+    #expect(
+        model.fetchResponseBodyIfNeeded(
+            for: second,
+            ifSubjectUnchanged: requestSubject
+        ) == false
+    )
+    #expect(model.memberTraversalCountForTesting == requestScopeTraversalBaseline)
+
+    model.selectEntry(groupedEntry)
+    let entrySubject = try #require(model.detailSubject)
+    var deliveryBaseline = model.rawTransactionDeliveryCountForTesting
+    let reusedID = await applyPendingRequest(
+        to: context,
+        requestID: "response-fetch-second",
+        url: "https://example.test/regrouped-second",
+        resourceType: .fetch,
+        timestamp: 7
+    )
+    #expect(reusedID == secondID)
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: deliveryBaseline))
+    deliveryBaseline = model.rawTransactionDeliveryCountForTesting
+    await applyResponseReceived(
+        to: context,
+        requestID: "response-fetch-second",
+        url: "https://example.test/regrouped-second",
+        resourceType: .fetch,
+        mimeType: "application/json",
+        timestamp: 8
+    )
+    await applyLoadingFinished(to: context, requestID: "response-fetch-second", timestamp: 9)
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: deliveryBaseline))
+    #expect(context.registeredRequest(for: secondID) === second)
+    #expect(model.detailSubject?.hasSameIdentity(as: entrySubject) == true)
+    #expect(model.entryID(containing: secondID) != groupedEntryID)
+
+    let regroupedTraversalBaseline = model.memberTraversalCountForTesting
+    #expect(
+        model.fetchResponseBodyIfNeeded(
+            for: second,
+            ifSubjectUnchanged: entrySubject
+        ) == false
+    )
+    #expect(model.memberTraversalCountForTesting == regroupedTraversalBaseline)
+}
+
+@Test
+@MainActor
 func foreignAndStaleSameIDSelectionActionsDoNotReplaceTheCurrentSubject() throws {
     let context = makeContext()
     let request = try seedFinishedRequest(
@@ -1479,6 +1585,7 @@ func bufferedResetAndSameIDReinsertionCannotResurrectEitherSelectionScope() asyn
         case .request:
             model.selectRequest(oldRequest)
         }
+        let oldSubject = try #require(model.detailSubject)
         let deliveryBaseline = model.rawTransactionDeliveryCountForTesting
 
         context.clearNetworkRequests()
@@ -1494,6 +1601,12 @@ func bufferedResetAndSameIDReinsertionCannotResurrectEitherSelectionScope() asyn
         #expect(model.detailSubject == nil)
         #expect(model.selection == nil)
         #expect(model.request(for: newRequest.id) === newRequest)
+        #expect(
+            model.fetchResponseBodyIfNeeded(
+                for: newRequest,
+                ifSubjectUnchanged: oldSubject
+            ) == false
+        )
     }
 }
 
@@ -1559,6 +1672,50 @@ func authoritativeSameIDInstanceReplacementRebindsSubjectAndCarriesIntent() thro
     #expect(reboundSubject.entry === previousSubject.entry)
     #expect(reboundSubject.activeRequest === replacement)
     #expect(model.request(for: replacement.id) === replacement)
+}
+
+@Test
+@MainActor
+func entryScopedConditionalFetchRejectsAReplacedSameIDInstance() throws {
+    let context = makeContext()
+    let original = try seedFinishedRequest(
+        in: context,
+        requestID: "entry-fetch-replacement",
+        url: "https://example.test/original",
+        timestamp: 1
+    )
+    let model = NetworkPanelModel(context: context)
+    let entryID = try #require(model.entryID(containing: original.id))
+    let entry = try #require(model.entry(for: entryID))
+    model.selectEntry(entry)
+    let entrySubject = try #require(model.detailSubject)
+    let proxyID = Network.Request.ID("entry-fetch-replacement")
+    let replacement = NetworkRequest(
+        request: Network.Request(
+            id: proxyID,
+            url: "https://example.test/replacement",
+            method: "GET"
+        ),
+        initiator: original.initiator,
+        navigationVisit: original.navigationVisit,
+        resourceType: original.resourceType,
+        timestamp: original.logicalStartTimestamp,
+        chronologySequence: original.chronologySequence,
+        modelContext: context
+    )
+
+    model.upsertRequestForTesting(replacement)
+
+    #expect(model.detailSubject?.hasSameIdentity(as: entrySubject) == true)
+    #expect(model.request(for: original.id) === replacement)
+    let traversalBaseline = model.memberTraversalCountForTesting
+    #expect(
+        model.fetchResponseBodyIfNeeded(
+            for: original,
+            ifSubjectUnchanged: entrySubject
+        ) == false
+    )
+    #expect(model.memberTraversalCountForTesting == traversalBaseline)
 }
 
 @Test

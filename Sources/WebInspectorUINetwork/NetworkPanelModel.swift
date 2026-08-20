@@ -605,25 +605,46 @@ package final class NetworkPanelModel {
         context.network.clearRequests()
     }
 
-    package func fetchResponseBodyIfNeeded(for request: NetworkRequest) {
+    @discardableResult
+    package func fetchResponseBodyIfNeeded(for request: NetworkRequest) -> Bool {
         guard registrationsByRequestID[request.id]?.request === request,
               request.canFetchResponseBody else {
-            return
+            return false
         }
         Task { @MainActor in
             await request.fetchResponseBody()
         }
+        return true
     }
 
+    @discardableResult
     func fetchResponseBodyIfNeeded(
         for request: NetworkRequest,
         ifSubjectUnchanged expectedSubject: NetworkDetailSubject
-    ) {
-        guard detailSubject?.hasSameIdentity(as: expectedSubject) == true,
-              expectedSubject.activeRequest === request else {
-            return
+    ) -> Bool {
+        guard let currentSubject = detailSubject,
+              currentSubject.hasSameIdentity(as: expectedSubject),
+              isRegistered(request, in: currentSubject) else {
+            return false
         }
-        fetchResponseBodyIfNeeded(for: request)
+        return fetchResponseBodyIfNeeded(for: request)
+    }
+
+    private func isRegistered(
+        _ request: NetworkRequest,
+        in subject: NetworkDetailSubject
+    ) -> Bool {
+        guard let registration = registrationsByRequestID[request.id],
+              registration.request === request,
+              registration.entry === subject.entry else {
+            return false
+        }
+        switch subject.scope {
+        case .entry:
+            return true
+        case .request:
+            return subject.activeRequest === request
+        }
     }
 
     private func startObservingFetchedResultsTransactions() {
