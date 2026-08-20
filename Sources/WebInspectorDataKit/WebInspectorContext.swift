@@ -1042,8 +1042,23 @@ public final class WebInspectorContext {
     }
 
     #if DEBUG
+    package var inspectionProxyForTesting: WebInspectorProxy {
+        proxy
+    }
+
+    package var currentPageForTesting: WebInspectorTarget? {
+        currentPage
+    }
+
     package func installCurrentPageRetargetTaskForTesting(_ task: Task<Void, Never>) {
         currentPageRetargetTask = task
+    }
+
+    package func currentPageRetargetTaskForTesting(
+        isolation: isolated (any Actor) = #isolation
+    ) -> Task<Void, Never>? {
+        requireOwner(isolation)
+        return currentPageRetargetTask
     }
 
     package func startupTaskForTesting(isolation: isolated (any Actor) = #isolation) -> Task<Void, Never>? {
@@ -1075,6 +1090,32 @@ public final class WebInspectorContext {
             target: target,
             subscriptionGeneration: subscriptionGeneration,
             beforeWatermarkUpdate: beforeWatermarkUpdate,
+            isolation: isolation
+        )
+    }
+
+    package func handleOrderedEventStreamFailureForTesting(
+        _ error: any Error,
+        subscriptionGeneration: UInt64,
+        isolation: isolated (any Actor) = #isolation
+    ) {
+        handleOrderedEventStreamFailure(
+            error,
+            subscriptionGeneration: subscriptionGeneration,
+            isolation: isolation
+        )
+    }
+
+    package func waitForOrderedEventsForTesting(
+        through sequence: UInt64,
+        registration: ReplyPromise<Void>,
+        isolation: isolated (any Actor) = #isolation
+    ) async -> Bool {
+        await waitForOrderedEvents(
+            through: sequence,
+            waiterRegistered: {
+                registration.fulfill(.success(()))
+            },
             isolation: isolation
         )
     }
@@ -3034,16 +3075,28 @@ public final class WebInspectorContext {
         stopEventPumps()
         let subscriptionGeneration = orderedEventSubscriptionGeneration
         let feed = await target.orderedEventFeed()
-        let pump = WebInspectorEventPump(stream: feed.events, isolation: isolation) { [weak self, target] sequencedEvent in
-            guard let self else { return }
-            await self.applyOrderedEvent(
-                sequencedEvent,
-                target: target,
-                subscriptionGeneration: subscriptionGeneration,
-                beforeWatermarkUpdate: nil,
-                isolation: isolation
-            )
-        }
+        let pump = WebInspectorEventPump(
+            stream: feed.events,
+            isolation: isolation,
+            apply: { [weak self, target] sequencedEvent in
+                guard let self else { return }
+                await self.applyOrderedEvent(
+                    sequencedEvent,
+                    target: target,
+                    subscriptionGeneration: subscriptionGeneration,
+                    beforeWatermarkUpdate: nil,
+                    isolation: isolation
+                )
+            },
+            onFailure: { [weak self] error in
+                guard let self else { return }
+                self.handleOrderedEventStreamFailure(
+                    error,
+                    subscriptionGeneration: subscriptionGeneration,
+                    isolation: isolation
+                )
+            }
+        )
         if let beforeValidation {
             await beforeValidation()
         }
@@ -3057,6 +3110,29 @@ public final class WebInspectorContext {
         )
         lastOrderedEventSequence = feed.initialSequence
         eventPumps = [pump]
+    }
+
+    private func handleOrderedEventStreamFailure(
+        _ error: any Error,
+        subscriptionGeneration: UInt64,
+        isolation: isolated (any Actor)
+    ) {
+        requireOwner(isolation)
+        guard subscriptionGeneration == orderedEventSubscriptionGeneration else {
+            return
+        }
+        stopEventPumps()
+        startupTask?.cancel()
+        currentPageRetargetTask?.cancel()
+        currentPageCleanupTask?.cancel()
+        documentReloadTask?.cancel()
+        cancelDOMDocumentLoad()
+
+        if let proxyError = error as? WebInspectorProxyError {
+            fail(proxyError)
+        } else {
+            fail(.disconnected("Ordered event stream failed: \(error)"))
+        }
     }
 
     private func stopEventPumps() {
@@ -3144,6 +3220,7 @@ public final class WebInspectorContext {
 
     private func waitForOrderedEvents(
         through sequence: UInt64,
+        waiterRegistered: (@Sendable () -> Void)? = nil,
         isolation: isolated (any Actor)
     ) async -> Bool {
         _ = isolation
@@ -3155,6 +3232,7 @@ public final class WebInspectorContext {
                 sequence: sequence,
                 continuation: continuation
             ))
+            waiterRegistered?()
         }
     }
 

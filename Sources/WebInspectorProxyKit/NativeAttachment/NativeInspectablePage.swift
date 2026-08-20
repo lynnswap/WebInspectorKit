@@ -23,9 +23,11 @@ package struct NativeInspectorConnection: Sendable {
         self.cleanup = cleanup
     }
 
-    package func close() async {
+    package func close(
+        error: TransportSession.Error = .transportClosed
+    ) async {
         await receiver.close()
-        await transport.detach()
+        await transport.detach(error: error)
         await restoreInspectabilityIfNeeded()
     }
 

@@ -28,6 +28,29 @@ func webInspectorProxyPublicLifecycleAndCommandSurfaceWorksFromConsumerPackage()
 }
 
 @Test
+func webInspectorProxyTestingStreamsFinishForActiveAndLateCloseConsumers() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let activeStream = target.network.events
+    let activeTask = Task {
+        var iterator = activeStream.makeAsyncIterator()
+        return await iterator.next()
+    }
+    try await runtime.backend.waitForSubscribers(
+        domain: "Network",
+        target: target,
+        count: 1
+    )
+
+    await runtime.proxy.close()
+
+    #expect(await activeTask.value == nil)
+    var lateIterator = target.network.events.makeAsyncIterator()
+    #expect(await lateIterator.next() == nil)
+    try await runtime.proxy.waitUntilClosed()
+}
+
+@Test
 func webInspectorProxyNetworkEventsMulticastToConsumerSubscribers() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()

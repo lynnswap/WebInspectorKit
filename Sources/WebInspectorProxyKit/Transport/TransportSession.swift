@@ -29,7 +29,7 @@ package actor TransportSession {
     private var networkOriginRegistry: TransportNetworkOriginRegistry
     private var eventSubscribers: TransportEventSubscriberRegistry
     private var inboundMessageQueue: TransportInboundMessageQueue
-    private var closed: Bool
+    private var terminalError: TransportSession.Error?
 
     package init(
         backend: any TransportBackend,
@@ -59,11 +59,11 @@ package actor TransportSession {
         networkOriginRegistry = TransportNetworkOriginRegistry()
         eventSubscribers = TransportEventSubscriberRegistry()
         inboundMessageQueue = TransportInboundMessageQueue()
-        closed = false
+        terminalError = nil
     }
 
     package func events(for domain: ProtocolDomain) -> AsyncStream<ProtocolEvent> {
-        guard !closed else {
+        guard terminalError == nil else {
             return finishedStream(of: ProtocolEvent.self)
         }
         let pair = AsyncStream<ProtocolEvent>.makeStream(bufferingPolicy: .unbounded)
@@ -81,7 +81,7 @@ package actor TransportSession {
     }
 
     package func orderedEventFeed() -> ProtocolOrderedEventFeed {
-        guard !closed else {
+        guard terminalError == nil else {
             return ProtocolOrderedEventFeed(
                 initialSequence: eventSequences.current.sequence,
                 events: finishedStream(of: ProtocolEvent.self)
@@ -102,8 +102,8 @@ package actor TransportSession {
 
     package func send(_ command: ProtocolCommand) async throws -> ProtocolCommand.Result {
         try Task.checkCancellation()
-        guard !closed else {
-            throw TransportSession.Error.transportClosed
+        if let terminalError {
+            throw terminalError
         }
 
         if isLatestRootNetworkCommand(command) {
@@ -163,7 +163,7 @@ package actor TransportSession {
 
     @discardableResult
     package func receiveRootMessage(_ message: String) async -> UInt64 {
-        guard !closed else {
+        guard terminalError == nil else {
             return eventSequences.current.sequence
         }
         inboundMessageQueue.append(message)
@@ -172,7 +172,7 @@ package actor TransportSession {
     }
 
     package func currentPageProcessDidTerminate() async {
-        guard !closed else {
+        guard terminalError == nil else {
             return
         }
         let currentMainPageTargetID = targetRegistry.currentMainPageTargetID
@@ -219,16 +219,18 @@ package actor TransportSession {
         )
     }
 
-    package func detach() async {
-        guard !closed else {
+    package func detach(
+        error: TransportSession.Error = .transportClosed
+    ) async {
+        guard terminalError == nil else {
             return
         }
-        closed = true
+        terminalError = error
         for pending in replyStore.pendingReplies {
-            pending.promise.fulfill(.failure(TransportSession.Error.transportClosed))
+            pending.promise.fulfill(.failure(error))
         }
         for waiter in mainPageTargetWaiterStore.removeAll() {
-            waiter.fulfill(.failure(TransportSession.Error.transportClosed))
+            waiter.fulfill(.failure(error))
         }
         replyStore.removeAll()
         provisionalTargetMessageStore.removeAll()
@@ -238,8 +240,8 @@ package actor TransportSession {
     }
 
     package func waitForCurrentMainPageTarget(timeout: Duration? = nil) async throws -> TransportSession.MainPageTarget {
-        guard !closed else {
-            throw TransportSession.Error.transportClosed
+        if let terminalError {
+            throw terminalError
         }
         if let currentMainPageTargetID = targetRegistry.currentMainPageTargetID {
             return TransportSession.MainPageTarget(
@@ -292,8 +294,8 @@ package actor TransportSession {
     }
 
     package func requireOpen() throws {
-        guard !closed else {
-            throw TransportSession.Error.transportClosed
+        if let terminalError {
+            throw terminalError
         }
     }
 

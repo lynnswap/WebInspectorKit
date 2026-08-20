@@ -22,6 +22,26 @@ package enum WebInspectorProxyEventDomain: String, Hashable, Sendable {
     case page = "Page"
 }
 
+package struct WebInspectorProxyTerminalFailure: Sendable {
+    package let publicError: WebInspectorProxyError
+    package let transportError: TransportSession.Error
+
+    package static func eventDecodingFailed(
+        method: String,
+        error: any Error
+    ) -> WebInspectorProxyTerminalFailure {
+        let message = String(describing: error)
+        return WebInspectorProxyTerminalFailure(
+            publicError: .disconnected("Failed to decode \(method): \(message)"),
+            transportError: .eventDecodingFailed(method: method, message: message)
+        )
+    }
+}
+
+package typealias WebInspectorProxyTerminalFailureHandler = @Sendable (
+    WebInspectorProxyTerminalFailure
+) async -> Void
+
 package struct WebInspectorProxyCommandReply<Result: Sendable>: Sendable {
     package let value: Result
     package let receivedSequence: UInt64
@@ -76,9 +96,12 @@ package struct WebInspectorProxyOrderedEvent: Sendable {
 
 package struct WebInspectorProxyOrderedEventFeed: Sendable {
     package let initialSequence: UInt64
-    package let events: AsyncStream<WebInspectorProxyOrderedEvent>
+    package let events: AsyncThrowingStream<WebInspectorProxyOrderedEvent, any Error>
 
-    package init(initialSequence: UInt64, events: AsyncStream<WebInspectorProxyOrderedEvent>) {
+    package init(
+        initialSequence: UInt64,
+        events: AsyncThrowingStream<WebInspectorProxyOrderedEvent, any Error>
+    ) {
         self.initialSequence = initialSequence
         self.events = events
     }
@@ -93,15 +116,19 @@ package protocol WebInspectorProxyBackend: Sendable {
         _ command: WebInspectorProxyCommand<Payload, Result>
     ) async throws -> WebInspectorProxyCommandReply<Result>
 
+    func finishEventSubscriptions(throwing error: WebInspectorProxyError?) async
+
     func orderedEvents(
         route: RoutingTargetID,
-        targetID: WebInspectorTarget.ID
+        targetID: WebInspectorTarget.ID,
+        terminalFailureHandler: @escaping WebInspectorProxyTerminalFailureHandler
     ) async -> WebInspectorProxyOrderedEventFeed
 
     nonisolated func events(
         route: RoutingTargetID,
         targetID: WebInspectorTarget.ID,
-        domain: WebInspectorProxyEventDomain
+        domain: WebInspectorProxyEventDomain,
+        terminalFailureHandler: @escaping WebInspectorProxyTerminalFailureHandler
     ) -> AsyncStream<WebInspectorProxyEvent>
 
     func waitForEventSubscription(

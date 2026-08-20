@@ -38,17 +38,30 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         )
     }
 
+    package func finishEventSubscriptions(throwing error: WebInspectorProxyError?) async {
+        await eventSubscriptions.finish(throwing: error)
+    }
+
     package func orderedEvents(
         route: RoutingTargetID,
-        targetID: WebInspectorTarget.ID
+        targetID: WebInspectorTarget.ID,
+        terminalFailureHandler: @escaping WebInspectorProxyTerminalFailureHandler
     ) async -> WebInspectorProxyOrderedEventFeed {
         let transportFeed = await transport.orderedEventFeed()
         let key = LiveProxyEventSubscriptionKey(route: route, targetID: targetID, domain: .ordered)
         let subscriptionID = LiveProxyEventSubscriptionID()
-        await eventSubscriptions.register(key, id: subscriptionID)
 
-        let stream = AsyncStream<WebInspectorProxyOrderedEvent>(bufferingPolicy: .unbounded) { continuation in
+        let stream = AsyncThrowingStream<WebInspectorProxyOrderedEvent, any Error>(
+            bufferingPolicy: .unbounded
+        ) { continuation in
             let task = Task {
+                guard await eventSubscriptions.registerOrdered(
+                    key,
+                    id: subscriptionID,
+                    continuation: continuation
+                ) else {
+                    return
+                }
                 for await event in transportFeed.events {
                     guard Task.isCancelled == false else {
                         break
@@ -63,16 +76,20 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
                             )
                         ))
                     } catch {
-                        preconditionFailure("Failed to decode \(event.method): \(error)")
+                        let failure = WebInspectorProxyTerminalFailure.eventDecodingFailed(
+                            method: event.method,
+                            error: error
+                        )
+                        await terminalFailureHandler(failure)
+                        return
                     }
                 }
-                await eventSubscriptions.unregister(key, id: subscriptionID)
                 continuation.finish()
             }
             continuation.onTermination = { _ in
                 task.cancel()
                 Task {
-                    await eventSubscriptions.unregister(key, id: subscriptionID)
+                    await eventSubscriptions.cancel(key, id: subscriptionID)
                 }
             }
         }
@@ -104,27 +121,77 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         )
     }
 
+    package func eventSubscriptionBookkeepingCountForTesting() async -> Int {
+        await eventSubscriptions.bookkeepingCount
+    }
+
+    package func eventSubscriptionWaiterCountForTesting() async -> Int {
+        await eventSubscriptions.waiterCount
+    }
+
+    package func waitForEventSubscriptionWaiterForTesting() async {
+        await eventSubscriptions.waitForWaiterRegistration()
+    }
+
+    package func exerciseCancelledSubscriptionRegistrationForTesting(
+        ordered: Bool,
+        route: RoutingTargetID,
+        targetID: WebInspectorTarget.ID
+    ) async -> Bool {
+        let id = LiveProxyEventSubscriptionID()
+        if ordered {
+            let key = LiveProxyEventSubscriptionKey(
+                route: route,
+                targetID: targetID,
+                domain: .ordered
+            )
+            let pair = AsyncThrowingStream<WebInspectorProxyOrderedEvent, any Error>.makeStream()
+            await eventSubscriptions.cancel(key, id: id)
+            let registered = await eventSubscriptions.registerOrdered(
+                key,
+                id: id,
+                continuation: pair.continuation
+            )
+            let bookkeepingCount = await eventSubscriptions.bookkeepingCount
+            return registered == false && bookkeepingCount == 0
+        }
+        let key = LiveProxyEventSubscriptionKey(
+            route: route,
+            targetID: targetID,
+            domain: .network
+        )
+        let pair = AsyncStream<WebInspectorProxyEvent>.makeStream()
+        await eventSubscriptions.cancel(key, id: id)
+        let registered = await eventSubscriptions.registerDomain(
+            key,
+            id: id,
+            continuation: pair.continuation
+        )
+        let bookkeepingCount = await eventSubscriptions.bookkeepingCount
+        return registered == false && bookkeepingCount == 0
+    }
+
     package nonisolated func events(
         route: RoutingTargetID,
         targetID: WebInspectorTarget.ID,
-        domain: WebInspectorProxyEventDomain
+        domain: WebInspectorProxyEventDomain,
+        terminalFailureHandler: @escaping WebInspectorProxyTerminalFailureHandler
     ) -> AsyncStream<WebInspectorProxyEvent> {
         AsyncStream<WebInspectorProxyEvent> { continuation in
             let key = LiveProxyEventSubscriptionKey(route: route, targetID: targetID, domain: domain)
             let subscriptionID = LiveProxyEventSubscriptionID()
             let task = Task {
                 let stream = await transport.events(for: protocolDomain(for: domain))
-                guard Task.isCancelled == false else {
-                    continuation.finish()
+                guard await eventSubscriptions.registerDomain(
+                    key,
+                    id: subscriptionID,
+                    continuation: continuation
+                ) else {
                     return
                 }
-                await eventSubscriptions.register(key, id: subscriptionID)
                 for await event in stream {
                     guard Task.isCancelled == false else {
                         break
-                    }
-                    guard await shouldDeliver(event, to: route) else {
-                        continue
                     }
                     do {
                         let lifecycleTarget = lifecycleTarget(for: event, route: route, targetID: targetID)
@@ -133,18 +200,25 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
                             targetID: targetID,
                             lifecycleTarget: lifecycleTarget
                         )
+                        guard await shouldDeliver(event, to: route) else {
+                            continue
+                        }
                         continuation.yield(projectedEvent(proxyEvent, from: event, route: route))
                     } catch {
-                        preconditionFailure("Failed to decode \(event.method): \(error)")
+                        let failure = WebInspectorProxyTerminalFailure.eventDecodingFailed(
+                            method: event.method,
+                            error: error
+                        )
+                        await terminalFailureHandler(failure)
+                        break
                     }
                 }
-                await eventSubscriptions.unregister(key, id: subscriptionID)
                 continuation.finish()
             }
             continuation.onTermination = { _ in
                 task.cancel()
                 Task {
-                    await eventSubscriptions.unregister(key, id: subscriptionID)
+                    await eventSubscriptions.cancel(key, id: subscriptionID)
                 }
             }
         }
@@ -157,6 +231,10 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         switch transportError {
         case .transportClosed:
             return WebInspectorProxyError.closed
+        case let .eventDecodingFailed(method, message):
+            return WebInspectorProxyError.disconnected(
+                "Failed to decode \(method): \(message)"
+            )
         case let .replyTimeout(method, _):
             return WebInspectorProxyError.timeout(domain: domain, method: method)
         case let .remoteError(method, _, message):
@@ -294,15 +372,15 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
         case .storage, .other:
             return nil
         }
-        guard shouldDeliverOrderedEvent(event, to: route) else {
-            return nil
-        }
         let lifecycleTarget = lifecycleTarget(for: event, route: route, targetID: targetID)
         let proxyEvent = try LiveProxyEventDecoder.proxyEvent(
             from: event,
             targetID: targetID,
             lifecycleTarget: lifecycleTarget
         )
+        guard shouldDeliverOrderedEvent(event, to: route) else {
+            return nil
+        }
         return projectedEvent(proxyEvent, from: event, route: route)
     }
 
@@ -847,22 +925,98 @@ private struct LiveProxyEventSubscriptionID: Hashable, Sendable {
 }
 
 private actor LiveProxyEventSubscriptions {
+    typealias DomainContinuation = AsyncStream<WebInspectorProxyEvent>.Continuation
+    typealias OrderedContinuation = AsyncThrowingStream<
+        WebInspectorProxyOrderedEvent,
+        any Error
+    >.Continuation
+
     private struct Waiter {
         let id: UInt64
         let minimumCount: Int
-        let continuation: CheckedContinuation<Void, Never>
+        let promise: ReplyPromise<Void>
+    }
+
+    private struct WaiterRegistrationWaiter {
+        let id: UInt64
+        let promise: ReplyPromise<Void>
     }
 
     private var activeSubscriberIDs: [LiveProxyEventSubscriptionKey: Set<LiveProxyEventSubscriptionID>] = [:]
+    private var domainContinuations: [LiveProxyEventSubscriptionID: DomainContinuation] = [:]
+    private var orderedContinuations: [LiveProxyEventSubscriptionID: OrderedContinuation] = [:]
+    private var cancelledSubscriptionIDs: Set<LiveProxyEventSubscriptionID> = []
     private var waiters: [LiveProxyEventSubscriptionKey: [Waiter]] = [:]
     private var nextWaiterID: UInt64 = 0
-    private var cancelledWaiterIDs: Set<UInt64> = []
+    private var waiterRegistrationWaiters: [WaiterRegistrationWaiter] = []
+    private var nextWaiterRegistrationWaiterID: UInt64 = 0
+    private var isFinished = false
+    private var terminalError: WebInspectorProxyError?
 
-    func register(_ key: LiveProxyEventSubscriptionKey, id: LiveProxyEventSubscriptionID) {
-        let inserted = activeSubscriberIDs[key, default: []].insert(id).inserted
-        guard inserted else {
+    var bookkeepingCount: Int {
+        activeSubscriberIDs.values.reduce(0) { $0 + $1.count }
+            + domainContinuations.count
+            + orderedContinuations.count
+            + cancelledSubscriptionIDs.count
+    }
+
+    var waiterCount: Int {
+        waiters.values.reduce(0) { $0 + $1.count }
+    }
+
+    func waitForWaiterRegistration() async {
+        guard waiterCount == 0, isFinished == false else {
             return
         }
+        let id = nextWaiterRegistrationWaiterID
+        nextWaiterRegistrationWaiterID += 1
+        let waiter = WaiterRegistrationWaiter(id: id, promise: ReplyPromise<Void>())
+        waiterRegistrationWaiters.append(waiter)
+        defer {
+            waiterRegistrationWaiters.removeAll { $0.id == id }
+        }
+        _ = try? await waiter.promise.value()
+    }
+
+    func registerDomain(
+        _ key: LiveProxyEventSubscriptionKey,
+        id: LiveProxyEventSubscriptionID,
+        continuation: DomainContinuation
+    ) -> Bool {
+        guard isFinished == false else {
+            continuation.finish()
+            return false
+        }
+        guard cancelledSubscriptionIDs.remove(id) == nil else {
+            continuation.finish()
+            return false
+        }
+        domainContinuations[id] = continuation
+        register(key, id: id)
+        return true
+    }
+
+    func registerOrdered(
+        _ key: LiveProxyEventSubscriptionKey,
+        id: LiveProxyEventSubscriptionID,
+        continuation: OrderedContinuation
+    ) -> Bool {
+        guard isFinished == false else {
+            continuation.finish(throwing: terminalError)
+            return false
+        }
+        guard cancelledSubscriptionIDs.remove(id) == nil else {
+            continuation.finish()
+            return false
+        }
+        orderedContinuations[id] = continuation
+        register(key, id: id)
+        return true
+    }
+
+    private func register(_ key: LiveProxyEventSubscriptionKey, id: LiveProxyEventSubscriptionID) {
+        let inserted = activeSubscriberIDs[key, default: []].insert(id).inserted
+        precondition(inserted, "Live event subscription identity was registered twice.")
         guard let pending = waiters.removeValue(forKey: key) else {
             return
         }
@@ -870,7 +1024,7 @@ private actor LiveProxyEventSubscriptions {
         var remaining: [Waiter] = []
         for waiter in pending {
             if count >= waiter.minimumCount {
-                waiter.continuation.resume()
+                waiter.promise.fulfill(.success(()))
             } else {
                 remaining.append(waiter)
             }
@@ -880,9 +1034,15 @@ private actor LiveProxyEventSubscriptions {
         }
     }
 
-    func unregister(_ key: LiveProxyEventSubscriptionKey, id: LiveProxyEventSubscriptionID) {
+    func cancel(_ key: LiveProxyEventSubscriptionKey, id: LiveProxyEventSubscriptionID) {
+        guard isFinished == false else {
+            return
+        }
+        domainContinuations[id] = nil
+        orderedContinuations[id] = nil
         guard var ids = activeSubscriberIDs[key],
               ids.remove(id) != nil else {
+            cancelledSubscriptionIDs.insert(id)
             return
         }
         if ids.isEmpty {
@@ -897,49 +1057,78 @@ private actor LiveProxyEventSubscriptions {
     }
 
     func waitForActiveSubscribers(_ key: LiveProxyEventSubscriptionKey, minimumCount: Int) async {
+        guard isFinished == false else {
+            return
+        }
         guard activeSubscriberIDs[key, default: []].count < minimumCount else {
             return
         }
         let waiterID = nextWaiterID
         nextWaiterID += 1
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                addWaiter(
-                    Waiter(id: waiterID, minimumCount: minimumCount, continuation: continuation),
-                    key: key
-                )
-            }
-        } onCancel: {
-            Task {
-                await self.cancelWaiter(waiterID, key: key)
-            }
+        let waiter = Waiter(
+            id: waiterID,
+            minimumCount: minimumCount,
+            promise: ReplyPromise<Void>()
+        )
+        addWaiter(waiter, key: key)
+        _ = try? await waiter.promise.value()
+        removeWaiter(waiterID, key: key)
+    }
+
+    func finish(throwing error: WebInspectorProxyError?) {
+        guard isFinished == false else {
+            return
         }
-        cancelledWaiterIDs.remove(waiterID)
+        isFinished = true
+        terminalError = error
+        activeSubscriberIDs.removeAll()
+        cancelledSubscriptionIDs.removeAll()
+        let domainContinuations = Array(domainContinuations.values)
+        self.domainContinuations.removeAll()
+        let orderedContinuations = Array(orderedContinuations.values)
+        self.orderedContinuations.removeAll()
+        let pending = waiters.values.flatMap { $0 }
+        waiters.removeAll()
+        let registrationWaiters = waiterRegistrationWaiters
+        waiterRegistrationWaiters.removeAll()
+        for waiter in pending {
+            waiter.promise.fulfill(.success(()))
+        }
+        for waiter in registrationWaiters {
+            waiter.promise.fulfill(.success(()))
+        }
+        for continuation in domainContinuations {
+            continuation.finish()
+        }
+        for continuation in orderedContinuations {
+            continuation.finish(throwing: error)
+        }
     }
 
     private func addWaiter(_ waiter: Waiter, key: LiveProxyEventSubscriptionKey) {
-        guard cancelledWaiterIDs.remove(waiter.id) == nil else {
-            waiter.continuation.resume()
+        guard isFinished == false else {
+            waiter.promise.fulfill(.success(()))
             return
         }
         waiters[key, default: []].append(waiter)
+        let registrationWaiters = waiterRegistrationWaiters
+        waiterRegistrationWaiters.removeAll()
+        for waiter in registrationWaiters {
+            waiter.promise.fulfill(.success(()))
+        }
     }
 
-    private func cancelWaiter(_ id: UInt64, key: LiveProxyEventSubscriptionKey) {
+    private func removeWaiter(_ id: UInt64, key: LiveProxyEventSubscriptionKey) {
         guard var pending = waiters[key],
               let index = pending.firstIndex(where: { $0.id == id }) else {
-            cancelledWaiterIDs.insert(id)
             return
         }
-        let waiter = pending.remove(at: index)
+        pending.remove(at: index)
         if pending.isEmpty {
             waiters[key] = nil
         } else {
             waiters[key] = pending
         }
-        // Resuming lets the cancelled caller return and observe its own
-        // Task.isCancelled state instead of staying suspended forever.
-        waiter.continuation.resume()
     }
 }
 
