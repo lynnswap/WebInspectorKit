@@ -137,7 +137,7 @@ public struct WebInspectorFetchedResultsSnapshot<ItemID: Hashable & Sendable>: H
 }
 
 extension WebInspectorFetchedResultsSnapshot {
-    init<Model: WebInspectorFetchableModel>(
+    init<Model: WebInspectorPersistentModel>(
         sections: [WebInspectorFetchSection<Model>]
     ) where Model.ID == ItemID {
         self.init(sections: sections.map { section in
@@ -184,7 +184,7 @@ public enum WebInspectorFetchedResultsItemChange<ItemID: Hashable & Sendable>: H
 }
 
 /// A batch of fetched-results changes between two snapshots.
-public struct WebInspectorFetchedResultsTransaction<Model: WebInspectorFetchableModel>: Hashable, Sendable {
+public struct WebInspectorFetchedResultsTransaction<Model: WebInspectorPersistentModel>: Hashable, Sendable {
     /// Item identity type for the model.
     public typealias ItemID = Model.ID
 
@@ -479,14 +479,9 @@ extension WebInspectorFetchedResultsIndexPath: Comparable {
 ///
 /// The controller shares the fetched results' registration and transaction
 /// stream lifetime. See <doc:ModelRegistrationLifetimes>.
-public final class WebInspectorFetchedResultsController<Model: WebInspectorFetchableModel> {
+public final class WebInspectorFetchedResultsController<Model: WebInspectorPersistentModel> {
     /// The observable fetched-results model.
     public let fetchedResults: WebInspectorFetchedResults<Model>
-
-    /// The descriptor currently used by the results.
-    public var fetchDescriptor: WebInspectorFetchDescriptor<Model> {
-        fetchedResults.fetchDescriptor
-    }
 
     /// The fetched models in display order.
     public var items: [Model] {
@@ -512,14 +507,30 @@ public final class WebInspectorFetchedResultsController<Model: WebInspectorFetch
         self.fetchedResults = fetchedResults
     }
 
-    /// Replaces the fetch descriptor and updates the result contents.
-    ///
-    /// - Throws: `WebInspectorProxyError.disconnected` when the underlying
-    ///   fetched results are no longer registered in their originating context.
-    public func updateFetchDescriptor(
-        _ descriptor: WebInspectorFetchDescriptor<Model>,
+}
+
+public extension WebInspectorFetchedResultsController where Model == NetworkRequest {
+    /// The last query installed for the results.
+    var query: NetworkRequestQuery { fetchedResults.query }
+
+    /// Replaces the query and updates the result contents atomically.
+    func updateQuery(
+        _ query: NetworkRequestQuery,
         isolation: isolated (any Actor) = #isolation
     ) throws {
-        try fetchedResults.updateFetchDescriptor(descriptor, isolation: isolation)
+        try fetchedResults.updateQuery(query, isolation: isolation)
+    }
+}
+
+public extension WebInspectorFetchedResultsController where Model == ConsoleMessage {
+    /// The last query installed for the results.
+    var query: ConsoleMessageQuery { fetchedResults.query }
+
+    /// Replaces the query and updates the result contents atomically.
+    func updateQuery(
+        _ query: ConsoleMessageQuery,
+        isolation: isolated (any Actor) = #isolation
+    ) throws {
+        try fetchedResults.updateQuery(query, isolation: isolation)
     }
 }

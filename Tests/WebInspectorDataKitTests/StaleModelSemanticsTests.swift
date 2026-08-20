@@ -227,9 +227,29 @@ func contextReleaseFinishesEveryFetchedResultsStreamAndRetainsFinalSnapshots() a
                 level: Console.Level(rawValue: "warning"),
                 text: "retained message"
             )))
-    let networkResults: WebInspectorFetchedResults<NetworkRequest> = try #require(context?.fetchedResults())
-    let secondNetworkResults: WebInspectorFetchedResults<NetworkRequest> = try #require(context?.fetchedResults())
-    let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = try #require(context?.fetchedResults())
+    let retainedNetworkQuery = NetworkRequestQuery(
+        filter: .method(equals: "GET"),
+        sortBy: [.requestSentTimestamp(order: .reverse)],
+        sectionBy: .method,
+        fetchLimit: 4,
+        fetchOffset: 0
+    )
+    let retainedConsoleQuery = ConsoleMessageQuery(
+        filter: .level(Console.Level(rawValue: "warning")),
+        sortBy: [.text(comparison: .lexical)],
+        sectionBy: .level,
+        fetchLimit: 4,
+        fetchOffset: 0
+    )
+    let networkResults: WebInspectorFetchedResults<NetworkRequest> = try #require(
+        context?.network.fetchedResults(for: retainedNetworkQuery)
+    )
+    let secondNetworkResults: WebInspectorFetchedResults<NetworkRequest> = try #require(
+        context?.network.fetchedResults()
+    )
+    let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = try #require(
+        context?.console.fetchedResults(for: retainedConsoleQuery)
+    )
     let networkController = WebInspectorFetchedResultsController(fetchedResults: networkResults)
     let consoleController = WebInspectorFetchedResultsController(fetchedResults: consoleResults)
     let retainedNetworkSnapshot = networkController.snapshot
@@ -255,16 +275,24 @@ func contextReleaseFinishesEveryFetchedResultsStreamAndRetainsFinalSnapshots() a
     #expect(consoleController.snapshot == retainedConsoleSnapshot)
     #expect(networkResults.items.map(\.url) == ["https://example.test/data.json"])
     #expect(consoleResults.items.map(\.text) == ["retained message"])
+    #expect(networkResults.query == retainedNetworkQuery)
+    #expect(networkController.query == retainedNetworkQuery)
+    #expect(consoleResults.query == retainedConsoleQuery)
+    #expect(consoleController.query == retainedConsoleQuery)
 
-    let networkDescriptor = WebInspectorFetchDescriptor<NetworkRequest>(fetchLimit: 1)
+    let networkQuery = NetworkRequestQuery(fetchLimit: 1)
+    let consoleQuery = ConsoleMessageQuery(fetchLimit: 1)
     #expect(throws: staleFetchedResultsError) {
-        try networkResults.updateFetchDescriptor(networkDescriptor)
+        try consoleResults.updateQuery(consoleQuery)
     }
     #expect(throws: staleFetchedResultsError) {
-        try networkResults.updateFetchDescriptor(networkDescriptor)
+        try networkResults.updateQuery(networkQuery)
     }
     #expect(throws: staleFetchedResultsError) {
-        try networkController.updateFetchDescriptor(networkDescriptor)
+        try networkController.updateQuery(networkQuery)
+    }
+    #expect(throws: staleFetchedResultsError) {
+        try consoleController.updateQuery(consoleQuery)
     }
 }
 
@@ -273,37 +301,37 @@ func contextReleaseFinishesEveryFetchedResultsStreamAndRetainsFinalSnapshots() a
 func liveFetchedResultsRemainRegisteredAcrossContextStatesAndRejectForeignUpdates() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
     let foreignContext = WebInspectorContext.preview(isolation: MainActor.shared)
-    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+    let networkResults = context.network.fetchedResults()
+    let consoleResults = context.console.fetchedResults()
     let networkController = WebInspectorFetchedResultsController(fetchedResults: networkResults)
     let consoleController = WebInspectorFetchedResultsController(fetchedResults: consoleResults)
-    let firstNetworkDescriptor = WebInspectorFetchDescriptor<NetworkRequest>(fetchLimit: 2)
-    let firstConsoleDescriptor = WebInspectorFetchDescriptor<ConsoleMessage>(fetchLimit: 2)
+    let firstNetworkQuery = NetworkRequestQuery(fetchLimit: 2)
+    let firstConsoleQuery = ConsoleMessageQuery(fetchLimit: 2)
 
-    try networkResults.updateFetchDescriptor(firstNetworkDescriptor)
-    try consoleController.updateFetchDescriptor(firstConsoleDescriptor)
-    #expect(networkResults.fetchDescriptor.fetchLimit == 2)
-    #expect(consoleResults.fetchDescriptor.fetchLimit == 2)
+    try networkResults.updateQuery(firstNetworkQuery)
+    try consoleController.updateQuery(firstConsoleQuery)
+    #expect(networkResults.query.fetchLimit == 2)
+    #expect(consoleResults.query.fetchLimit == 2)
 
     await context.stop()
     #expect(context.state == .detached)
-    try networkController.updateFetchDescriptor(WebInspectorFetchDescriptor(fetchLimit: 3))
-    try consoleResults.updateFetchDescriptor(WebInspectorFetchDescriptor(fetchLimit: 3))
-    #expect(networkResults.fetchDescriptor.fetchLimit == 3)
-    #expect(consoleResults.fetchDescriptor.fetchLimit == 3)
+    try networkController.updateQuery(NetworkRequestQuery(fetchLimit: 3))
+    try consoleResults.updateQuery(ConsoleMessageQuery(fetchLimit: 3))
+    #expect(networkResults.query.fetchLimit == 3)
+    #expect(consoleResults.query.fetchLimit == 3)
 
     context.start()
     #expect(context.state == .attaching)
-    try networkResults.updateFetchDescriptor(WebInspectorFetchDescriptor(fetchLimit: 4))
-    try consoleController.updateFetchDescriptor(WebInspectorFetchDescriptor(fetchLimit: 4))
-    #expect(networkResults.fetchDescriptor.fetchLimit == 4)
-    #expect(consoleResults.fetchDescriptor.fetchLimit == 4)
+    try networkResults.updateQuery(NetworkRequestQuery(fetchLimit: 4))
+    try consoleController.updateQuery(ConsoleMessageQuery(fetchLimit: 4))
+    #expect(networkResults.query.fetchLimit == 4)
+    #expect(consoleResults.query.fetchLimit == 4)
 
     #expect(throws: staleFetchedResultsError) {
-        try foreignContext.updateFetchDescriptor(
-            WebInspectorFetchDescriptor<NetworkRequest>(fetchLimit: 1),
+        try foreignContext.updateNetworkQuery(
+            NetworkRequestQuery(fetchLimit: 1),
             for: networkResults
         )
     }
-    #expect(networkResults.fetchDescriptor.fetchLimit == 4)
+    #expect(networkResults.query.fetchLimit == 4)
 }

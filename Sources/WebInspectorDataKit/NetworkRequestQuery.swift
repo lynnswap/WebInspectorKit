@@ -75,79 +75,33 @@ package struct NetworkRequestRecord: Hashable, Sendable {
 }
 
 package struct NetworkRequestQueryPlan: Sendable {
-    package typealias RecordPredicate = @Sendable (NetworkRequestRecord) -> Bool
-
-    package enum Filter: Sendable {
-        case record(RecordPredicate)
-        case model(Predicate<NetworkRequest>)
-
-        package func matches(record: NetworkRequestRecord) -> Bool? {
-            switch self {
-            case let .record(predicate):
-                return predicate(record)
-            case .model:
-                return nil
-            }
-        }
-
-        package func matches(record: NetworkRequestRecord, request: NetworkRequest) -> Bool {
-            switch self {
-            case let .record(predicate):
-                return predicate(record)
-            case let .model(predicate):
-                do {
-                    return try predicate.evaluate(request)
-                } catch {
-                    preconditionFailure("NetworkRequest predicate evaluation failed: \(error)")
-                }
-            }
-        }
-    }
-
-    package var filter: Filter?
+    package var filter: NetworkRequestQuery.Filter?
     package var sortComparators: [NetworkRequestRecordSortComparator]
     package var fetchLimit: Int?
     package var fetchOffset: Int
 
     package init(
-        descriptor: WebInspectorFetchDescriptor<NetworkRequest>,
-        context: WebInspectorContext
+        query: NetworkRequestQuery
     ) {
-        filter = descriptor.predicate.map(makeNetworkRequestFilter)
-        sortComparators = descriptor.sortBy.map {
-            NetworkRequestRecordSortComparator(descriptor: $0, context: context)
-        }
-        fetchLimit = descriptor.fetchLimit
-        fetchOffset = descriptor.fetchOffset
+        filter = query.filter
+        sortComparators = query.sortBy.map(NetworkRequestRecordSortComparator.init)
+        fetchLimit = query.fetchLimitAsInt
+        fetchOffset = query.fetchOffsetAsInt
     }
 
     package var requiresQuery: Bool {
         filter != nil || sortComparators.isEmpty == false || fetchLimit != nil || fetchOffset > 0
     }
 
-    package var requiresModelPredicate: Bool {
-        guard case .model = filter else {
-            return false
-        }
-        return true
-    }
-
-    package func matches(record: NetworkRequestRecord) -> Bool? {
+    package func matches(record: NetworkRequestRecord) -> Bool {
         filter?.matches(record: record) ?? true
-    }
-
-    package func matches(record: NetworkRequestRecord, request: NetworkRequest) -> Bool {
-        filter?.matches(record: record, request: request) ?? true
     }
 
     package func visibleIDs(from matchingIDs: [NetworkRequest.ID]) -> ArraySlice<NetworkRequest.ID> {
         let lowerBound = min(fetchOffset, matchingIDs.count)
-        let upperBound: Int
-        if let fetchLimit {
-            upperBound = min(lowerBound + fetchLimit, matchingIDs.count)
-        } else {
-            upperBound = matchingIDs.count
-        }
+        let remainingCount = matchingIDs.count - lowerBound
+        let visibleCount = min(fetchLimit ?? remainingCount, remainingCount)
+        let upperBound = lowerBound + visibleCount
         return matchingIDs[lowerBound..<upperBound]
     }
 
@@ -189,7 +143,7 @@ package struct NetworkRequestQueryState {
         let record = NetworkRequestRecord(request: request, orderIndex: orderIndex)
         recordsByID[record.id] = record
         matchingIDs.removeAll { $0 == record.id }
-        guard plan.matches(record: record, request: request) else {
+        guard plan.matches(record: record) else {
             return
         }
         insertMatchingID(record.id)
@@ -236,15 +190,12 @@ package struct NetworkRequestRecordSortComparator: Sendable {
     private var key: Key
     private var order: SortOrder
 
-    fileprivate init(
-        descriptor: SortDescriptor<NetworkRequest>,
-        context: WebInspectorContext
-    ) {
-        guard let key = Self.key(for: descriptor, context: context) else {
-            preconditionFailure("Unsupported NetworkRequest sort descriptor: \(descriptor)")
+    fileprivate init(_ sort: NetworkRequestQuery.Sort) {
+        switch sort.storage {
+        case let .requestSentTimestamp(order):
+            key = .requestSentTimestamp
+            self.order = order
         }
-        self.key = key
-        order = descriptor.order
     }
 
     fileprivate func compare(
@@ -266,52 +217,6 @@ package struct NetworkRequestRecordSortComparator: Sendable {
 
     fileprivate var usesReverseOrder: Bool {
         order == .reverse
-    }
-
-    private static func key(
-        for descriptor: SortDescriptor<NetworkRequest>,
-        context: WebInspectorContext
-    ) -> Key? {
-        let timestampPair = sentinelPair(
-            lhsTimestamp: 1,
-            rhsTimestamp: 2,
-            context: context
-        )
-        if descriptor.compare(timestampPair.lhs, timestampPair.rhs) != .orderedSame {
-            return .requestSentTimestamp
-        }
-        return nil
-    }
-
-    private static func sentinelPair(
-        lhsTimestamp: Double,
-        rhsTimestamp: Double,
-        context: WebInspectorContext
-    ) -> (lhs: NetworkRequest, rhs: NetworkRequest) {
-        (
-            lhs: NetworkRequest(
-                request: Network.Request(
-                    id: Network.Request.ID("__sort-lhs"),
-                    url: "https://example.test/resource",
-                    method: "GET"
-                ),
-                initiator: nil,
-                resourceType: .fetch,
-                timestamp: lhsTimestamp,
-                modelContext: context
-            ),
-            rhs: NetworkRequest(
-                request: Network.Request(
-                    id: Network.Request.ID("__sort-rhs"),
-                    url: "https://example.test/resource",
-                    method: "GET"
-                ),
-                initiator: nil,
-                resourceType: .fetch,
-                timestamp: rhsTimestamp,
-                modelContext: context
-            )
-        )
     }
 
     private func compareOptional<Value: Comparable>(
@@ -350,291 +255,38 @@ private extension ComparisonResult {
     }
 }
 
-private protocol NetworkRequestRecordPredicateExpression {
-    func networkRequestRecordPredicate() throws -> NetworkRequestQueryPlan.RecordPredicate
-}
-
-private protocol NetworkRequestRecordStringExpression {
-    func networkRequestStringExpression() throws -> @Sendable (NetworkRequestRecord) -> String
-}
-
-private protocol NetworkRequestRecordIntExpression {
-    func networkRequestIntExpression() throws -> @Sendable (NetworkRequestRecord) -> Int
-}
-
-private protocol NetworkRequestRecordOptionalIntExpression {
-    func networkRequestOptionalIntExpression() throws -> @Sendable (NetworkRequestRecord) -> Int?
-}
-
-private protocol NetworkRequestRecordResourceCategoryExpression {
-    func networkRequestResourceCategoryExpression() throws -> @Sendable (NetworkRequestRecord) -> NetworkRequest.ResourceCategory
-}
-
-private protocol NetworkRequestRecordResourceCategorySequenceExpression {
-    func networkRequestResourceCategorySequenceExpression() throws -> [NetworkRequest.ResourceCategory]
-}
-
-private enum NetworkRequestRecordPredicateValue: Equatable, Sendable {
-    case string(String)
-    case optionalString(String?)
-    case resourceCategory(NetworkRequest.ResourceCategory)
-}
-
-private protocol NetworkRequestRecordEquatableExpression {
-    func networkRequestEquatableExpression() throws -> @Sendable (NetworkRequestRecord) -> NetworkRequestRecordPredicateValue
-}
-
-private struct UnsupportedNetworkRequestRecordPredicate: Error {}
-
-private func makeNetworkRequestFilter(
-    _ predicate: Predicate<NetworkRequest>
-) -> NetworkRequestQueryPlan.Filter {
-    guard let expression = predicate.expression as? any NetworkRequestRecordPredicateExpression else {
-        return .model(predicate)
-    }
-    do {
-        return .record(try expression.networkRequestRecordPredicate())
-    } catch is UnsupportedNetworkRequestRecordPredicate {
-        return .model(predicate)
-    } catch {
-        preconditionFailure("NetworkRequest predicate planning failed: \(error)")
-    }
-}
-
-extension PredicateExpressions.Conjunction: NetworkRequestRecordPredicateExpression
-    where LHS: NetworkRequestRecordPredicateExpression, RHS: NetworkRequestRecordPredicateExpression
-{
-    fileprivate func networkRequestRecordPredicate() throws -> NetworkRequestQueryPlan.RecordPredicate {
-        let lhsPredicate = try lhs.networkRequestRecordPredicate()
-        let rhsPredicate = try rhs.networkRequestRecordPredicate()
-        return { record in
-            lhsPredicate(record) && rhsPredicate(record)
-        }
-    }
-}
-
-extension PredicateExpressions.Disjunction: NetworkRequestRecordPredicateExpression
-    where LHS: NetworkRequestRecordPredicateExpression, RHS: NetworkRequestRecordPredicateExpression
-{
-    fileprivate func networkRequestRecordPredicate() throws -> NetworkRequestQueryPlan.RecordPredicate {
-        let lhsPredicate = try lhs.networkRequestRecordPredicate()
-        let rhsPredicate = try rhs.networkRequestRecordPredicate()
-        return { record in
-            lhsPredicate(record) || rhsPredicate(record)
-        }
-    }
-}
-
-extension PredicateExpressions.Equal: NetworkRequestRecordPredicateExpression
-    where LHS: NetworkRequestRecordEquatableExpression, RHS: NetworkRequestRecordEquatableExpression
-{
-    fileprivate func networkRequestRecordPredicate() throws -> NetworkRequestQueryPlan.RecordPredicate {
-        let lhsExpression = try lhs.networkRequestEquatableExpression()
-        let rhsExpression = try rhs.networkRequestEquatableExpression()
-        return { record in
-            networkRequestRecordPredicateValuesEqual(lhsExpression(record), rhsExpression(record))
-        }
-    }
-}
-
-private func networkRequestRecordPredicateValuesEqual(
-    _ lhs: NetworkRequestRecordPredicateValue,
-    _ rhs: NetworkRequestRecordPredicateValue
-) -> Bool {
-    switch (lhs, rhs) {
-    case let (.string(lhs), .string(rhs)):
-        return lhs == rhs
-    case let (.optionalString(lhs), .optionalString(rhs)):
-        return lhs == rhs
-    case let (.optionalString(lhs), .string(rhs)):
-        return lhs == rhs
-    case let (.string(lhs), .optionalString(rhs)):
-        return lhs == rhs
-    case let (.resourceCategory(lhs), .resourceCategory(rhs)):
-        return lhs == rhs
-    case (.string, _),
-         (.optionalString, _),
-         (.resourceCategory, _):
-        return false
-    }
-}
-
-extension PredicateExpressions.StringLocalizedStandardContains: NetworkRequestRecordPredicateExpression
-    where Root: NetworkRequestRecordStringExpression, Other: NetworkRequestRecordStringExpression
-{
-    fileprivate func networkRequestRecordPredicate() throws -> NetworkRequestQueryPlan.RecordPredicate {
-        let rootExpression = try root.networkRequestStringExpression()
-        let otherExpression = try other.networkRequestStringExpression()
-        return { record in
-            rootExpression(record).localizedStandardContains(otherExpression(record))
-        }
-    }
-}
-
-extension PredicateExpressions.SequenceContains: NetworkRequestRecordPredicateExpression
-    where LHS: NetworkRequestRecordResourceCategorySequenceExpression,
-          RHS: NetworkRequestRecordResourceCategoryExpression
-{
-    fileprivate func networkRequestRecordPredicate() throws -> NetworkRequestQueryPlan.RecordPredicate {
-        let categories = Set(try sequence.networkRequestResourceCategorySequenceExpression())
-        let elementExpression = try element.networkRequestResourceCategoryExpression()
-        return { record in
-            categories.contains(elementExpression(record))
-        }
-    }
-}
-
-extension PredicateExpressions.Comparison: NetworkRequestRecordPredicateExpression
-    where LHS: NetworkRequestRecordIntExpression, RHS: NetworkRequestRecordIntExpression
-{
-    fileprivate func networkRequestRecordPredicate() throws -> NetworkRequestQueryPlan.RecordPredicate {
-        let lhsExpression = try lhs.networkRequestIntExpression()
-        let rhsExpression = try rhs.networkRequestIntExpression()
-        let op = op
-        return { record in
-            let lhs = lhsExpression(record)
-            let rhs = rhsExpression(record)
-            switch op {
-            case .lessThan:
-                return lhs < rhs
-            case .lessThanOrEqual:
-                return lhs <= rhs
-            case .greaterThan:
-                return lhs > rhs
-            case .greaterThanOrEqual:
-                return lhs >= rhs
-            @unknown default:
-                preconditionFailure("Unsupported NetworkRequest comparison operator: \(op)")
+extension NetworkRequestQuery.Filter {
+    func matches(record: NetworkRequestRecord) -> Bool {
+        switch storage {
+        case let .method(method):
+            return record.method == method
+        case let .methodContains(text):
+            return record.method.localizedStandardContains(text)
+        case let .urlEquals(url):
+            return record.url == url
+        case let .urlContains(text):
+            return record.url.localizedStandardContains(text)
+        case let .searchableTextEquals(text):
+            return record.searchableText == text
+        case let .searchableTextContains(text):
+            return record.searchableText.localizedStandardContains(text)
+        case let .mimeType(mimeType):
+            return record.mimeType == mimeType
+        case let .resourceCategories(categories):
+            return categories.contains(record.resourceCategory)
+        case let .statusCode(comparison, missingValue):
+            let statusCode = record.statusCode ?? missingValue
+            switch comparison {
+            case let .lessThan(value): return statusCode < value
+            case let .atMost(value): return statusCode <= value
+            case let .greaterThan(value): return statusCode > value
+            case let .atLeast(value): return statusCode >= value
             }
+        case let .all(filters):
+            return filters.allSatisfy { $0.matches(record: record) }
+        case let .any(filters):
+            return filters.contains { $0.matches(record: record) }
         }
     }
-}
 
-extension PredicateExpressions.NilCoalesce: NetworkRequestRecordIntExpression
-    where LHS: NetworkRequestRecordOptionalIntExpression, RHS: NetworkRequestRecordIntExpression
-{
-    fileprivate func networkRequestIntExpression() throws -> @Sendable (NetworkRequestRecord) -> Int {
-        let lhsExpression = try lhs.networkRequestOptionalIntExpression()
-        let rhsExpression = try rhs.networkRequestIntExpression()
-        return { record in
-            lhsExpression(record) ?? rhsExpression(record)
-        }
-    }
-}
-
-extension PredicateExpressions.KeyPath: NetworkRequestRecordStringExpression
-    where Root == PredicateExpressions.Variable<NetworkRequest>, Output == String
-{
-    fileprivate func networkRequestStringExpression() throws -> @Sendable (NetworkRequestRecord) -> String {
-        if keyPath == \NetworkRequest.url {
-            return { $0.url }
-        }
-        if keyPath == \NetworkRequest.method {
-            return { $0.method }
-        }
-        if keyPath == \NetworkRequest.searchableText {
-            return { $0.searchableText }
-        }
-        throw UnsupportedNetworkRequestRecordPredicate()
-    }
-}
-
-extension PredicateExpressions.KeyPath: NetworkRequestRecordEquatableExpression
-    where Root == PredicateExpressions.Variable<NetworkRequest>
-{
-    fileprivate func networkRequestEquatableExpression() throws -> @Sendable (NetworkRequestRecord) -> NetworkRequestRecordPredicateValue {
-        if keyPath == \NetworkRequest.url || keyPath == \NetworkRequest.method || keyPath == \NetworkRequest.searchableText {
-            let stringExpression: @Sendable (NetworkRequestRecord) -> String
-            if keyPath == \NetworkRequest.url {
-                stringExpression = { $0.url }
-            } else if keyPath == \NetworkRequest.method {
-                stringExpression = { $0.method }
-            } else {
-                stringExpression = { $0.searchableText }
-            }
-            return { record in
-                .string(stringExpression(record))
-            }
-        }
-        if keyPath == \NetworkRequest.mimeType {
-            return { record in
-                .optionalString(record.mimeType)
-            }
-        }
-        if keyPath == \NetworkRequest.resourceCategory {
-            return { record in
-                .resourceCategory(record.resourceCategory)
-            }
-        }
-        throw UnsupportedNetworkRequestRecordPredicate()
-    }
-}
-
-extension PredicateExpressions.KeyPath: NetworkRequestRecordOptionalIntExpression
-    where Root == PredicateExpressions.Variable<NetworkRequest>, Output == Int?
-{
-    fileprivate func networkRequestOptionalIntExpression() throws -> @Sendable (NetworkRequestRecord) -> Int? {
-        if keyPath == \NetworkRequest.statusCode {
-            return { $0.statusCode }
-        }
-        throw UnsupportedNetworkRequestRecordPredicate()
-    }
-}
-
-extension PredicateExpressions.KeyPath: NetworkRequestRecordResourceCategoryExpression
-    where Root == PredicateExpressions.Variable<NetworkRequest>, Output == NetworkRequest.ResourceCategory
-{
-    fileprivate func networkRequestResourceCategoryExpression() throws -> @Sendable (NetworkRequestRecord) -> NetworkRequest.ResourceCategory {
-        if keyPath == \NetworkRequest.resourceCategory {
-            return { $0.resourceCategory }
-        }
-        throw UnsupportedNetworkRequestRecordPredicate()
-    }
-}
-
-extension PredicateExpressions.Value: NetworkRequestRecordStringExpression where Output == String {
-    fileprivate func networkRequestStringExpression() throws -> @Sendable (NetworkRequestRecord) -> String {
-        let value = value
-        return { _ in value }
-    }
-}
-
-extension PredicateExpressions.Value: NetworkRequestRecordEquatableExpression {
-    fileprivate func networkRequestEquatableExpression() throws -> @Sendable (NetworkRequestRecord) -> NetworkRequestRecordPredicateValue {
-        if let value = value as? String {
-            return { _ in .string(value) }
-        }
-        if Output.self == Optional<String>.self {
-            let value = value as! String?
-            return { _ in .optionalString(value) }
-        }
-        if let value = value as? NetworkRequest.ResourceCategory {
-            return { _ in .resourceCategory(value) }
-        }
-        throw UnsupportedNetworkRequestRecordPredicate()
-    }
-}
-
-extension PredicateExpressions.Value: NetworkRequestRecordIntExpression where Output == Int {
-    fileprivate func networkRequestIntExpression() throws -> @Sendable (NetworkRequestRecord) -> Int {
-        let value = value
-        return { _ in value }
-    }
-}
-
-extension PredicateExpressions.Value: NetworkRequestRecordResourceCategoryExpression
-    where Output == NetworkRequest.ResourceCategory
-{
-    fileprivate func networkRequestResourceCategoryExpression() throws -> @Sendable (NetworkRequestRecord) -> NetworkRequest.ResourceCategory {
-        let value = value
-        return { _ in value }
-    }
-}
-
-extension PredicateExpressions.Value: NetworkRequestRecordResourceCategorySequenceExpression
-    where Output == [NetworkRequest.ResourceCategory]
-{
-    fileprivate func networkRequestResourceCategorySequenceExpression() throws -> [NetworkRequest.ResourceCategory] {
-        value
-    }
 }

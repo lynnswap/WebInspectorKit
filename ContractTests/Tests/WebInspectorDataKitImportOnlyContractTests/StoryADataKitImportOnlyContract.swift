@@ -17,16 +17,68 @@ func dataKitLegacyNetworkResponseSnapshotInitializerFunctionReferenceRemainsUsab
 
 private actor DataKitImportOnlyActor {
     func consume(_ context: WebInspectorContext) async throws {
-        let requests: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-        let messages: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+        let requests = context.network.fetchedResults()
+        let messages = context.console.fetchedResults()
         let requestsByMethod: WebInspectorFetchedResults<NetworkRequest> =
-            context.fetchedResults(sectionBy: \.method)
+            context.network.fetchedResults(for: NetworkRequestQuery(sectionBy: .method))
         let messagesByLevel: WebInspectorFetchedResults<ConsoleMessage> =
-            context.fetchedResults(sectionBy: \.level)
+            context.console.fetchedResults(for: ConsoleMessageQuery(sectionBy: .level))
         let requestController: WebInspectorFetchedResultsController<NetworkRequest> =
-            context.fetchedResultsController()
+            context.network.fetchedResultsController()
         let messageController: WebInspectorFetchedResultsController<ConsoleMessage> =
-            context.fetchedResultsController()
+            context.console.fetchedResultsController()
+        let networkFilters: [NetworkRequestQuery.Filter] = [
+            .method(equals: "GET"),
+            .method(containing: "get"),
+            .url(equals: "https://example.com"),
+            .url(containing: "example"),
+            .searchableText(equals: "GET"),
+            .searchableText(containing: "GET"),
+            .mimeType(equals: nil),
+            .resourceCategory(.image),
+            .resourceCategories([.image, .media]),
+            .statusCode(atLeast: 400),
+            .statusCode(greaterThan: 399),
+            .statusCode(lessThan: 500),
+            .statusCode(atMost: 499),
+        ]
+        let networkQuery = NetworkRequestQuery(
+            filter: .all(networkFilters),
+            sortBy: [
+                .requestSentTimestamp(order: .forward),
+                .requestSentTimestamp(order: .reverse),
+            ],
+            sectionBy: .resourceType,
+            fetchLimit: 50,
+            fetchOffset: 1
+        )
+        _ = NetworkRequestQuery.Section.method
+        _ = NetworkRequestQuery.Section.resourceCategory
+        _ = NetworkRequestQuery.Section.mimeType
+        _ = NetworkRequestQuery.Filter.any(networkFilters)
+        let consoleFilters: [ConsoleMessageQuery.Filter] = [
+            .source(.init(rawValue: "console-api")),
+            .level(.init(rawValue: "warning")),
+            .kind(.init(rawValue: "log")),
+            .url("https://example.com/app.js"),
+            .text(containing: "warning"),
+        ]
+        let consoleQuery = ConsoleMessageQuery(
+            filter: .all(consoleFilters),
+            sortBy: [
+                .text(comparison: .localizedStandard, order: .forward),
+                .text(comparison: .lexical, order: .reverse),
+                .level(order: .forward),
+                .level(order: .reverse),
+            ],
+            sectionBy: .source,
+            fetchLimit: 50,
+            fetchOffset: 1
+        )
+        _ = ConsoleMessageQuery.Section.level
+        _ = ConsoleMessageQuery.Section.kind
+        _ = ConsoleMessageQuery.Section.url
+        _ = ConsoleMessageQuery.Filter.any(consoleFilters)
 
         _ = context.state
         _ = context.rootNode?.children
@@ -79,10 +131,12 @@ private actor DataKitImportOnlyActor {
         _ = messagesByLevel.sections.first?.id
         _ = messageController.snapshot
         _ = messageController.transactions
-        try requests.updateFetchDescriptor(WebInspectorFetchDescriptor(fetchLimit: 50))
-        try requestController.updateFetchDescriptor(WebInspectorFetchDescriptor(fetchOffset: 1))
-        try messages.updateFetchDescriptor(WebInspectorFetchDescriptor(fetchLimit: 50))
-        try messageController.updateFetchDescriptor(WebInspectorFetchDescriptor(fetchOffset: 1))
+        try requests.updateQuery(networkQuery)
+        try messages.updateQuery(consoleQuery)
+        try requests.updateQuery(NetworkRequestQuery(fetchLimit: 50))
+        try requestController.updateQuery(NetworkRequestQuery(fetchOffset: 1))
+        try messages.updateQuery(ConsoleMessageQuery(fetchLimit: 50))
+        try messageController.updateQuery(ConsoleMessageQuery(fetchOffset: 1))
         _ = try await context.evaluate("1 + 1").object.description
 
         let request = NetworkRequestSnapshot(url: "https://example.com", method: "GET")

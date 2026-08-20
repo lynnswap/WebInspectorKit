@@ -1230,7 +1230,7 @@ package enum NetworkResponseCookieSection: Equatable, Sendable {
 
 /// Observable model for one network request.
 @Observable
-public final class NetworkRequest: WebInspectorFetchableModel {
+public final class NetworkRequest: WebInspectorPersistentModel {
     /// Stable identity for a network request within a context.
     public struct ID: Hashable, Sendable {
         let proxyID: Network.Request.ID
@@ -1551,7 +1551,7 @@ public final class NetworkRequest: WebInspectorFetchableModel {
         .joined(separator: "\n")
     }
 
-    /// The HTTP status code, exposed as a stable fetch key path.
+    /// The HTTP status code used by query filters and display.
     public var statusCode: Int? {
         status
     }

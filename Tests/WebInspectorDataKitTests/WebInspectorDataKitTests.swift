@@ -1606,7 +1606,7 @@ func supersededOrderedFeedSubscriptionReleasesItsProducer() async throws {
 func currentPageCommitOnSameProtocolAgentRetainsRequiredDomainLeases() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await runtime.backend.enqueue(
         DOM.Node(id: DOM.Node.ID("same-agent-root"), nodeType: 9, nodeName: "#document"),
@@ -1654,7 +1654,7 @@ func currentPageCommitOnSameProtocolAgentRetainsRequiredDomainLeases() async thr
 func currentPageCommitInitializesNewAgentWithoutReenablingPage() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await enqueueStartupReplies(
         on: runtime.backend,
@@ -1870,7 +1870,7 @@ func frameNavigationAndRuntimeContextApplyInSourceOrder() async throws {
 func frameNavigationPrecedesFollowingNetworkRequestInSourceOrder() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await emitOriginatedNetworkRequest(
         id: "before-navigation",
@@ -2196,8 +2196,8 @@ func closeAfterAttachedClearsAttachmentBackedModels() async throws {
 
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
-    networkResults = context.fetchedResults()
-    consoleResults = context.fetchedResults()
+    networkResults = context.network.fetchedResults()
+    consoleResults = context.console.fetchedResults()
     try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil { context.state == .attached }
 
@@ -2404,8 +2404,12 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
         ]
     )
     let (target, context) = try await startContext(runtime: runtime, document: oldDocument)
-    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-    let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+    let networkResults = context.network.fetchedResults(
+        for: NetworkRequestQuery(filter: .all([]))
+    )
+    let networkController = WebInspectorFetchedResultsController(fetchedResults: networkResults)
+    var networkTransactions = networkController.transactions.makeAsyncIterator()
+    let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
 
     let seedAppliedBaseline = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(
@@ -2459,6 +2463,12 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
     #expect(oldElement.attributes["data-generation"] == "old")
     #expect(oldConsoleMessage.text == "old-console")
     #expect(oldRuntimeContext.id == RuntimeContext.ID(oldRuntimeID))
+    #expect(try #require(await networkTransactions.next()).itemChanges == [
+        .insert(
+            itemID: NetworkRequest.ID(oldRequestID),
+            indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+        ),
+    ])
 
     let supersededSubscription = context.orderedEventSubscriptionStateForTesting
     let appliedBaseline = context.eventPumpAppliedSequenceForTesting
@@ -2475,6 +2485,9 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
     #expect(linearizedSubscription.sequence == supersededSubscription.sequence)
     #expect(networkResults.items.isEmpty)
     #expect(context.registeredRequest(forProxyID: oldRequestID) == nil)
+    let resetTransaction = try #require(await networkTransactions.next())
+    #expect(resetTransaction.isReset)
+    #expect(resetTransaction.newSnapshot.itemIDs.isEmpty)
 
     _ = await runtime.backend.waitForRecordedCommands(
         domain: "Console",
@@ -2598,6 +2611,12 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
     #expect(freshSubscription.sequence > supersededSubscription.sequence)
     #expect(networkResults.items.count == 1)
     #expect(context.registeredRequest(forProxyID: freshRequestID) != nil)
+    #expect(try #require(await networkTransactions.next()).itemChanges == [
+        .insert(
+            itemID: NetworkRequest.ID(freshRequestID),
+            indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
+        ),
+    ])
     #expect(freshElement.attributes["data-generation"] == "fresh")
     #expect(freshStyles.phase == .needsRefresh)
     #expect(consoleResults.items.map(\.text) == ["fresh-console"])
@@ -2651,7 +2670,7 @@ func consoleEnableReplayIsCapturedBeforeCommandReturns() async throws {
 
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
     try await waitUntil {
         await runtime.backend.recordedCommands() == startupCommands
     }
@@ -2737,7 +2756,7 @@ func transportBackedStartupCapturesRuntimeAndConsoleReplayBeforeEnableReplies() 
     #expect(target.id == .currentPage)
     let container = WebInspectorContainer(proxy: proxy)
     let context = container.mainContext
-    let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+    let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
 
     try await replyTransportInspectorAndPageInitialization(backend, transport: transport, targetID: ProtocolTarget.ID("page-main"))
 
@@ -3045,7 +3064,7 @@ func transportBackedFrameRuntimeAndConsoleEventsKeepTargetScope() async throws {
         documentID: "1",
         protocolProfile: .latest
     )
-    let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+    let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
     let startupMessageCount = await backend.sentTargetMessages().count
 
     await installTransportFrameTarget(
@@ -3194,7 +3213,7 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
         targetID: oldTargetID,
         documentID: "old-root"
     )
-    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     let domTreeController = try await context.treeController()
     let domUpdates = DOMTreeUpdateRecorder(stream: domTreeController.updates)
     defer { domUpdates.cancel() }
@@ -3405,7 +3424,7 @@ func currentPageProcessTerminationInterruptsPickerAndRetargetsWithoutClearingNet
         targetID: oldTargetID,
         documentID: "destroyed-root"
     )
-    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     let startupMessageCount = await backend.sentTargetMessages().count
 
     #expect(context.state == .attached)
@@ -3551,7 +3570,7 @@ func currentPageProcessTerminationInterruptsPickerAndRetargetsWithoutClearingNet
 func startBeginsFreshNetworkAttachmentEpoch() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     let staleRequestID = Network.Request.ID("stale-before-restart")
 
     await emitFinishedRequest(id: staleRequestID, target: target, backend: runtime.backend)
@@ -3580,7 +3599,7 @@ func startBeginsFreshNetworkAttachmentEpoch() async throws {
 func networkNavigationVisitIdentityDoesNotRepeatAcrossRestart() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await runtime.backend.emit(
         .requestWillBeSent(
@@ -3867,7 +3886,7 @@ func mainFrameNavigatedReloadsDOMAndClearsRuntimeContexts() async throws {
         targetID: targetID,
         documentID: "initial-root"
     )
-    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     let undoCommands = try context.domUndoRedoCommands()
     let startupMessageCount = await backend.sentTargetMessages().count
 
@@ -3926,7 +3945,7 @@ func networkNavigationGroupsEachAtoBtoAFrameVisitSeparately() async throws {
         targetID: targetID,
         documentID: "navigation-visit-root"
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     for (index, visit) in [
         ("loader-a", "a-first", 1.0),
@@ -3980,7 +3999,7 @@ func networkRequestBeforeFrameCommitSharesVisitWithCommittedRequest() async thro
         targetID: targetID,
         documentID: "provisional-visit-root"
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await emitTransportNetworkRequest(
         id: "before-commit",
@@ -4016,7 +4035,7 @@ func networkRequestBeforeFrameCommitSharesVisitWithCommittedRequest() async thro
 @Test
 func ambiguousFrameCommitDoesNotGuessBetweenPendingNetworkTargets() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await applyOriginatedNetworkRequest(
         id: "ambiguous-current",
@@ -4078,7 +4097,7 @@ func ambiguousFrameCommitDoesNotGuessBetweenPendingNetworkTargets() async throws
 @Test
 func frameCommitUsesExactPageBindingForPendingNetworkTarget() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await applyOriginatedNetworkRequest(
         id: "exact-current",
@@ -4135,7 +4154,7 @@ func frameDetachmentRetainsNetworkHistoryAndLateTerminalEvents() async throws {
         targetID: targetID,
         documentID: "detached-frame-root"
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await emitTransportNetworkRequest(
         id: "detached-request",
@@ -4202,7 +4221,7 @@ func memoryCacheOnlyRequestSharesFrameNavigationVisit() async throws {
         targetID: targetID,
         documentID: "memory-cache-visit-root"
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await emitTransportFrameNavigated(
         frameID: "child-frame",
@@ -4240,7 +4259,7 @@ func responseOnlyRequestSharesFrameNavigationVisit() async throws {
         targetID: targetID,
         documentID: "response-only-visit-root"
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await emitTransportFrameNavigated(
         frameID: "child-frame",
@@ -4278,7 +4297,7 @@ func subframeDetachmentDoesNotAdvanceTopLevelNetworkVisit() async throws {
         targetID: targetID,
         documentID: "subframe-detach-top-level-root"
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await emitTransportNetworkRequest(
         id: "top-level-before-detach",
@@ -4326,7 +4345,7 @@ func networkEventWithoutFrameMembershipHasNoNavigationVisit() async throws {
         targetID: targetID,
         documentID: "missing-frame-membership-root"
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await receiveTransportTargetEvent(
         transport,
@@ -4606,7 +4625,7 @@ func delayedNetworkConsumerUsesEventTimeTargetAfterFrameRetarget() async throws 
     }
 
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     await context.apply(oldNetworkEvent)
     let newID = Network.Request.ID("event-time-new")
     await context.apply(.requestWillBeSent(
@@ -4657,7 +4676,7 @@ func workerInitiatedRequestSharesOwningFrameNavigationVisit() async throws {
     )
 
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     for _ in 0..<2 {
         let protocolEvent = try #require(await iterator.next())
         let proxyEvent = try LiveProxyEventDecoder.proxyEvent(
@@ -4681,7 +4700,7 @@ func workerInitiatedRequestSharesOwningFrameNavigationVisit() async throws {
 func abandonedProvisionalTargetDoesNotReuseNetworkNavigationVisit() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await emitOriginatedNetworkRequest(
         id: "abandoned-provisional",
@@ -4781,7 +4800,7 @@ func frameCommitBeforeTargetCommitPreservesUnattributedNetworkVisit() async thro
 func ambiguousFrameCommitPreservesCandidatesUntilExactTargetCommit() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await emitOriginatedNetworkRequest(
         id: "candidate-current",
@@ -4845,7 +4864,7 @@ func ambiguousFrameCommitPreservesCandidatesUntilExactTargetCommit() async throw
 func networkTargetCommitCommitsPendingNavigationVisit() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await emitOriginatedNetworkRequest(
         id: "a-first",
@@ -5004,7 +5023,7 @@ func restartClearsRuntimeContextsBeforeEnableReplay() async throws {
 func restartClearsConsoleMessagesBeforeConsoleReplay() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
     let enableGate = WebInspectorTestGate()
 
     await runtime.backend.emit(
@@ -5802,7 +5821,7 @@ func setChildNodesReplacementPublishesSelectionClearingForRemovedDescendant() as
 func fetchedResultsControllerPublishesNetworkInsertAndContentUpdateTransactions() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     let controller = WebInspectorFetchedResultsController(fetchedResults: results)
     let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
     defer { recorder.cancel() }
@@ -6028,7 +6047,7 @@ func unfilteredNetworkContentUpdateDoesNotVisitFullMembership() async throws {
         ))
     }
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     let controller = WebInspectorFetchedResultsController(fetchedResults: results)
     let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
     defer { recorder.cancel() }
@@ -6064,7 +6083,7 @@ func unfilteredNetworkContentUpdateDoesNotVisitFullMembership() async throws {
 func sectionedNetworkResultsPublishTopologyWhenSectionKeyChanges() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(sectionBy: \.mimeType)
+    let results = context.network.fetchedResults(for: NetworkRequestQuery(sectionBy: .mimeType))
     let controller = WebInspectorFetchedResultsController(fetchedResults: results)
     let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
     defer { recorder.cancel() }
@@ -6119,7 +6138,9 @@ func sectionedNetworkResultsPublishTopologyWhenSectionKeyChanges() async throws 
 @Test
 func sectionedNetworkResultsPublishItemMoveWhenSectionKeyChangesBetweenExistingSections() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(sectionBy: \.resourceCategory)
+    let results = context.network.fetchedResults(
+        for: NetworkRequestQuery(sectionBy: .resourceCategory)
+    )
     let controller = WebInspectorFetchedResultsController(fetchedResults: results)
     let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
     defer { recorder.cancel() }
@@ -6183,7 +6204,7 @@ func sectionedNetworkResultsPublishItemMoveWhenSectionKeyChangesBetweenExistingS
 
 @MainActor
 @Test
-func networkFetchDescriptorAppliesPredicateSortAndLimit() async throws {
+func networkQueryAppliesFilterSortAndLimit() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
     await context.apply(.requestWillBeSent(
         id: Network.Request.ID("graphql-old"),
@@ -6209,23 +6230,23 @@ func networkFetchDescriptorAppliesPredicateSortAndLimit() async throws {
 
     let xhrFetch = NetworkRequest.ResourceCategory.xhrFetch
     let search = "graphql"
-    let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
-        predicate: #Predicate { request in
-            request.resourceCategory == xhrFetch
-                && request.searchableText.localizedStandardContains(search)
-        },
-        sortBy: [SortDescriptor(\.requestSentTimestamp, order: .reverse)],
+    let query = NetworkRequestQuery(
+        filter: .all([
+            .resourceCategory(xhrFetch),
+            .searchableText(containing: search),
+        ]),
+        sortBy: [.requestSentTimestamp(order: .reverse)],
         fetchLimit: 1
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: descriptor)
+    let results = context.network.fetchedResults(for: query)
 
     #expect(results.items.map(\.id) == [NetworkRequest.ID(Network.Request.ID("graphql-new"))])
 }
 
 @MainActor
 @Test
-func networkFetchDescriptorPlansURLAndMIMETypePredicates() async throws {
+func networkQueryCombinesURLAndMIMETypeFilters() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
     await context.apply(.requestWillBeSent(
         id: Network.Request.ID("api"),
@@ -6259,14 +6280,14 @@ func networkFetchDescriptorPlansURLAndMIMETypePredicates() async throws {
         timestamp: 4
     ))
 
-    let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
-        predicate: #Predicate { request in
-            request.url.localizedStandardContains("api")
-                || request.mimeType == "image/png"
-        },
-        sortBy: [SortDescriptor(\.requestSentTimestamp, order: .forward)]
+    let query = NetworkRequestQuery(
+        filter: .any([
+            .url(containing: "api"),
+            .mimeType(equals: "image/png"),
+        ]),
+        sortBy: [.requestSentTimestamp(order: .forward)]
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: descriptor)
+    let results = context.network.fetchedResults(for: query)
 
     #expect(results.items.map(\.id) == [
         NetworkRequest.ID(Network.Request.ID("api")),
@@ -6276,13 +6297,13 @@ func networkFetchDescriptorPlansURLAndMIMETypePredicates() async throws {
 
 @MainActor
 @Test
-func clearNetworkRequestsResetsDescriptorBackedQueryState() async throws {
+func clearNetworkRequestsResetsConfiguredQueryState() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
-    let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
-        sortBy: [SortDescriptor(\.requestSentTimestamp, order: .forward)],
+    let query = NetworkRequestQuery(
+        sortBy: [.requestSentTimestamp(order: .forward)],
         fetchLimit: 2
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: descriptor)
+    let results = context.network.fetchedResults(for: query)
 
     for (index, name) in ["stale-a", "stale-b", "stale-c"].enumerated() {
         await context.apply(.requestWillBeSent(
@@ -6315,14 +6336,14 @@ func clearNetworkRequestsResetsDescriptorBackedQueryState() async throws {
 
 @MainActor
 @Test
-func startResetsDescriptorBackedNetworkQueryState() async throws {
+func startResetsConfiguredNetworkQueryState() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
-        sortBy: [SortDescriptor(\.requestSentTimestamp, order: .forward)],
+    let query = NetworkRequestQuery(
+        sortBy: [.requestSentTimestamp(order: .forward)],
         fetchLimit: 1
     )
-    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: descriptor)
+    let networkResults = context.network.fetchedResults(for: query)
     let staleRequestID = Network.Request.ID("stale-query-before-restart")
 
     await emitFinishedRequest(id: staleRequestID, target: target, backend: runtime.backend)
@@ -6351,12 +6372,12 @@ func startResetsDescriptorBackedNetworkQueryState() async throws {
 
 @MainActor
 @Test
-func networkFetchDescriptorOrdersEqualTimestampsByNewestInsertionFirst() async throws {
+func networkQueryOrdersEqualTimestampsByNewestInsertionFirst() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
-    let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
-        sortBy: [SortDescriptor(\.requestSentTimestamp, order: .reverse)]
+    let query = NetworkRequestQuery(
+        sortBy: [.requestSentTimestamp(order: .reverse)]
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: descriptor)
+    let results = context.network.fetchedResults(for: query)
     let controller = WebInspectorFetchedResultsController(fetchedResults: results)
     let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
     defer { recorder.cancel() }
@@ -6394,14 +6415,12 @@ func networkFetchDescriptorOrdersEqualTimestampsByNewestInsertionFirst() async t
 
 @MainActor
 @Test
-func networkFetchDescriptorPublishesPredicateEnterAndLeave() async throws {
+func networkQueryPublishesFilterEnterAndLeave() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
-    let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
-        predicate: #Predicate { request in
-            (request.statusCode ?? 0) >= 400
-        }
+    let query = NetworkRequestQuery(
+        filter: .statusCode(atLeast: 400)
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: descriptor)
+    let results = context.network.fetchedResults(for: query)
     let controller = WebInspectorFetchedResultsController(fetchedResults: results)
     let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
     defer { recorder.cancel() }
@@ -6449,7 +6468,7 @@ func networkFetchDescriptorPublishesPredicateEnterAndLeave() async throws {
 
 @MainActor
 @Test
-func networkFetchDescriptorSupportsResourceCategorySets() async throws {
+func networkQuerySupportsResourceCategorySets() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
 
     await context.apply(.requestWillBeSent(
@@ -6482,13 +6501,11 @@ func networkFetchDescriptorSupportsResourceCategorySets() async throws {
     ))
 
     let mediaCategories: [NetworkRequest.ResourceCategory] = [.image, .media]
-    let descriptor = WebInspectorFetchDescriptor<NetworkRequest>(
-        predicate: #Predicate { request in
-            mediaCategories.contains(request.resourceCategory)
-        },
-        sortBy: [SortDescriptor(\.requestSentTimestamp, order: .reverse)]
+    let query = NetworkRequestQuery(
+        filter: .resourceCategories(mediaCategories),
+        sortBy: [.requestSentTimestamp(order: .reverse)]
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(for: descriptor)
+    let results = context.network.fetchedResults(for: query)
 
     #expect(results.items.map(\.id) == [
         NetworkRequest.ID(Network.Request.ID("image")),
@@ -6583,7 +6600,7 @@ func networkRequestResourceCategoryUsesResponseHeadersWithoutPendingURLInference
 func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     let controller = WebInspectorFetchedResultsController(fetchedResults: results)
     let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
     defer { recorder.cancel() }
@@ -6713,7 +6730,7 @@ func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
 func clearNetworkRequestsPreservesRetainedSecurityWithoutLeakingIntoReusedID() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     let requestID = Network.Request.ID("clear-security-request")
     let initialSecurity = Network.Security(
         connection: Network.Security.Connection(tlsProtocol: "TLS 1.2")
@@ -6791,7 +6808,7 @@ func clearNetworkRequestsPreservesRetainedSecurityWithoutLeakingIntoReusedID() a
 func networkRequestExposesDataKitQueryableProperties() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     let apiRequestID = Network.Request.ID("queryable-api-request")
     await runtime.backend.emit(
@@ -6859,7 +6876,7 @@ func networkRequestExposesDataKitQueryableProperties() async throws {
 func fetchedResultsControllerPublishesConsoleInsertUpdateAndDeleteTransactions() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
     let controller = WebInspectorFetchedResultsController(fetchedResults: results)
     let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
     defer { recorder.cancel() }
@@ -6914,10 +6931,10 @@ func fetchedResultsControllerPublishesConsoleInsertUpdateAndDeleteTransactions()
 
 @MainActor
 @Test
-func fetchedResultsCanBeSectionedByStringKeyPath() async throws {
+func networkResultsCanBeSectionedByMethod() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults(sectionBy: \.method)
+    let results = context.network.fetchedResults(for: NetworkRequestQuery(sectionBy: .method))
     let controller = WebInspectorFetchedResultsController(fetchedResults: results)
     let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
     defer { recorder.cancel() }
@@ -6997,10 +7014,10 @@ func fetchedResultsCanBeSectionedByStringKeyPath() async throws {
 
 @MainActor
 @Test
-func fetchedResultsCanBeSectionedByRawRepresentableKeyPath() async throws {
+func consoleResultsCanBeSectionedByLevel() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults(sectionBy: \.level)
+    let results = context.console.fetchedResults(for: ConsoleMessageQuery(sectionBy: .level))
 
     await runtime.backend.emit(
         .messageAdded(Console.Message(
@@ -9969,7 +9986,7 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil {
         results.items.count == 1 && results.items.first?.state == .finished
     }
@@ -10034,7 +10051,7 @@ func responseReceivedWithoutRequestWillBeSentCreatesRequest() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil {
         results.items.first?.state == .finished
     }
@@ -10123,7 +10140,7 @@ func loadingFinishedStoresTerminalMetadataAndOverridesDataTotals() async throws 
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil {
         results.items.first?.state == .finished
     }
@@ -10170,7 +10187,7 @@ func loadingFinishedClampsNegativeMetricTotals() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil {
         results.items.first?.state == .finished
     }
@@ -10369,7 +10386,7 @@ func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil {
         results.items.first?.status == 302
     }
@@ -10418,7 +10435,7 @@ func networkRequestPreservesInitialInitiatorAcrossRedirects() async throws {
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("initiator-redirect")
     let initialNodeID = DOM.Node.ID("17")
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await runtime.backend.emit(
         .requestWillBeSent(
@@ -10506,7 +10523,7 @@ func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil { results.items.first?.state == .finished }
     let request = try #require(results.items.first)
     #expect(request.lifecycleRevision == 0)
@@ -10564,7 +10581,7 @@ func loadingFailedStoresFailureTimestampAndClampsDataLength() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil { results.items.first?.state == .failed(errorText: "cancelled", canceled: true) }
     let request = try #require(results.items.first)
     #expect(request.requestSentTimestamp == 1)
@@ -10605,7 +10622,7 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil {
         results.items.count == 1 && results.items.first?.state == .finished
     }
@@ -10711,7 +10728,7 @@ func memoryCacheEventWithoutURLForNewRequestIsSkipped() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil { results.items.count == 1 }
     #expect(results.items.first?.url == "https://example.com/cached.css")
     #expect(context.state == .attached)
@@ -10729,7 +10746,7 @@ func webSocketCreatedCreatesRequestWithConnectingState() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil { results.items.count == 1 }
     let request = try #require(results.items.first)
     #expect(request.url == "wss://example.com/socket")
@@ -10787,7 +10804,7 @@ func webSocketCreatedPreservesExistingNetworkLifecycleMetadata() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil { results.items.first?.decodedDataLength == 7 }
     let request = try #require(results.items.first)
     let webSocket = try #require(request.webSocket)
@@ -10862,7 +10879,7 @@ func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
         .webSocket(.created(id: requestID, url: "wss://example.com/socket")),
         target: target
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil { results.items.count == 1 }
     let request = try #require(results.items.first)
 
@@ -10992,7 +11009,7 @@ func webSocketTimelinePreservesArrivalOrderStableIDsAndExactFrameSemantics() asy
         .webSocket(.created(id: requestID, url: "wss://example.com/timeline")),
         target: target
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil { results.items.count == 1 }
     let request = try #require(results.items.first)
 
@@ -11187,7 +11204,7 @@ func webSocketFirstCloseAndHandshakeAreTerminalAndDuplicateEventsDoNotNotify() a
         .webSocket(.created(id: requestID, url: "wss://example.com/terminal")),
         target: target
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil { results.items.count == 1 }
     let request = try #require(results.items.first)
     await runtime.backend.emit(
@@ -11268,7 +11285,7 @@ func webSocketRejectedHandshakePreservesResponseWithoutOpeningAndOrdersTerminalE
         .webSocket(.created(id: requestID, url: "wss://example.com/rejected")),
         target: target
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil { results.items.count == 1 }
     let request = try #require(results.items.first)
     await runtime.backend.emit(
@@ -11440,7 +11457,7 @@ func activeDuplicateWebSocketCreatedPreservesStateIdentityAndTimeline() async th
         .webSocket(.created(id: requestID, url: "wss://example.com/initial")),
         target: target
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil { results.items.count == 1 }
     let request = try #require(results.items.first)
     await runtime.backend.emit(
@@ -11639,7 +11656,7 @@ func terminalWebSocketCreatedRestartsSameRequestThroughCommonLifecycleReset() as
         ),
         target: target
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil { results.items.count == 1 }
     let request = try #require(results.items.first)
     let responseBody = request.responseBody
@@ -11766,7 +11783,7 @@ func webSocketCreatedRestartsLifecycleClosedByErrorWithoutClosedEvent(
         .webSocket(.created(id: requestID, url: "wss://example.com/first")),
         target: target
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil { results.items.count == 1 }
     let request = try #require(results.items.first)
     if hasHandshakeResponse {
@@ -11966,7 +11983,7 @@ func closedWebSocketCannotFetchResponseBodyOrSendProtocolCommand() async throws 
         .webSocket(.created(id: requestID, url: "wss://example.com/no-body")),
         target: target
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil { results.items.count == 1 }
     let request = try #require(results.items.first)
     await runtime.backend.emit(
@@ -12016,7 +12033,7 @@ func webSocketEventForUnknownRequestIsSkipped() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil { results.items.count == 1 }
     #expect(results.items.first?.webSocket?.readyState == .connecting)
     #expect(results.items.first?.webSocket?.handshakeResponse == nil)
@@ -12028,7 +12045,7 @@ func webSocketEventForUnknownRequestIsSkipped() async throws {
 func webSocketOtherEventDoesNotMutateRequests() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     let baseline = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(
@@ -12066,7 +12083,7 @@ func requestPostDataCreatesNetworkBodyWithFormRepresentation() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil { results.items.count == 1 }
     let request = try #require(results.items.first)
     let body = try #require(request.requestBody)
@@ -12107,7 +12124,7 @@ func responseRequestHeadersRefreshRequestBodyHints() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil { results.items.count == 1 }
     let request = try #require(results.items.first)
     let body = try #require(request.requestBody)
@@ -12315,7 +12332,7 @@ func responseBodyPublishesHintsAndFetchLifecycle() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil { results.items.first?.state == .responded }
     let request = try #require(results.items.first)
     let body = request.responseBody
@@ -12368,7 +12385,7 @@ func fetchResponseBodyStoresLoadedAndFailedPhases() async throws {
     await emitFinishedRequest(id: loadedID, target: target, backend: runtime.backend)
     await emitFinishedRequest(id: failedID, target: target, backend: runtime.backend)
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil {
         results.items.count == 2 && results.items.allSatisfy { $0.state == .finished }
     }
@@ -12644,7 +12661,7 @@ func consoleEventsPopulateRepeatAndClearFetchedMessages() async throws {
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("request-1")
 
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
     await runtime.backend.emit(
         .messageAdded(Console.Message(
             source: Console.Source(rawValue: "console-api"),
@@ -12727,7 +12744,7 @@ func consoleRepeatUpdatesStayWithinTheirTarget() throws {
         targetID: secondTargetID
     )
 
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
     let first = try #require(results.items.first { $0.targetID == firstTargetID })
     let second = try #require(results.items.first { $0.targetID == secondTargetID })
 
@@ -12748,10 +12765,10 @@ func consoleRepeatUpdatesStayWithinTheirTarget() throws {
 
 @MainActor
 @Test
-func consoleFetchedResultsHonorDescriptorsForInitialUpdatesAndDescriptorChanges() async throws {
+func consoleFetchedResultsHonorQueriesForInitialUpdatesAndQueryChanges() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let allResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+    let allResults = context.console.fetchedResults()
 
     await runtime.backend.emit(
         .messageAdded(Console.Message(
@@ -12779,14 +12796,12 @@ func consoleFetchedResultsHonorDescriptorsForInitialUpdatesAndDescriptorChanges(
     )
     try await waitUntil { allResults.items.count == 3 }
 
-    let warningDescriptor = WebInspectorFetchDescriptor<ConsoleMessage>(
-        predicate: #Predicate { message in
-            message.level.rawValue == "warning"
-        },
-        sortBy: [SortDescriptor(\.text, order: .reverse)],
+    let warningQuery = ConsoleMessageQuery(
+        filter: .level(Console.Level(rawValue: "warning")),
+        sortBy: [.text(order: .reverse)],
         fetchLimit: 2
     )
-    let warningResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults(for: warningDescriptor)
+    let warningResults = context.console.fetchedResults(for: warningQuery)
 
     #expect(warningResults.items.map(\.text) == ["omega", "middle"])
 
@@ -12802,8 +12817,8 @@ func consoleFetchedResultsHonorDescriptorsForInitialUpdatesAndDescriptorChanges(
         warningResults.items.map(\.text) == ["zebra", "omega"]
     }
 
-    try warningResults.updateFetchDescriptor(WebInspectorFetchDescriptor<ConsoleMessage>(
-        sortBy: [SortDescriptor(\.text)],
+    try warningResults.updateQuery(ConsoleMessageQuery(
+        sortBy: [.text()],
         fetchLimit: 2,
         fetchOffset: 1
     ))
@@ -12825,15 +12840,15 @@ func consoleFetchedResultsPreserveTieOrderAndCustomComparators() {
         )))
     }
 
-    let reverseTieResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults(
-        for: WebInspectorFetchDescriptor(
-            sortBy: [SortDescriptor(\.level.rawValue, order: .reverse)],
+    let reverseTieResults: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults(
+        for: ConsoleMessageQuery(
+            sortBy: [.level(order: .reverse)],
             fetchLimit: 1
         )
     )
-    let lexicalResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults(
-        for: WebInspectorFetchDescriptor(
-            sortBy: [SortDescriptor(\.text, comparator: .lexical)]
+    let lexicalResults: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults(
+        for: ConsoleMessageQuery(
+            sortBy: [.text(comparison: .lexical)]
         )
     )
 
@@ -12847,7 +12862,7 @@ func consoleMessageParametersRegisterRuntimeObjects() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let objectID = Runtime.RemoteObject.ID("console-object")
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
 
     await runtime.backend.emit(
         .messageAdded(Console.Message(
@@ -12890,7 +12905,7 @@ func consoleMessagesClearedInvalidatesRuntimeObjectsWithoutRuntimeCommand() asyn
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let objectID = Runtime.RemoteObject.ID("console-stale-object")
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
 
     await runtime.backend.emit(
         .messageAdded(Console.Message(
@@ -14765,7 +14780,7 @@ private func networkVisitsAcrossTopLevelCommit(
 ) async throws -> (provisional: NetworkNavigationVisit, committed: NetworkNavigationVisit) {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await emitOriginatedNetworkRequest(
         id: "commit-order-current",
@@ -15020,7 +15035,7 @@ private final class DOMTreeRevealRequestRecorder {
 }
 
 @MainActor
-private final class FetchedResultsTransactionRecorder<Model: WebInspectorFetchableModel> {
+private final class FetchedResultsTransactionRecorder<Model: WebInspectorPersistentModel> {
     private(set) var transactions: [WebInspectorFetchedResultsTransaction<Model>] = []
 
     private var task: Task<Void, Never>?
@@ -15054,7 +15069,7 @@ private final class FetchedResultsTransactionRecorder<Model: WebInspectorFetchab
 }
 
 @MainActor
-private final class FetchedResultsTransactionCounter<Model: WebInspectorFetchableModel> {
+private final class FetchedResultsTransactionCounter<Model: WebInspectorPersistentModel> {
     private(set) var transactionCount = 0
 
     private var task: Task<Void, Never>?

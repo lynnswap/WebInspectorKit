@@ -128,16 +128,16 @@ actor ContractDataKitActor {
 
     func assertPublicSurfaceIsUsable() async throws {
         let context = modelContext()
-        let requestResults: WebInspectorFetchedResults<NetworkRequest> = context.fetchedResults()
-        let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = context.fetchedResults()
+        let requestResults = context.network.fetchedResults()
+        let consoleResults = context.console.fetchedResults()
         let sectionedRequests: WebInspectorFetchedResults<NetworkRequest> =
-            context.fetchedResults(sectionBy: \.method)
+            context.network.fetchedResults(for: NetworkRequestQuery(sectionBy: .method))
         let sectionedConsole: WebInspectorFetchedResults<ConsoleMessage> =
-            context.fetchedResults(sectionBy: \.level)
+            context.console.fetchedResults(for: ConsoleMessageQuery(sectionBy: .level))
         let requestController: WebInspectorFetchedResultsController<NetworkRequest> =
-            context.fetchedResultsController()
+            context.network.fetchedResultsController()
         let consoleController: WebInspectorFetchedResultsController<ConsoleMessage> =
-            context.fetchedResultsController()
+            context.console.fetchedResultsController()
 
         #expect(requestResults.items.isEmpty)
         #expect(consoleResults.items.isEmpty)
@@ -250,7 +250,7 @@ actor ContractDataKitActor {
             headers: ["Accept": "application/json"]
         )
         let requestController: WebInspectorFetchedResultsController<NetworkRequest> =
-            context.fetchedResultsController()
+            context.network.fetchedResultsController()
         var requestTransactions = requestController.transactions.makeAsyncIterator()
         await ContractTestSupport.emitFinishedRequest(request, target: target, backend: runtime.backend)
 
@@ -332,7 +332,7 @@ actor ContractDataKitActor {
             return consoleController
         }
         let controller: WebInspectorFetchedResultsController<ConsoleMessage> =
-            modelContext().fetchedResultsController()
+            modelContext().console.fetchedResultsController()
         consoleController = controller
         return controller
     }

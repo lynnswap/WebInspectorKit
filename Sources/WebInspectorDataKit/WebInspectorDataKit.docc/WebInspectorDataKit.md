@@ -70,6 +70,7 @@ access with no model layer.
 ### Essentials
 
 - <doc:ModelRegistrationLifetimes>
+- <doc:QueryCapabilities>
 
 ### Creating a Model Context
 
@@ -87,7 +88,8 @@ access with no model layer.
 
 - ``NetworkRequest``
 - ``ConsoleMessage``
-- ``WebInspectorFetchRequest``
+- ``NetworkRequestQuery``
+- ``ConsoleMessageQuery``
 - ``WebInspectorFetchedResultsController``
 
 ### Runtime and CSS Models

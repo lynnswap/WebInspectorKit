@@ -27,10 +27,48 @@ if [[ "${dump_status}" -ne 0 ]]; then
   echo "warning: symbol graph dump reported failures outside WebInspectorDataKit; continuing with generated DataKit graph." >&2
 fi
 
-denylist='Network\.Request|Network\.Response|WebInspectorSortOrder|WebInspectorSortDescriptor|WebInspectorFetchPredicate|WebInspectorDataPhase|WebInspectorModelActor|WebInspectorModelExecutor|WebInspectorTargetChanges|RawEvent|\bWebView[A-Za-z0-9_]*|WebViewKit|@WebView'
+denylist='Network\.Request|Network\.Response|WebInspectorSortOrder|WebInspectorSortDescriptor|WebInspectorFetchPredicate|WebInspectorFetchableModel|WebInspectorFetchDescriptor|WebInspectorFetchRequest|WebInspectorSectionDescriptor|WebInspectorDataPhase|WebInspectorModelActor|WebInspectorModelExecutor|WebInspectorTargetChanges|RawEvent|\bWebView[A-Za-z0-9_]*|WebViewKit|@WebView'
 
 if rg -n "${denylist}" "${graph}"; then
   echo "error: WebInspectorDataKit public symbol graph exposes forbidden boundary symbols." >&2
+  exit 1
+fi
+
+foundation_query_pattern='s:10Foundation(9PredicateV|14SortDescriptorV)'
+foundation_query_hits="$(
+  jq -r --arg pattern "${foundation_query_pattern}" '
+    .symbols[]
+    | select(.accessLevel == "public")
+    | select(
+        ((.declarationFragments // []) + (.names.subHeading // []))
+        | any((.preciseIdentifier? // "") | test($pattern))
+      )
+    | "  - " + (.pathComponents | join("."))
+  ' "${graph}"
+)"
+
+if [[ -n "${foundation_query_hits}" ]]; then
+  echo "error: WebInspectorDataKit public query surface exposes Foundation Predicate or SortDescriptor." >&2
+  echo "${foundation_query_hits}" >&2
+  exit 1
+fi
+
+open_query_surface_hits="$(
+  jq -r '
+    .symbols[]
+    | select(.accessLevel == "public")
+    | (.pathComponents | join(".")) as $path
+    | select(
+        ($path | test("^WebInspectorContext\\.fetchedResults"))
+        or ($path | test("^(NetworkRequestQuery|ConsoleMessageQuery)\\.(Filter|Sort|Section)\\.init"))
+      )
+    | "  - " + $path
+  ' "${graph}"
+)"
+
+if [[ -n "${open_query_surface_hits}" ]]; then
+  echo "error: WebInspectorDataKit public query surface exposes an open generic or capability initializer." >&2
+  echo "${open_query_surface_hits}" >&2
   exit 1
 fi
 
