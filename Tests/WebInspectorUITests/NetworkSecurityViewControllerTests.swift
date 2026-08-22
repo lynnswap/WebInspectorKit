@@ -391,54 +391,6 @@ struct NetworkSecurityViewControllerTests {
         )
     }
 
-    @Test
-    func adaptiveModeControlUsesMenuForCompactAndAccessibilitySizes() {
-        let controller = NetworkDetailModeControlController(initialMode: .headers)
-        let host = UIViewController()
-        host.view.addSubview(controller.view)
-        let window = showInWindow(host)
-        defer { window.isHidden = true }
-        let stableViewIdentity = ObjectIdentifier(controller.view)
-        var selectedModes: [NetworkDetailViewController.Mode] = []
-        controller.selectionHandler = { mode in
-            selectedModes.append(mode)
-            controller.render(mode: mode, isEnabled: true)
-        }
-        controller.render(mode: .headers, isEnabled: true)
-
-        host.traitOverrides.horizontalSizeClass = .regular
-        host.traitOverrides.preferredContentSizeCategory = .large
-        host.updateTraitsIfNeeded()
-        controller.view.updateTraitsIfNeeded()
-        #expect(controller.presentationForTesting == .segmented)
-        #expect(controller.segmentedControlForTesting.isHidden == false)
-        #expect(controller.menuButtonForTesting.isHidden)
-        #expect(controller.segmentedControlForTesting.accessibilityValue == NetworkDetailViewController.Mode.headers.title)
-
-        host.traitOverrides.horizontalSizeClass = .compact
-        host.updateTraitsIfNeeded()
-        controller.view.updateTraitsIfNeeded()
-        #expect(controller.presentationForTesting == .menu)
-        #expect(controller.segmentedControlForTesting.isHidden)
-        #expect(controller.menuButtonForTesting.isHidden == false)
-        #expect(controller.view.intrinsicContentSize == controller.menuButtonForTesting.intrinsicContentSize)
-        #expect(controller.view.intrinsicContentSize.width < controller.segmentedControlForTesting.intrinsicContentSize.width)
-        #expect(controller.menuActionTitlesForTesting == NetworkDetailViewController.Mode.allCases.map(\.title))
-
-        for mode in NetworkDetailViewController.Mode.allCases {
-            controller.selectModeForTesting(mode)
-        }
-        #expect(selectedModes == NetworkDetailViewController.Mode.allCases)
-        #expect(controller.menuButtonForTesting.accessibilityValue == NetworkDetailViewController.Mode.security.title)
-
-        host.traitOverrides.horizontalSizeClass = .regular
-        host.traitOverrides.preferredContentSizeCategory = .accessibilityExtraExtraExtraLarge
-        host.updateTraitsIfNeeded()
-        controller.view.updateTraitsIfNeeded()
-        #expect(controller.presentationForTesting == .menu)
-        #expect(ObjectIdentifier(controller.view) == stableViewIdentity)
-    }
-
     private func reportedSecurity(
         dnsNames: [String],
         ipAddresses: [String]

@@ -661,15 +661,17 @@ struct NetworkDetailViewControllerTests {
         #expect(securityController.expandedListsForTesting == [.dnsNames])
         let expandedOriginalIDs = Set(securityController.snapshotForTesting.itemIdentifiers)
         let modeControlIdentity = ObjectIdentifier(viewController.detailModeControlViewForTesting)
+        #expect(viewController.navigationItem.titleView === viewController.detailModeControlViewForTesting)
         viewController.detailModeControlViewForTesting.traitOverrides.horizontalSizeClass = .compact
         viewController.detailModeControlViewForTesting.updateTraitsIfNeeded()
-        #expect(viewController.detailModeControlPresentationForTesting == .menu)
+        viewController.detailModeControlViewForTesting.layoutIfNeeded()
+        #expect(viewController.detailModeSelectedModeForTesting == .security)
         #expect(securityController.expandedListsForTesting == [.dnsNames])
         viewController.detailModeControlViewForTesting.traitOverrides.horizontalSizeClass = .regular
         viewController.detailModeControlViewForTesting.traitOverrides.preferredContentSizeCategory = .large
         viewController.detailModeControlViewForTesting.updateTraitsIfNeeded()
-        #expect(viewController.detailModeControlPresentationForTesting == .segmented)
         #expect(ObjectIdentifier(viewController.detailModeControlViewForTesting) == modeControlIdentity)
+        #expect(viewController.detailModeSelectedModeForTesting == .security)
         #expect(securityController.expandedListsForTesting == [.dnsNames])
 
         selectMode(.cookies, on: viewController)
@@ -9963,7 +9965,7 @@ struct NetworkDetailViewControllerTests {
         _ mode: NetworkDetailViewController.Mode,
         on viewController: NetworkDetailViewController
     ) {
-        #expect(viewController.isDetailModeEnabledForTesting(mode))
+        #expect(viewController.isDetailModeControlEnabledForTesting)
         viewController.selectModeForTesting(mode)
     }
 
