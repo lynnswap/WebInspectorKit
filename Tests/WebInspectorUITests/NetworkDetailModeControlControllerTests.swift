@@ -30,7 +30,10 @@ struct NetworkDetailModeControlControllerTests {
         let collectionView = try #require(controller.floatingCollectionViewForTesting)
         floatingTabBar.layoutIfNeeded()
 
-        #expect(NSStringFromClass(type(of: floatingTabBar)) == "_UIFloatingTabBar")
+        let floatingTabBarClass: AnyClass = try #require(
+            NSClassFromString("_UIFloatingTabBar")
+        )
+        #expect(floatingTabBar.isKind(of: floatingTabBarClass))
         #expect(
             controller.floatingTabTitlesForTesting
                 == NetworkDetailViewController.Mode.allCases.map(\.title)
@@ -45,6 +48,13 @@ struct NetworkDetailModeControlControllerTests {
             } == 2
         )
         if #available(iOS 26.0, *) {
+            #expect(controller.usesExpandedFloatingPaginationForTesting)
+            let maximumContainerWidth = try #require(
+                controller.floatingMaximumContainerWidthForTesting
+            )
+            #expect(maximumContainerWidth > floatingTabBar.bounds.width * 0.8)
+            #expect(maximumContainerWidth < floatingTabBar.bounds.width)
+            #expect(collectionView.bounds.width > 200)
             #expect(controller.floatingTabBarHasLiquidLensForTesting)
         }
 
