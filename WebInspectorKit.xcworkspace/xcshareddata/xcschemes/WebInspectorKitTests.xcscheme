@@ -43,6 +43,20 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
+               BlueprintIdentifier = "ScrollableTabBarTests"
+               BuildableName = "ScrollableTabBarTests"
+               BlueprintName = "ScrollableTabBarTests"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "WebInspectorUITests"
                BuildableName = "WebInspectorUITests"
                BlueprintName = "WebInspectorUITests"
@@ -98,6 +112,16 @@
                BlueprintIdentifier = "WebInspectorDataKitTests"
                BuildableName = "WebInspectorDataKitTests"
                BlueprintName = "WebInspectorDataKitTests"
+               ReferencedContainer = "container:">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "ScrollableTabBarTests"
+               BuildableName = "ScrollableTabBarTests"
+               BlueprintName = "ScrollableTabBarTests"
                ReferencedContainer = "container:">
             </BuildableReference>
          </TestableReference>

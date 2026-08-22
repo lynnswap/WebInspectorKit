@@ -66,6 +66,16 @@ jobs:
       - name: Run consumer contract package tests
         run: swift test --package-path ContractTests
 
+      - name: Run iOS consumer contract tests
+        working-directory: ContractTests
+        run: |
+          xcodebuild -quiet test \
+            -scheme WebInspectorKitContractTests-Package \
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=latest' \
+            -only-testing:WebInspectorConsumerContractTests \
+            -enableCodeCoverage NO \
+            -parallel-testing-enabled NO
+
   native-bridge-tests:
     name: ${{ matrix.name }}
     strategy:
@@ -511,6 +521,9 @@ jobs:
           - name: DataKit
             test_filter: WebInspectorDataKitTests
             result_name: data
+          - name: ScrollableTabBar
+            test_filter: ScrollableTabBarTests
+            result_name: scrollable-tab-bar
           - name: UI
             test_filter: WebInspectorUITests
             result_name: ui
