@@ -323,7 +323,7 @@ struct NetworkHeadersTextDocumentBuilder {
                 Row(
                     key: String(
                         localized: "network.headers.parameters.empty",
-                        defaultValue: "No parameters",
+                        defaultValue: "None",
                         bundle: WebInspectorUILocalization.bundle
                     ),
                     value: nil,
@@ -354,8 +354,8 @@ struct NetworkHeadersTextDocumentBuilder {
                 rows.append(
                     Row(
                         key: String(
-                            localized: "network.headers.request_data.view_preview",
-                            defaultValue: "View Request Preview",
+                            localized: "network.headers.request_data.view_preview.inline",
+                            defaultValue: "View Preview",
                             bundle: WebInspectorUILocalization.bundle
                         ),
                         value: nil,
@@ -373,12 +373,8 @@ struct NetworkHeadersTextDocumentBuilder {
                 case let .decoded(_, value) = parameter.value
             else {
                 return Row(
-                    key: String(
-                        localized: "network.headers.parameters.unparsed",
-                        defaultValue: "Unparsed Parameter",
-                        bundle: WebInspectorUILocalization.bundle
-                    ),
-                    value: "\(parameter.rawFragment) — \(malformedReasonText(for: parameter))",
+                    key: parameter.rawFragment,
+                    value: malformedReasonText(for: parameter),
                     style: .warning,
                     alwaysShowsValueSeparator: true
                 )
@@ -435,27 +431,23 @@ struct NetworkHeadersTextDocumentBuilder {
             return [
                 Row(
                     key: contentTypeLabel,
-                    value: String(
-                        localized: "network.headers.value.not_reported",
-                        defaultValue: "Not reported",
-                        bundle: WebInspectorUILocalization.bundle
-                    ),
+                    value: "-",
                     style: .message
                 )
             ]
         case .ambiguous(let rawValues):
-            return rawValues.map { rawValue in
+            return [
                 Row(
                     key: String(
                         localized: "network.headers.request_data.content_type_ambiguous",
                         defaultValue: "Ambiguous Content Type",
                         bundle: WebInspectorUILocalization.bundle
                     ),
-                    value: rawValue,
+                    value: rawValues.joined(separator: "\n"),
                     style: .warning,
                     alwaysShowsValueSeparator: true
                 )
-            }
+            ]
         case .value(let contentType):
             var rows = [
                 Row(
@@ -503,22 +495,23 @@ struct NetworkHeadersTextDocumentBuilder {
                         alwaysShowsValueSeparator: true
                     )
                 })
-            rows.append(
-                contentsOf: contentType.parameters.compactMap { parameter in
-                    guard parameter.issue != nil else {
-                        return nil
-                    }
-                    return Row(
+            let unparsedParameters = contentType.parameters.compactMap { parameter in
+                parameter.issue == nil ? nil : parameter.rawFragment
+            }
+            if unparsedParameters.isEmpty == false {
+                rows.append(
+                    Row(
                         key: String(
                             localized: "network.headers.request_data.content_type_parameter_unparsed",
-                            defaultValue: "Unparsed Content-Type Parameter",
+                            defaultValue: "Unparsed Content-Type Parameters",
                             bundle: WebInspectorUILocalization.bundle
                         ),
-                        value: parameter.rawFragment,
+                        value: unparsedParameters.joined(separator: "\n"),
                         style: .warning,
                         alwaysShowsValueSeparator: true
                     )
-                })
+                )
+            }
             return rows
         }
     }
@@ -535,7 +528,7 @@ struct NetworkHeadersTextDocumentBuilder {
             rows.append(
                 Row(
                     key: String(
-                        localized: "network.headers.request.empty", defaultValue: "No request headers",
+                        localized: "network.headers.request.empty", defaultValue: "None",
                         bundle: WebInspectorUILocalization.bundle),
                     value: nil,
                     style: .message
@@ -564,7 +557,7 @@ struct NetworkHeadersTextDocumentBuilder {
             rows.append(
                 Row(
                     key: String(
-                        localized: "network.headers.response.empty", defaultValue: "No response headers",
+                        localized: "network.headers.response.empty", defaultValue: "None",
                         bundle: WebInspectorUILocalization.bundle),
                     value: nil,
                     style: .message

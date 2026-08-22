@@ -80,6 +80,7 @@ package final class NetworkCookiesViewController: UICollectionViewController {
         package let kind: Kind
         package let title: String
         package let detail: String?
+        package let accessibilityLabel: String
     }
 
     private enum RowContent: Hashable, Sendable {
@@ -217,7 +218,7 @@ package final class NetworkCookiesViewController: UICollectionViewController {
             content.text = Self.title(for: section)
             header.contentConfiguration = content
             header.isAccessibilityElement = true
-            header.accessibilityLabel = content.text
+            header.accessibilityLabel = Self.accessibilityTitle(for: section)
             header.accessibilityTraits = .header
         }
         dataSource.supplementaryViewProvider = { collectionView, elementKind, indexPath in
@@ -261,7 +262,7 @@ package final class NetworkCookiesViewController: UICollectionViewController {
                 kind: .requestNotCaptured,
                 title: localized(
                     "network.cookies.request.not_captured",
-                    defaultValue: "Request cookies were not captured"
+                    defaultValue: "Not Captured"
                 )
             )]
         case .unavailable(.servedFromMemoryCache):
@@ -270,8 +271,12 @@ package final class NetworkCookiesViewController: UICollectionViewController {
                 section: .request,
                 kind: .requestMemoryCache,
                 title: localized(
+                    "network.cookies.request.not_captured",
+                    defaultValue: "Not Captured"
+                ),
+                detail: localized(
                     "network.cookies.request.memory_cache",
-                    defaultValue: "No request, served from the memory cache"
+                    defaultValue: "Memory Cache"
                 )
             )]
         case .empty:
@@ -281,7 +286,7 @@ package final class NetworkCookiesViewController: UICollectionViewController {
                 kind: .requestEmpty,
                 title: localized(
                     "network.cookies.request.empty",
-                    defaultValue: "No request cookies"
+                    defaultValue: "None"
                 )
             )]
         case .values(let report):
@@ -316,7 +321,7 @@ package final class NetworkCookiesViewController: UICollectionViewController {
                 kind: .responseLoading,
                 title: localized(
                     "network.cookies.response.loading",
-                    defaultValue: "Waiting for response"
+                    defaultValue: "Waiting"
                 ),
                 messageKind: .loading
             )]
@@ -327,7 +332,7 @@ package final class NetworkCookiesViewController: UICollectionViewController {
                 kind: .responseMissing,
                 title: localized(
                     "network.cookies.response.missing",
-                    defaultValue: "No response was received"
+                    defaultValue: "Not Received"
                 )
             )]
         case .empty:
@@ -337,7 +342,7 @@ package final class NetworkCookiesViewController: UICollectionViewController {
                 kind: .responseEmpty,
                 title: localized(
                     "network.cookies.response.empty",
-                    defaultValue: "No response cookies"
+                    defaultValue: "None"
                 )
             )]
         case .values(let report):
@@ -365,11 +370,18 @@ package final class NetworkCookiesViewController: UICollectionViewController {
         section: SectionID,
         kind: StateKind,
         title: String,
+        detail: String? = nil,
         messageKind: MessageContent.Kind = .information
     ) -> (ItemID, RowContent) {
         (
             .state(epoch: requestEpoch, section: section, kind: kind),
-            .message(MessageContent(kind: messageKind, title: title, detail: nil))
+            .message(MessageContent(
+                kind: messageKind,
+                title: title,
+                detail: detail,
+                accessibilityLabel: [Self.accessibilityTitle(for: section), title]
+                    .joined(separator: ", ")
+            ))
         )
     }
 
@@ -385,48 +397,40 @@ package final class NetworkCookiesViewController: UICollectionViewController {
         case .ambiguousCombined:
             title = localized(
                 "network.cookies.warning.ambiguous_combined",
-                defaultValue: "Combined cookie header cannot be parsed safely"
+                defaultValue: "Combined header cannot be parsed safely"
             )
         case .partial:
             title = localized(
                 "network.cookies.warning.partial",
-                defaultValue: "Some cookie data could not be parsed"
+                defaultValue: "Some data could not be parsed"
             )
         case .unparsed:
             title = localized(
                 "network.cookies.warning.unparsed",
-                defaultValue: "Cookie header could not be parsed"
+                defaultValue: "Header could not be parsed"
             )
         case .complete:
             title = localized(
                 "network.cookies.warning.unparsed",
-                defaultValue: "Cookie header could not be parsed"
+                defaultValue: "Header could not be parsed"
             )
         }
 
-        if diagnostics.isEmpty {
-            guard status != .complete else {
-                return []
-            }
-            return [(
-                .diagnostic(epoch: requestEpoch, section: section, ordinal: 0),
-                .message(MessageContent(
-                    kind: .warning,
-                    title: title,
-                    detail: rawHeaderValues.joined(separator: "\n")
-                ))
-            )]
+        guard diagnostics.isEmpty == false || status != .complete else {
+            return []
         }
-        return diagnostics.enumerated().map { index, diagnostic in
-            (
-                .diagnostic(epoch: requestEpoch, section: section, ordinal: index),
-                .message(MessageContent(
-                    kind: .warning,
-                    title: title,
-                    detail: diagnostic.rawFragment
-                ))
-            )
-        }
+        let detail = (diagnostics.isEmpty ? rawHeaderValues : diagnostics.map(\.rawFragment))
+            .joined(separator: "\n")
+        return [(
+            .diagnostic(epoch: requestEpoch, section: section, ordinal: 0),
+            .message(MessageContent(
+                kind: .warning,
+                title: title,
+                detail: detail,
+                accessibilityLabel: [Self.accessibilityTitle(for: section), title]
+                    .joined(separator: ", ")
+            ))
+        )]
     }
 
     private func requestRowContent(_ cookie: NetworkRequestCookie) -> NetworkCookieRowContent {
@@ -440,26 +444,41 @@ package final class NetworkCookiesViewController: UICollectionViewController {
     }
 
     private func responseRowContent(_ cookie: NetworkResponseCookie) -> NetworkCookieRowContent {
-        let missingValue = localized("network.cookies.value.unavailable", defaultValue: "Not reported")
+        let missingAccessibilityValue = localized(
+            "network.cookies.value.not_set",
+            defaultValue: "Not Set"
+        )
         var fields = [
             field("network.cookies.field.name", defaultValue: "Name", value: cookie.name),
             field("network.cookies.field.value", defaultValue: "Value", value: cookie.value),
-            field("network.cookies.field.domain", defaultValue: "Domain", value: cookie.domain ?? missingValue),
-            field("network.cookies.field.path", defaultValue: "Path", value: cookie.path ?? missingValue),
+            optionalField(
+                "network.cookies.field.domain",
+                defaultValue: "Domain",
+                value: cookie.domain,
+                missingAccessibilityValue: missingAccessibilityValue
+            ),
+            optionalField(
+                "network.cookies.field.path",
+                defaultValue: "Path",
+                value: cookie.path,
+                missingAccessibilityValue: missingAccessibilityValue
+            ),
             field(
                 "network.cookies.field.partitioned",
                 defaultValue: "Partitioned",
                 value: booleanText(cookie.isPartitioned)
             ),
-            field(
+            optionalField(
                 "network.cookies.field.expires",
                 defaultValue: "Expires",
-                value: expiresText(cookie, missingValue: missingValue)
+                value: expiresText(cookie),
+                missingAccessibilityValue: missingAccessibilityValue
             ),
-            field(
+            optionalField(
                 "network.cookies.field.max_age",
                 defaultValue: "Max-Age",
-                value: cookie.maxAgeSeconds.map(String.init) ?? cookie.rawMaxAge ?? missingValue
+                value: cookie.maxAgeSeconds.map(String.init) ?? cookie.rawMaxAge,
+                missingAccessibilityValue: missingAccessibilityValue
             ),
             field(
                 "network.cookies.field.secure",
@@ -471,10 +490,11 @@ package final class NetworkCookiesViewController: UICollectionViewController {
                 defaultValue: "HttpOnly",
                 value: booleanText(cookie.isHTTPOnly)
             ),
-            field(
+            optionalField(
                 "network.cookies.field.same_site",
                 defaultValue: "SameSite",
-                value: sameSiteText(cookie.sameSite, missingValue: missingValue)
+                value: sameSiteText(cookie.sameSite),
+                missingAccessibilityValue: missingAccessibilityValue
             ),
         ]
         fields.append(contentsOf: cookie.unknownAttributes.map { attribute in
@@ -495,26 +515,42 @@ package final class NetworkCookiesViewController: UICollectionViewController {
         _ key: StaticString,
         defaultValue: String.LocalizationValue,
         value: String,
+        accessibilityValue: String? = nil,
         isFullWidth: Bool = false
     ) -> NetworkCookieFieldContent {
         NetworkCookieFieldContent(
             label: localized(key, defaultValue: defaultValue),
             value: value,
+            accessibilityValue: accessibilityValue,
             isFullWidth: isFullWidth
         )
     }
 
-    private func expiresText(_ cookie: NetworkResponseCookie, missingValue: String) -> String {
+    private func optionalField(
+        _ key: StaticString,
+        defaultValue: String.LocalizationValue,
+        value: String?,
+        missingAccessibilityValue: String
+    ) -> NetworkCookieFieldContent {
+        field(
+            key,
+            defaultValue: defaultValue,
+            value: value ?? "-",
+            accessibilityValue: value == nil ? missingAccessibilityValue : nil
+        )
+    }
+
+    private func expiresText(_ cookie: NetworkResponseCookie) -> String? {
         if let expires = cookie.expires {
             return expires.formatted(date: .abbreviated, time: .standard)
         }
-        return cookie.rawExpires ?? missingValue
+        return cookie.rawExpires
     }
 
-    private func sameSiteText(_ sameSite: NetworkCookieSameSite, missingValue: String) -> String {
+    private func sameSiteText(_ sameSite: NetworkCookieSameSite) -> String? {
         switch sameSite {
         case .absent:
-            missingValue
+            nil
         case .none:
             "None"
         case .lax:
@@ -616,7 +652,7 @@ package final class NetworkCookiesViewController: UICollectionViewController {
         cell.accessories = content.kind == .loading ? [Self.loadingAccessory()] : []
         cell.isAccessibilityElement = true
         cell.accessibilityTraits = .staticText
-        cell.accessibilityLabel = content.title
+        cell.accessibilityLabel = content.accessibilityLabel
         cell.accessibilityValue = content.detail
     }
 
@@ -637,6 +673,23 @@ package final class NetworkCookiesViewController: UICollectionViewController {
     }
 
     private static func title(for section: SectionID) -> String {
+        switch section {
+        case .request:
+            String(
+                localized: "network.section.request",
+                defaultValue: "Request",
+                bundle: WebInspectorUILocalization.bundle
+            )
+        case .response:
+            String(
+                localized: "network.section.response",
+                defaultValue: "Response",
+                bundle: WebInspectorUILocalization.bundle
+            )
+        }
+    }
+
+    private static func accessibilityTitle(for section: SectionID) -> String {
         switch section {
         case .request:
             String(

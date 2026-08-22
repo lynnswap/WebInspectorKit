@@ -74,17 +74,25 @@ func clearAvailabilityUsesUnfilteredRequestsWhenFiltersHideEveryRequest() async 
 
     #expect(model.hasClearableRequests)
     #expect(observedValues.latestValue == true)
+    #expect(
+        model.captureListProjection().content
+            == .entries(model.displayEntryIDs)
+    )
 
     model.setSearchText("does-not-match")
 
     #expect(model.isEmpty)
     #expect(model.displayRequestIDs.isEmpty)
     #expect(model.hasClearableRequests)
+    #expect(model.captureListProjection().content == .noMatches)
 
+    let transactionBaseline = model.rawTransactionDeliveryCountForTesting
     model.clearRequests()
 
     #expect(model.hasClearableRequests == false)
     #expect(await observedValues.waitUntilValue(false))
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: transactionBaseline))
+    #expect(model.captureListProjection().content == .noRequests)
     #expect(context.registeredRequest(for: requestID) == nil)
 }
 

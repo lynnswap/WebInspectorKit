@@ -227,6 +227,11 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
     }
 
+    private enum EmptyPresentation: Equatable {
+        case noRequests
+        case noMatches
+    }
+
     private let model: NetworkPanelModel
     private var entrySelectionAction: EntrySelectionAction
     private let listInvalidationAccumulator: NetworkListInvalidationAccumulator
@@ -243,6 +248,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private let snapshotApplyCompletionScheduler: any NetworkListSnapshotApplyCompletionScheduling
     private var isApplyingSearchPresentation = false
     private var activeSearchController: UISearchController?
+    private var renderedEmptyPresentation: EmptyPresentation?
 #if DEBUG
     private struct FetchedResultsTransactionDeliveryWaiter {
         var id: Int
@@ -547,7 +553,16 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private func makeSearchController() -> UISearchController {
         let searchController = UISearchController(searchResultsController: nil)
         searchController.obscuresBackgroundDuringPresentation = false
-        searchController.searchBar.placeholder = String(localized: "network.search.placeholder", bundle: WebInspectorUILocalization.bundle)
+        searchController.searchBar.placeholder = String(
+            localized: "network.search.placeholder.short",
+            defaultValue: "Search",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        searchController.searchBar.searchTextField.accessibilityLabel = String(
+            localized: "network.search.placeholder",
+            defaultValue: "Search Requests",
+            bundle: WebInspectorUILocalization.bundle
+        )
         searchController.searchBar.text = model.searchText
         searchController.searchResultsUpdater = self
         return searchController
@@ -758,7 +773,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         Task.detached {
             await accumulator.didCapture(projection.version)
         }
-        renderEmptyState(isEmpty: projection.entryIDs.isEmpty)
+        renderEmptyState(for: projection.content)
         requestListSnapshotBuild(target: projection)
     }
 
@@ -792,11 +807,10 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     }
 
     private func renderInitialEmptyStateIfNeeded() {
-        guard dataSource.snapshot().itemIdentifiers.isEmpty,
-              model.isEmpty else {
+        guard dataSource.snapshot().itemIdentifiers.isEmpty else {
             return
         }
-        renderEmptyState(isEmpty: true)
+        renderEmptyState(for: model.captureListProjection().content)
     }
 
     private func requestListProjectionCapture() {
@@ -820,25 +834,43 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         collectionView.selectItem(at: targetIndexPath, animated: false, scrollPosition: [])
     }
 
-    private func renderEmptyState(isEmpty: Bool) {
+    private func renderEmptyState(for content: NetworkPanelListContent) {
+        let nextPresentation: EmptyPresentation? = switch content {
+        case .entries: nil
+        case .noRequests: .noRequests
+        case .noMatches: .noMatches
+        }
+        let isEmpty = nextPresentation != nil
         if collectionView.isHidden != isEmpty {
             collectionView.isHidden = isEmpty
         }
-        if isEmpty {
-            let title = String(localized: "network.empty.title", bundle: WebInspectorUILocalization.bundle)
-            if let configuration = contentUnavailableConfiguration as? UIContentUnavailableConfiguration,
-               configuration.text == title,
-               configuration.secondaryText == nil,
-               configuration.image == nil,
-               configuration.textProperties.color == .secondaryLabel {
-                return
-            }
+        guard renderedEmptyPresentation != nextPresentation
+                || (nextPresentation == nil) != (contentUnavailableConfiguration == nil) else {
+            return
+        }
+        renderedEmptyPresentation = nextPresentation
+        switch nextPresentation {
+        case .none:
+            contentUnavailableConfiguration = nil
+        case .noRequests:
             var configuration = UIContentUnavailableConfiguration.empty()
-            configuration.text = title
+            configuration.text = String(
+                localized: "network.empty.none.title",
+                defaultValue: "None",
+                bundle: WebInspectorUILocalization.bundle
+            )
             configuration.textProperties.color = .secondaryLabel
             contentUnavailableConfiguration = configuration
-        } else if contentUnavailableConfiguration != nil {
-            contentUnavailableConfiguration = nil
+        case .noMatches:
+            var configuration = UIContentUnavailableConfiguration.search()
+            configuration.text = String(
+                localized: "network.no_results.title",
+                defaultValue: "No Results",
+                bundle: WebInspectorUILocalization.bundle
+            )
+            configuration.secondaryText = nil
+            configuration.textProperties.color = .secondaryLabel
+            contentUnavailableConfiguration = configuration
         }
     }
 

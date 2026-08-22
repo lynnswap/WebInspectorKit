@@ -6,6 +6,7 @@ import WebInspectorDataKit
 @MainActor
 package enum NetworkBodySurface {
     case none
+    case emptyBodyPlaceholder
     case unavailableBodyPlaceholder
     case body(NetworkBody, metadata: NetworkMediaPreviewMetadata?)
 
@@ -27,14 +28,16 @@ package enum NetworkBodySurface {
         switch self {
         case .none:
             false
-        case .unavailableBodyPlaceholder, .body:
+        case .emptyBodyPlaceholder, .unavailableBodyPlaceholder, .body:
             true
         }
     }
 
     package func isEquivalent(to other: NetworkBodySurface) -> Bool {
         switch (self, other) {
-        case (.none, .none), (.unavailableBodyPlaceholder, .unavailableBodyPlaceholder):
+        case (.none, .none),
+             (.emptyBodyPlaceholder, .emptyBodyPlaceholder),
+             (.unavailableBodyPlaceholder, .unavailableBodyPlaceholder):
             return true
         case (.body(let body, let metadata), .body(let otherBody, let otherMetadata)):
             return body === otherBody && metadata == otherMetadata

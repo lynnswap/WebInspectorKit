@@ -803,7 +803,7 @@ package final class NetworkDetailViewController: UIViewController {
         renderPreviewRoleControl(roles: roles, selectedRole: selectedRole)
 
         guard let role = selectedRole else {
-            bodyViewController.setSurface(.unavailableBodyPlaceholder)
+            bodyViewController.setSurface(.emptyBodyPlaceholder)
             unbindResponseBodyFetchObservation()
             return
         }
@@ -918,7 +918,7 @@ package final class NetworkDetailViewController: UIViewController {
             return .unavailableBodyPlaceholder
         }
         guard let body = body(in: request, for: role) else {
-            return .unavailableBodyPlaceholder
+            return .emptyBodyPlaceholder
         }
         return .body(
             body,

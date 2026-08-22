@@ -57,6 +57,7 @@ struct NetworkSecurityItemID: Hashable {
 struct NetworkSecurityRowContent: Equatable {
     let label: String
     let value: String?
+    let accessibilityLabel: String?
     let usesTechnicalValueDirection: Bool
     let disclosureList: NetworkSecurityListKind?
     let isExpanded: Bool
@@ -79,22 +80,31 @@ struct NetworkSecurityDocumentBuilder {
         var builder = Builder(epoch: epoch)
         switch summary {
         case .plaintextScheme(let scheme):
-            builder.appendStatus(
-                value: plaintextStatus(for: scheme),
-                scheme: plaintextSchemeText(scheme)
+            builder.appendScheme(plaintextSchemeText(scheme))
+            builder.append(
+                section: .status,
+                kind: .status,
+                label: tlsLabel,
+                value: notApplicableText
             )
-            builder.appendUnavailableMetadata(value: notApplicableText)
         case .pending(let scheme):
-            builder.appendStatus(value: pendingText, scheme: encryptedSchemeText(scheme))
-            builder.appendUnavailableMetadata(value: pendingText)
-        case let .encryptedScheme(scheme, metadata):
-            builder.appendStatus(
-                value: metadataStatus(for: scheme, metadata: metadata),
-                scheme: encryptedSchemeText(scheme)
+            builder.appendScheme(encryptedSchemeText(scheme))
+            builder.appendState(
+                section: .status,
+                kind: .status,
+                accessibilityLabel: statusLabel,
+                value: pendingText
             )
+        case let .encryptedScheme(scheme, metadata):
+            builder.appendScheme(encryptedSchemeText(scheme))
             switch metadata {
             case .notReported:
-                builder.appendMetadataNotReported()
+                builder.append(
+                    section: .status,
+                    kind: .securityMetadata,
+                    label: securityMetadataLabel,
+                    value: notReportedText
+                )
             case .reported(let security):
                 builder.append(
                     section: .status,
@@ -105,9 +115,12 @@ struct NetworkSecurityDocumentBuilder {
                 appendReportedSecurity(security, to: &builder)
             }
         case let .unavailable(scheme, reason):
-            builder.appendStatus(
-                value: unavailableStatus(for: reason),
-                scheme: encryptedSchemeText(scheme)
+            builder.appendScheme(encryptedSchemeText(scheme))
+            builder.appendState(
+                section: .status,
+                kind: .status,
+                accessibilityLabel: statusLabel,
+                value: unavailableStatus(for: reason)
             )
             if let reasonText = rawUnavailableReason(reason) {
                 builder.append(
@@ -117,21 +130,14 @@ struct NetworkSecurityDocumentBuilder {
                     display: reportedScalar(reasonText)
                 )
             }
-            builder.appendUnavailableMetadata(value: unavailableText)
         case .notApplicable(let scheme):
+            builder.appendScheme(scheme)
             builder.append(
                 section: .status,
                 kind: .status,
-                label: statusLabel,
+                label: tlsLabel,
                 value: notClassifiedText
             )
-            builder.append(
-                section: .status,
-                kind: .scheme,
-                label: schemeLabel,
-                display: reportedScalar(scheme)
-            )
-            builder.appendUnavailableMetadata(value: notApplicableText)
         }
         return builder.document
     }
@@ -141,12 +147,6 @@ struct NetworkSecurityDocumentBuilder {
         to builder: inout Builder
     ) {
         if let connection = security.connection {
-            builder.append(
-                section: .connection,
-                kind: .connectionMetadata,
-                label: connectionMetadataLabel,
-                value: reportedText
-            )
             builder.append(
                 section: .connection,
                 kind: .tlsProtocol,
@@ -160,29 +160,23 @@ struct NetworkSecurityDocumentBuilder {
                 display: reportedScalar(connection.cipher)
             )
         } else {
-            builder.append(
+            builder.appendState(
                 section: .connection,
                 kind: .connectionMetadata,
-                label: connectionMetadataLabel,
+                accessibilityLabel: connectionMetadataLabel,
                 value: notReportedText
             )
         }
 
         guard let certificate = security.certificate else {
-            builder.append(
+            builder.appendState(
                 section: .certificate,
                 kind: .certificateMetadata,
-                label: certificateMetadataLabel,
+                accessibilityLabel: certificateMetadataLabel,
                 value: notReportedText
             )
             return
         }
-        builder.append(
-            section: .certificate,
-            kind: .certificateMetadata,
-            label: certificateMetadataLabel,
-            value: reportedText
-        )
         builder.append(
             section: .certificate,
             kind: .subject,
@@ -223,7 +217,7 @@ struct NetworkSecurityDocumentBuilder {
                 section: .certificate,
                 kind: kind == .dnsNames ? .dnsState : .ipAddressState,
                 label: kind == .dnsNames ? dnsNamesLabel : ipAddressesLabel,
-                value: notReportedText
+                display: notReportedDisplay
             )
             return
         }
@@ -232,7 +226,11 @@ struct NetworkSecurityDocumentBuilder {
                 section: .certificate,
                 kind: kind == .dnsNames ? .dnsState : .ipAddressState,
                 label: kind == .dnsNames ? dnsNamesLabel : ipAddressesLabel,
-                value: noValuesReportedText
+                display: DisplayValue(
+                    value: noneText,
+                    accessibilityValue: noValuesReportedText,
+                    isTechnical: false
+                )
             )
             return
         }
@@ -262,57 +260,6 @@ struct NetworkSecurityDocumentBuilder {
         )
     }
 
-    private func plaintextStatus(
-        for scheme: NetworkSecuritySummary.PlaintextScheme
-    ) -> String {
-        switch scheme {
-        case .http:
-            localized(
-                "network.security.status.http",
-                defaultValue: "HTTP scheme reported; TLS does not apply."
-            )
-        case .ws:
-            localized(
-                "network.security.status.ws",
-                defaultValue: "WS scheme reported; TLS does not apply."
-            )
-        }
-    }
-
-    private func metadataStatus(
-        for scheme: NetworkSecuritySummary.EncryptedScheme,
-        metadata: NetworkSecuritySummary.Metadata
-    ) -> String {
-        switch metadata {
-        case .notReported:
-            switch scheme {
-            case .https:
-                localized(
-                    "network.security.status.https_not_reported",
-                    defaultValue: "HTTPS scheme reported; security metadata was not reported."
-                )
-            case .wss:
-                localized(
-                    "network.security.status.wss_not_reported",
-                    defaultValue: "WSS scheme reported; security metadata was not reported."
-                )
-            }
-        case .reported:
-            switch scheme {
-            case .https:
-                localized(
-                    "network.security.status.https_reported",
-                    defaultValue: "HTTPS scheme and security metadata reported."
-                )
-            case .wss:
-                localized(
-                    "network.security.status.wss_reported",
-                    defaultValue: "WSS scheme and security metadata reported."
-                )
-            }
-        }
-    }
-
     private func unavailableStatus(
         for reason: NetworkSecuritySummary.UnavailableReason
     ) -> String {
@@ -320,17 +267,17 @@ struct NetworkSecurityDocumentBuilder {
         case .failedBeforeResponse:
             localized(
                 "network.security.status.failed_before_response",
-                defaultValue: "The request failed before a response was reported."
+                defaultValue: "Request Failed"
             )
         case .canceledBeforeResponse:
             localized(
                 "network.security.status.canceled_before_response",
-                defaultValue: "The request was canceled before a response was reported."
+                defaultValue: "Request Canceled"
             )
         case .completedWithoutResponse:
             localized(
                 "network.security.status.completed_without_response",
-                defaultValue: "Loading completed without a reported response."
+                defaultValue: "No Response"
             )
         }
     }
@@ -371,20 +318,25 @@ struct NetworkSecurityDocumentBuilder {
 
     private func reportedScalar(_ value: String?) -> DisplayValue {
         guard let value else {
-            return DisplayValue(value: notReportedText, isTechnical: false)
+            return notReportedDisplay
         }
         guard value.isEmpty == false else {
-            return DisplayValue(value: emptyValueReportedText, isTechnical: false)
+            return DisplayValue(
+                value: emptyText,
+                accessibilityValue: emptyValueReportedText,
+                isTechnical: false
+            )
         }
-        return DisplayValue(value: value, isTechnical: true)
+        return DisplayValue(value: value, accessibilityValue: nil, isTechnical: true)
     }
 
     private func reportedDate(_ date: Date?) -> DisplayValue {
         guard let date else {
-            return DisplayValue(value: notReportedText, isTechnical: false)
+            return notReportedDisplay
         }
         return DisplayValue(
             value: date.formatted(date: .numeric, time: .complete),
+            accessibilityValue: nil,
             isTechnical: false
         )
     }
@@ -413,12 +365,12 @@ struct NetworkSecurityDocumentBuilder {
         case .dnsNames:
             localized(
                 "network.security.action.show_less_dns_names",
-                defaultValue: "Show Less DNS Names"
+                defaultValue: "Show Fewer DNS Names"
             )
         case .ipAddresses:
             localized(
                 "network.security.action.show_less_ip_addresses",
-                defaultValue: "Show Less IP Addresses"
+                defaultValue: "Show Fewer IP Addresses"
             )
         }
     }
@@ -436,7 +388,7 @@ struct NetworkSecurityDocumentBuilder {
     }
 
     private var securityMetadataLabel: String {
-        localized("network.security.field.security_metadata", defaultValue: "Security Metadata")
+        localized("network.security.field.metadata", defaultValue: "Metadata")
     }
 
     private var connectionMetadataLabel: String {
@@ -445,6 +397,10 @@ struct NetworkSecurityDocumentBuilder {
 
     private var tlsProtocolLabel: String {
         localized("network.security.field.tls_protocol", defaultValue: "TLS Protocol")
+    }
+
+    private var tlsLabel: String {
+        localized("network.security.field.tls", defaultValue: "TLS")
     }
 
     private var cipherLabel: String {
@@ -491,6 +447,22 @@ struct NetworkSecurityDocumentBuilder {
         localized("network.security.value.not_reported", defaultValue: "Not reported")
     }
 
+    private var notReportedDisplay: DisplayValue {
+        DisplayValue(
+            value: "-",
+            accessibilityValue: notReportedText,
+            isTechnical: false
+        )
+    }
+
+    private var emptyText: String {
+        localized("network.security.value.empty", defaultValue: "Empty")
+    }
+
+    private var noneText: String {
+        localized("network.security.value.none", defaultValue: "None")
+    }
+
     private var emptyValueReportedText: String {
         localized("network.security.value.empty_reported", defaultValue: "Empty value reported")
     }
@@ -500,11 +472,7 @@ struct NetworkSecurityDocumentBuilder {
     }
 
     private var pendingText: String {
-        localized("network.security.value.pending", defaultValue: "Response pending")
-    }
-
-    private var unavailableText: String {
-        localized("network.security.value.unavailable", defaultValue: "Unavailable")
+        localized("network.security.value.pending", defaultValue: "Waiting for Response")
     }
 
     private var notApplicableText: String {
@@ -513,8 +481,8 @@ struct NetworkSecurityDocumentBuilder {
 
     private var notClassifiedText: String {
         localized(
-            "network.security.status.not_classified",
-            defaultValue: "TLS applicability is not classified for this scheme."
+            "network.security.value.not_classified",
+            defaultValue: "Not Classified"
         )
     }
 
@@ -524,6 +492,7 @@ struct NetworkSecurityDocumentBuilder {
 
     private struct DisplayValue {
         let value: String
+        let accessibilityValue: String?
         let isTechnical: Bool
     }
 
@@ -536,50 +505,31 @@ struct NetworkSecurityDocumentBuilder {
             rowsByItemID: [:]
         )
 
-        mutating func appendStatus(value: String, scheme: String) {
-            append(section: .status, kind: .status, label: statusLabel, value: value)
+        mutating func appendScheme(_ scheme: String?) {
             append(
                 section: .status,
                 kind: .scheme,
                 label: schemeLabel,
-                value: scheme,
+                value: scheme ?? "-",
+                accessibilityLabel: scheme == nil
+                    ? [schemeLabel, notReportedText].joined(separator: ", ")
+                    : nil,
                 usesTechnicalValueDirection: true
             )
         }
 
-        mutating func appendMetadataNotReported() {
+        mutating func appendState(
+            section: NetworkSecuritySectionID,
+            kind: NetworkSecurityItemID.Kind,
+            accessibilityLabel: String,
+            value: String
+        ) {
             append(
-                section: .status,
-                kind: .securityMetadata,
-                label: securityMetadataLabel,
-                value: notReportedText
-            )
-            append(
-                section: .connection,
-                kind: .connectionMetadata,
-                label: connectionMetadataLabel,
-                value: notReportedText
-            )
-            append(
-                section: .certificate,
-                kind: .certificateMetadata,
-                label: certificateMetadataLabel,
-                value: notReportedText
-            )
-        }
-
-        mutating func appendUnavailableMetadata(value: String) {
-            append(
-                section: .connection,
-                kind: .connectionMetadata,
-                label: connectionMetadataLabel,
-                value: value
-            )
-            append(
-                section: .certificate,
-                kind: .certificateMetadata,
-                label: certificateMetadataLabel,
-                value: value
+                section: section,
+                kind: kind,
+                label: value,
+                value: nil,
+                accessibilityLabel: [accessibilityLabel, value].joined(separator: ", ")
             )
         }
 
@@ -594,6 +544,9 @@ struct NetworkSecurityDocumentBuilder {
                 kind: kind,
                 label: label,
                 value: display.value,
+                accessibilityLabel: display.accessibilityValue.map {
+                    [label, $0].joined(separator: ", ")
+                },
                 usesTechnicalValueDirection: display.isTechnical
             )
         }
@@ -602,7 +555,8 @@ struct NetworkSecurityDocumentBuilder {
             section: NetworkSecuritySectionID,
             kind: NetworkSecurityItemID.Kind,
             label: String,
-            value: String,
+            value: String?,
+            accessibilityLabel: String? = nil,
             usesTechnicalValueDirection: Bool = false
         ) {
             let itemID = NetworkSecurityItemID(epoch: epoch, kind: kind)
@@ -611,6 +565,7 @@ struct NetworkSecurityDocumentBuilder {
             document.rowsByItemID[itemID] = NetworkSecurityRowContent(
                 label: label,
                 value: value,
+                accessibilityLabel: accessibilityLabel,
                 usesTechnicalValueDirection: usesTechnicalValueDirection,
                 disclosureList: nil,
                 isExpanded: false
@@ -628,30 +583,15 @@ struct NetworkSecurityDocumentBuilder {
             document.rowsByItemID[itemID] = NetworkSecurityRowContent(
                 label: title,
                 value: nil,
+                accessibilityLabel: nil,
                 usesTechnicalValueDirection: false,
                 disclosureList: kind,
                 isExpanded: isExpanded
             )
         }
 
-        private var statusLabel: String {
-            localized("network.security.field.status", defaultValue: "Status")
-        }
-
         private var schemeLabel: String {
             localized("network.security.field.scheme", defaultValue: "Scheme")
-        }
-
-        private var securityMetadataLabel: String {
-            localized("network.security.field.security_metadata", defaultValue: "Security Metadata")
-        }
-
-        private var connectionMetadataLabel: String {
-            localized("network.security.field.connection_metadata", defaultValue: "Connection Metadata")
-        }
-
-        private var certificateMetadataLabel: String {
-            localized("network.security.field.certificate_metadata", defaultValue: "Certificate Metadata")
         }
 
         private var notReportedText: String {

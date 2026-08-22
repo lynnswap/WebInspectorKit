@@ -35,10 +35,62 @@ struct NetworkDetailViewControllerTests {
         #expect(viewController.collectionViewForTesting.isHidden)
         #expect(viewController.contentUnavailableConfiguration != nil)
         let configuration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
-        #expect(configuration?.text?.isEmpty == false)
+        #expect(
+            configuration?.text == String(
+                localized: "network.empty.none.title",
+                defaultValue: "None",
+                bundle: WebInspectorUILocalization.bundle
+            )
+        )
         #expect(configuration?.secondaryText == nil)
         #expect(configuration?.image == nil)
         #expect(configuration?.textProperties.color == .secondaryLabel)
+    }
+
+    @Test
+    func listDistinguishesNoMatchesFromNoRequests() async throws {
+        let context = makeContext()
+        _ = try #require(await applyRequest(
+            to: context,
+            requestID: "empty-state-search",
+            url: "https://example.com/app.js"
+        ))
+        let model = NetworkPanelModel(context: context)
+        let viewController = NetworkListViewController(model: model)
+        let window = showInWindow(viewController, makeVisible: true)
+        defer { window.isHidden = true }
+        await viewController.flushPendingSnapshotUpdateForTesting()
+
+        var transactionBaseline = viewController.fetchedResultsTransactionDeliveryCountForTesting
+        model.setSearchText("does-not-match")
+        #expect(await waitUntilListShows(
+            [],
+            in: viewController,
+            afterTransactionDeliveryCount: transactionBaseline
+        ))
+
+        let noResults = try #require(
+            viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
+        )
+        #expect(noResults.text == String(
+            localized: "network.no_results.title",
+            defaultValue: "No Results",
+            bundle: WebInspectorUILocalization.bundle
+        ))
+        #expect(noResults.secondaryText == nil)
+        #expect(noResults.image != nil)
+        #expect(viewController.collectionViewForTesting.isHidden)
+
+        transactionBaseline = viewController.fetchedResultsTransactionDeliveryCountForTesting
+        model.setSearchText("")
+        #expect(await waitUntilListShows(
+            [try #require(model.displayRequests.first?.id)],
+            in: viewController,
+            afterTransactionDeliveryCount: transactionBaseline
+        ))
+
+        #expect(viewController.contentUnavailableConfiguration == nil)
+        #expect(viewController.collectionViewForTesting.isHidden == false)
     }
 
     @Test
@@ -120,6 +172,31 @@ struct NetworkDetailViewControllerTests {
         viewController.resumeRendering()
 
         #expect(viewController.syntaxViewForTesting.backgroundColor == .clear)
+    }
+
+    @Test
+    func failedBodyRendersUnavailableMessageOnlyOnce() async throws {
+        let viewController = NetworkBodyViewController()
+        let body = NetworkBody(phase: .failed(.closed))
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+
+        viewController.setSurface(.body(body, metadata: nil))
+        viewController.resumeRendering()
+
+        let observation = try #require(viewController.bodyObservationDeliveryForTesting)
+        let renderedText = await observation.values {
+            viewController.syntaxViewForTesting.text
+        }
+        defer { renderedText.cancel() }
+
+        let unavailable = String(
+            localized: "network.body.unavailable",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        #expect(await renderedText.waitUntilValue(unavailable))
+        let text = try #require(renderedText.latestValue)
+        #expect(text.components(separatedBy: unavailable).count == 2)
     }
 
     @Test
@@ -323,7 +400,7 @@ struct NetworkDetailViewControllerTests {
                 && viewController.webSocketPreviewViewControllerForTesting.view.isHidden
                 && viewController.securityViewControllerForTesting.view.isHidden == false
                 && viewController.securityViewControllerForTesting.snapshotForTesting.sectionIdentifiers
-                    == NetworkSecuritySectionID.allCases
+                    == [.status]
         }
         #expect(didRenderSecurity)
         #expect(
@@ -406,7 +483,7 @@ struct NetworkDetailViewControllerTests {
                 })
                 && security.snapshotForTesting.itemIdentifiers.contains(where: {
                     $0.kind == .connectionMetadata
-                        && security.rowContentForTesting($0)?.value == String(
+                        && security.rowContentForTesting($0)?.label == String(
                             localized: "network.security.value.not_reported",
                             defaultValue: "Not reported",
                             bundle: WebInspectorUILocalization.bundle
@@ -811,21 +888,40 @@ struct NetworkDetailViewControllerTests {
         #expect(
             NetworkCookiesViewController.sectionTitleForTesting(.request)
                 == localized(
-                    "network.cookies.section.request",
-                    defaultValue: "Request Cookies"
+                    "network.section.request",
+                    defaultValue: "Request"
                 )
         )
         #expect(
             NetworkCookiesViewController.sectionTitleForTesting(.response)
                 == localized(
-                    "network.cookies.section.response",
-                    defaultValue: "Response Cookies"
+                    "network.section.response",
+                    defaultValue: "Response"
                 )
         )
+        let requestNotCaptured = viewController.messageContentForTesting(
+            .state(epoch: requestEpoch, section: .request, kind: .requestNotCaptured)
+        )
+        #expect(requestNotCaptured?.title == localized(
+            "network.cookies.request.not_captured",
+            defaultValue: "Not Captured"
+        ))
+        #expect(requestNotCaptured?.accessibilityLabel.contains(localized(
+            "network.cookies.section.request",
+            defaultValue: "Request Cookies"
+        )) == true)
         #expect(
             viewController.messageContentForTesting(
                 .state(epoch: requestEpoch, section: .response, kind: .responseLoading)
             )?.kind == .loading
+        )
+        #expect(
+            viewController.messageContentForTesting(
+                .state(epoch: requestEpoch, section: .response, kind: .responseLoading)
+            )?.title == localized(
+                "network.cookies.response.loading",
+                defaultValue: "Waiting"
+            )
         )
 
         await renderCookies(
@@ -841,6 +937,25 @@ struct NetworkDetailViewControllerTests {
         #expect(viewController.snapshotForTesting.itemIdentifiers(inSection: .response) == [
             .state(epoch: requestEpoch, section: .response, kind: .responseMissing)
         ])
+        let memoryCache = viewController.messageContentForTesting(
+            .state(epoch: requestEpoch, section: .request, kind: .requestMemoryCache)
+        )
+        #expect(memoryCache?.title == localized(
+            "network.cookies.request.not_captured",
+            defaultValue: "Not Captured"
+        ))
+        #expect(memoryCache?.detail == localized(
+            "network.cookies.request.memory_cache",
+            defaultValue: "Memory Cache"
+        ))
+        #expect(
+            viewController.messageContentForTesting(
+                .state(epoch: requestEpoch, section: .response, kind: .responseMissing)
+            )?.title == localized(
+                "network.cookies.response.missing",
+                defaultValue: "Not Received"
+            )
+        )
 
         await renderCookies(
             NetworkCookieSections(request: .empty, response: .empty),
@@ -852,17 +967,25 @@ struct NetworkDetailViewControllerTests {
         #expect(viewController.snapshotForTesting.itemIdentifiers(inSection: .response) == [
             .state(epoch: requestEpoch, section: .response, kind: .responseEmpty)
         ])
+        let none = localized("network.cookies.request.empty", defaultValue: "None")
+        #expect(viewController.messageContentForTesting(
+            .state(epoch: requestEpoch, section: .request, kind: .requestEmpty)
+        )?.title == none)
+        #expect(viewController.messageContentForTesting(
+            .state(epoch: requestEpoch, section: .response, kind: .responseEmpty)
+        )?.title == localized("network.cookies.response.empty", defaultValue: "None"))
     }
 
     @Test
     func cookiesListKeepsValidRowsWithPartialAndAmbiguousRawWarnings() async throws {
         let requestReport = try #require(NetworkCookieParser.parseRequestHeaders([
-            "Cookie": "z=3; broken; a=1; a=2"
+            "Cookie": "z=3; broken; also-broken; a=1; a=2"
         ]))
         let responseReport = try #require(NetworkCookieParser.parseResponseHeaders([
             "Set-Cookie": "first=1, second=2"
         ]))
         #expect(requestReport.status == .partial)
+        #expect(requestReport.diagnostics.count == 2)
         #expect(responseReport.status == .ambiguousCombined)
 
         let viewController = NetworkCookiesViewController()
@@ -912,7 +1035,7 @@ struct NetworkDetailViewControllerTests {
         #expect(
             viewController.messageContentForTesting(
                 .diagnostic(epoch: requestEpoch, section: .request, ordinal: 0)
-            )?.detail?.contains("broken") == true
+            )?.detail == " broken\n also-broken"
         )
         #expect(
             viewController.messageContentForTesting(
@@ -1078,6 +1201,37 @@ struct NetworkDetailViewControllerTests {
         cell.prepareForReuse()
         #expect(cell.renderedFieldsForTesting.isEmpty)
         #expect(cell.accessibilityLabel == nil)
+    }
+
+    @Test
+    func responseCookieUsesDashForUnsetAttributesAndDescriptiveAccessibility() async throws {
+        let report = try #require(NetworkCookieParser.parseResponseHeaders([
+            "Set-Cookie": "session=abc"
+        ]))
+        let viewController = NetworkCookiesViewController()
+        let requestEpoch = NetworkCookiesViewController.RequestEpoch.testing(viewController)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        await renderCookies(
+            NetworkCookieSections(request: .empty, response: .values(report)),
+            in: viewController
+        )
+        let content = try #require(
+            viewController.cookieContentForTesting(.responseCookie(
+                epoch: requestEpoch,
+                key: .init(name: "session", duplicateOccurrence: 0)
+            ))
+        )
+        let domainLabel = localized("network.cookies.field.domain", defaultValue: "Domain")
+        let domain = try #require(content.fields.first { $0.label == domainLabel })
+        let notSet = localized("network.cookies.value.not_set", defaultValue: "Not Set")
+        #expect(domain.value == "-")
+        #expect(domain.accessibilityValue == notSet)
+
+        let cell = NetworkCookieCell(frame: .zero)
+        cell.bind(content)
+        #expect(cell.accessibilityLabel?.contains("\(domainLabel), \(notSet)") == true)
+        #expect(cell.accessibilityLabel?.contains("\(domainLabel), -") == false)
     }
 
     @Test
@@ -1412,6 +1566,11 @@ struct NetworkDetailViewControllerTests {
             defaultValue: "Text Frame",
             bundle: WebInspectorUILocalization.bundle
         )
+        let binaryFrame = String(
+            localized: "network.websocket.frame.binary",
+            defaultValue: "Binary Frame",
+            bundle: WebInspectorUILocalization.bundle
+        )
         let copy = String(
             localized: "Copy",
             defaultValue: "Copy",
@@ -1419,7 +1578,7 @@ struct NetworkDetailViewControllerTests {
         )
         let handshakeResponse = String(
             localized: "network.websocket.handshake.response",
-            defaultValue: "WebSocket Handshake Response",
+            defaultValue: "Handshake Response",
             bundle: WebInspectorUILocalization.bundle
         )
         #expect(contents[0].title == handshakeResponse)
@@ -1439,8 +1598,12 @@ struct NetworkDetailViewControllerTests {
         #expect(contents[3].style == .received)
         #expect(contents[3].symbolName == "arrow.down")
         #expect(contents[3].title.contains(13.formatted()))
+        #expect(contents[3].title.contains(binaryFrame) == false)
+        #expect(contents[3].subtitle.contains(binaryFrame))
+        #expect(contents[3].accessibilityLabel.contains(binaryFrame))
+        #expect(contents[3].accessibilityValue.contains(binaryFrame) == false)
         #expect(viewController.contextMenuConfigurationForTesting(itemIDs[3]) == nil)
-        #expect(contents[8].title.contains("15"))
+        #expect(contents[8].subtitle.contains("15"))
         #expect(contents[9].style == .error)
         #expect(contents[9].title == "decode failed")
         #expect(contents[10].style == .lifecycle)
@@ -1627,12 +1790,12 @@ struct NetworkDetailViewControllerTests {
         }
         let rejectionTitle = String(
             localized: "network.websocket.handshake.rejected",
-            defaultValue: "WebSocket Handshake Rejected",
+            defaultValue: "Handshake Rejected",
             bundle: WebInspectorUILocalization.bundle
         )
         let establishedTitle = String(
             localized: "network.websocket.connection.established",
-            defaultValue: "WebSocket Connection Established",
+            defaultValue: "Connection Established",
             bundle: WebInspectorUILocalization.bundle
         )
         #expect(contents[0].title == rejectionTitle)
@@ -1649,12 +1812,12 @@ struct NetworkDetailViewControllerTests {
     func webSocketPreviewKeepsQuietAndUnreportedHandshakeResponsesNeutral() async throws {
         let handshakeTitle = String(
             localized: "network.websocket.handshake.response",
-            defaultValue: "WebSocket Handshake Response",
+            defaultValue: "Handshake Response",
             bundle: WebInspectorUILocalization.bundle
         )
         let establishedTitle = String(
             localized: "network.websocket.connection.established",
-            defaultValue: "WebSocket Connection Established",
+            defaultValue: "Connection Established",
             bundle: WebInspectorUILocalization.bundle
         )
         let statusNotReported = String(
@@ -2601,7 +2764,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func previewRequestWithoutBodyReplacesPreviousBodyWithUnavailablePlaceholder() async throws {
+    func previewRequestWithoutBodyReplacesPreviousBodyWithEmptyPlaceholder() async throws {
         let context = makeContext()
         let bodyRequest = try #require(
             await applyRequestWithoutResponse(
@@ -2635,11 +2798,15 @@ struct NetworkDetailViewControllerTests {
 
         model.selectRequest(emptyRequest)
 
-        let unavailableText = String(localized: "network.body.unavailable", bundle: WebInspectorUILocalization.bundle)
+        let emptyText = String(
+            localized: "network.body.empty",
+            defaultValue: "No Body",
+            bundle: WebInspectorUILocalization.bundle
+        )
         let didReplaceBody = await waitUntilRendered(in: viewController) {
             viewController.previewViewForTesting.isHidden == false
                 && viewController.isPreviewRoleControlHiddenForTesting
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == unavailableText
+                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == emptyText
         }
         #expect(didReplaceBody)
         #expect(viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text.contains("Jane") == false)
@@ -2782,12 +2949,16 @@ struct NetworkDetailViewControllerTests {
 
         viewController.setModeForTesting(.preview)
 
-        let unavailableText = String(localized: "network.body.unavailable", bundle: WebInspectorUILocalization.bundle)
+        let emptyText = String(
+            localized: "network.body.empty",
+            defaultValue: "No Body",
+            bundle: WebInspectorUILocalization.bundle
+        )
         let didRenderPlaceholder = await waitUntilRendered(in: viewController) {
             viewController.currentModeForTesting == .preview
                 && viewController.previewViewForTesting.isHidden == false
                 && viewController.isPreviewRoleControlHiddenForTesting
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == unavailableText
+                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == emptyText
         }
         #expect(didRenderPlaceholder)
     }
@@ -4879,7 +5050,7 @@ struct NetworkDetailViewControllerTests {
         )
         let unparsedContentTypeParameterLabel = String(
             localized: "network.headers.request_data.content_type_parameter_unparsed",
-            defaultValue: "Unparsed Content-Type Parameter",
+            defaultValue: "Unparsed Content-Type Parameters",
             bundle: WebInspectorUILocalization.bundle
         )
 
@@ -4901,8 +5072,8 @@ struct NetworkDetailViewControllerTests {
         #expect(
             (headers.renderedTextForTesting as NSString).substring(with: tagRange)
                 == String(
-                    localized: "network.headers.request_data.view_preview",
-                    defaultValue: "View Request Preview",
+                    localized: "network.headers.request_data.view_preview.inline",
+                    defaultValue: "View Preview",
                     bundle: WebInspectorUILocalization.bundle
                 )
         )
@@ -5315,13 +5486,12 @@ struct NetworkDetailViewControllerTests {
 
         #expect(
             await waitUntilRendered(in: viewController) {
-                model.selectedRequest === replacement
-                    && viewController.headersTextViewForTesting.renderedTextForTesting
-                        .contains("https://example.com/replacement")
-                    && viewController.headersTextViewForTesting.renderedTextForTesting
-                        .contains("\(ambiguousContentTypeLabel): application/json")
-                    && viewController.headersTextViewForTesting.renderedTextForTesting
-                        .contains("\(ambiguousContentTypeLabel): text/plain")
+                let text = viewController.headersTextViewForTesting.renderedTextForTesting
+                return model.selectedRequest === replacement
+                    && text.contains("https://example.com/replacement")
+                    && text.contains("application/json")
+                    && text.contains("text/plain")
+                    && text.components(separatedBy: ambiguousContentTypeLabel).count == 2
                     && viewController.headersTextViewForTesting.requestPreviewTagRangesForTesting.count == 1
             })
 
@@ -6460,7 +6630,7 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(context: context)
         let target = NetworkPanelListProjection(
             version: NetworkPanelListVersion(revision: 41, entryIdentityGeneration: 0),
-            entryIDs: model.displayEntryIDs
+            content: .entries(model.displayEntryIDs)
         )
         let input = makeNetworkListSnapshotBuildInput(target: target)
         let builderFactory = NetworkListSnapshotBuilderFactory()
@@ -6493,7 +6663,7 @@ struct NetworkDetailViewControllerTests {
         }
         let target = NetworkPanelListProjection(
             version: NetworkPanelListVersion(revision: 42, entryIdentityGeneration: 0),
-            entryIDs: NetworkPanelModel(context: context).displayEntryIDs
+            content: .entries(NetworkPanelModel(context: context).displayEntryIDs)
         )
         let input = makeNetworkListSnapshotBuildInput(target: target)
         let builder = NetworkListSnapshotBuilderFactory().makeBuilder()
@@ -6639,7 +6809,7 @@ struct NetworkDetailViewControllerTests {
             baseline: baseline,
             target: NetworkPanelListProjection(
                 version: NetworkPanelListVersion(revision: 8, entryIdentityGeneration: 1),
-                entryIDs: entryIDs
+                content: .entries(entryIDs)
             )
         )
 
@@ -6688,7 +6858,7 @@ struct NetworkDetailViewControllerTests {
         let artifact = try await NetworkListSnapshotBuilder().build(
             makeNetworkListSnapshotBuildInput(
                 baseline: baseline,
-                target: NetworkPanelListProjection(version: version, entryIDs: entryIDs)
+                target: NetworkPanelListProjection(version: version, content: .entries(entryIDs))
             )
         )
 
@@ -6731,7 +6901,7 @@ struct NetworkDetailViewControllerTests {
                 baseline: originalBaseline,
                 target: NetworkPanelListProjection(
                     version: version2,
-                    entryIDs: baselineEntryIDs
+                    content: .entries(baselineEntryIDs)
                 )
             )
         )
@@ -6748,7 +6918,7 @@ struct NetworkDetailViewControllerTests {
                 baseline: originalBaseline,
                 target: NetworkPanelListProjection(
                     version: version3,
-                    entryIDs: allEntryIDs
+                    content: .entries(allEntryIDs)
                 )
             )
         )
@@ -6764,7 +6934,7 @@ struct NetworkDetailViewControllerTests {
                 baseline: state.submittedBaseline,
                 target: NetworkPanelListProjection(
                     version: version3,
-                    entryIDs: allEntryIDs
+                    content: .entries(allEntryIDs)
                 )
             )
         )
@@ -6808,7 +6978,7 @@ struct NetworkDetailViewControllerTests {
                 baseline: baseline,
                 target: NetworkPanelListProjection(
                     version: version2,
-                    entryIDs: allEntryIDs
+                    content: .entries(allEntryIDs)
                 )
             )
         )
@@ -6817,7 +6987,7 @@ struct NetworkDetailViewControllerTests {
                 baseline: baseline,
                 target: NetworkPanelListProjection(
                     version: version1,
-                    entryIDs: baselineEntryIDs
+                    content: .entries(baselineEntryIDs)
                 )
             )
         )
@@ -6861,7 +7031,7 @@ struct NetworkDetailViewControllerTests {
         let firstArtifact = try await NetworkListSnapshotBuilder().build(
             makeNetworkListSnapshotBuildInput(
                 baseline: baseline,
-                target: NetworkPanelListProjection(version: version2, entryIDs: entryIDs)
+                target: NetworkPanelListProjection(version: version2, content: .entries(entryIDs))
             )
         )
         let firstReceiveResult = state.receive(firstArtifact, currentVersion: version2)
@@ -6876,7 +7046,7 @@ struct NetworkDetailViewControllerTests {
         let secondArtifact = try await NetworkListSnapshotBuilder().build(
             makeNetworkListSnapshotBuildInput(
                 baseline: state.submittedBaseline,
-                target: NetworkPanelListProjection(version: version3, entryIDs: entryIDs)
+                target: NetworkPanelListProjection(version: version3, content: .entries(entryIDs))
             )
         )
         let secondReceiveResult = state.receive(secondArtifact, currentVersion: version3)
@@ -6905,7 +7075,7 @@ struct NetworkDetailViewControllerTests {
         let cleanArtifact = try await NetworkListSnapshotBuilder().build(
             makeNetworkListSnapshotBuildInput(
                 baseline: state.submittedBaseline,
-                target: NetworkPanelListProjection(version: version3, entryIDs: entryIDs)
+                target: NetworkPanelListProjection(version: version3, content: .entries(entryIDs))
             )
         )
         #expect(cleanArtifact.changeCounts.requiresApply == false)
@@ -6942,13 +7112,13 @@ struct NetworkDetailViewControllerTests {
         let readyArtifact = try await NetworkListSnapshotBuilder().build(
             makeNetworkListSnapshotBuildInput(
                 baseline: baseline,
-                target: NetworkPanelListProjection(version: version2, entryIDs: allEntryIDs)
+                target: NetworkPanelListProjection(version: version2, content: .entries(allEntryIDs))
             )
         )
         let noOpArtifact = try await NetworkListSnapshotBuilder().build(
             makeNetworkListSnapshotBuildInput(
                 baseline: baseline,
-                target: NetworkPanelListProjection(version: version3, entryIDs: baselineEntryIDs)
+                target: NetworkPanelListProjection(version: version3, content: .entries(baselineEntryIDs))
             )
         )
 
@@ -6962,7 +7132,7 @@ struct NetworkDetailViewControllerTests {
         let applyingArtifact = try await NetworkListSnapshotBuilder().build(
             makeNetworkListSnapshotBuildInput(
                 baseline: state.submittedBaseline,
-                target: NetworkPanelListProjection(version: version4, entryIDs: allEntryIDs)
+                target: NetworkPanelListProjection(version: version4, content: .entries(allEntryIDs))
             )
         )
         let applyingResult = state.receive(applyingArtifact, currentVersion: version4)
@@ -6976,7 +7146,7 @@ struct NetworkDetailViewControllerTests {
                 baseline: state.submittedBaseline,
                 target: NetworkPanelListProjection(
                     version: version5,
-                    entryIDs: baselineEntryIDs
+                    content: .entries(baselineEntryIDs)
                 )
             )
         )
@@ -7026,7 +7196,7 @@ struct NetworkDetailViewControllerTests {
                 baseline: baseline,
                 target: NetworkPanelListProjection(
                     version: version2,
-                    entryIDs: applyingEntryIDs
+                    content: .entries(applyingEntryIDs)
                 )
             )
         )
@@ -7044,7 +7214,7 @@ struct NetworkDetailViewControllerTests {
         let queuedArtifact = try await NetworkListSnapshotBuilder().build(
             makeNetworkListSnapshotBuildInput(
                 baseline: state.submittedBaseline,
-                target: NetworkPanelListProjection(version: version3, entryIDs: allEntryIDs)
+                target: NetworkPanelListProjection(version: version3, content: .entries(allEntryIDs))
             )
         )
         let noOpArtifact = try await NetworkListSnapshotBuilder().build(
@@ -7052,7 +7222,7 @@ struct NetworkDetailViewControllerTests {
                 baseline: state.submittedBaseline,
                 target: NetworkPanelListProjection(
                     version: version4,
-                    entryIDs: applyingEntryIDs
+                    content: .entries(applyingEntryIDs)
                 )
             )
         )
@@ -7185,7 +7355,7 @@ struct NetworkDetailViewControllerTests {
             baseline: baseline,
             target: NetworkPanelListProjection(
                 version: NetworkPanelListVersion(revision: 12, entryIdentityGeneration: 0),
-                entryIDs: targetEntryIDs
+                content: .entries(targetEntryIDs)
             )
         )
 
@@ -7218,7 +7388,7 @@ struct NetworkDetailViewControllerTests {
         }
         let target = NetworkPanelListProjection(
             version: NetworkPanelListVersion(revision: 13, entryIdentityGeneration: 0),
-            entryIDs: NetworkPanelModel(context: context).displayEntryIDs
+            content: .entries(NetworkPanelModel(context: context).displayEntryIDs)
         )
         let input = makeNetworkListSnapshotBuildInput(target: target)
         let gate = NetworkListBuilderStartGate()

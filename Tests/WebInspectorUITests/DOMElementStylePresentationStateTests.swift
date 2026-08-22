@@ -81,7 +81,7 @@ struct DOMElementStyleSnapshotCoordinatorTests {
     }
 
     @Test
-    func coordinatorKeepsDisplayedRowsWhileSelectionHydratesThenReloadsLoadedReplacement() throws {
+    func coordinatorClearsPreviousSelectionWhileReplacementHydrates() throws {
         let coordinator = DOMElementStyleSnapshotCoordinator()
         let bodyStyles = makeStyles(nodeID: "node-body")
         load(bodyStyles, with: makeFlatMatchedStyles())
@@ -93,10 +93,10 @@ struct DOMElementStyleSnapshotCoordinatorTests {
         let loadingUpdate = coordinator.updateSelectedNodeStyles(inputStyles)
 
         #expect(inputStyles.phase == .loading)
-        #expect(loadingUpdate.applyMode == .none)
-        #expect(loadingUpdate.snapshot == nil)
-        #expect(loadingUpdate.placeholderMode == .none)
-        #expect(coordinator.visibleSectionIDs.isEmpty == false)
+        #expect(loadingUpdate.applyMode == .diff(animated: false))
+        #expect(try #require(loadingUpdate.snapshot).itemIdentifiers.isEmpty)
+        #expect(loadingUpdate.placeholderMode == .loading)
+        #expect(coordinator.visibleSectionIDs.isEmpty)
 
         load(
             inputStyles,
@@ -109,8 +109,31 @@ struct DOMElementStyleSnapshotCoordinatorTests {
         )
         let loadedUpdate = coordinator.updateSelectedNodeStyles(inputStyles)
 
-        #expect(loadedUpdate.applyMode == .reloadData)
+        #expect(loadedUpdate.applyMode == .diff(animated: false))
         #expect(loadedUpdate.placeholderMode == .none)
+    }
+
+    @Test
+    func coordinatorDistinguishesNoSelectionLoadingUnavailableAndFailed() {
+        let coordinator = DOMElementStyleSnapshotCoordinator()
+
+        #expect(coordinator.updateNoSelection().placeholderMode == .noSelection)
+
+        let loadingStyles = makeStyles(nodeID: "loading")
+        #expect(
+            coordinator.updateSelectedNodeStyles(loadingStyles).placeholderMode == .loading
+        )
+
+        loadingStyles.markUnavailable()
+        #expect(
+            coordinator.updateSelectedNodeStyles(loadingStyles).placeholderMode == .unavailable
+        )
+
+        let failedStyles = makeStyles(nodeID: "failed")
+        failedStyles.fail(.closed)
+        #expect(
+            coordinator.updateSelectedNodeStyles(failedStyles).placeholderMode == .failed
+        )
     }
 
     @Test

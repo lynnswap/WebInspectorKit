@@ -19,36 +19,37 @@ struct NetworkSecurityViewControllerTests {
         defer { window.isHidden = true }
 
         await render(.plaintextScheme(.http), epoch: epoch, in: viewController)
-        #expect(
-            viewController.snapshotForTesting.sectionIdentifiers
-                == NetworkSecuritySectionID.allCases
-        )
+        #expect(viewController.snapshotForTesting.sectionIdentifiers == [.status])
         #expect(row(.scheme, in: viewController)?.value == "HTTP")
-        #expect(
-            row(.status, in: viewController)?.value
-                == localized(
-                    "network.security.status.http",
-                    defaultValue: "HTTP scheme reported; TLS does not apply."
-                )
-        )
-        #expect(
-            row(.connectionMetadata, in: viewController)?.value
-                == localized("network.security.value.not_applicable", defaultValue: "Not applicable")
-        )
+        #expect(row(.status, in: viewController)?.label == localized(
+            "network.security.field.tls",
+            defaultValue: "TLS"
+        ))
+        #expect(row(.status, in: viewController)?.value == localized(
+            "network.security.value.not_applicable",
+            defaultValue: "Not applicable"
+        ))
 
         await render(.pending(.wss), epoch: epoch, in: viewController)
+        #expect(viewController.snapshotForTesting.sectionIdentifiers == [.status])
         #expect(row(.scheme, in: viewController)?.value == "WSS")
-        #expect(
-            row(.status, in: viewController)?.value
-                == localized("network.security.value.pending", defaultValue: "Response pending")
-        )
+        #expect(row(.status, in: viewController)?.label == localized(
+            "network.security.value.pending",
+            defaultValue: "Waiting for Response"
+        ))
+        #expect(row(.status, in: viewController)?.value == nil)
 
         await render(
             .encryptedScheme(.https, metadata: .notReported),
             epoch: epoch,
             in: viewController
         )
+        #expect(viewController.snapshotForTesting.sectionIdentifiers == [.status])
         #expect(row(.scheme, in: viewController)?.value == "HTTPS")
+        #expect(row(.securityMetadata, in: viewController)?.label == localized(
+            "network.security.field.metadata",
+            defaultValue: "Metadata"
+        ))
         #expect(
             row(.securityMetadata, in: viewController)?.value
                 == localized("network.security.value.not_reported", defaultValue: "Not reported")
@@ -59,13 +60,26 @@ struct NetworkSecurityViewControllerTests {
             epoch: epoch,
             in: viewController
         )
+        #expect(viewController.snapshotForTesting.sectionIdentifiers == [.status])
+        #expect(row(.status, in: viewController)?.label == localized(
+            "network.security.status.canceled_before_response",
+            defaultValue: "Request Canceled"
+        ))
+        #expect(row(.status, in: viewController)?.value == nil)
         #expect(row(.reason, in: viewController)?.value == "cancelled raw")
         #expect(row(.reason, in: viewController)?.usesTechnicalValueDirection == true)
 
         await render(.notApplicable(scheme: "Custom+Scheme"), epoch: epoch, in: viewController)
         #expect(row(.scheme, in: viewController)?.value == "Custom+Scheme")
-        let visibleText = viewController.snapshotForTesting.itemIdentifiers.compactMap {
-            viewController.rowContentForTesting($0)?.value
+        #expect(row(.status, in: viewController)?.value == localized(
+            "network.security.value.not_classified",
+            defaultValue: "Not Classified"
+        ))
+        let visibleText = viewController.snapshotForTesting.itemIdentifiers.flatMap { itemID -> [String] in
+            guard let row = viewController.rowContentForTesting(itemID) else {
+                return []
+            }
+            return [row.label, row.value].compactMap { $0 }
         }.joined(separator: "\n").lowercased()
         for verdict in ["trusted", "valid certificate", "hostname matched", "expired", "secure connection"] {
             #expect(visibleText.contains(verdict) == false)
@@ -83,7 +97,16 @@ struct NetworkSecurityViewControllerTests {
         defer { window.isHidden = true }
 
         await render(
-            .pending(.https),
+            .encryptedScheme(
+                .https,
+                metadata: .reported(Network.Security(
+                    connection: Network.Security.Connection(),
+                    certificate: Network.Security.Certificate(
+                        dnsNames: [],
+                        ipAddresses: []
+                    )
+                ))
+            ),
             epoch: NetworkSecurityRequestEpoch(request: request),
             in: viewController
         )
@@ -121,14 +144,8 @@ struct NetworkSecurityViewControllerTests {
             defaultValue: "Not reported"
         )
         let reported = localized("network.security.value.reported", defaultValue: "Reported")
-        let empty = localized(
-            "network.security.value.empty_reported",
-            defaultValue: "Empty value reported"
-        )
-        let noValues = localized(
-            "network.security.value.no_values_reported",
-            defaultValue: "No values reported"
-        )
+        let empty = localized("network.security.value.empty", defaultValue: "Empty")
+        let none = localized("network.security.value.none", defaultValue: "None")
 
         await render(
             .encryptedScheme(.https, metadata: .reported(Network.Security())),
@@ -136,8 +153,10 @@ struct NetworkSecurityViewControllerTests {
             in: viewController
         )
         #expect(row(.securityMetadata, in: viewController)?.value == reported)
-        #expect(row(.connectionMetadata, in: viewController)?.value == notReported)
-        #expect(row(.certificateMetadata, in: viewController)?.value == notReported)
+        #expect(row(.connectionMetadata, in: viewController)?.label == notReported)
+        #expect(row(.connectionMetadata, in: viewController)?.value == nil)
+        #expect(row(.certificateMetadata, in: viewController)?.label == notReported)
+        #expect(row(.certificateMetadata, in: viewController)?.value == nil)
         #expect(row(.tlsProtocol, in: viewController) == nil)
 
         let security = Network.Security(
@@ -153,13 +172,15 @@ struct NetworkSecurityViewControllerTests {
             epoch: epoch,
             in: viewController
         )
-        #expect(row(.connectionMetadata, in: viewController)?.value == reported)
-        #expect(row(.tlsProtocol, in: viewController)?.value == notReported)
-        #expect(row(.cipher, in: viewController)?.value == notReported)
-        #expect(row(.certificateMetadata, in: viewController)?.value == reported)
+        #expect(row(.connectionMetadata, in: viewController) == nil)
+        #expect(row(.tlsProtocol, in: viewController)?.value == "-")
+        #expect(row(.tlsProtocol, in: viewController)?.accessibilityLabel?.contains(notReported) == true)
+        #expect(row(.cipher, in: viewController)?.value == "-")
+        #expect(row(.certificateMetadata, in: viewController) == nil)
         #expect(row(.subject, in: viewController)?.value == empty)
-        #expect(row(.dnsState, in: viewController)?.value == notReported)
-        #expect(row(.ipAddressState, in: viewController)?.value == noValues)
+        #expect(row(.dnsState, in: viewController)?.value == "-")
+        #expect(row(.dnsState, in: viewController)?.accessibilityLabel?.contains(notReported) == true)
+        #expect(row(.ipAddressState, in: viewController)?.value == none)
     }
 
     @Test
@@ -199,8 +220,8 @@ struct NetworkSecurityViewControllerTests {
         #expect(
             row(.dnsName(3), in: viewController)?.value
                 == localized(
-                    "network.security.value.empty_reported",
-                    defaultValue: "Empty value reported"
+                    "network.security.value.empty",
+                    defaultValue: "Empty"
                 )
         )
         let dnsDisclosureID = try #require(itemID(.disclosure(.dnsNames), in: viewController))
@@ -280,7 +301,7 @@ struct NetworkSecurityViewControllerTests {
             viewController.rowContentForTesting(dnsDisclosureID)?.label
                 == localized(
                     "network.security.action.show_less_dns_names",
-                    defaultValue: "Show Less DNS Names"
+                    defaultValue: "Show Fewer DNS Names"
                 )
         )
         let expandedDisclosureCell = try #require(visibleCell(dnsDisclosureID, in: viewController))
@@ -305,7 +326,7 @@ struct NetworkSecurityViewControllerTests {
             viewController.rowContentForTesting(ipDisclosureID)?.label
                 == localized(
                     "network.security.action.show_less_ip_addresses",
-                    defaultValue: "Show Less IP Addresses"
+                    defaultValue: "Show Fewer IP Addresses"
                 )
         )
 
