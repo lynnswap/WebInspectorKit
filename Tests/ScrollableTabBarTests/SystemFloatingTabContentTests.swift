@@ -32,6 +32,8 @@ struct SystemFloatingTabContentTests {
         #expect(content.tabs.map(\.title) == ["Headers", "Preview", "Cookie", "Security"])
         #expect(content.tabs[0].accessibilityIdentifier == "ScrollableTabBar.Test.0")
         #expect(content.tabController.selectedTab === content.tabs[0])
+        #expect(content.floatingView.accessibilityContainerType == .semanticGroup)
+        #expect(content.floatingView.accessibilityLabel == "Detail Mode")
         #expect(content.collectionView.contentSize.width > content.collectionView.bounds.width)
         #expect(
             descendants(of: content.floatingView.floatingTabBar).count {

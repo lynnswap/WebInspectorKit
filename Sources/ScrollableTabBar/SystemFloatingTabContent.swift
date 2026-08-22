@@ -199,6 +199,9 @@ final class SystemFloatingTabView: UIView {
         super.init(frame: .zero)
 
         isAccessibilityElement = false
+        // Preserve UIKit's individual tab elements while exposing the control's
+        // contextual label once when assistive technology enters the group.
+        accessibilityContainerType = .semanticGroup
         addSubview(floatingTabBar)
     }
 
