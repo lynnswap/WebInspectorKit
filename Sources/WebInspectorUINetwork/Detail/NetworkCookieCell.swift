@@ -4,11 +4,18 @@ import UIKit
 package struct NetworkCookieFieldContent: Hashable, Sendable {
     package let label: String
     package let value: String
+    package let accessibilityValue: String?
     package let isFullWidth: Bool
 
-    package init(label: String, value: String, isFullWidth: Bool = false) {
+    package init(
+        label: String,
+        value: String,
+        accessibilityValue: String? = nil,
+        isFullWidth: Bool = false
+    ) {
         self.label = label
         self.value = value
+        self.accessibilityValue = accessibilityValue
         self.isFullWidth = isFullWidth
     }
 }
@@ -178,7 +185,7 @@ package final class NetworkCookieCell: UICollectionViewListCell {
 
     private func renderAccessibility(_ content: NetworkCookieRowContent) {
         accessibilityLabel = content.fields
-            .map { "\($0.label), \($0.value)" }
+            .map { "\($0.label), \($0.accessibilityValue ?? $0.value)" }
             .joined(separator: ", ")
         accessibilityValue = nil
     }

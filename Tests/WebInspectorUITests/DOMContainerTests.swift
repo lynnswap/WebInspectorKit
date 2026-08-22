@@ -13,7 +13,7 @@ extension WebInspectorUIRenderingTests {
 @Suite
 struct DOMContainerTests {
     @Test
-    func elementViewControllerShowsUnavailableStateWithoutSelectedStyles() {
+    func elementViewControllerShowsNoSelectionStateWithoutSelectedNode() {
         let context = makeElementContext()
         let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
@@ -22,8 +22,13 @@ struct DOMContainerTests {
         #expect(viewController.view.backgroundColor == .systemBackground)
         #expect(viewController.contentUnavailableConfiguration != nil)
         let configuration = viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration
-        #expect(configuration?.text?.isEmpty == false)
+        #expect(configuration?.text == String(
+            localized: "dom.element.styles.no_selection.title",
+            defaultValue: "No Selection",
+            bundle: WebInspectorUILocalization.bundle
+        ))
         #expect(configuration?.textProperties.color == .secondaryLabel)
+        #expect(viewController.placeholderModeForTesting == .noSelection)
         #expect(viewController.collectionView.isHidden == false)
         #expect(viewController.collectionView.numberOfSections == 0)
     }
@@ -45,7 +50,7 @@ struct DOMContainerTests {
     }
 
     @Test
-    func elementViewControllerKeepsUnavailableStateWhenDocumentRootArrivesWithoutSelection() async throws {
+    func elementViewControllerKeepsNoSelectionStateWhenDocumentRootArrives() async throws {
         let context = makeWebInspectorContext()
         let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
@@ -58,7 +63,7 @@ struct DOMContainerTests {
         context.seedDOMDocument(documentNode())
 
         let didKeepUnavailableState = await waitUntilRendered(in: viewController) {
-            viewController.contentUnavailableConfiguration != nil
+            viewController.placeholderModeForTesting == .noSelection
                 && viewController.collectionView.isHidden == false
                 && viewController.collectionView.numberOfSections == 0
         }
@@ -307,7 +312,7 @@ struct DOMContainerTests {
     }
 
     @Test
-    func elementViewControllerKeepsCurrentRowsWhileNewSelectionStylesAreHydrating() async throws {
+    func elementViewControllerClearsPreviousRowsWhileNewSelectionStylesAreHydrating() async throws {
         let context = makeElementContext()
         _ = try selectElement(named: "body", in: context)
         applyBodyStyles(to: context)
@@ -341,15 +346,18 @@ struct DOMContainerTests {
 
         #expect(body !== input)
         #expect(inputStyles.phase == .loading)
-        let didKeepBodyRowsWhileInputLoads = await waitUntilRendered(in: viewController) {
-            viewController.contentUnavailableConfiguration == nil
+        let didShowLoadingWithoutBodyRows = await waitUntilRendered(in: viewController) {
+            viewController.placeholderModeForTesting == .loading
+                && (viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration)?.text
+                    == String(
+                        localized: "dom.element.styles.loading.title",
+                        defaultValue: "Loading",
+                        bundle: WebInspectorUILocalization.bundle
+                    )
                 && viewController.collectionView.isHidden == false
-                && viewController.collectionView.numberOfSections == 1
-                && stylePropertyViews(in: viewController)
-                    .map(\.declarationTextForTesting)
-                    .contains("margin: 0;")
+                && viewController.collectionView.numberOfSections == 0
         }
-        #expect(didKeepBodyRowsWhileInputLoads)
+        #expect(didShowLoadingWithoutBodyRows)
 
         applyBodyStyles(
             to: context,
@@ -366,7 +374,7 @@ struct DOMContainerTests {
 
         #expect(didRenderInputRows)
         #expect(viewController.collectionView.isHidden == false)
-        #expect(viewController.lastSnapshotApplyModeForTesting == .reloadData)
+        #expect(viewController.lastSnapshotApplyModeForTesting == .diff(animated: false))
     }
 
     @Test
@@ -377,15 +385,29 @@ struct DOMContainerTests {
         defer { window.isHidden = true }
 
         let body = try selectElement(named: "body", in: context)
-        #expect(body.elementStyles?.phase == .loading)
+        let styles = try #require(body.elementStyles)
+        // Preview contexts have no live page, so their synthetic refresh
+        // otherwise advances immediately from loading to unavailable.
+        styles.markLoading()
+        #expect(styles.phase == .loading)
 
         let didRenderPlaceholder = await waitUntilRendered(in: viewController) {
-            viewController.contentUnavailableConfiguration != nil
+            viewController.placeholderModeForTesting == .loading
+                && viewController.contentUnavailableConfiguration != nil
                 && viewController.collectionView.isHidden == false
                 && viewController.collectionView.numberOfSections == 0
         }
 
         #expect(didRenderPlaceholder)
+        #expect(viewController.placeholderModeForTesting == .loading)
+        #expect(
+            (viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration)?.text
+                == String(
+                    localized: "dom.element.styles.loading.title",
+                    defaultValue: "Loading",
+                    bundle: WebInspectorUILocalization.bundle
+                )
+        )
     }
 
     @Test
@@ -407,12 +429,11 @@ struct DOMContainerTests {
 
         let input = try selectElement(named: "input", in: context)
         #expect(input.elementStyles?.phase == .loading)
-        #expect(stylePropertyViews(in: viewController).map(\.declarationTextForTesting).contains("margin: 0;"))
 
         context.select(nil)
 
         let didClearRows = await waitUntilRendered(in: viewController) {
-            viewController.contentUnavailableConfiguration != nil
+            viewController.placeholderModeForTesting == .noSelection
                 && viewController.collectionView.isHidden == false
                 && viewController.collectionView.numberOfSections == 0
         }
@@ -440,7 +461,7 @@ struct DOMContainerTests {
         context.apply(.childNodeRemoved(parent: DOM.Node.ID("html"), node: DOM.Node.ID("body")))
 
         let didClearRows = await waitUntilRendered(in: viewController) {
-            viewController.contentUnavailableConfiguration != nil
+            viewController.placeholderModeForTesting == .noSelection
                 && viewController.collectionView.isHidden == false
                 && viewController.collectionView.numberOfSections == 0
         }
@@ -469,12 +490,46 @@ struct DOMContainerTests {
         styles.markUnavailable()
 
         let didClearRows = await waitUntilRendered(in: viewController) {
-            viewController.contentUnavailableConfiguration != nil
+            viewController.placeholderModeForTesting == .unavailable
                 && viewController.collectionView.isHidden == false
                 && viewController.collectionView.numberOfSections == 0
         }
 
         #expect(didClearRows)
+        #expect(
+            (viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration)?.text
+                == String(
+                    localized: "dom.element.styles.unavailable.title",
+                    defaultValue: "Unavailable",
+                    bundle: WebInspectorUILocalization.bundle
+                )
+        )
+    }
+
+    @Test
+    func elementViewControllerShowsFailedStateWhenStyleLoadingFails() async throws {
+        let context = makeElementContext()
+        let body = try selectElement(named: "body", in: context)
+        let viewController = makeElementViewController(context: context)
+        let window = showInWindow(viewController)
+        defer { window.isHidden = true }
+        let styles = try #require(body.elementStyles)
+
+        styles.fail(.closed)
+
+        let didShowFailure = await waitUntilRendered(in: viewController) {
+            viewController.placeholderModeForTesting == .failed
+                && viewController.collectionView.numberOfSections == 0
+        }
+        #expect(didShowFailure)
+        #expect(
+            (viewController.contentUnavailableConfiguration as? UIContentUnavailableConfiguration)?.text
+                == String(
+                    localized: "dom.element.styles.failed.title",
+                    defaultValue: "Load Failed",
+                    bundle: WebInspectorUILocalization.bundle
+                )
+        )
     }
 
     @Test
