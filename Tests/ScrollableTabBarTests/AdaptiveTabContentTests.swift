@@ -23,7 +23,16 @@ struct AdaptiveTabContentTests {
         #expect(content.menuButton.accessibilityValue == "Cookies")
         let menuActions = content.menuButton.menu?.children.compactMap { $0 as? UIAction }
         #expect(menuActions?.map(\.title) == ["Headers", "Preview", "Cookies", "Security"])
+        #expect(
+            menuActions?.map(\.accessibilityIdentifier)
+                == (0..<4).map { "ScrollableTabBar.Test.\($0)" }
+        )
         #expect(menuActions?.map(\.state) == [.off, .off, .on, .off])
+        #expect(
+            (0..<content.segmentedControl.numberOfSegments).map {
+                content.segmentedControl.actionForSegment(at: $0)?.accessibilityIdentifier
+            } == (0..<4).map { "ScrollableTabBar.Test.\($0)" }
+        )
     }
 
     @Test
@@ -75,13 +84,58 @@ struct AdaptiveTabContentTests {
         #expect(AdaptiveTabView.presentation(for: accessibilityRegular) == .menu)
     }
 
+    @Test
+    func adaptiveSizingPreservesTheActiveControlHeight() {
+        let content = makeContent()
+        content.adaptiveView.traitOverrides.horizontalSizeClass = .compact
+        content.adaptiveView.updateTraitsIfNeeded()
+        var configuration = content.menuButton.configuration ?? .plain()
+        configuration.contentInsets = NSDirectionalEdgeInsets(
+            top: 32,
+            leading: 12,
+            bottom: 32,
+            trailing: 12
+        )
+        content.menuButton.configuration = configuration
+        content.render(
+            selectedIndex: 0,
+            isEnabled: true,
+            accessibilityLabel: "Detail Mode"
+        )
+
+        let activeHeight = content.adaptiveView.intrinsicContentSize.height
+
+        #expect(activeHeight > scrollableTabBarMinimumHeight)
+        #expect(content.intrinsicHeight == activeHeight)
+        #expect(
+            content.heightThatFits(CGSize(width: 240, height: 1))
+                >= activeHeight
+        )
+    }
+
     private func makeContent() -> AdaptiveTabContent {
         AdaptiveTabContent(
             items: [
-                .init(title: "Headers", image: nil, accessibilityIdentifier: nil),
-                .init(title: "Preview", image: nil, accessibilityIdentifier: nil),
-                .init(title: "Cookies", image: nil, accessibilityIdentifier: nil),
-                .init(title: "Security", image: nil, accessibilityIdentifier: nil),
+                .init(
+                    title: "Headers",
+                    image: nil,
+                    accessibilityIdentifier: "ScrollableTabBar.Test.0"
+                ),
+                .init(
+                    title: "Preview",
+                    image: nil,
+                    accessibilityIdentifier: "ScrollableTabBar.Test.1"
+                ),
+                .init(
+                    title: "Cookies",
+                    image: nil,
+                    accessibilityIdentifier: "ScrollableTabBar.Test.2"
+                ),
+                .init(
+                    title: "Security",
+                    image: nil,
+                    accessibilityIdentifier: "ScrollableTabBar.Test.3"
+                ),
             ]
         )
     }

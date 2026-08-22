@@ -103,6 +103,7 @@ final class SystemFloatingTabContent: NSObject,
 {
     var view: UIView { floatingView }
     var selectionHandler: ((Int) -> Void)?
+    var intrinsicHeight: CGFloat { scrollableTabBarMinimumHeight }
     let floatingView: SystemFloatingTabView
     let tabController: UITabBarController
     let tabs: [UITab]
@@ -165,6 +166,10 @@ final class SystemFloatingTabContent: NSObject,
                 tab.isEnabled = isEnabled
             }
         }
+    }
+
+    func heightThatFits(_ size: CGSize) -> CGFloat {
+        scrollableTabBarMinimumHeight
     }
 
     func tabBarController(

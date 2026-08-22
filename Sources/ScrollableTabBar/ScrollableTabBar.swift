@@ -5,13 +5,18 @@ import UIKit
 protocol ScrollableTabBarContent: AnyObject {
     var view: UIView { get }
     var selectionHandler: ((Int) -> Void)? { get set }
+    var intrinsicHeight: CGFloat { get }
 
     func render(
         selectedIndex: Int,
         isEnabled: Bool,
         accessibilityLabel: String?
     )
+
+    func heightThatFits(_ size: CGSize) -> CGFloat
 }
+
+let scrollableTabBarMinimumHeight: CGFloat = 49
 
 @MainActor
 struct ScrollableTabBarPresentationItem {
@@ -90,7 +95,6 @@ public final class ScrollableTabBar<ID: Hashable>: UIControl {
     }
 
     private static var preferredWidth: CGFloat { 640 }
-    private static var preferredHeight: CGFloat { 49 }
 
     let content: any ScrollableTabBarContent
     private let itemIndexByID: [ID: Int]
@@ -147,6 +151,12 @@ public final class ScrollableTabBar<ID: Hashable>: UIControl {
         content.selectionHandler = { [weak self] selectedIndex in
             self?.didSelectItem(at: selectedIndex)
         }
+        registerForTraitChanges([
+            UITraitHorizontalSizeClass.self,
+            UITraitPreferredContentSizeCategory.self,
+        ]) { (self: ScrollableTabBar, _) in
+            self.invalidateIntrinsicContentSize()
+        }
         renderContent()
     }
 
@@ -156,7 +166,7 @@ public final class ScrollableTabBar<ID: Hashable>: UIControl {
     }
 
     public override var intrinsicContentSize: CGSize {
-        CGSize(width: Self.preferredWidth, height: Self.preferredHeight)
+        CGSize(width: Self.preferredWidth, height: content.intrinsicHeight)
     }
 
     public override func sizeThatFits(_ size: CGSize) -> CGSize {
@@ -165,7 +175,7 @@ public final class ScrollableTabBar<ID: Hashable>: UIControl {
             : Self.preferredWidth
         return CGSize(
             width: min(Self.preferredWidth, proposedWidth),
-            height: Self.preferredHeight
+            height: content.heightThatFits(size)
         )
     }
 

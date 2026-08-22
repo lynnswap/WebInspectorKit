@@ -5,6 +5,9 @@ import UIKit
 final class AdaptiveTabContent: ScrollableTabBarContent {
     var view: UIView { adaptiveView }
     var selectionHandler: ((Int) -> Void)?
+    var intrinsicHeight: CGFloat {
+        max(scrollableTabBarMinimumHeight, adaptiveView.intrinsicContentSize.height)
+    }
     let adaptiveView: AdaptiveTabView
     let segmentedControl: UISegmentedControl
     let menuButton: UIButton
@@ -12,7 +15,20 @@ final class AdaptiveTabContent: ScrollableTabBarContent {
 
     init(items: [ScrollableTabBarPresentationItem]) {
         self.items = items
-        segmentedControl = UISegmentedControl(items: items.map(\.title))
+        // Public segmented and menu APIs expose UIActions rather than per-item
+        // views. UIMenuElement's accessibility identity keeps the same item ID
+        // without coupling it to UIAction's separate semantic identifier.
+        segmentedControl = UISegmentedControl(
+            frame: .zero,
+            actions: items.map { item in
+                let action = UIAction(
+                    title: item.title,
+                    image: item.image
+                ) { _ in }
+                action.accessibilityIdentifier = item.accessibilityIdentifier
+                return action
+            }
+        )
         menuButton = UIButton(type: .system)
         menuButton.showsMenuAsPrimaryAction = true
         adaptiveView = AdaptiveTabView(
@@ -52,16 +68,22 @@ final class AdaptiveTabContent: ScrollableTabBarContent {
         menuButton.menu = UIMenu(
             options: .singleSelection,
             children: items.enumerated().map { index, item in
-                UIAction(
+                let action = UIAction(
                     title: item.title,
                     image: item.image,
                     state: index == selectedIndex ? .on : .off
                 ) { [weak self] _ in
                     self?.selectionHandler?(index)
                 }
+                action.accessibilityIdentifier = item.accessibilityIdentifier
+                return action
             }
         )
         adaptiveView.invalidateIntrinsicContentSize()
+    }
+
+    func heightThatFits(_ size: CGSize) -> CGFloat {
+        max(scrollableTabBarMinimumHeight, adaptiveView.sizeThatFits(size).height)
     }
 
     @objc func valueChanged(_ sender: UISegmentedControl) {
