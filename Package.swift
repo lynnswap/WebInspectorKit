@@ -33,6 +33,10 @@ let package = Package(
             targets: ["WebInspectorDataKitTesting"]
         ),
         .library(
+            name: "ScrollableTabBar",
+            targets: ["ScrollableTabBar"]
+        ),
+        .library(
             name: "WebInspectorKit",
             targets: ["WebInspectorKit"]
         )
@@ -117,6 +121,11 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .target(
+            name: "ScrollableTabBar",
+            dependencies: [],
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
             name: "WebInspectorUIDOM",
             dependencies: [
                 "WebInspectorDataKit",
@@ -133,6 +142,7 @@ let package = Package(
                 "WebInspectorDataKit",
                 "WebInspectorProxyKit",
                 "WebInspectorUIBase",
+                "ScrollableTabBar",
                 .product(name: "ObservationBridge", package: "ObservationBridge"),
                 .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS]))
             ],
@@ -199,6 +209,13 @@ let package = Package(
                 "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorDataKitTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "ScrollableTabBarTests",
+            dependencies: [
+                "ScrollableTabBar"
+            ],
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
