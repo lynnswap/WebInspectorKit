@@ -1,5 +1,4 @@
 #if canImport(UIKit)
-import Darwin
 import OSLog
 import UIKit
 import WebInspectorUIBase
@@ -27,16 +26,10 @@ final class NetworkDetailModeControlController {
 
     init(initialMode: NetworkDetailViewController.Mode) {
         mode = initialMode
-        let content: any NetworkDetailModeControlContent
-        if let scrollableContent = NetworkDetailScrollableModeControlView.makeIfAvailable(
+        content = NetworkDetailFloatingModeControlContent.makeIfAvailable(
             modes: NetworkDetailViewController.Mode.allCases,
             initialMode: initialMode
-        ) {
-            content = scrollableContent
-        } else {
-            content = NetworkDetailAdaptiveModeControlContent()
-        }
-        self.content = content
+        ) ?? NetworkDetailAdaptiveModeControlContent()
         view = content.view
         content.selectionHandler = { [weak self] mode in
             self?.select(mode)
@@ -56,7 +49,6 @@ final class NetworkDetailModeControlController {
             return
         }
         selectionHandler?(selectedMode)
-        renderControls()
     }
 
     private func renderControls() {
@@ -65,160 +57,190 @@ final class NetworkDetailModeControlController {
 }
 
 @MainActor
-private struct NetworkDetailScrollableModePickerComponents {
-    let pickerView: UIView
-    let categories: [NSObject]
-    let segmentClass: UIControl.Type
+private struct NetworkDetailFloatingModeControlComponents {
+    let tabController: UITabBarController
+    let entries: [(mode: NetworkDetailViewController.Mode, tab: UITab)]
+    let floatingTabBar: UIView
+    let collectionView: UICollectionView
 }
 
 @MainActor
-private enum NetworkDetailScrollableModePickerRuntime {
-    private static let frameworkPath = "/System/Library/PrivateFrameworks/MapsUI.framework/MapsUI"
+private enum NetworkDetailFloatingModeControlRuntime {
+    private static let floatingTabBarClassName = "_UIFloatingTabBar"
+    private static let tabModelKey = "_tabModel"
+    private static let tabModelSelector = NSSelectorFromString(tabModelKey)
+    private static let setTabModelSelector = NSSelectorFromString("setTabModel:")
+    private static let collectionViewSelector = NSSelectorFromString("collectionView")
+    private static let showsSidebarButtonSelector = NSSelectorFromString("showsSidebarButton")
 
-    // Keep the image loaded for the process lifetime. dlclose would invalidate the
-    // Objective-C classes behind live picker instances.
-    private static let didLoadFramework: Bool = unsafe dlopen(
-        frameworkPath,
-        RTLD_NOW | RTLD_LOCAL
-    ) != nil
-
-    static func makeComponents(titles: [String]) -> NetworkDetailScrollableModePickerComponents? {
-        guard didLoadFramework else {
+    static func makeComponents(
+        modes: [NetworkDetailViewController.Mode],
+        initialMode: NetworkDetailViewController.Mode
+    ) -> NetworkDetailFloatingModeControlComponents? {
+        guard let floatingTabBarClass = NSClassFromString(floatingTabBarClassName) as? UIView.Type else {
             networkDetailModeControlLogger.error(
-                "MapsUI could not be loaded; using the public adaptive mode control."
+                "UIKit's floating tab bar class is unavailable; using the public adaptive mode control."
             )
             return nil
         }
-        guard let pickerClass = NSClassFromString("MUScrollableSegmentedPickerView") as? UIView.Type,
-              let categoryClass = NSClassFromString("MUScrollableSegmentedPickerCategory") as? NSObject.Type,
-              let segmentClass = NSClassFromString("MUScrollableSegmentedPickerSegmentView") as? UIControl.Type else {
+        guard let initialIndex = modes.firstIndex(of: initialMode) else {
+            preconditionFailure("Every Network Detail mode must have a floating-tab item.")
+        }
+
+        let tabController = UITabBarController()
+        tabController.mode = .tabBar
+        let entries: [(mode: NetworkDetailViewController.Mode, tab: UITab)] = modes.enumerated().map { index, mode in
+            let tab = UITab(
+                title: mode.title,
+                image: nil,
+                identifier: "WebInspector.Network.DetailMode.\(index)"
+            ) { _ in
+                UIViewController()
+            }
+            tab.preferredPlacement = .fixed
+            tab.accessibilityIdentifier = "WebInspector.Network.DetailMode.\(index)"
+            return (mode: mode, tab: tab)
+        }
+        let tabs = entries.map(\.tab)
+        tabController.tabs = tabs
+        tabController.selectedTab = tabs[initialIndex]
+
+        guard let firstTab = tabs.first,
+              firstTab.responds(to: tabModelSelector),
+              let tabModel = firstTab.value(forKey: tabModelKey) as AnyObject? else {
             networkDetailModeControlLogger.error(
-                "MapsUI scrollable picker classes are unavailable; using the public adaptive mode control."
+                "UITab did not expose its configured tab model; using the public adaptive mode control."
             )
             return nil
         }
 
-        let pickerView = pickerClass.init(frame: .zero)
-        let categoryProbe = categoryClass.init()
-        let segmentProbe = segmentClass.init(frame: .zero)
-        guard responds(
-            pickerView,
-            to: ["setViewModels:", "setSelectedIndex:", "selectedIndex", "setDelegate:"]
-        ), responds(categoryProbe, to: ["setCategoryName:", "categoryName"]),
-            responds(segmentProbe, to: ["viewModel"]) else {
+        let floatingTabBar = floatingTabBarClass.init(frame: .zero)
+        guard floatingTabBar.responds(to: setTabModelSelector),
+              floatingTabBar.responds(to: collectionViewSelector),
+              floatingTabBar.responds(to: showsSidebarButtonSelector) else {
             networkDetailModeControlLogger.error(
-                "MapsUI scrollable picker selectors changed; using the public adaptive mode control."
+                "UIKit's floating tab bar contract changed; using the public adaptive mode control."
+            )
+            return nil
+        }
+        floatingTabBar.setValue(tabModel, forKey: "tabModel")
+
+        guard floatingTabBar.value(forKey: "showsSidebarButton") as? Bool == false,
+              let collectionView = floatingTabBar.value(forKey: "collectionView") as? UICollectionView else {
+            networkDetailModeControlLogger.error(
+                "UIKit's floating tab bar produced unexpected sidebar chrome; using the public adaptive mode control."
             )
             return nil
         }
 
-        let categories = titles.map { title in
-            let category = categoryClass.init()
-            category.setValue(title, forKey: "categoryName")
-            return category
-        }
-        pickerView.setValue(categories, forKey: "viewModels")
-        return NetworkDetailScrollableModePickerComponents(
-            pickerView: pickerView,
-            categories: categories,
-            segmentClass: segmentClass
+        return NetworkDetailFloatingModeControlComponents(
+            tabController: tabController,
+            entries: entries,
+            floatingTabBar: floatingTabBar,
+            collectionView: collectionView
         )
     }
-
-    private static func responds(_ object: NSObject, to selectorNames: [String]) -> Bool {
-        selectorNames.allSatisfy { object.responds(to: NSSelectorFromString($0)) }
-    }
 }
 
 @MainActor
-private final class NetworkDetailModeAccessibilityElement: UIAccessibilityElement {
-    let mode: NetworkDetailViewController.Mode
-    weak var owner: NetworkDetailScrollableModeControlView?
-
-    init(
-        mode: NetworkDetailViewController.Mode,
-        owner: NetworkDetailScrollableModeControlView
-    ) {
-        self.mode = mode
-        self.owner = owner
-        super.init(accessibilityContainer: owner)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    override func accessibilityActivate() -> Bool {
-        owner?.activate(mode: mode) == true
-    }
-
-    override func accessibilityElementDidBecomeFocused() {
-        owner?.reveal(mode: mode)
-    }
-}
-
-@MainActor
-private final class NetworkDetailScrollableModeControlView: UIView, NetworkDetailModeControlContent {
-    private static let preferredWidth: CGFloat = 640
-    private static let preferredHeight: CGFloat = 44
-
-    var view: UIView { self }
+private final class NetworkDetailFloatingModeControlContent: NSObject,
+    NetworkDetailModeControlContent,
+    UITabBarControllerDelegate
+{
+    var view: UIView { floatingView }
     var selectionHandler: ((NetworkDetailViewController.Mode) -> Void)?
-    private let modes: [NetworkDetailViewController.Mode]
-    private let pickerView: UIView
-    private let categories: [NSObject]
-    private let segmentClass: UIControl.Type
-    private var modeAccessibilityElements: [NetworkDetailModeAccessibilityElement] = []
-    private var selectedMode: NetworkDetailViewController.Mode
-    private var isEnabled = false
-    private var modeNeedingReveal: NetworkDetailViewController.Mode?
+    private let floatingView: NetworkDetailFloatingModeControlView
+    private let tabController: UITabBarController
+    private let entries: [(mode: NetworkDetailViewController.Mode, tab: UITab)]
+    private let collectionView: UICollectionView
+    private var renderedMode: NetworkDetailViewController.Mode
 
     static func makeIfAvailable(
         modes: [NetworkDetailViewController.Mode],
         initialMode: NetworkDetailViewController.Mode
-    ) -> NetworkDetailScrollableModeControlView? {
-        guard let components = NetworkDetailScrollableModePickerRuntime.makeComponents(
-            titles: modes.map(\.title)
+    ) -> NetworkDetailFloatingModeControlContent? {
+        guard let components = NetworkDetailFloatingModeControlRuntime.makeComponents(
+            modes: modes,
+            initialMode: initialMode
         ) else {
             return nil
         }
-        return NetworkDetailScrollableModeControlView(
-            modes: modes,
+        return NetworkDetailFloatingModeControlContent(
             initialMode: initialMode,
             components: components
         )
     }
 
     private init(
-        modes: [NetworkDetailViewController.Mode],
         initialMode: NetworkDetailViewController.Mode,
-        components: NetworkDetailScrollableModePickerComponents
+        components: NetworkDetailFloatingModeControlComponents
     ) {
-        self.modes = modes
-        selectedMode = initialMode
-        pickerView = components.pickerView
-        categories = components.categories
-        segmentClass = components.segmentClass
+        renderedMode = initialMode
+        tabController = components.tabController
+        entries = components.entries
+        collectionView = components.collectionView
+        floatingView = NetworkDetailFloatingModeControlView(
+            floatingTabBar: components.floatingTabBar
+        )
+        super.init()
+        tabController.delegate = self
+    }
+
+    isolated deinit {
+        floatingView.floatingTabBar.setValue(nil, forKey: "tabModel")
+    }
+
+    func render(mode: NetworkDetailViewController.Mode, isEnabled: Bool) {
+        guard let entry = entries.first(where: { $0.mode == mode }) else {
+            preconditionFailure("Every Network Detail mode must have a floating-tab item.")
+        }
+        renderedMode = mode
+        if tabController.selectedTab !== entry.tab {
+            tabController.selectedTab = entry.tab
+        }
+
+        floatingView.isUserInteractionEnabled = isEnabled
+        floatingView.alpha = isEnabled ? 1 : 0.5
+        if #available(iOS 18.4, *) {
+            for entry in entries {
+                entry.tab.isEnabled = isEnabled
+            }
+        }
+    }
+
+    func tabBarController(
+        _ tabBarController: UITabBarController,
+        didSelectTab selectedTab: UITab,
+        previousTab: UITab?
+    ) {
+        guard let selectedMode = entries.first(where: { $0.tab === selectedTab })?.mode else {
+            networkDetailModeControlLogger.fault(
+                "UIKit's floating tab bar selected an item outside the Network Detail mode set."
+            )
+            return
+        }
+        guard selectedMode != renderedMode else {
+            return
+        }
+        selectionHandler?(selectedMode)
+    }
+}
+
+@MainActor
+private final class NetworkDetailFloatingModeControlView: UIView {
+    private static let preferredWidth: CGFloat = 640
+    private static let preferredHeight: CGFloat = 49
+
+    let floatingTabBar: UIView
+
+    init(floatingTabBar: UIView) {
+        self.floatingTabBar = floatingTabBar
         super.init(frame: .zero)
 
         accessibilityIdentifier = "WebInspector.Network.DetailModeTabBar"
-        accessibilityContainerType = .semanticGroup
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         setContentHuggingPriority(.defaultLow, for: .horizontal)
-
-        pickerView.accessibilityIdentifier = "WebInspector.Network.DetailModeScrollablePicker"
-        pickerView.setValue(self, forKey: "delegate")
-        addSubview(pickerView)
-
-        modeAccessibilityElements = modes.enumerated().map { index, mode in
-            let element = NetworkDetailModeAccessibilityElement(mode: mode, owner: self)
-            element.accessibilityIdentifier = "WebInspector.Network.DetailMode.\(index)"
-            element.accessibilityLabel = mode.title
-            return element
-        }
-        accessibilityElements = modeAccessibilityElements
-        setSelectedMode(initialMode, needsReveal: true)
+        addSubview(floatingTabBar)
     }
 
     @available(*, unavailable)
@@ -242,137 +264,36 @@ private final class NetworkDetailScrollableModeControlView: UIView, NetworkDetai
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        pickerView.frame = bounds
-        pickerView.layoutIfNeeded()
-        updateSegmentPresentation()
-        revealPendingModeIfPossible()
+        floatingTabBar.frame = bounds
+        floatingTabBar.layoutIfNeeded()
     }
 
-    func render(mode: NetworkDetailViewController.Mode, isEnabled: Bool) {
-        self.isEnabled = isEnabled
-        pickerView.isUserInteractionEnabled = isEnabled
-        pickerView.alpha = isEnabled ? 1 : 0.5
-        if selectedMode != mode {
-            setSelectedMode(mode, needsReveal: true)
-        }
-        updateSegmentPresentation()
-        revealPendingModeIfPossible()
-    }
-
-    fileprivate func activate(mode: NetworkDetailViewController.Mode) -> Bool {
-        guard isEnabled else {
-            return false
-        }
-        setSelectedMode(mode, needsReveal: true)
-        selectionHandler?(mode)
-        return true
-    }
-
-    fileprivate func reveal(mode: NetworkDetailViewController.Mode) {
-        modeNeedingReveal = mode
-        revealPendingModeIfPossible()
-    }
-
-    @objc(scrollableSegmentedPickerView:didChangeSelectedIndex:)
-    private func pickerSelectionDidChange(_ pickerView: UIView, selectedIndex: UInt) {
-        guard pickerView === self.pickerView,
-              let index = Int(exactly: selectedIndex),
-              modes.indices.contains(index) else {
-            networkDetailModeControlLogger.fault(
-                "MapsUI scrollable picker reported an invalid selection."
-            )
-            setSelectedMode(selectedMode, needsReveal: true)
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil else {
             return
         }
-        guard isEnabled else {
-            setSelectedMode(selectedMode, needsReveal: true)
-            return
-        }
-        selectedMode = modes[index]
-        modeNeedingReveal = nil
-        updateSegmentPresentation()
-        selectionHandler?(selectedMode)
-    }
-
-    private func setSelectedMode(
-        _ mode: NetworkDetailViewController.Mode,
-        needsReveal: Bool
-    ) {
-        guard let index = modes.firstIndex(of: mode) else {
-            preconditionFailure("Every Network Detail mode must have a picker item.")
-        }
-        selectedMode = mode
-        pickerView.setValue(NSNumber(value: index), forKey: "selectedIndex")
-        if needsReveal {
-            modeNeedingReveal = mode
-            setNeedsLayout()
-        }
-        updateSegmentPresentation()
-    }
-
-    private func updateSegmentPresentation() {
-        let segmentsByMode = Dictionary(
-            uniqueKeysWithValues: resolvedSegments().map { ($0.mode, $0.view) }
-        )
-        for (index, mode) in modes.enumerated() {
-            guard let segment = segmentsByMode[mode] else {
-                continue
-            }
-            segment.isEnabled = isEnabled
-            let element = modeAccessibilityElements[index]
-            var traits: UIAccessibilityTraits = [.button]
-            if mode == selectedMode {
-                traits.insert(.selected)
-            }
-            if isEnabled == false {
-                traits.insert(.notEnabled)
-            }
-            element.accessibilityTraits = traits
-            element.accessibilityFrameInContainerSpace = segment.convert(
-                segment.bounds,
-                to: self
+        setNeedsLayout()
+        layoutIfNeeded()
+        if #available(iOS 26.0, *), hasLiquidLens == false {
+            networkDetailModeControlLogger.error(
+                "UIKit's floating tab bar did not create its Liquid Glass selection lens."
             )
         }
     }
 
-    private func revealPendingModeIfPossible() {
-        guard let mode = modeNeedingReveal,
-              bounds.width > 0,
-              let scrollView = pickerScrollView,
-              let segment = resolvedSegments().first(where: { $0.mode == mode })?.view else {
-            return
-        }
-        let segmentFrame = segment.convert(segment.bounds, to: scrollView)
-        scrollView.scrollRectToVisible(segmentFrame, animated: false)
-        modeNeedingReveal = nil
-        updateSegmentPresentation()
+    fileprivate var hasLiquidLens: Bool {
+        containsView(named: "_UILiquidLensView", below: floatingTabBar)
     }
 
-    private var pickerScrollView: UIScrollView? {
-        descendants(of: pickerView).first { $0 is UIScrollView } as? UIScrollView
-    }
-
-    private func resolvedSegments() -> [(mode: NetworkDetailViewController.Mode, view: UIControl)] {
-        descendants(of: pickerView).compactMap { view in
-            guard view.isKind(of: segmentClass),
-                  let segment = view as? UIControl,
-                  let category = segment.value(forKey: "viewModel") as? NSObject,
-                  let index = categories.firstIndex(where: { $0 === category }) else {
-                return nil
-            }
-            return (modes[index], segment)
-        }
-    }
-
-    private func descendants(of view: UIView) -> [UIView] {
-        view.subviews.flatMap { subview in
-            [subview] + descendants(of: subview)
-        }
+    private func containsView(named className: String, below view: UIView) -> Bool {
+        NSStringFromClass(type(of: view)) == className
+            || view.subviews.contains { containsView(named: className, below: $0) }
     }
 }
 
 @MainActor
-final class NetworkDetailAdaptiveModeControlContent: NetworkDetailModeControlContent {
+private final class NetworkDetailAdaptiveModeControlContent: NetworkDetailModeControlContent {
     var view: UIView { adaptiveView }
     var selectionHandler: ((NetworkDetailViewController.Mode) -> Void)?
     private let adaptiveView: NetworkDetailAdaptiveModeControlView
@@ -441,12 +362,13 @@ final class NetworkDetailAdaptiveModeControlContent: NetworkDetailModeControlCon
     }
 
     private static func index(for mode: NetworkDetailViewController.Mode) -> Int {
-        NetworkDetailViewController.Mode.allCases.firstIndex(of: mode) ?? UISegmentedControl.noSegment
+        NetworkDetailViewController.Mode.allCases.firstIndex(of: mode)
+            ?? UISegmentedControl.noSegment
     }
 }
 
 @MainActor
-final class NetworkDetailAdaptiveModeControlView: UIView {
+private final class NetworkDetailAdaptiveModeControlView: UIView {
     enum Presentation: Equatable {
         case segmented
         case menu
@@ -461,6 +383,7 @@ final class NetworkDetailAdaptiveModeControlView: UIView {
         self.menuButton = menuButton
         presentation = Self.presentation(for: UITraitCollection())
         super.init(frame: .zero)
+
         let stackView = UIStackView(arrangedSubviews: [segmentedControl, menuButton])
         stackView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stackView)
@@ -531,67 +454,72 @@ extension NetworkDetailModeControlController {
         select(mode)
     }
 
-    var usesScrollablePickerForTesting: Bool {
-        content is NetworkDetailScrollableModeControlView
+    var usesFloatingTabBarForTesting: Bool {
+        content is NetworkDetailFloatingModeControlContent
     }
 
-    var scrollablePickerViewForTesting: UIView? {
-        (content as? NetworkDetailScrollableModeControlView)?.pickerViewForTesting
+    var floatingTabBarForTesting: UIView? {
+        (content as? NetworkDetailFloatingModeControlContent)?.floatingTabBarForTesting
     }
 
-    var scrollViewForTesting: UIScrollView? {
-        (content as? NetworkDetailScrollableModeControlView)?.scrollViewForTesting
+    var floatingCollectionViewForTesting: UICollectionView? {
+        (content as? NetworkDetailFloatingModeControlContent)?.collectionViewForTesting
     }
 
-    var segmentControlsForTesting: [UIControl] {
-        (content as? NetworkDetailScrollableModeControlView)?.segmentControlsForTesting ?? []
+    var floatingTabTitlesForTesting: [String] {
+        (content as? NetworkDetailFloatingModeControlContent)?.tabTitlesForTesting ?? []
     }
 
-    var modeAccessibilityElementsForTesting: [UIAccessibilityElement] {
-        (content as? NetworkDetailScrollableModeControlView)?.accessibilityElementsForTesting ?? []
+    var selectedFloatingModeForTesting: NetworkDetailViewController.Mode? {
+        (content as? NetworkDetailFloatingModeControlContent)?.selectedModeForTesting
+    }
+
+    var floatingTabsAreEnabledForTesting: Bool {
+        (content as? NetworkDetailFloatingModeControlContent)?.tabsAreEnabledForTesting ?? false
+    }
+
+    var floatingTabBarShowsSidebarButtonForTesting: Bool {
+        (content as? NetworkDetailFloatingModeControlContent)?.showsSidebarButtonForTesting ?? true
+    }
+
+    var floatingTabBarHasLiquidLensForTesting: Bool {
+        (content as? NetworkDetailFloatingModeControlContent)?.hasLiquidLensForTesting ?? false
     }
 }
 
-extension NetworkDetailScrollableModeControlView {
-    fileprivate var pickerViewForTesting: UIView {
-        pickerView
+extension NetworkDetailFloatingModeControlContent {
+    fileprivate var floatingTabBarForTesting: UIView {
+        floatingView.floatingTabBar
     }
 
-    fileprivate var scrollViewForTesting: UIScrollView? {
-        pickerScrollView
+    fileprivate var collectionViewForTesting: UICollectionView {
+        collectionView
     }
 
-    fileprivate var segmentControlsForTesting: [UIControl] {
-        let segments = resolvedSegments()
-        return modes.compactMap { mode in
-            segments.first(where: { $0.mode == mode })?.view
+    fileprivate var tabTitlesForTesting: [String] {
+        entries.map { $0.tab.title }
+    }
+
+    fileprivate var selectedModeForTesting: NetworkDetailViewController.Mode? {
+        guard let selectedTab = tabController.selectedTab else {
+            return nil
         }
+        return entries.first(where: { $0.tab === selectedTab })?.mode
     }
 
-    fileprivate var accessibilityElementsForTesting: [UIAccessibilityElement] {
-        modeAccessibilityElements
-    }
-}
-
-extension NetworkDetailAdaptiveModeControlContent {
-    var presentationForTesting: NetworkDetailAdaptiveModeControlView.Presentation {
-        adaptiveView.presentation
+    fileprivate var tabsAreEnabledForTesting: Bool {
+        if #available(iOS 18.4, *) {
+            return entries.allSatisfy { $0.tab.isEnabled }
+        }
+        return floatingView.isUserInteractionEnabled
     }
 
-    var segmentedControlForTesting: UISegmentedControl {
-        segmentedControl
+    fileprivate var showsSidebarButtonForTesting: Bool {
+        floatingView.floatingTabBar.value(forKey: "showsSidebarButton") as? Bool ?? true
     }
 
-    var menuButtonForTesting: UIButton {
-        menuButton
-    }
-
-    var menuActionTitlesForTesting: [String] {
-        menuButton.menu?.children.compactMap { ($0 as? UIAction)?.title } ?? []
-    }
-
-    func selectModeForTesting(_ mode: NetworkDetailViewController.Mode) {
-        selectionHandler?(mode)
+    fileprivate var hasLiquidLensForTesting: Bool {
+        floatingView.hasLiquidLens
     }
 }
 #endif

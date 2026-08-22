@@ -1202,24 +1202,20 @@ extension NetworkDetailViewController {
         modeControlController.view
     }
 
-    var detailModeUsesScrollablePickerForTesting: Bool {
-        modeControlController.usesScrollablePickerForTesting
+    var detailModeUsesFloatingTabBarForTesting: Bool {
+        modeControlController.usesFloatingTabBarForTesting
     }
 
-    var detailModeScrollablePickerForTesting: UIView? {
-        modeControlController.scrollablePickerViewForTesting
+    var detailModeFloatingTabBarForTesting: UIView? {
+        modeControlController.floatingTabBarForTesting
     }
 
-    var detailModeScrollViewForTesting: UIScrollView? {
-        modeControlController.scrollViewForTesting
+    var detailModeSelectedFloatingModeForTesting: NetworkDetailViewController.Mode? {
+        modeControlController.selectedFloatingModeForTesting
     }
 
-    var detailModeSegmentControlsForTesting: [UIControl] {
-        modeControlController.segmentControlsForTesting
-    }
-
-    var detailModeAccessibilityElementsForTesting: [UIAccessibilityElement] {
-        modeControlController.modeAccessibilityElementsForTesting
+    var detailModeFloatingTabBarHasLiquidLensForTesting: Bool {
+        modeControlController.floatingTabBarHasLiquidLensForTesting
     }
 
     var isPreviewRoleControlHiddenForTesting: Bool {
