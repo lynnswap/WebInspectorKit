@@ -160,9 +160,26 @@ package struct NetworkPanelListInvalidation: Equatable, Sendable {
     package let version: NetworkPanelListVersion
 }
 
+package enum NetworkPanelListContent: Equatable, Sendable {
+    case entries([NetworkListEntry.ID])
+    case noRequests
+    case noMatches
+
+    package var entryIDs: [NetworkListEntry.ID] {
+        guard case .entries(let entryIDs) = self else {
+            return []
+        }
+        return entryIDs
+    }
+}
+
 package struct NetworkPanelListProjection: Equatable, Sendable {
     package let version: NetworkPanelListVersion
-    package let entryIDs: [NetworkListEntry.ID]
+    package let content: NetworkPanelListContent
+
+    package var entryIDs: [NetworkListEntry.ID] {
+        content.entryIDs
+    }
 }
 
 enum NetworkPanelSelection: Equatable, Sendable {
@@ -424,9 +441,17 @@ package final class NetworkPanelModel {
     }
 
     package func captureListProjection() -> NetworkPanelListProjection {
-        NetworkPanelListProjection(
+        let content: NetworkPanelListContent
+        if visibleEntryIDs.isEmpty == false {
+            content = .entries(visibleEntryIDs)
+        } else if orderedEntryIDs.isEmpty {
+            content = .noRequests
+        } else {
+            content = .noMatches
+        }
+        return NetworkPanelListProjection(
             version: listProjectionVersion,
-            entryIDs: visibleEntryIDs
+            content: content
         )
     }
 

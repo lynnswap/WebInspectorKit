@@ -229,7 +229,14 @@ struct DOMTreeMenuView: View {
                 Button {
                     model.copySelectedText()
                 } label: {
-                    Label(String(localized: "Copy", bundle: WebInspectorUILocalization.bundle), systemImage: "doc.on.doc")
+                    Label(
+                        String(
+                            localized: "dom.tree.copy.selected_text",
+                            defaultValue: "Selected Text",
+                            bundle: WebInspectorUILocalization.bundle
+                        ),
+                        systemImage: "doc.on.doc"
+                    )
                 }
                 .disabled(!model.canCopySelectedText)
             }

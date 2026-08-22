@@ -494,7 +494,7 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
         case .connectionEstablished:
             let title = localized(
                 "network.websocket.connection.established",
-                defaultValue: "WebSocket Connection Established"
+                defaultValue: "Connection Established"
             )
             return RowContent(
                 title: title,
@@ -507,7 +507,7 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
         case .connectionClosed:
             let title = localized(
                 "network.websocket.connection.closed",
-                defaultValue: "WebSocket Connection Closed"
+                defaultValue: "Connection Closed"
             )
             return RowContent(
                 title: title,
@@ -553,14 +553,20 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
         }
 
         let title: String
+        let accessibilityLabel: String
+        let accessibilityValue: String
         switch frame.kind {
         case .text:
             guard case let .text(payload) = frame.payload else {
                 preconditionFailure("A text WebSocket frame must carry a text payload.")
             }
             title = Self.renderedTextPayload(payload)
+            accessibilityLabel = title
+            accessibilityValue = [direction, frameKind, time].joined(separator: " · ")
         case .continuation, .binary, .close, .ping, .pong, .unknown:
-            title = [frameKind, byteCountText(frame.payloadLength)].joined(separator: " · ")
+            title = byteCountText(frame.payloadLength)
+            accessibilityLabel = [frameKind, title].joined(separator: ", ")
+            accessibilityValue = [direction, time].joined(separator: ", ")
         }
         let subtitle = [direction, frameKind, time].joined(separator: " · ")
         return RowContent(
@@ -568,8 +574,8 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
             subtitle: subtitle,
             symbolName: symbolName,
             style: style,
-            accessibilityLabel: title,
-            accessibilityValue: subtitle
+            accessibilityLabel: accessibilityLabel,
+            accessibilityValue: accessibilityValue
         )
     }
 
@@ -584,14 +590,14 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
         case .switchingProtocols, .unreported:
             title = localized(
                 "network.websocket.handshake.response",
-                defaultValue: "WebSocket Handshake Response"
+                defaultValue: "Handshake Response"
             )
             symbolName = "arrow.left.arrow.right"
             style = .lifecycle
         case .rejected:
             title = localized(
                 "network.websocket.handshake.rejected",
-                defaultValue: "WebSocket Handshake Rejected"
+                defaultValue: "Handshake Rejected"
             )
             symbolName = "exclamationmark.shield"
             style = .error

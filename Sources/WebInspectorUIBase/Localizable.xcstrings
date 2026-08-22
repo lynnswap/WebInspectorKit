@@ -287,6 +287,57 @@
         }
       }
     },
+    "dom.element.styles.failed.title" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Load Failed"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "読み込み失敗"
+          }
+        }
+      }
+    },
+    "dom.element.styles.loading.title" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Loading"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "読み込み中"
+          }
+        }
+      }
+    },
+    "dom.element.styles.no_selection.title" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No Selection"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未選択"
+          }
+        }
+      }
+    },
     "dom.element.styles.not_editable.accessibility_value" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1574,6 +1625,40 @@
         }
       }
     },
+    "dom.element.styles.unavailable.title" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Unavailable"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "利用不可"
+          }
+        }
+      }
+    },
+    "dom.tree.copy.selected_text" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Selected Text"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選択範囲"
+          }
+        }
+      }
+    },
     "dom.tree.extend_selection_down" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2432,6 +2517,23 @@
         }
       }
     },
+    "network.body.empty" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No Body"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ボディなし"
+          }
+        }
+      }
+    },
     "network.body.fetch.error.decode_failed" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2714,6 +2816,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "本文無法使用"
+          }
+        }
+      }
+    },
+    "network.body.fetch.error.timeout" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@.%2$@ timed out."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@.%2$@がタイムアウトしました。"
           }
         }
       }
@@ -3357,13 +3476,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "No request cookies"
+            "value" : "None"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "リクエストCookieなし"
+            "value" : "なし"
           }
         }
       }
@@ -3374,13 +3493,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "No request, served from the memory cache"
+            "value" : "Memory Cache"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "リクエストなし（メモリキャッシュから提供）"
+            "value" : "メモリキャッシュ"
           }
         }
       }
@@ -3391,13 +3510,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Request cookies were not captured"
+            "value" : "Not Captured"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "リクエストCookieは取得されませんでした"
+            "value" : "未取得"
           }
         }
       }
@@ -3408,13 +3527,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "No response cookies"
+            "value" : "None"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "レスポンスCookieなし"
+            "value" : "なし"
           }
         }
       }
@@ -3425,13 +3544,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Waiting for response"
+            "value" : "Waiting"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "レスポンスを待機中"
+            "value" : "待機中"
           }
         }
       }
@@ -3442,13 +3561,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "No response was received"
+            "value" : "Not Received"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "レスポンスを受信しませんでした"
+            "value" : "未受信"
           }
         }
       }
@@ -3504,6 +3623,23 @@
         }
       }
     },
+    "network.cookies.value.not_set" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Not Set"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未設定"
+          }
+        }
+      }
+    },
     "network.cookies.value.unavailable" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -3544,13 +3680,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Combined cookie header cannot be parsed safely"
+            "value" : "Combined header cannot be parsed safely"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "結合されたCookieヘッダーを安全に解析できません"
+            "value" : "結合されたヘッダーを安全に解析できません"
           }
         }
       }
@@ -3561,13 +3697,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Some cookie data could not be parsed"
+            "value" : "Some data could not be parsed"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "一部のCookieデータを解析できませんでした"
+            "value" : "一部のデータを解析できませんでした"
           }
         }
       }
@@ -3578,13 +3714,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Cookie header could not be parsed"
+            "value" : "Header could not be parsed"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cookieヘッダーを解析できませんでした"
+            "value" : "ヘッダーを解析できませんでした"
           }
         }
       }
@@ -3796,6 +3932,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "概覽"
+          }
+        }
+      }
+    },
+    "network.empty.none.title" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "None"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "なし"
           }
         }
       }
@@ -4082,6 +4235,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "沒有請求"
+          }
+        }
+      }
+    },
+    "network.no_results.title" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "No Results"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "該当なし"
           }
         }
       }
@@ -4949,13 +5119,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No parameters"
+            "value" : "None"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "パラメータがありません"
+            "value" : "なし"
           }
         }
       }
@@ -5014,13 +5184,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "No request headers"
+            "value" : "None"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "リクエストヘッダーなし"
+            "value" : "なし"
           }
         }
       }
@@ -5078,7 +5248,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Unparsed Content-Type Parameter"
+            "value" : "Unparsed Content-Type Parameters"
           }
         },
         "ja" : {
@@ -5121,6 +5291,23 @@
         }
       }
     },
+    "network.headers.request_data.view_preview.inline" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "View Preview"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プレビューを表示"
+          }
+        }
+      }
+    },
     "network.headers.request_data.view_preview" : {
       "localizations" : {
         "en" : {
@@ -5143,13 +5330,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "No response headers"
+            "value" : "None"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "レスポンスヘッダーなし"
+            "value" : "なし"
           }
         }
       }
@@ -5528,6 +5715,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "未報告"
+          }
+        }
+      }
+    },
+    "network.search.placeholder.short" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Search"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検索"
           }
         }
       }
@@ -6406,13 +6610,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Show Less DNS Names"
+            "value" : "Show Fewer DNS Names"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "DNS名の表示を減らす"
+            "value" : "DNS名を一部のみ表示"
           }
         }
       }
@@ -6423,13 +6627,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Show Less IP Addresses"
+            "value" : "Show Fewer IP Addresses"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "IPアドレスの表示を減らす"
+            "value" : "IPアドレスを一部のみ表示"
           }
         }
       }
@@ -6623,6 +6827,23 @@
         }
       }
     },
+    "network.security.field.metadata" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Metadata"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メタデータ"
+          }
+        }
+      }
+    },
     "network.security.field.reason" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -6704,6 +6925,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "サブジェクト"
+          }
+        }
+      }
+    },
+    "network.security.field.tls" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "TLS"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TLS"
           }
         }
       }
@@ -6816,13 +7054,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "The request was canceled before a response was reported."
+            "value" : "Request Canceled"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "レスポンスが報告される前にリクエストがキャンセルされました。"
+            "value" : "リクエストをキャンセル"
           }
         }
       }
@@ -6833,13 +7071,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Loading completed without a reported response."
+            "value" : "No Response"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "レスポンスが報告されずに読み込みが完了しました。"
+            "value" : "レスポンスなし"
           }
         }
       }
@@ -6850,13 +7088,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "The request failed before a response was reported."
+            "value" : "Request Failed"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "レスポンスが報告される前にリクエストが失敗しました。"
+            "value" : "リクエスト失敗"
           }
         }
       }
@@ -6980,6 +7218,23 @@
         }
       }
     },
+    "network.security.value.empty" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Empty"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "空"
+          }
+        }
+      }
+    },
     "network.security.value.empty_reported" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -6993,6 +7248,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "空の値が報告されました"
+          }
+        }
+      }
+    },
+    "network.security.value.none" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "None"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "なし"
           }
         }
       }
@@ -7031,6 +7303,23 @@
         }
       }
     },
+    "network.security.value.not_classified" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Not Classified"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未分類"
+          }
+        }
+      }
+    },
     "network.security.value.not_reported" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -7054,7 +7343,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "Response pending"
+            "value" : "Waiting for Response"
           }
         },
         "ja" : {
@@ -7105,13 +7394,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "WebSocket Connection Closed"
+            "value" : "Connection Closed"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "WebSocket接続を終了"
+            "value" : "接続を終了"
           }
         }
       }
@@ -7122,13 +7411,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "WebSocket Connection Established"
+            "value" : "Connection Established"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "WebSocket接続を確立"
+            "value" : "接続を確立"
           }
         }
       }
@@ -7309,13 +7598,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "WebSocket Handshake Rejected"
+            "value" : "Handshake Rejected"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "WebSocketハンドシェイクを拒否"
+            "value" : "ハンドシェイクを拒否"
           }
         }
       }
@@ -7326,13 +7615,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "WebSocket Handshake Response"
+            "value" : "Handshake Response"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "WebSocketハンドシェイク応答"
+            "value" : "ハンドシェイク応答"
           }
         }
       }

@@ -103,7 +103,10 @@ package final class DOMElementStyleSnapshotCoordinator {
 
     package enum PlaceholderMode: Equatable {
         case none
+        case noSelection
+        case loading
         case unavailable
+        case failed
     }
 
     package struct SnapshotUpdate {
@@ -208,16 +211,21 @@ package final class DOMElementStyleSnapshotCoordinator {
             return updateLoadedSnapshot(styles.sections)
         case .loading, .needsRefresh:
             return updatePendingSnapshot(styles.sections)
-        case .unavailable, .failed:
-            return updateUnavailableSnapshot()
+        case .unavailable:
+            return resetSnapshot(placeholderMode: .unavailable)
+        case .failed:
+            return resetSnapshot(placeholderMode: .failed)
         }
     }
 
-    /// No selected element styles exist (no selection, or the selection is
-    /// not an element node).
+    package func updateNoSelection() -> SnapshotUpdate {
+        selectionEpoch = nil
+        return resetSnapshot(placeholderMode: .noSelection)
+    }
+
     package func updateUnavailable() -> SnapshotUpdate {
         selectionEpoch = nil
-        return updateUnavailableSnapshot()
+        return resetSnapshot(placeholderMode: .unavailable)
     }
 
     package func revealHiddenUnusedVariables(
@@ -339,11 +347,11 @@ package final class DOMElementStyleSnapshotCoordinator {
     /// modified-by-inspector badge must update immediately (the legacy build
     /// rendered this through per-object observation in the cells).
     private func updatePendingSnapshot(_ sections: [CSSStyleSection]) -> SnapshotUpdate {
-        guard displayedSections != nil else {
-            return updateUnavailableSnapshot()
-        }
         guard selectionEpoch?.hasRenderedLoadedSnapshot == true else {
-            return SnapshotUpdate(snapshot: nil, applyMode: .none, placeholderMode: .none)
+            return resetSnapshot(placeholderMode: .loading)
+        }
+        guard displayedSections != nil else {
+            return resetSnapshot(placeholderMode: .loading)
         }
 
         let prospectiveVisibleSections = DOMElementStyleDiffableSnapshotBuilder.visibleSections(
@@ -391,7 +399,7 @@ package final class DOMElementStyleSnapshotCoordinator {
         )
     }
 
-    private func updateUnavailableSnapshot() -> SnapshotUpdate {
+    private func resetSnapshot(placeholderMode: PlaceholderMode) -> SnapshotUpdate {
         let oldSectionIDs = visibleSectionIDs
         let oldItemIDs = visibleItemIDs
         expandedUnusedVariableSectionIDs.removeAll()
@@ -404,7 +412,11 @@ package final class DOMElementStyleSnapshotCoordinator {
             oldItemIDs: oldItemIDs,
             snapshot: snapshot
         ) ? .diff(animated: false) : .none
-        return SnapshotUpdate(snapshot: snapshot, applyMode: applyMode, placeholderMode: .unavailable)
+        return SnapshotUpdate(
+            snapshot: snapshot,
+            applyMode: applyMode,
+            placeholderMode: placeholderMode
+        )
     }
 
     private func rebuildVisibleSections() {

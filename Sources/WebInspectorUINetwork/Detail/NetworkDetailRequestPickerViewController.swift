@@ -71,7 +71,13 @@ final class NetworkDetailRequestPickerViewController: UICollectionViewController
         let searchController = UISearchController(searchResultsController: nil)
         searchController.obscuresBackgroundDuringPresentation = false
         searchController.searchBar.placeholder = String(
+            localized: "network.search.placeholder.short",
+            defaultValue: "Search",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        searchController.searchBar.searchTextField.accessibilityLabel = String(
             localized: "network.search.placeholder",
+            defaultValue: "Search Requests",
             bundle: WebInspectorUILocalization.bundle
         )
         searchController.searchResultsUpdater = self

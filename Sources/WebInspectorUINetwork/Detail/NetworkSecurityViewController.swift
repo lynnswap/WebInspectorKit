@@ -107,8 +107,11 @@ final class NetworkSecurityViewController: UICollectionViewController {
         currentDocument = document
 
         var snapshot = NSDiffableDataSourceSnapshot<NetworkSecuritySectionID, NetworkSecurityItemID>()
-        snapshot.appendSections(NetworkSecuritySectionID.allCases)
-        for section in NetworkSecuritySectionID.allCases {
+        let visibleSections = NetworkSecuritySectionID.allCases.filter {
+            document.itemsBySection[$0]?.isEmpty == false
+        }
+        snapshot.appendSections(visibleSections)
+        for section in visibleSections {
             snapshot.appendItems(document.itemsBySection[section] ?? [], toSection: section)
         }
         let retainedItemIDs = snapshot.itemIdentifiers.filter(previousItemIDs.contains)
@@ -245,9 +248,10 @@ final class NetworkSecurityViewController: UICollectionViewController {
         configuration.secondaryTextProperties.adjustsFontForContentSizeCategory = true
         cell.contentConfiguration = configuration
         cell.accessories = []
-        cell.accessibilityLabel = [content.label, content.value]
-            .compactMap { $0 }
-            .joined(separator: ", ")
+        cell.accessibilityLabel = content.accessibilityLabel
+            ?? [content.label, content.value]
+                .compactMap { $0 }
+                .joined(separator: ", ")
         cell.accessibilityValue = nil
         cell.accessibilityHint = nil
         cell.accessibilityTraits = .staticText

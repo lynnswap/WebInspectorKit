@@ -289,28 +289,33 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         switch surface {
         case .none:
             return
+        case .emptyBodyPlaceholder:
+            renderBodyPlaceholder(
+                String(
+                    localized: "network.body.empty",
+                    defaultValue: "No Body",
+                    bundle: WebInspectorUILocalization.bundle
+                )
+            )
         case .unavailableBodyPlaceholder:
-            renderBody(nil)
+            renderBodyPlaceholder(unavailableBodyText)
         case .body(let body, _):
             renderBody(body)
         }
     }
 
-    private func renderBody(_ body: NetworkBody?) {
+    private func renderBodyPlaceholder(_ text: String) {
+        textPreviewCoordinator.cancel()
+        hideMediaPreview()
+        applyBodyDisplay(text: text, syntaxKind: .plainText)
+    }
+
+    private func renderBody(_ body: NetworkBody) {
         guard isRenderingActive else {
             return
         }
         let displayText: String
         let syntaxKind: NetworkBody.SyntaxKind
-        guard let body else {
-            textPreviewCoordinator.cancel()
-            hideMediaPreview()
-            applyBodyDisplay(
-                text: String(localized: "network.body.unavailable", bundle: WebInspectorUILocalization.bundle),
-                syntaxKind: .plainText
-            )
-            return
-        }
 
         if case .loaded = body.phase,
            surface.metadata?.sourcePolicy == .syntax,
@@ -326,10 +331,7 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
                 syntaxBody = rawBody
             }
             applyBodyDisplay(
-                text: syntaxBody ?? String(
-                    localized: "network.body.unavailable",
-                    bundle: WebInspectorUILocalization.bundle
-                ),
+                text: syntaxBody ?? unavailableBodyText,
                 syntaxKind: body.sourceSyntaxKind
             )
             return
@@ -352,7 +354,7 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
             }
             switch textAction {
             case .unavailable:
-                displayText = String(localized: "network.body.unavailable", bundle: WebInspectorUILocalization.bundle)
+                displayText = unavailableBodyText
                 syntaxKind = .plainText
             case .active(let text, let preparedSyntaxKind), .ready(let text, let preparedSyntaxKind):
                 displayText = text
@@ -361,9 +363,10 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         case .failed(let error):
             textPreviewCoordinator.cancel()
             hideMediaPreview()
-            let text = body.textRepresentation
-                ?? String(localized: "network.body.unavailable", bundle: WebInspectorUILocalization.bundle)
-            displayText = text + "\n\n" + localizedDescription(for: error)
+            displayText = failureDisplayText(
+                bodyText: body.textRepresentation,
+                errorText: localizedDescription(for: error)
+            )
             syntaxKind = body.textRepresentationSyntaxKind
         }
 
@@ -393,8 +396,35 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
              .commandFailed(_, _, let message):
             message
         case .timeout(let domain, let method):
-            "\(domain).\(method) timed out."
+            String.localizedStringWithFormat(
+                String(
+                    localized: "network.body.fetch.error.timeout",
+                    defaultValue: "%1$@.%2$@ timed out.",
+                    bundle: WebInspectorUILocalization.bundle
+                ),
+                domain,
+                method
+            )
         }
+    }
+
+    private func failureDisplayText(bodyText: String?, errorText: String) -> String {
+        var components: [String] = []
+        for component in [bodyText, errorText] {
+            guard let component, component.isEmpty == false,
+                  components.contains(component) == false else {
+                continue
+            }
+            components.append(component)
+        }
+        return components.isEmpty ? unavailableBodyText : components.joined(separator: "\n\n")
+    }
+
+    private var unavailableBodyText: String {
+        String(
+            localized: "network.body.unavailable",
+            bundle: WebInspectorUILocalization.bundle
+        )
     }
 
     private func applyBodyDisplay(
@@ -493,11 +523,8 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         clearMoviePreviewSourceIfNeeded(bodyID: bodyID, resetsFailure: false)
         var configuration = UIContentUnavailableConfiguration.empty()
         configuration.image = UIImage(systemName: "exclamationmark.triangle")
-        configuration.text = String(
-            localized: "network.body.unavailable",
-            bundle: WebInspectorUILocalization.bundle
-        )
-        configuration.secondaryText = message
+        configuration.text = unavailableBodyText
+        configuration.secondaryText = message == unavailableBodyText ? nil : message
         showMoviePreviewStatus(configuration)
         previewRenderState.showMovieUnavailable(bodyID: bodyID)
     }

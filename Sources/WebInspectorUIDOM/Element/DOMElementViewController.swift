@@ -12,6 +12,7 @@ package final class DOMElementViewController: UICollectionViewController {
     private var selectedStylesObservation: PortableObservationTracking.Token?
     private var observedSelectedNodeObjectID: ObjectIdentifier?
     private var hasBoundSelectedNode = false
+    private var renderedPlaceholderMode = DOMElementStyleSnapshotCoordinator.PlaceholderMode.none
     private let styleSnapshotCoordinator = DOMElementStyleSnapshotCoordinator()
 
 #if DEBUG
@@ -202,7 +203,7 @@ package final class DOMElementViewController: UICollectionViewController {
         selectedStylesObservation?.cancel()
         guard let node else {
             selectedStylesObservation = nil
-            renderSelectedStyles(nil)
+            applySnapshotUpdate(styleSnapshotCoordinator.updateNoSelection())
             return
         }
         let token = withPortableContinuousObservation { [weak self, weak node, nodeObjectID] _ in
@@ -211,7 +212,7 @@ package final class DOMElementViewController: UICollectionViewController {
                 return
             }
             guard let node else {
-                self.renderSelectedStyles(nil)
+                self.applySnapshotUpdate(self.styleSnapshotCoordinator.updateNoSelection())
                 return
             }
             self.renderSelectedStyles(node.elementStyles)
@@ -283,22 +284,53 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func applyPlaceholder(_ placeholderMode: DOMElementStyleSnapshotCoordinator.PlaceholderMode) {
+        guard renderedPlaceholderMode != placeholderMode
+                || (placeholderMode == .none) != (contentUnavailableConfiguration == nil) else {
+            return
+        }
+        renderedPlaceholderMode = placeholderMode
         switch placeholderMode {
         case .none:
-            if contentUnavailableConfiguration != nil {
-                contentUnavailableConfiguration = nil
-            }
-        case .unavailable:
-            let title = String(localized: "dom.element.styles.empty.title", bundle: WebInspectorUILocalization.bundle)
-            if let configuration = contentUnavailableConfiguration as? UIContentUnavailableConfiguration,
-               configuration.text == title {
-                return
-            }
-            var configuration = UIContentUnavailableConfiguration.empty()
-            configuration.text = title
+            contentUnavailableConfiguration = nil
+        case .noSelection:
+            contentUnavailableConfiguration = placeholderConfiguration(
+                key: "dom.element.styles.no_selection.title",
+                defaultValue: "No Selection"
+            )
+        case .loading:
+            var configuration = UIContentUnavailableConfiguration.loading()
+            configuration.text = String(
+                localized: "dom.element.styles.loading.title",
+                defaultValue: "Loading",
+                bundle: WebInspectorUILocalization.bundle
+            )
             configuration.textProperties.color = .secondaryLabel
             contentUnavailableConfiguration = configuration
+        case .unavailable:
+            contentUnavailableConfiguration = placeholderConfiguration(
+                key: "dom.element.styles.unavailable.title",
+                defaultValue: "Unavailable"
+            )
+        case .failed:
+            contentUnavailableConfiguration = placeholderConfiguration(
+                key: "dom.element.styles.failed.title",
+                defaultValue: "Load Failed"
+            )
         }
+    }
+
+    private func placeholderConfiguration(
+        key: StaticString,
+        defaultValue: String.LocalizationValue
+    ) -> UIContentUnavailableConfiguration {
+        var configuration = UIContentUnavailableConfiguration.empty()
+        configuration.text = String(
+            localized: key,
+            defaultValue: defaultValue,
+            bundle: WebInspectorUILocalization.bundle
+        )
+        configuration.textProperties.color = .secondaryLabel
+        return configuration
     }
 
     /// Section headers are supplementary views; diffable snapshots never
@@ -353,6 +385,10 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
 #if DEBUG
+    package var placeholderModeForTesting: DOMElementStyleSnapshotCoordinator.PlaceholderMode {
+        renderedPlaceholderMode
+    }
+
     package var styleRenderGenerationForTesting: Int {
         styleRenderGeneration
     }
@@ -388,7 +424,11 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     package func renderCurrentStylesForTesting() {
-        renderSelectedStyles(context.selectedNode?.elementStyles)
+        guard let selectedNode = context.selectedNode else {
+            applySnapshotUpdate(styleSnapshotCoordinator.updateNoSelection())
+            return
+        }
+        renderSelectedStyles(selectedNode.elementStyles)
     }
 
     private func finishStyleRenderForTesting() {
