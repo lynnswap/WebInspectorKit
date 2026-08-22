@@ -141,8 +141,8 @@ final class SystemFloatingTabContent: NSObject,
     }
 
     isolated deinit {
-        SystemFloatingTabRuntime.detachTabModel(from: floatingView.floatingTabBar)
         tabController.delegate = nil
+        SystemFloatingTabRuntime.detachTabModel(from: floatingView.floatingTabBar)
         tabController.tabs = []
     }
 

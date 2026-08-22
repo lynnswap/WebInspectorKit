@@ -1,6 +1,6 @@
 # ScrollableTabBar Target Design
 
-Status: Proposed (design gate)
+Status: Implemented
 
 Baseline: `3e842f340b19d2001968c852cfa7daae7103bc6e`
 
@@ -143,12 +143,12 @@ import ScrollableTabBar
 
 private lazy var modeControl: ScrollableTabBar<Mode> = {
     let control = ScrollableTabBar(
-        items: Mode.allCases.map { mode in
+        items: Mode.allCases.enumerated().map { index, mode in
             .init(
                 id: mode,
                 title: mode.title,
                 accessibilityIdentifier:
-                    "WebInspector.Network.DetailMode.\(mode)"
+                    "WebInspector.Network.DetailMode.\(index)"
             )
         },
         selectedID: mode

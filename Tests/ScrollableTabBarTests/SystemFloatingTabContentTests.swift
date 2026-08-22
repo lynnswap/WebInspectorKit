@@ -65,6 +65,30 @@ struct SystemFloatingTabContentTests {
     }
 
     @Test
+    func wideLayoutFitsTheCurrentFourItemsWithoutPagination() throws {
+        let content = try #require(makeContent())
+        content.view.frame = CGRect(x: 0, y: 0, width: 640, height: 49)
+        let host = UIViewController()
+        host.view.addSubview(content.view)
+        let window = showInWindow(
+            host,
+            size: CGSize(width: 1_024, height: 768)
+        )
+        defer { window.isHidden = true }
+
+        content.render(
+            selectedIndex: 0,
+            isEnabled: true,
+            accessibilityLabel: "Detail Mode"
+        )
+        window.layoutIfNeeded()
+        content.view.layoutIfNeeded()
+        content.floatingView.floatingTabBar.layoutIfNeeded()
+
+        #expect(content.collectionView.contentSize.width <= content.collectionView.bounds.width)
+    }
+
+    @Test
     func translatesDelegateSelectionAndDisabledState() throws {
         let content = try #require(makeContent())
         var selectedIndices: [Int] = []
@@ -146,8 +170,11 @@ struct SystemFloatingTabContentTests {
         )
     }
 
-    private func showInWindow(_ viewController: UIViewController) -> UIWindow {
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+    private func showInWindow(
+        _ viewController: UIViewController,
+        size: CGSize = CGSize(width: 390, height: 844)
+    ) -> UIWindow {
+        let window = UIWindow(frame: CGRect(origin: .zero, size: size))
         window.rootViewController = viewController
         viewController.loadViewIfNeeded()
         viewController.view.frame = window.bounds

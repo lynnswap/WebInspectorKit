@@ -24,16 +24,24 @@ struct ScrollableTabBarPresentationItem {
 ///
 /// The control uses UIKit's system floating-tab presentation when its runtime contract
 /// is available, and otherwise presents the same ordered selection through public UIKit
-/// controls. Listen for user selection with ``UIControl/Event/valueChanged``.
+/// controls. Listen for user selection with `UIControl.Event.valueChanged`.
 @MainActor
 public final class ScrollableTabBar<ID: Hashable>: UIControl {
     /// A tab presented by ``ScrollableTabBar``.
     public struct Item: Identifiable {
+        /// The stable identity used for selection.
         public let id: ID
+
+        /// The text describing the tab.
         public let title: String
+
+        /// An optional image shown when the active UIKit presentation supports it.
         public let image: UIImage?
+
+        /// An optional identifier for UI automation.
         public let accessibilityIdentifier: String?
 
+        /// Creates a tab item with stable identity and display content.
         public init(
             id: ID,
             title: String,
@@ -53,7 +61,7 @@ public final class ScrollableTabBar<ID: Hashable>: UIControl {
     /// The identifier of the selected item.
     ///
     /// Assigning this property updates the presentation without sending
-    /// ``UIControl/Event/valueChanged``. The identifier must belong to ``items``.
+    /// `UIControl.Event.valueChanged`. The identifier must belong to ``items``.
     public var selectedID: ID {
         get {
             items[selectedIndexStorage].id
@@ -67,12 +75,14 @@ public final class ScrollableTabBar<ID: Hashable>: UIControl {
         }
     }
 
+    /// A Boolean value that determines whether the user can change the selection.
     public override var isEnabled: Bool {
         didSet {
             renderContent()
         }
     }
 
+    /// The contextual accessibility label propagated to the active presentation.
     public override var accessibilityLabel: String? {
         didSet {
             renderContent()

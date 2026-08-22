@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import ScrollableTabBar
 import WebInspectorUIBase
 import WebInspectorDataKit
 import ObservationBridge
@@ -86,12 +87,33 @@ package final class NetworkDetailViewController: UIViewController {
     private lazy var securityViewController = NetworkSecurityViewController()
     private lazy var cookiesViewController = NetworkCookiesViewController()
     private let webSocketPreviewViewController: NetworkWebSocketPreviewViewController
-    private lazy var modeControlController: NetworkDetailModeControlController = {
-        let controller = NetworkDetailModeControlController(initialMode: mode)
-        controller.selectionHandler = { [weak self] mode in
-            self?.setMode(mode)
-        }
-        return controller
+    private lazy var modeControl: ScrollableTabBar<Mode> = {
+        let control = ScrollableTabBar(
+            items: Mode.allCases.enumerated().map { index, mode in
+                .init(
+                    id: mode,
+                    title: mode.title,
+                    accessibilityIdentifier: "WebInspector.Network.DetailMode.\(index)"
+                )
+            },
+            selectedID: mode
+        )
+        control.accessibilityIdentifier = "WebInspector.Network.DetailModeTabBar"
+        control.accessibilityLabel = String(
+            localized: "network.detail.mode.label",
+            defaultValue: "Detail Mode",
+            bundle: WebInspectorUILocalization.bundle
+        )
+        control.addAction(
+            UIAction { [weak self, weak control] _ in
+                guard let selectedMode = control?.selectedID else {
+                    return
+                }
+                self?.setMode(selectedMode)
+            },
+            for: .valueChanged
+        )
+        return control
     }()
     private lazy var previewRoleControlController: NetworkPreviewRoleControlController = {
         let controller = NetworkPreviewRoleControlController()
@@ -389,7 +411,7 @@ package final class NetworkDetailViewController: UIViewController {
     }
 
     private func installModeTitleView() {
-        navigationItem.titleView = modeControlController.view
+        navigationItem.titleView = modeControl
         renderModeControl()
     }
 
@@ -599,7 +621,8 @@ package final class NetworkDetailViewController: UIViewController {
 
     private func renderModeControl(selectedRequest request: NetworkRequest? = nil) {
         let request = request ?? observedRequest
-        modeControlController.render(mode: mode, isEnabled: request != nil)
+        modeControl.selectedID = mode
+        modeControl.isEnabled = request != nil
     }
 
     private func clearSelectedRequestPresentation(bodySurface: NetworkBodySurface) {
@@ -1195,27 +1218,15 @@ extension NetworkDetailViewController {
     }
 
     var isDetailModeControlEnabledForTesting: Bool {
-        modeControlController.isEnabledForTesting
+        modeControl.isEnabled
     }
 
     var detailModeControlViewForTesting: UIView {
-        modeControlController.view
+        modeControl
     }
 
-    var detailModeUsesFloatingTabBarForTesting: Bool {
-        modeControlController.usesFloatingTabBarForTesting
-    }
-
-    var detailModeFloatingTabBarForTesting: UIView? {
-        modeControlController.floatingTabBarForTesting
-    }
-
-    var detailModeSelectedFloatingModeForTesting: NetworkDetailViewController.Mode? {
-        modeControlController.selectedFloatingModeForTesting
-    }
-
-    var detailModeFloatingTabBarHasLiquidLensForTesting: Bool {
-        modeControlController.floatingTabBarHasLiquidLensForTesting
+    var detailModeSelectedModeForTesting: NetworkDetailViewController.Mode {
+        modeControl.selectedID
     }
 
     var isPreviewRoleControlHiddenForTesting: Bool {
@@ -1251,12 +1262,9 @@ extension NetworkDetailViewController {
         presentedRequestPicker
     }
 
-    func isDetailModeEnabledForTesting(_ mode: NetworkDetailViewController.Mode) -> Bool {
-        modeControlController.isModeEnabledForTesting(mode)
-    }
-
     func selectModeForTesting(_ mode: NetworkDetailViewController.Mode) {
-        modeControlController.selectModeForTesting(mode)
+        modeControl.selectedID = mode
+        modeControl.sendActions(for: .valueChanged)
     }
 
     func setModeForTesting(_ mode: NetworkDetailViewController.Mode) {
