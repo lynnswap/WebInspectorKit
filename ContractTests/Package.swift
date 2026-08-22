@@ -33,6 +33,11 @@ let package = Package(
                 .product(name: "WebInspectorProxyKit", package: "WebInspectorKit"),
                 .product(name: "WebInspectorProxyKitTesting", package: "WebInspectorKit"),
                 .product(
+                    name: "ScrollableTabBar",
+                    package: "WebInspectorKit",
+                    condition: .when(platforms: [.iOS])
+                ),
+                .product(
                     name: "WebInspectorKit",
                     package: "WebInspectorKit",
                     condition: .when(platforms: [.iOS])
