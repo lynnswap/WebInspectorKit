@@ -67,7 +67,11 @@ struct SystemFloatingTabContentTests {
     }
 
     @Test
-    func wideLayoutFitsTheCurrentFourItemsWithoutPagination() throws {
+    func expandedWideLayoutFitsTheCurrentFourItemsWithoutPagination() throws {
+        guard #available(iOS 26.0, *) else {
+            return
+        }
+
         let content = try #require(makeContent())
         content.view.frame = CGRect(x: 0, y: 0, width: 640, height: 49)
         let host = UIViewController()
