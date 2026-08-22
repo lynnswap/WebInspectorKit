@@ -1198,24 +1198,28 @@ extension NetworkDetailViewController {
         modeControlController.isEnabledForTesting
     }
 
-    var detailModeControlViewForTesting: NetworkDetailModeControlView {
+    var detailModeControlViewForTesting: UIView {
         modeControlController.view
     }
 
-    var detailModeControlPresentationForTesting: NetworkDetailModeControlView.Presentation {
-        modeControlController.presentationForTesting
+    var detailModeUsesScrollablePickerForTesting: Bool {
+        modeControlController.usesScrollablePickerForTesting
     }
 
-    var detailModeSegmentedControlForTesting: UISegmentedControl {
-        modeControlController.segmentedControlForTesting
+    var detailModeScrollablePickerForTesting: UIView? {
+        modeControlController.scrollablePickerViewForTesting
     }
 
-    var detailModeMenuButtonForTesting: UIButton {
-        modeControlController.menuButtonForTesting
+    var detailModeScrollViewForTesting: UIScrollView? {
+        modeControlController.scrollViewForTesting
     }
 
-    var detailModeMenuActionTitlesForTesting: [String] {
-        modeControlController.menuActionTitlesForTesting
+    var detailModeSegmentControlsForTesting: [UIControl] {
+        modeControlController.segmentControlsForTesting
+    }
+
+    var detailModeAccessibilityElementsForTesting: [UIAccessibilityElement] {
+        modeControlController.modeAccessibilityElementsForTesting
     }
 
     var isPreviewRoleControlHiddenForTesting: Bool {

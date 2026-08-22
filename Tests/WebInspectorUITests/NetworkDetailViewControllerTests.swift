@@ -584,15 +584,21 @@ struct NetworkDetailViewControllerTests {
         #expect(securityController.expandedListsForTesting == [.dnsNames])
         let expandedOriginalIDs = Set(securityController.snapshotForTesting.itemIdentifiers)
         let modeControlIdentity = ObjectIdentifier(viewController.detailModeControlViewForTesting)
+        let pickerIdentity = ObjectIdentifier(
+            try #require(viewController.detailModeScrollablePickerForTesting)
+        )
         viewController.detailModeControlViewForTesting.traitOverrides.horizontalSizeClass = .compact
         viewController.detailModeControlViewForTesting.updateTraitsIfNeeded()
-        #expect(viewController.detailModeControlPresentationForTesting == .menu)
+        #expect(viewController.detailModeUsesScrollablePickerForTesting)
         #expect(securityController.expandedListsForTesting == [.dnsNames])
         viewController.detailModeControlViewForTesting.traitOverrides.horizontalSizeClass = .regular
         viewController.detailModeControlViewForTesting.traitOverrides.preferredContentSizeCategory = .large
         viewController.detailModeControlViewForTesting.updateTraitsIfNeeded()
-        #expect(viewController.detailModeControlPresentationForTesting == .segmented)
         #expect(ObjectIdentifier(viewController.detailModeControlViewForTesting) == modeControlIdentity)
+        #expect(
+            viewController.detailModeScrollablePickerForTesting.map(ObjectIdentifier.init)
+                == pickerIdentity
+        )
         #expect(securityController.expandedListsForTesting == [.dnsNames])
 
         selectMode(.cookies, on: viewController)
