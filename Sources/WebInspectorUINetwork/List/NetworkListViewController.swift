@@ -278,6 +278,11 @@ package final class NetworkListViewController: UICollectionViewController, UISea
             image: UIImage(systemName: "line.3.horizontal.decrease"),
             menu: UIMenu(children: [makeFilterMenuElement()])
         )
+        item.accessibilityLabel = String(
+            localized: "network.controls.filter",
+            defaultValue: "Filter",
+            bundle: WebInspectorUILocalization.bundle
+        )
         item.accessibilityIdentifier = "WebInspector.Network.FilterButton"
         item.isSelected = model.effectiveResourceFilters.isEmpty == false
         return item
