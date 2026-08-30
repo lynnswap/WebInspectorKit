@@ -12,7 +12,11 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
     )
 
     private let elementDescriptor = WebInspectorTab.DisplayDescriptor(
-        title: "Element",
+        title: String(
+            localized: "inspector.tab.element",
+            defaultValue: "Element",
+            bundle: WebInspectorUILocalization.bundle
+        ),
         image: UIImage(systemName: "info.circle")
     )
 

@@ -40,6 +40,11 @@ package final class DOMNavigationItems: NSObject {
             target: self,
             action: #selector(toggleElementPicker)
         )
+        item.accessibilityLabel = String(
+            localized: "inspector.pick_element",
+            defaultValue: "Pick Element",
+            bundle: WebInspectorUILocalization.bundle
+        )
         item.accessibilityIdentifier = "WebInspector.DOM.PickButton"
         return item
     }()

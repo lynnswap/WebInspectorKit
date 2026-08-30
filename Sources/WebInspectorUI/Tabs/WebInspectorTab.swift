@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import UIKit
+import WebInspectorUIBase
 
 /// A tab shown by the built-in WebInspectorKit UI.
 ///
@@ -115,7 +116,11 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
     /// Built-in DOM inspector tab.
     public static let dom = WebInspectorTab(
         id: "webinspector_dom",
-        title: "DOM",
+        title: String(
+            localized: "inspector.tab.dom",
+            defaultValue: "DOM",
+            bundle: WebInspectorUILocalization.bundle
+        ),
         image: UIImage(systemName: "chevron.left.forwardslash.chevron.right"),
         builtIn: .dom
     )
@@ -123,7 +128,11 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
     /// Built-in Network inspector tab.
     public static let network = WebInspectorTab(
         id: "webinspector_network",
-        title: "Network",
+        title: String(
+            localized: "inspector.tab.network",
+            defaultValue: "Network",
+            bundle: WebInspectorUILocalization.bundle
+        ),
         image: UIImage(systemName: "waveform.path.ecg.rectangle"),
         builtIn: .network
     )
