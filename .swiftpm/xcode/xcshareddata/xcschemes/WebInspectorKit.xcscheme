@@ -54,16 +54,6 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "ScrollableTabBarTests"
-               BuildableName = "ScrollableTabBarTests"
-               BlueprintName = "ScrollableTabBarTests"
-               ReferencedContainer = "container:">
-            </BuildableReference>
-         </TestableReference>
-         <TestableReference
-            skipped = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
                BlueprintIdentifier = "WebInspectorUITests"
                BuildableName = "WebInspectorUITests"
                BlueprintName = "WebInspectorUITests"
