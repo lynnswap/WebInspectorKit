@@ -33,7 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ScrollableTabBar.git",
       "state" : {
-        "revision" : "028b688a04f06a51490660507ee5d4199d20c00c"
+        "revision" : "58224bfa25d30adc1607a7910a2ee1cf88295105",
+        "version" : "0.1.0"
       }
     },
     {

@@ -48,7 +48,7 @@ private final class NetworkResponseBodyFetchObservationBinding {
 }
 
 @MainActor
-package final class NetworkDetailViewController: UIViewController {
+package final class NetworkDetailViewController: UIViewController, ScrollableTabBarDelegate {
     private enum PreviewCandidate {
         case remoteHLS(NetworkRequest)
         case remotePartialMovie(NetworkRequest)
@@ -104,15 +104,7 @@ package final class NetworkDetailViewController: UIViewController {
             defaultValue: "Detail Mode",
             bundle: WebInspectorUILocalization.bundle
         )
-        control.addAction(
-            UIAction { [weak self, weak control] _ in
-                guard let selectedMode = control?.selectedID else {
-                    return
-                }
-                self?.setMode(selectedMode)
-            },
-            for: .valueChanged
-        )
+        control.delegate = self
         return control
     }()
     private lazy var previewRoleControlController: NetworkPreviewRoleControlController = {
@@ -575,6 +567,13 @@ package final class NetworkDetailViewController: UIViewController {
         }
         renderModeControl()
         rebindSelectedRequestRendering()
+    }
+
+    package func scrollableTabBar(
+        _ tabBar: ScrollableTabBar<NetworkDetailViewController.Mode>,
+        didSelect selectedID: NetworkDetailViewController.Mode
+    ) {
+        setMode(selectedID)
     }
 
     private func setPreviewRole(_ nextRole: NetworkBody.Role) {
@@ -1264,7 +1263,7 @@ extension NetworkDetailViewController {
 
     func selectModeForTesting(_ mode: NetworkDetailViewController.Mode) {
         modeControl.selectedID = mode
-        modeControl.sendActions(for: .valueChanged)
+        modeControl.delegate?.scrollableTabBar(modeControl, didSelect: mode)
     }
 
     func setModeForTesting(_ mode: NetworkDetailViewController.Mode) {
