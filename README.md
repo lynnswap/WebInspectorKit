@@ -29,7 +29,6 @@ UIKit Web Inspector for `WKWebView`.
 
 | Product | Use when |
 | --- | --- |
-| `ScrollableTabBar` | You want an iOS 18+ UIKit tab selector whose overflow items remain horizontally reachable. |
 | `WebInspectorKit` | You want the built-in UIKit inspector UI. |
 | `WebInspectorDataKit` | You want observable DOM, Network, Console, Runtime, and CSS models for a custom UI. |
 | `WebInspectorDataKitTesting` | You want deterministic `WebInspectorContext` startup synchronization in tests. |
@@ -62,64 +61,6 @@ final class BrowserViewController: UIViewController {
     }
 }
 ```
-
-## ScrollableTabBar
-
-Add the `ScrollableTabBar` product when an iOS UIKit interface needs a compact
-tab selector whose overflow items remain reachable. The control keeps item
-membership and order fixed while the consumer owns the selected domain value.
-
-```swift
-import ScrollableTabBar
-import UIKit
-
-@MainActor
-final class ReportViewController: UIViewController {
-    private enum Section: Hashable {
-        case overview
-        case activity
-        case settings
-    }
-    private var selectedSection: Section = .overview
-
-    private lazy var sectionControl: ScrollableTabBar<Section> = {
-        let control = ScrollableTabBar(
-            items: [
-                .init(id: .overview, title: "Overview"),
-                .init(id: .activity, title: "Activity"),
-                .init(id: .settings, title: "Settings"),
-            ],
-            selectedID: .overview
-        )
-        control.addAction(
-            UIAction { [weak self, weak control] _ in
-                guard let selectedID = control?.selectedID else {
-                    return
-                }
-                self?.showSection(selectedID)
-            },
-            for: .valueChanged
-        )
-        return control
-    }()
-
-    private func showSection(_ section: Section) {
-        selectedSection = section
-        sectionControl.selectedID = selectedSection
-        // Render content for `section`.
-    }
-}
-```
-
-Changing `selectedID` programmatically updates the selection without sending
-`.valueChanged`. User selection sends `.valueChanged` only when the selected ID
-actually changes. Use the inherited `isEnabled` property to disable selection.
-
-> [!WARNING]
-> `ScrollableTabBar` prefers an undocumented UIKit floating-tab runtime when its
-> expected contract is available. It otherwise uses a public UIKit fallback.
-> Exact pagination, Liquid Glass appearance, private-runtime availability, and
-> App Store acceptance are not guaranteed.
 
 ## Tabs
 
@@ -167,7 +108,6 @@ to GitHub Pages.
 
 | Document | Purpose |
 | --- | --- |
-| [ScrollableTabBar](Sources/ScrollableTabBar/ScrollableTabBar.docc/ScrollableTabBar.md) | Public UIKit control usage and runtime guarantees. |
 | [Migration Guide](Docs/MIGRATION.md) | Version-by-version source migration notes for app code. |
 | [WebInspectorUI](Sources/WebInspectorUI/README.md) | UIKit inspector implementation notes and UI/DataKit ownership boundaries. |
 | [WebKit Version Mapping](Docs/WebKitVersionMapping.md) | Local notes for mapping iOS WebKit framework versions to public WebKit source refs. |
@@ -176,7 +116,6 @@ to GitHub Pages.
 
 ```text
 Sources/
-  ScrollableTabBar/             Public iOS UIKit overflow tab selector product.
   WebInspectorKit/             Public built-in inspector product.
   WebInspectorDataKit/         Observable inspector model product.
   WebInspectorDataKitTesting/  Deterministic DataKit consumer test helpers.

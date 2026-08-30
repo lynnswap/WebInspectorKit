@@ -33,10 +33,6 @@ let package = Package(
             targets: ["WebInspectorDataKitTesting"]
         ),
         .library(
-            name: "ScrollableTabBar",
-            targets: ["ScrollableTabBar"]
-        ),
-        .library(
             name: "WebInspectorKit",
             targets: ["WebInspectorKit"]
         )
@@ -45,6 +41,10 @@ let package = Package(
         .package(
             url: "https://github.com/lynnswap/ObservationBridge.git",
             exact: "0.13.0"
+        ),
+        .package(
+            url: "https://github.com/lynnswap/ScrollableTabBar.git",
+            revision: "028b688a04f06a51490660507ee5d4199d20c00c"
         ),
         .package(
             url: "https://github.com/lynnswap/UIHostingMenu.git",
@@ -121,11 +121,6 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         .target(
-            name: "ScrollableTabBar",
-            dependencies: [],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
             name: "WebInspectorUIDOM",
             dependencies: [
                 "WebInspectorDataKit",
@@ -142,7 +137,11 @@ let package = Package(
                 "WebInspectorDataKit",
                 "WebInspectorProxyKit",
                 "WebInspectorUIBase",
-                "ScrollableTabBar",
+                .product(
+                    name: "ScrollableTabBar",
+                    package: "ScrollableTabBar",
+                    condition: .when(platforms: [.iOS])
+                ),
                 .product(name: "ObservationBridge", package: "ObservationBridge"),
                 .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS]))
             ],
@@ -209,13 +208,6 @@ let package = Package(
                 "WebInspectorTestSupport"
             ],
             path: "Tests/WebInspectorDataKitTests",
-            swiftSettings: strictSwiftSettings
-        ),
-        .testTarget(
-            name: "ScrollableTabBarTests",
-            dependencies: [
-                "ScrollableTabBar"
-            ],
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(

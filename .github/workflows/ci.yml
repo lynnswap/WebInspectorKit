@@ -521,9 +521,6 @@ jobs:
           - name: DataKit
             test_filter: WebInspectorDataKitTests
             result_name: data
-          - name: ScrollableTabBar
-            test_filter: ScrollableTabBarTests
-            result_name: scrollable-tab-bar
           - name: UI
             test_filter: WebInspectorUITests
             result_name: ui
