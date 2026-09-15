@@ -1,0 +1,6 @@
+paths:
+  .github/workflows/ci.yml:
+    ignore:
+      # Remove when actionlint recognizes GitHub's hosted Xcode 27 preview label.
+      # https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+      - '^label "xcode-27" is unknown\.'
