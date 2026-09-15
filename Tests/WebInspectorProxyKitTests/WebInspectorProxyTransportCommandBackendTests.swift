@@ -945,6 +945,10 @@ func malformedKnownEventTerminatesFilteredOrderedRouteWithoutWatermark() async t
 
     let closeMessage = await disconnectedMessage(from: eventTask)
     #expect(closeMessage?.contains("Network.loadingFinished") == true)
+    let completedCloseMessage = await disconnectedMessage(from: Task {
+        try await proxy.waitUntilClosed()
+    })
+    #expect(completedCloseMessage == closeMessage)
     #expect(await backend.isDetached())
 }
 
@@ -1161,6 +1165,10 @@ func malformedKnownEventPropagatesFailureToFilteredOrderedRoute() async throws {
     let frameMessage = await disconnectedMessage(from: frameTask)
     #expect(pageMessage?.contains("Network.loadingFinished") == true)
     #expect(frameMessage == pageMessage)
+    let closeMessage = await disconnectedMessage(from: Task {
+        try await proxy.waitUntilClosed()
+    })
+    #expect(closeMessage == pageMessage)
     #expect(await backend.isDetached())
 }
 
@@ -4366,7 +4374,7 @@ private func disconnectedMessage<Value: Sendable>(
     from task: Task<Value, any Error>
 ) async -> String? {
     do {
-        _ = try await throwingValue(of: task)
+        _ = try await task.value
         Issue.record("Expected a disconnected terminal error.")
         return nil
     } catch let WebInspectorProxyError.disconnected(message) {
