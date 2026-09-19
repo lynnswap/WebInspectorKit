@@ -608,6 +608,13 @@ static NSError *selectorFailureError(
 
 @end
 
+// Monocly uses these existing navigation callbacks to settle and persist history.
+@protocol WebInspectorNativeNavigationDelegateClient <WKNavigationDelegate>
+@optional
+- (void)_webView:(WKWebView *)webView navigation:(nullable WKNavigation *)navigation didSameDocumentNavigation:(int64_t)navigationType;
+- (void)_webView:(WKWebView *)webView backForwardListItemAdded:(nullable WKBackForwardListItem *)itemAdded removed:(nullable NSArray<WKBackForwardListItem *> *)itemsRemoved;
+@end
+
 @interface WebInspectorNativeNavigationDelegateProxy : NSObject <WKNavigationDelegate>
 
 - (instancetype)initWithWebView:(WKWebView *)webView
@@ -732,16 +739,138 @@ private:
 
 - (BOOL)respondsToSelector:(SEL)selector
 {
-    return [super respondsToSelector:selector] || [_client respondsToSelector:selector];
+    if (selector == @selector(webViewWebContentProcessDidTerminate:)
+        || selector == @selector(webView:didStartProvisionalNavigation:)
+        || selector == @selector(webView:didCommitNavigation:)
+        || selector == @selector(webView:didFinishNavigation:))
+        return YES;
+
+    if (protocol_getMethodDescription(@protocol(WKNavigationDelegate), selector, NO, YES).name
+        || protocol_getMethodDescription(@protocol(WebInspectorNativeNavigationDelegateClient), selector, NO, YES).name)
+        return [super respondsToSelector:selector] && [_client respondsToSelector:selector];
+    return [super respondsToSelector:selector];
 }
 
-- (id)forwardingTargetForSelector:(SEL)selector
+// WebKit caches optional delegate capabilities when installing the delegate.
+// Keep concrete entry points for callbacks queued before the weak client disappears.
+- (void)_webView:(WKWebView *)webView navigation:(WKNavigation *)navigation didSameDocumentNavigation:(int64_t)navigationType
+{
+    id<WebInspectorNativeNavigationDelegateClient> client = (id)_client;
+    if ([client respondsToSelector:_cmd])
+        [client _webView:webView navigation:navigation didSameDocumentNavigation:navigationType];
+}
+
+- (void)_webView:(WKWebView *)webView backForwardListItemAdded:(WKBackForwardListItem *)itemAdded removed:(NSArray<WKBackForwardListItem *> *)itemsRemoved
+{
+    id<WebInspectorNativeNavigationDelegateClient> client = (id)_client;
+    if ([client respondsToSelector:_cmd])
+        [client _webView:webView backForwardListItemAdded:itemAdded removed:itemsRemoved];
+}
+
+- (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)action decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler
 {
     id<WKNavigationDelegate> client = _client;
-    if ([client respondsToSelector:selector])
-        return client;
-    return [super forwardingTargetForSelector:selector];
+    if ([client respondsToSelector:_cmd])
+        [client webView:webView decidePolicyForNavigationAction:action decisionHandler:decisionHandler];
+    else
+        decisionHandler(WKNavigationActionPolicyAllow);
 }
+
+- (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)action preferences:(WKWebpagePreferences *)preferences decisionHandler:(void (^)(WKNavigationActionPolicy, WKWebpagePreferences *))decisionHandler
+{
+    id<WKNavigationDelegate> client = _client;
+    if ([client respondsToSelector:_cmd]) {
+        [client webView:webView decidePolicyForNavigationAction:action preferences:preferences decisionHandler:decisionHandler];
+    } else if ([client respondsToSelector:@selector(webView:decidePolicyForNavigationAction:decisionHandler:)]) {
+        [client webView:webView decidePolicyForNavigationAction:action decisionHandler:^(WKNavigationActionPolicy policy) {
+            decisionHandler(policy, preferences);
+        }];
+    } else {
+        decisionHandler(WKNavigationActionPolicyAllow, preferences);
+    }
+}
+
+- (void)webView:(WKWebView *)webView decidePolicyForNavigationResponse:(WKNavigationResponse *)response decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler
+{
+    id<WKNavigationDelegate> client = _client;
+    if ([client respondsToSelector:_cmd])
+        [client webView:webView decidePolicyForNavigationResponse:response decisionHandler:decisionHandler];
+    else
+        decisionHandler(response.canShowMIMEType ? WKNavigationResponsePolicyAllow : WKNavigationResponsePolicyCancel);
+}
+
+- (void)webView:(WKWebView *)webView didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge *)challenge completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredential *))completionHandler
+{
+    id<WKNavigationDelegate> client = _client;
+    if ([client respondsToSelector:_cmd])
+        [client webView:webView didReceiveAuthenticationChallenge:challenge completionHandler:completionHandler];
+    else
+        completionHandler(NSURLSessionAuthChallengeRejectProtectionSpace, nil);
+}
+
+- (void)webView:(WKWebView *)webView authenticationChallenge:(NSURLAuthenticationChallenge *)challenge shouldAllowDeprecatedTLS:(void (^)(BOOL))decisionHandler
+{
+    id<WKNavigationDelegate> client = _client;
+    if ([client respondsToSelector:_cmd])
+        [client webView:webView authenticationChallenge:challenge shouldAllowDeprecatedTLS:decisionHandler];
+    else
+        decisionHandler(NO);
+}
+
+- (void)webView:(WKWebView *)webView didReceiveServerRedirectForProvisionalNavigation:(WKNavigation *)navigation
+{
+    id<WKNavigationDelegate> client = _client;
+    if ([client respondsToSelector:_cmd])
+        [client webView:webView didReceiveServerRedirectForProvisionalNavigation:navigation];
+}
+
+- (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error
+{
+    id<WKNavigationDelegate> client = _client;
+    if ([client respondsToSelector:_cmd])
+        [client webView:webView didFailProvisionalNavigation:navigation withError:error];
+}
+
+- (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error
+{
+    id<WKNavigationDelegate> client = _client;
+    if ([client respondsToSelector:_cmd])
+        [client webView:webView didFailNavigation:navigation withError:error];
+}
+
+- (void)webView:(WKWebView *)webView navigationAction:(WKNavigationAction *)action didBecomeDownload:(WKDownload *)download
+{
+    id<WKNavigationDelegate> client = _client;
+    if ([client respondsToSelector:_cmd])
+        [client webView:webView navigationAction:action didBecomeDownload:download];
+}
+
+- (void)webView:(WKWebView *)webView navigationResponse:(WKNavigationResponse *)response didBecomeDownload:(WKDownload *)download
+{
+    id<WKNavigationDelegate> client = _client;
+    if ([client respondsToSelector:_cmd])
+        [client webView:webView navigationResponse:response didBecomeDownload:download];
+}
+
+- (void)webView:(WKWebView *)webView shouldGoToBackForwardListItem:(WKBackForwardListItem *)item willUseInstantBack:(BOOL)willUseInstantBack completionHandler:(void (^)(BOOL))completionHandler API_AVAILABLE(macos(26.0), ios(26.0))
+{
+    id<WKNavigationDelegate> client = _client;
+    if ([client respondsToSelector:_cmd])
+        [client webView:webView shouldGoToBackForwardListItem:item willUseInstantBack:willUseInstantBack completionHandler:completionHandler];
+    else
+        completionHandler(YES);
+}
+
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 270000 || __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000
+- (void)webView:(WKWebView *)webView willSubmitForm:(WKFormInfo *)formInfo submissionHandler:(void (^)(void))submissionHandler API_AVAILABLE(macos(27.0), ios(27.0))
+{
+    id<WKNavigationDelegate> client = _client;
+    if ([client respondsToSelector:_cmd])
+        [client webView:webView willSubmitForm:formInfo submissionHandler:submissionHandler];
+    else
+        submissionHandler();
+}
+#endif
 
 - (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView
 {

@@ -13,6 +13,37 @@ private let nativeRuntimeSmokeDisabledReason: Comment =
     "Native WebKit runtime smoke tests depend on the host WebKit dyld image and shared cache state; set WEBINSPECTORKIT_RUN_NATIVE_RUNTIME_SMOKE=1 to run them."
 
 struct NativeInspectorSymbolResolverTests {
+    @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason), .timeLimit(.minutes(1)))
+    @MainActor
+    func nativeFrontendExchangesProtocolMessages() async throws {
+        let webView = WKWebView(frame: .zero)
+        webView.isInspectable = true
+        let bridge = NativeInspectorBridge(webView: webView)
+        let (messages, continuation) = AsyncThrowingStream<String, any Error>.makeStream()
+        bridge.messageHandler = { continuation.yield($0) }
+        bridge.fatalFailureHandler = { message in
+            continuation.finish(throwing: NSError(
+                domain: "NativeFrontendSmokeTest", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: message]
+            ))
+        }
+        defer {
+            bridge.detach()
+            continuation.finish()
+        }
+
+        try bridge.attach(with: NativeInspectorResolvedSymbols.resolveCurrent())
+        try bridge.sendJSONString(#"{"id":1,"method":"Target.setPauseOnStart","params":{"pauseOnStart":false}}"#)
+        for try await message in messages {
+            let response = try JSONSerialization.jsonObject(with: Data(message.utf8)) as? [String: Any]
+            guard response?["id"] as? Int == 1 else { continue }
+            #expect(response?["error"] == nil)
+            #expect(response?["result"] != nil)
+            return
+        }
+        Issue.record("The native frontend closed before replying to the protocol command.")
+    }
+
     @Test
     func fixtureImageResolvesCompleteAddressSet() throws {
         let fixture = try nativeSymbolFixture()
