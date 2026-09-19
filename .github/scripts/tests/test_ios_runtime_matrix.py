@@ -33,16 +33,14 @@ class RuntimeMatrixTests(unittest.TestCase):
 
     def test_runtime_identifier_is_preserved_when_version_contains_a_patch(self):
         installed = [runtime("26.4.1", identifier="com.apple.CoreSimulator.SimRuntime.iOS-26-4")]
-        jobs = matrix.test_matrix(matrix.supported_runtimes(installed), True)["include"]
-        self.assertEqual(len(jobs), 5)
-        self.assertEqual({job["runtime"] for job in jobs}, {installed[0]["identifier"]})
-        self.assertEqual({job["version"] for job in jobs}, {"26.4.1"})
-        self.assertIn("MonoclyTests", {job["test_filter"] for job in jobs})
+        jobs = matrix.test_matrix(matrix.supported_runtimes(installed), "26.6.2")["include"]
+        self.assertEqual(jobs[0], {"runtime": installed[0]["identifier"], "version": "26.4.1", "platform": "iOS"})
 
-    def test_native_bridge_runs_on_older_toolchain_for_each_runtime(self):
-        jobs = matrix.test_matrix([runtime("18.5"), runtime("18.6")], False)["include"]
-        self.assertEqual(len(jobs), 2)
-        self.assertEqual({job["product"] for job in jobs}, {"native"})
+    def test_one_job_per_runtime_and_one_for_the_host_macos(self):
+        jobs = matrix.test_matrix([runtime("18.5"), runtime("18.6")], "15.7")["include"]
+        self.assertEqual(len(jobs), 3)
+        self.assertEqual([job["version"] for job in jobs if job["platform"] == "iOS"], ["18.5", "18.6"])
+        self.assertEqual(jobs[-1], {"runtime": "", "version": "15.7", "platform": "macOS"})
 
 
 if __name__ == "__main__":

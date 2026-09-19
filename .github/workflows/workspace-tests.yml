@@ -1,4 +1,4 @@
-name: iOS Runtime Tests
+name: Runtime Tests
 
 on:
   workflow_call:
@@ -20,49 +20,8 @@ permissions:
   contents: read
 
 jobs:
-  macos:
-    name: NativeBridge on the host macOS
-    runs-on: ${{ inputs.runner }}
-    timeout-minutes: 15
-    env:
-      XCODE_MAJOR: ${{ inputs.xcode_major }}
-      XCODE_ALLOW_PRERELEASE: ${{ inputs.allow_prerelease }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Resolve Xcode
-        run: ruby .github/scripts/resolve-xcode.rb
-      - name: Test the host WebKit
-        run: |
-          set -e -o pipefail
-          sw_vers
-          xcodebuild build-for-testing \
-            -workspace Packages/WebInspectorNativeBridge/WebInspectorNativeBridge.xcworkspace \
-            -scheme WebInspectorNativeBridgeTests \
-            -destination 'platform=macOS,arch=arm64' \
-            -derivedDataPath "$RUNNER_TEMP/native-macos" \
-            -enableCodeCoverage NO \
-            | tee "$RUNNER_TEMP/native-macos-build.log"
-          xctestrun="$(python3 .github/scripts/prepare-xctestrun.py "$RUNNER_TEMP/native-macos/Build/Products" --product native)"
-          xcodebuild test-without-building \
-            -xctestrun "$xctestrun" \
-            -destination 'platform=macOS,arch=arm64' \
-            -parallel-testing-enabled NO \
-            -test-timeouts-enabled YES \
-            -maximum-test-execution-time-allowance 60 \
-            -resultBundlePath "$RUNNER_TEMP/native-macos.xcresult" \
-            | tee "$RUNNER_TEMP/native-macos-tests.log"
-      - name: Upload macOS diagnostics
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: native-macos-${{ inputs.runner }}
-          path: |
-            ${{ runner.temp }}/native-macos-*.log
-            ${{ runner.temp }}/native-macos.xcresult
-          if-no-files-found: ignore
-
   build:
-    name: Build tests and discover installed runtimes
+    name: Build iOS and macOS test artifacts
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 20
     outputs:
@@ -77,18 +36,9 @@ jobs:
       - name: Resolve Xcode
         id: toolchain
         run: ruby .github/scripts/resolve-xcode.rb
-      - name: Discover all installed supported iOS runtimes
+      - name: Discover installed supported runtimes
         id: runtimes
-        run: |
-          args=()
-          if [[ "$INCLUDE_WORKSPACE" == true ]]; then
-            args+=(--include-workspace)
-          fi
-          python3 .github/scripts/ios-runtime-matrix.py discover "${args[@]}"
-      - name: Select build destination
-        env:
-          BUILD_RUNTIME: ${{ steps.runtimes.outputs.build-runtime }}
-        run: python3 .github/scripts/ios-runtime-matrix.py resolve --runtime "$BUILD_RUNTIME"
+        run: python3 .github/scripts/ios-runtime-matrix.py discover
       - name: Restore Swift package cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -96,37 +46,48 @@ jobs:
             ${{ env.SPM_CACHE_DIR }}
             ~/Library/Caches/org.swift.swiftpm
           key: spm-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.cache-id }}-${{ hashFiles('**/Package.resolved') }}
-      - name: Build once for the installed runtimes
+      - name: Build each platform once
         run: |
           set -e -o pipefail
-          products=(native)
-          if [[ "$INCLUDE_WORKSPACE" == true ]]; then
-            products+=(workspace)
-          fi
-          for product in "${products[@]}"; do
-            if [[ "$product" == native ]]; then
+          for platform in iOS macOS; do
+            if [[ "$platform" == iOS ]]; then
+              destination='generic/platform=iOS Simulator'
+              scheme=WebInspectorKitTests
+            else
+              destination='platform=macOS,arch=arm64'
+              scheme=WebInspectorKit
+            fi
+            if [[ "$INCLUDE_WORKSPACE" == true ]]; then
+              workspace=WebInspectorKit.xcworkspace
+            else
               workspace=Packages/WebInspectorNativeBridge/WebInspectorNativeBridge.xcworkspace
               scheme=WebInspectorNativeBridgeTests
-            else
-              workspace=WebInspectorKit.xcworkspace
-              scheme=WebInspectorKitTests
             fi
-            derived_data="$RUNNER_TEMP/build-$product"
+            derived_data="$RUNNER_TEMP/build-$platform"
             xcodebuild build-for-testing \
               -workspace "$workspace" -scheme "$scheme" \
-              -destination "$DESTINATION" \
-              -clonedSourcePackagesDirPath "$SPM_CACHE_DIR/$product" \
+              -destination "$destination" \
+              -clonedSourcePackagesDirPath "$SPM_CACHE_DIR" \
               -disableAutomaticPackageResolution \
               -derivedDataPath "$derived_data" \
               -enableCodeCoverage NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
-              | tee "$RUNNER_TEMP/build-$product.log"
-            tar -C "$derived_data/Build/Products" -czf "$RUNNER_TEMP/$product-tests.tar.gz" .
+              | tee "$RUNNER_TEMP/build-$platform.log"
+            python3 .github/scripts/prepare-xctestrun.py "$derived_data/Build/Products"
+            tar -C "$derived_data/Build/Products" -czf "$RUNNER_TEMP/$platform-tests.tar.gz" .
           done
-      - name: Upload built tests
+      - name: Upload iOS tests
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ios-test-products-${{ inputs.runner }}
-          path: ${{ runner.temp }}/*-tests.tar.gz
+          name: test-products-${{ inputs.runner }}-iOS
+          path: ${{ runner.temp }}/iOS-tests.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+      - name: Upload macOS tests
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-products-${{ inputs.runner }}-macOS
+          path: ${{ runner.temp }}/macOS-tests.tar.gz
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
@@ -134,15 +95,15 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ios-build-diagnostics-${{ inputs.runner }}
+          name: build-diagnostics-${{ inputs.runner }}
           path: ${{ runner.temp }}/build-*.log
           if-no-files-found: ignore
 
   test:
-    name: iOS ${{ matrix.version }} / ${{ matrix.suite }}
+    name: ${{ matrix.platform }} ${{ matrix.version }}
     needs: build
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.build.outputs.matrix) }}
@@ -150,29 +111,46 @@ jobs:
       XCODE_MAJOR: ${{ inputs.xcode_major }}
       XCODE_ALLOW_PRERELEASE: ${{ inputs.allow_prerelease }}
       RUNTIME_ID: ${{ matrix.runtime }}
-      TEST_PRODUCT: ${{ matrix.product }}
-      TEST_FILTER: ${{ matrix.test_filter }}
+      TEST_PLATFORM: ${{ matrix.platform }}
+      INCLUDE_WORKSPACE: ${{ inputs.include_workspace }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Resolve Xcode
         run: ruby .github/scripts/resolve-xcode.rb
-      - name: Select the exact runtime
-        run: python3 .github/scripts/ios-runtime-matrix.py resolve --runtime "$RUNTIME_ID"
+      - name: Select the runtime
+        run: |
+          if [[ "$TEST_PLATFORM" == iOS ]]; then
+            python3 .github/scripts/ios-runtime-matrix.py resolve --runtime "$RUNTIME_ID"
+          else
+            sw_vers
+            echo 'DESTINATION=platform=macOS,arch=arm64' >> "$GITHUB_ENV"
+          fi
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ios-test-products-${{ inputs.runner }}
+          name: test-products-${{ inputs.runner }}-${{ matrix.platform }}
           path: ${{ runner.temp }}/test-products
-      - name: Run tests against the installed WebKit
+      - name: Boot the Simulator before starting test timeouts
+        if: matrix.platform == 'iOS'
+        run: xcrun simctl bootstatus "$WATCHDOG_SIMULATOR_UDID" -b
+      - name: Run all suites from the artifact
         run: |
           set -e -o pipefail
           mkdir -p "$RUNNER_TEMP/tests"
-          tar -C "$RUNNER_TEMP/tests" -xzf "$RUNNER_TEMP/test-products/$TEST_PRODUCT-tests.tar.gz"
-          xctestrun="$(python3 .github/scripts/prepare-xctestrun.py "$RUNNER_TEMP/tests" --product "$TEST_PRODUCT")"
+          tar -C "$RUNNER_TEMP/tests" -xzf "$RUNNER_TEMP/test-products/$TEST_PLATFORM-tests.tar.gz"
+          xctestruns=("$RUNNER_TEMP/tests/"*.xctestrun)
+          args=()
+          if [[ "$TEST_PLATFORM" == macOS && "$INCLUDE_WORKSPACE" == true ]]; then
+            args+=(
+              -only-testing:WebInspectorNativeBridgeTests
+              -only-testing:WebInspectorDataKitImportOnlyContractTests
+              -only-testing:WebInspectorConsumerContractTests
+            )
+          fi
           bash Scripts/ci-xcodebuild-watchdog.sh \
             xcodebuild test-without-building \
-            -xctestrun "$xctestrun" \
+            -xctestrun "${xctestruns[0]}" \
             -destination "$DESTINATION" \
-            "-only-testing:$TEST_FILTER" \
+            "${args[@]}" \
             -parallel-testing-enabled NO \
             -test-timeouts-enabled YES \
             -default-test-execution-time-allowance 30 \
@@ -183,7 +161,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ios-tests-${{ inputs.runner }}-${{ matrix.version }}-${{ matrix.suite }}
+          name: tests-${{ inputs.runner }}-${{ matrix.platform }}-${{ matrix.version }}
           path: |
             ${{ runner.temp }}/tests.log
             ${{ runner.temp }}/tests.xcresult

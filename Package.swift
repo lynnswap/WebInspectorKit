@@ -189,6 +189,17 @@ let package = Package(
             path: "Tests/WebInspectorTestSupport",
             swiftSettings: strictSwiftSettings
         ),
+        .target(
+            name: "WebInspectorNativeSymbolFixtures",
+            path: "Packages/WebInspectorNativeBridge/Tests/WebInspectorNativeSymbolFixtures",
+            publicHeadersPath: "include"
+        ),
+        .testTarget(
+            name: "WebInspectorNativeBridgeTests",
+            dependencies: ["WebInspectorNativeBridge", "WebInspectorNativeSymbolFixtures"],
+            path: "Packages/WebInspectorNativeBridge/Tests/WebInspectorNativeBridgeTests",
+            swiftSettings: strictSwiftSettings
+        ),
         .testTarget(
             name: "WebInspectorProxyKitTests",
             dependencies: [

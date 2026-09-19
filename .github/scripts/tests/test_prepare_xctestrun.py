@@ -17,13 +17,14 @@ class PrepareTestRunTests(unittest.TestCase):
         for uses_test_plan in (False, True):
             with self.subTest(uses_test_plan=uses_test_plan), tempfile.TemporaryDirectory() as temporary:
                 products = Path(temporary)
-                target = {"TestBundlePath": "__TESTROOT__/Debug-iphonesimulator/Native.xctest",
+                target = {"BlueprintName": "WebInspectorNativeBridgeTests",
+                          "TestBundlePath": "__TESTROOT__/Debug-iphonesimulator/Native.xctest",
                           "EnvironmentVariables": {"EXISTING": "preserved"}}
                 data = ({"TestConfigurations": [{"TestTargets": [target]}]}
                         if uses_test_plan else {"Native": target})
                 path = products / "Native.xctestrun"
                 path.write_bytes(plistlib.dumps(data))
-                self.assertEqual(prepare.prepare(products, "native"), path)
+                self.assertEqual(prepare.prepare(products), path)
                 updated = plistlib.loads(path.read_bytes())
                 updated_target = (updated["TestConfigurations"][0]["TestTargets"][0]
                                   if uses_test_plan else updated["Native"])
@@ -32,14 +33,18 @@ class PrepareTestRunTests(unittest.TestCase):
                 })
                 self.assertEqual(updated_target["TestBundlePath"], target["TestBundlePath"])
 
-    def test_workspace_plan_remains_unchanged(self):
+    def test_aggregate_plan_enables_only_the_native_smoke_tests(self):
         with tempfile.TemporaryDirectory() as temporary:
             products = Path(temporary)
             path = products / "Workspace.xctestrun"
-            content = plistlib.dumps({"TestConfigurations": [{"TestTargets": []}]})
+            native = {"BlueprintName": "WebInspectorNativeBridgeTests", "TestBundlePath": "native.xctest"}
+            consumer = {"BlueprintName": "WebInspectorConsumerContractTests", "EnvironmentVariables": {"OTHER": "preserved"}}
+            content = plistlib.dumps({"TestConfigurations": [{"TestTargets": [native, consumer]}]})
             path.write_bytes(content)
-            prepare.prepare(products, "workspace")
-            self.assertEqual(path.read_bytes(), content)
+            prepare.prepare(products)
+            targets = plistlib.loads(path.read_bytes())["TestConfigurations"][0]["TestTargets"]
+            self.assertEqual(targets[0]["EnvironmentVariables"]["WEBINSPECTORKIT_RUN_NATIVE_RUNTIME_SMOKE"], "1")
+            self.assertEqual(targets[1], consumer)
 
 
 if __name__ == "__main__":

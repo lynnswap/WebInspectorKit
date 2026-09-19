@@ -20,54 +20,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  contract-tests:
-    name: Consumer API Contract Tests (iOS ${{ matrix.ios_major }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-26
-            xcode_major: '26'
-            ios_major: '26'
-          - runner: xcode-27
-            xcode_major: '27'
-            ios_major: '27'
-            allow_prerelease: true
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 10
-    env:
-      XCODE_MAJOR: ${{ matrix.xcode_major }}
-      XCODE_ALLOW_PRERELEASE: ${{ matrix.allow_prerelease }}
-      IOS_MAJOR: ${{ matrix.ios_major }}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Resolve Xcode
-        run: ruby .github/scripts/resolve-xcode.rb
-
-      - name: Run macOS consumer contract tests
-        working-directory: ContractTests
-        run: |
-          xcodebuild -quiet test \
-            -scheme WebInspectorKitContractTests-Package \
-            -destination 'platform=macOS,arch=arm64' \
-            -enableCodeCoverage NO \
-            -parallel-testing-enabled NO
-
-      - name: Resolve iOS simulator destination
-        run: ruby .github/scripts/resolve-ios-simulator.rb
-
-      - name: Run iOS consumer contract tests
-        working-directory: ContractTests
-        run: |
-          xcodebuild -quiet test \
-            -scheme WebInspectorKitContractTests-Package \
-            -destination "${DESTINATION}" \
-            -only-testing:WebInspectorConsumerContractTests \
-            -enableCodeCoverage NO \
-            -parallel-testing-enabled NO
-
   script-tests:
     name: CI script tests
     runs-on: ubuntu-24.04
@@ -75,8 +27,8 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - run: python3 -m unittest discover -s .github/scripts/tests -p 'test_*.py'
 
-  ios-runtime-tests:
-    name: iOS runtimes on ${{ matrix.runner }}
+  runtime-tests:
+    name: Runtime tests on ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:

@@ -122,6 +122,18 @@
                ReferencedContainer = "container:Monocly/Monocly.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference skipped="NO">
+            <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="WebInspectorNativeBridgeTests" BuildableName="WebInspectorNativeBridgeTests" BlueprintName="WebInspectorNativeBridgeTests" ReferencedContainer="container:">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference skipped="NO">
+            <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="WebInspectorDataKitImportOnlyContractTests" BuildableName="WebInspectorDataKitImportOnlyContractTests" BlueprintName="WebInspectorDataKitImportOnlyContractTests" ReferencedContainer="container:ContractTests">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference skipped="NO">
+            <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="WebInspectorConsumerContractTests" BuildableName="WebInspectorConsumerContractTests" BlueprintName="WebInspectorConsumerContractTests" ReferencedContainer="container:ContractTests">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

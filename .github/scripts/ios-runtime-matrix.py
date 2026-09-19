@@ -27,21 +27,11 @@ def supported_runtimes(runtimes):
     return sorted(selected.values(), key=lambda runtime: version_components(runtime["version"]))
 
 
-def test_matrix(runtimes, include_workspace):
-    suites = [("NativeBridge", "native", "WebInspectorNativeBridgeTests")]
-    if include_workspace:
-        suites += [
-            ("ProxyKit", "workspace", "WebInspectorProxyKitTests"),
-            ("DataKit", "workspace", "WebInspectorDataKitTests"),
-            ("UI", "workspace", "WebInspectorUITests"),
-            ("Monocly", "workspace", "MonoclyTests"),
-        ]
+def test_matrix(runtimes, macos_version):
     return {"include": [
-        {"runtime": runtime["identifier"], "version": runtime["version"],
-         "suite": suite, "product": product, "test_filter": test_filter}
+        {"runtime": runtime["identifier"], "version": runtime["version"], "platform": "iOS"}
         for runtime in runtimes
-        for suite, product, test_filter in suites
-    ]}
+    ] + [{"runtime": "", "version": macos_version, "platform": "macOS"}]}
 
 
 def simctl(*arguments):
@@ -79,8 +69,7 @@ def resolve_device(runtime_id):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    discover = commands.add_parser("discover")
-    discover.add_argument("--include-workspace", action="store_true")
+    commands.add_parser("discover")
     resolve = commands.add_parser("resolve")
     resolve.add_argument("--runtime", required=True)
     args = parser.parse_args()
@@ -92,8 +81,8 @@ def main():
     if not runtimes:
         raise ValueError("No available iOS 18.4 or later runtime is installed.")
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
-        output.write(f"matrix={json.dumps(test_matrix(runtimes, args.include_workspace))}\n")
-        output.write(f"build-runtime={runtimes[0]['identifier']}\n")
+        macos_version = subprocess.check_output(["sw_vers", "-productVersion"], text=True).strip()
+        output.write(f"matrix={json.dumps(test_matrix(runtimes, macos_version))}\n")
     for runtime in runtimes:
         print(f"iOS {runtime['version']} ({runtime['buildversion']})")
 
