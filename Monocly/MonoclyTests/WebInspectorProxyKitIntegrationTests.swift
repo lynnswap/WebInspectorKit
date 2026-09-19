@@ -7,6 +7,63 @@ import XCTest
 #if os(iOS)
 final class WebInspectorProxyKitIntegrationTests: XCTestCase {
     @MainActor
+    func testNavigationContinuesAfterClientDelegateIsReleased() async throws {
+        let fixture = try HostedWebViewFixture()
+        defer { fixture.cleanup() }
+        try await fixture.loadHTMLString("<html><body>Initial page</body></html>")
+
+        let proxy = try await WebInspectorProxy(attachingTo: fixture.webView)
+        weak var weakClient: NavigationPolicyProbe?
+        autoreleasepool {
+            let client = NavigationPolicyProbe()
+            weakClient = client
+            fixture.webView.navigationDelegate = client
+            XCTAssertTrue(fixture.webView.navigationDelegate?.responds(to: NSSelectorFromString(
+                "webView:decidePolicyForNavigationAction:decisionHandler:"
+            )) == true)
+            XCTAssertFalse(fixture.webView.navigationDelegate?.responds(to: NSSelectorFromString(
+                "webView:decidePolicyForNavigationAction:preferences:decisionHandler:"
+            )) == true)
+        }
+        XCTAssertNil(weakClient)
+
+        let loaded = expectation(description: "Navigation finishes without a client delegate")
+        let observation = fixture.webView.observe(\.title, options: [.new]) { webView, _ in
+            if webView.title == "Released delegate" {
+                loaded.fulfill()
+            }
+        }
+        fixture.webView.loadHTMLString(
+            "<html><head><title>Released delegate</title></head><body>Loaded</body></html>",
+            baseURL: nil
+        )
+        await fulfillment(of: [loaded], timeout: 10)
+        observation.invalidate()
+        await proxy.close()
+        XCTAssertNil(fixture.webView.navigationDelegate)
+    }
+
+    @MainActor
+    func testClientPreferencesPolicyTakesPrecedenceOverLegacyPolicy() async throws {
+        let fixture = try HostedWebViewFixture()
+        defer { fixture.cleanup() }
+        try await fixture.loadHTMLString("<html><body>Initial page</body></html>")
+        let proxy = try await WebInspectorProxy(attachingTo: fixture.webView)
+        let decided = expectation(description: "Client decides the navigation policy")
+        let client = PreferencesNavigationPolicyProbe()
+        client.didDecide = { decided.fulfill() }
+        fixture.webView.navigationDelegate = client
+
+        fixture.webView.loadHTMLString("<html><body>Cancelled page</body></html>", baseURL: nil)
+        await fulfillment(of: [decided], timeout: 10)
+        XCTAssertEqual(client.preferenceDecisionCount, 1)
+        XCTAssertEqual(client.legacyDecisionCount, 0)
+
+        await proxy.close()
+        XCTAssertTrue(fixture.webView.navigationDelegate === client)
+    }
+
+    @MainActor
     func testNativeInspectablePageRestoresOriginalInspectability() {
         let webView = WKWebView(frame: .zero)
         webView.isInspectable = false
@@ -129,6 +186,52 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
             await firstProxy.close()
             throw error
         }
+    }
+}
+
+@MainActor
+private final class NavigationPolicyProbe: NSObject, WKNavigationDelegate {
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void
+    ) {
+        decisionHandler(.allow)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationResponse: WKNavigationResponse,
+        decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void
+    ) {
+        decisionHandler(.allow)
+    }
+}
+
+@MainActor
+private final class PreferencesNavigationPolicyProbe: NSObject, WKNavigationDelegate {
+    var legacyDecisionCount = 0
+    var preferenceDecisionCount = 0
+    var didDecide: (() -> Void)?
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void
+    ) {
+        legacyDecisionCount += 1
+        decisionHandler(.cancel)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        preferences: WKWebpagePreferences,
+        decisionHandler: @escaping @MainActor (WKNavigationActionPolicy, WKWebpagePreferences) -> Void
+    ) {
+        preferenceDecisionCount += 1
+        decisionHandler(.cancel, preferences)
+        didDecide?()
     }
 }
 
