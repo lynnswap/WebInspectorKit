@@ -1189,15 +1189,15 @@ struct DOMContainerTests {
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         let treeView = viewController.displayedDOMTreeTextViewForTesting
-        #expect(await treeView.waitForRowDocumentForTesting())
+        try #require(await treeView.waitForRowDocumentForTesting())
 
-        treeView.primaryClickRowForTesting(containing: "<input")
-        treeView.primaryClickRowForTesting(containing: "<button", modifiers: .command)
+        try #require(treeView.primaryClickRowForTesting(containing: "<input"))
+        try #require(treeView.primaryClickRowForTesting(containing: "<button", modifiers: .command))
 
         await enqueueDOMRemoveNodeWithUndoMark(on: fixture.runtime.backend)
         await treeView.deleteMultiSelectionFromMenuForTesting(undoManager: undoManager)
 
-        #expect(undoManager.canUndo)
+        try #require(undoManager.canUndo)
 
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "undo")
         undoManager.undo()
