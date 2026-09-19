@@ -1,4 +1,4 @@
-name: Workspace Tests
+name: iOS Runtime Tests
 
 on:
   workflow_call:
@@ -9,177 +9,182 @@ on:
       xcode_major:
         required: true
         type: string
-      ios_major:
-        required: true
-        type: string
       allow_prerelease:
         default: false
+        type: boolean
+      include_workspace:
+        default: true
         type: boolean
 
 permissions:
   contents: read
 
 jobs:
-  webinspector-build:
-    name: WebInspectorKit Build (iOS ${{ inputs.ios_major }})
+  macos:
+    name: NativeBridge on the host macOS
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       XCODE_MAJOR: ${{ inputs.xcode_major }}
       XCODE_ALLOW_PRERELEASE: ${{ inputs.allow_prerelease }}
-      IOS_MAJOR: ${{ inputs.ios_major }}
-      TEST_SCHEME: WebInspectorKitTests
-      TEST_WORKSPACE: WebInspectorKit.xcworkspace
-      SIMULATOR_DEVICE: iPhone 17 Pro
-      SPM_CACHE_DIR: ${{ github.workspace }}/.ci/spm-cache/${{ inputs.xcode_major }}-WebInspectorKitTests
-      TEST_DERIVED_DATA: ${{ github.workspace }}/.ci/derived-data/WebInspectorKitTests
     steps:
-      - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Resolve Xcode
+        run: ruby .github/scripts/resolve-xcode.rb
+      - name: Test the host WebKit
+        run: |
+          set -e -o pipefail
+          sw_vers
+          xcodebuild build-for-testing \
+            -workspace Packages/WebInspectorNativeBridge/WebInspectorNativeBridge.xcworkspace \
+            -scheme WebInspectorNativeBridgeTests \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/native-macos" \
+            -enableCodeCoverage NO \
+            | tee "$RUNNER_TEMP/native-macos-build.log"
+          xctestrun="$(python3 .github/scripts/prepare-xctestrun.py "$RUNNER_TEMP/native-macos/Build/Products" --product native)"
+          xcodebuild test-without-building \
+            -xctestrun "$xctestrun" \
+            -destination 'platform=macOS,arch=arm64' \
+            -parallel-testing-enabled NO \
+            -test-timeouts-enabled YES \
+            -maximum-test-execution-time-allowance 60 \
+            -resultBundlePath "$RUNNER_TEMP/native-macos.xcresult" \
+            | tee "$RUNNER_TEMP/native-macos-tests.log"
+      - name: Upload macOS diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-macos-${{ inputs.runner }}
+          path: |
+            ${{ runner.temp }}/native-macos-*.log
+            ${{ runner.temp }}/native-macos.xcresult
+          if-no-files-found: ignore
 
+  build:
+    name: Build tests and discover installed runtimes
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 20
+    outputs:
+      matrix: ${{ steps.runtimes.outputs.matrix }}
+    env:
+      XCODE_MAJOR: ${{ inputs.xcode_major }}
+      XCODE_ALLOW_PRERELEASE: ${{ inputs.allow_prerelease }}
+      INCLUDE_WORKSPACE: ${{ inputs.include_workspace }}
+      SPM_CACHE_DIR: ${{ github.workspace }}/.ci/spm-cache
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Resolve Xcode
         id: toolchain
         run: ruby .github/scripts/resolve-xcode.rb
-
+      - name: Discover all installed supported iOS runtimes
+        id: runtimes
+        run: |
+          args=()
+          if [[ "$INCLUDE_WORKSPACE" == true ]]; then
+            args+=(--include-workspace)
+          fi
+          python3 .github/scripts/ios-runtime-matrix.py discover "${args[@]}"
+      - name: Select build destination
+        env:
+          BUILD_RUNTIME: ${{ steps.runtimes.outputs.build-runtime }}
+        run: python3 .github/scripts/ios-runtime-matrix.py resolve --runtime "$BUILD_RUNTIME"
       - name: Restore Swift package cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ${{ env.SPM_CACHE_DIR }}
             ~/Library/Caches/org.swift.swiftpm
-          key: spm-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.cache-id }}-${{ hashFiles('Package.resolved', 'WebInspectorKit.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
-
-      - name: Restore test build cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ env.TEST_DERIVED_DATA }}/Build/Products
-          key: webinspector-test-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.cache-id }}-${{ hashFiles('Package.swift', 'Package.resolved', 'WebInspectorKit.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'WebInspectorKit.xcworkspace/xcshareddata/xcschemes/WebInspectorKitTests.xcscheme', 'Monocly/Monocly.xcodeproj/project.pbxproj') }}-${{ github.sha }}
-          restore-keys: |
-            webinspector-test-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.cache-id }}-${{ hashFiles('Package.swift', 'Package.resolved', 'WebInspectorKit.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'WebInspectorKit.xcworkspace/xcshareddata/xcschemes/WebInspectorKitTests.xcscheme', 'Monocly/Monocly.xcodeproj/project.pbxproj') }}-
-
-      - name: Resolve iOS simulator destination
-        run: ruby .github/scripts/resolve-ios-simulator.rb
-
-      - name: Build workspace tests
+          key: spm-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.cache-id }}-${{ hashFiles('**/Package.resolved') }}
+      - name: Build once for the installed runtimes
         run: |
           set -e -o pipefail
-          log_path="${RUNNER_TEMP}/xcodebuild-${TEST_SCHEME}-build.log"
-
-          xcodebuild build-for-testing \
-            -workspace "${TEST_WORKSPACE}" \
-            -scheme "${TEST_SCHEME}" \
-            -destination "${DESTINATION}" \
-            -clonedSourcePackagesDirPath "${SPM_CACHE_DIR}" \
-            -disableAutomaticPackageResolution \
-            -skipPackageUpdates \
-            -derivedDataPath "${TEST_DERIVED_DATA}" \
-            -enableCodeCoverage NO \
-            ARCHS=arm64 \
-            ONLY_ACTIVE_ARCH=YES \
-            -showBuildTimingSummary \
-            | tee "${log_path}"
-
-          xctestrun_count="$(
-            find "${TEST_DERIVED_DATA}/Build/Products" -maxdepth 1 -name '*.xctestrun' -print \
-              | wc -l \
-              | tr -d '[:space:]'
-          )"
-          if [ "${xctestrun_count}" -ne 1 ]; then
-            echo "Expected exactly one .xctestrun, found ${xctestrun_count}" >&2
-            exit 1
+          products=(native)
+          if [[ "$INCLUDE_WORKSPACE" == true ]]; then
+            products+=(workspace)
           fi
-
+          for product in "${products[@]}"; do
+            if [[ "$product" == native ]]; then
+              workspace=Packages/WebInspectorNativeBridge/WebInspectorNativeBridge.xcworkspace
+              scheme=WebInspectorNativeBridgeTests
+            else
+              workspace=WebInspectorKit.xcworkspace
+              scheme=WebInspectorKitTests
+            fi
+            derived_data="$RUNNER_TEMP/build-$product"
+            xcodebuild build-for-testing \
+              -workspace "$workspace" -scheme "$scheme" \
+              -destination "$DESTINATION" \
+              -clonedSourcePackagesDirPath "$SPM_CACHE_DIR/$product" \
+              -disableAutomaticPackageResolution \
+              -derivedDataPath "$derived_data" \
+              -enableCodeCoverage NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+              | tee "$RUNNER_TEMP/build-$product.log"
+            tar -C "$derived_data/Build/Products" -czf "$RUNNER_TEMP/$product-tests.tar.gz" .
+          done
+      - name: Upload built tests
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ios-test-products-${{ inputs.runner }}
+          path: ${{ runner.temp }}/*-tests.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
       - name: Upload build diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: webinspector-test-build-diagnostics-ios-${{ inputs.ios_major }}
-          path: ${{ runner.temp }}/xcodebuild-${{ env.TEST_SCHEME }}-build.log
+          name: ios-build-diagnostics-${{ inputs.runner }}
+          path: ${{ runner.temp }}/build-*.log
           if-no-files-found: ignore
 
-  webinspector-tests:
-    name: WebInspectorKit Tests (iOS ${{ inputs.ios_major }}, ${{ matrix.suite.name }})
-    needs: webinspector-build
+  test:
+    name: iOS ${{ matrix.version }} / ${{ matrix.suite }}
+    needs: build
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       fail-fast: false
-      matrix:
-        suite:
-          - name: ProxyKit
-            test_filter: WebInspectorProxyKitTests
-            result_name: proxy
-          - name: DataKit
-            test_filter: WebInspectorDataKitTests
-            result_name: data
-          - name: UI
-            test_filter: WebInspectorUITests
-            result_name: ui
-          - name: Monocly
-            test_filter: MonoclyTests/WebInspectorProxyKitIntegrationTests
-            result_name: monocly
+      matrix: ${{ fromJSON(needs.build.outputs.matrix) }}
     env:
       XCODE_MAJOR: ${{ inputs.xcode_major }}
       XCODE_ALLOW_PRERELEASE: ${{ inputs.allow_prerelease }}
-      IOS_MAJOR: ${{ inputs.ios_major }}
-      TEST_SCHEME: WebInspectorKitTests
-      SIMULATOR_DEVICE: iPhone 17 Pro
-      TEST_DERIVED_DATA: ${{ github.workspace }}/.ci/derived-data/WebInspectorKitTests
+      RUNTIME_ID: ${{ matrix.runtime }}
+      TEST_PRODUCT: ${{ matrix.product }}
+      TEST_FILTER: ${{ matrix.test_filter }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Resolve Xcode
-        id: toolchain
         run: ruby .github/scripts/resolve-xcode.rb
-
-      - name: Resolve iOS simulator destination
-        run: ruby .github/scripts/resolve-ios-simulator.rb
-
-      - name: Restore built workspace tests
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Select the exact runtime
+        run: python3 .github/scripts/ios-runtime-matrix.py resolve --runtime "$RUNTIME_ID"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: ${{ env.TEST_DERIVED_DATA }}/Build/Products
-          key: webinspector-test-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.cache-id }}-${{ hashFiles('Package.swift', 'Package.resolved', 'WebInspectorKit.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'WebInspectorKit.xcworkspace/xcshareddata/xcschemes/WebInspectorKitTests.xcscheme', 'Monocly/Monocly.xcodeproj/project.pbxproj') }}-${{ github.sha }}
-          fail-on-cache-miss: true
-
-      - name: Run ${{ matrix.suite.name }} tests
+          name: ios-test-products-${{ inputs.runner }}
+          path: ${{ runner.temp }}/test-products
+      - name: Run tests against the installed WebKit
         run: |
           set -e -o pipefail
-          log_path="${RUNNER_TEMP}/xcodebuild-${TEST_SCHEME}-${{ matrix.suite.result_name }}.log"
-          result_path="${RUNNER_TEMP}/${TEST_SCHEME}-${{ matrix.suite.result_name }}.xcresult"
-          xctestrun_count="$(
-            find "${TEST_DERIVED_DATA}/Build/Products" -maxdepth 1 -name '*.xctestrun' -print \
-              | wc -l \
-              | tr -d '[:space:]'
-          )"
-          if [ "${xctestrun_count}" -ne 1 ]; then
-            echo "Expected exactly one .xctestrun, found ${xctestrun_count}" >&2
-            exit 1
-          fi
-          xctestrun="$(
-            find "${TEST_DERIVED_DATA}/Build/Products" -maxdepth 1 -name '*.xctestrun' -print
-          )"
-
+          mkdir -p "$RUNNER_TEMP/tests"
+          tar -C "$RUNNER_TEMP/tests" -xzf "$RUNNER_TEMP/test-products/$TEST_PRODUCT-tests.tar.gz"
+          xctestrun="$(python3 .github/scripts/prepare-xctestrun.py "$RUNNER_TEMP/tests" --product "$TEST_PRODUCT")"
           bash Scripts/ci-xcodebuild-watchdog.sh \
             xcodebuild test-without-building \
-            -xctestrun "${xctestrun}" \
-            -destination "${DESTINATION}" \
-            "-only-testing:${{ matrix.suite.test_filter }}" \
+            -xctestrun "$xctestrun" \
+            -destination "$DESTINATION" \
+            "-only-testing:$TEST_FILTER" \
             -parallel-testing-enabled NO \
-            -maximum-concurrent-test-simulator-destinations 1 \
             -test-timeouts-enabled YES \
             -default-test-execution-time-allowance 30 \
             -maximum-test-execution-time-allowance 60 \
-            -resultBundlePath "${result_path}" \
-            | tee "${log_path}"
-
+            -resultBundlePath "$RUNNER_TEMP/tests.xcresult" \
+            | tee "$RUNNER_TEMP/tests.log"
       - name: Upload test diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: webinspector-test-diagnostics-ios-${{ inputs.ios_major }}-${{ matrix.suite.result_name }}
+          name: ios-tests-${{ inputs.runner }}-${{ matrix.version }}-${{ matrix.suite }}
           path: |
-            ${{ runner.temp }}/xcodebuild-${{ env.TEST_SCHEME }}-${{ matrix.suite.result_name }}.log
-            ${{ runner.temp }}/${{ env.TEST_SCHEME }}-${{ matrix.suite.result_name }}.xcresult
+            ${{ runner.temp }}/tests.log
+            ${{ runner.temp }}/tests.xcresult
           if-no-files-found: ignore

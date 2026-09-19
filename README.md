@@ -90,6 +90,14 @@ let inspector = WebInspectorViewController(
 
 ## Testing against real WebKit
 
+CI discovers all installed iOS 18.4+ Simulator runtimes on the `macos-15`,
+`macos-26`, and `xcode-27` runners. Each runtime runs the NativeBridge tests,
+including native symbol resolution and an Inspector protocol round trip. The
+Swift 6.3+ runners also run the ProxyKit, DataKit, UI, and full Monocly test suites.
+Test binaries are built once per runner and reused across its runtimes.
+Runtimes absent from the runner images are not downloaded or covered by this matrix.
+The NativeBridge tests also exercise each runner's host macOS and WebKit.
+
 The repository includes a self-authored, loopback-only integration site for
 manual Monocly verification through a real `WKWebView` and WebKit protocol
 backend. It combines a large DOM, mutation burst, iframe, shadow/pseudo nodes,

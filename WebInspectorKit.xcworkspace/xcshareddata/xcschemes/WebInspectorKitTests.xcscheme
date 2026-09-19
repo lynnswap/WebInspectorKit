@@ -121,20 +121,6 @@
                BlueprintName = "MonoclyTests"
                ReferencedContainer = "container:Monocly/Monocly.xcodeproj">
             </BuildableReference>
-            <SelectedTests>
-               <Test
-                  Identifier = "WebInspectorProxyKitIntegrationTests/testNativeInspectablePageRestoresOriginalInspectability()">
-               </Test>
-               <Test
-                  Identifier = "WebInspectorProxyKitIntegrationTests/testNativeInspectorReconnectsAfterWebContentProcessTermination()">
-               </Test>
-               <Test
-                  Identifier = "WebInspectorProxyKitIntegrationTests/testOverlappingNativeInspectablePagesRestoreOnlyAfterLastOwner()">
-               </Test>
-               <Test
-                  Identifier = "WebInspectorProxyKitIntegrationTests/testSecondNativeInspectorAttachmentFailsWithoutReplacingDelegate()">
-               </Test>
-            </SelectedTests>
          </TestableReference>
       </Testables>
    </TestAction>
