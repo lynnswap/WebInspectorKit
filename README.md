@@ -16,7 +16,8 @@ UIKit Web Inspector for `WKWebView`.
 ## Requirements
 
 - Swift 6.3+
-- iOS 18+
+- iOS 18.4+
+- macOS 15.4+ for the non-UI products
 - ARM64/ARM64e Apple runtime; Intel Mac / x86_64 simulator environments are not
   supported.
 
