@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/p-x9/MachOKit.git",
       "state" : {
-        "revision" : "c7ffcf1dfda93ebcac01b2366b19f4f7bd9b4215",
-        "version" : "0.52.1"
+        "revision" : "773e10797abc53914b94c2ee8c6f40f5da0b06eb",
+        "version" : "0.52.2"
       }
     },
     {
@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-asn1.git",
       "state" : {
-        "revision" : "eb50cbd14606a9161cbc5d452f18797c90ef0bab",
-        "version" : "1.7.0"
+        "revision" : "3b6410f7dee09eb33cdd26260c5fd47fda19b0e2",
+        "version" : "1.7.3"
       }
     },
     {
@@ -69,8 +69,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/p-x9/swift-fileio.git",
       "state" : {
-        "revision" : "d589ff3966f9f064574780f527449a946736b989",
-        "version" : "0.13.0"
+        "revision" : "13a83389fb4844f279b43012c4b8d7a3f95773bf",
+        "version" : "0.15.1"
       }
     },
     {
@@ -78,8 +78,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/p-x9/swift-fileio-extra.git",
       "state" : {
-        "revision" : "8d83506dd4dff737807d90dbf2264096ed98c7a7",
-        "version" : "0.2.2"
+        "revision" : "eccf765a9d90b82db55cacd260490d2fcae000fb",
+        "version" : "0.3.0"
       }
     },
     {
@@ -186,8 +186,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/UIHostingMenu.git",
       "state" : {
-        "revision" : "5277efa331ab295e4f2b5ec9a018158607b9c662",
-        "version" : "0.2.0"
+        "revision" : "c146f00d47fa3bfaa919780aa3c42c3d32a90f0c",
+        "version" : "0.3.0"
       }
     },
     {
@@ -195,8 +195,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/WKViewportCoordinator.git",
       "state" : {
-        "revision" : "6533837995d2cb06eb5880c9459bd130fc5799d7",
-        "version" : "0.5.1"
+        "revision" : "ac9832598a2e9603c84ed8ba5cb1f98f66e888f4",
+        "version" : "0.7.0"
       }
     }
   ],
