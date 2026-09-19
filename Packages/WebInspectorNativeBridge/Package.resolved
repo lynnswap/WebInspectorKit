@@ -1,13 +1,13 @@
 {
-  "originHash" : "86762c624f4073dfad8068250d5040d801b34f42eafd990d02cee5b11c83a4e0",
+  "originHash" : "8dae4ad9dbecfcced230527f630a5576070414d83ba62d493a5d8a065f980a81",
   "pins" : [
     {
       "identity" : "machokit",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/p-x9/MachOKit.git",
       "state" : {
-        "revision" : "c7ffcf1dfda93ebcac01b2366b19f4f7bd9b4215",
-        "version" : "0.52.1"
+        "revision" : "773e10797abc53914b94c2ee8c6f40f5da0b06eb",
+        "version" : "0.52.2"
       }
     },
     {
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-asn1.git",
       "state" : {
-        "revision" : "a9a5efd40eaf558a2bcd48d64b1d1646be686008",
-        "version" : "1.7.1"
+        "revision" : "3b6410f7dee09eb33cdd26260c5fd47fda19b0e2",
+        "version" : "1.7.3"
       }
     },
     {
@@ -51,8 +51,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/p-x9/swift-fileio.git",
       "state" : {
-        "revision" : "e581ae04d4079c675042fa62aeabc5ba7480d3df",
-        "version" : "0.14.0"
+        "revision" : "13a83389fb4844f279b43012c4b8d7a3f95773bf",
+        "version" : "0.15.1"
       }
     },
     {
@@ -60,8 +60,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/p-x9/swift-fileio-extra.git",
       "state" : {
-        "revision" : "8d83506dd4dff737807d90dbf2264096ed98c7a7",
-        "version" : "0.2.2"
+        "revision" : "eccf765a9d90b82db55cacd260490d2fcae000fb",
+        "version" : "0.3.0"
       }
     }
   ],

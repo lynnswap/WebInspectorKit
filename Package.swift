@@ -48,7 +48,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/lynnswap/UIHostingMenu.git",
-            exact: "0.2.0"
+            exact: "0.3.0"
         ),
         .package(
             url: "https://github.com/lynnswap/SyntaxEditorUI.git",
@@ -56,7 +56,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/p-x9/MachOKit.git",
-            exact: "0.52.1"
+            exact: "0.52.2"
         ),
         .package(
             url: "https://github.com/swiftlang/swift-docc-plugin",
