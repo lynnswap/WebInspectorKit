@@ -1,11 +1,51 @@
 import Darwin
 import UIKit
 import WebKit
+@testable import Monocly
 @testable import WebInspectorProxyKit
 import XCTest
 
 #if os(iOS)
 final class WebInspectorProxyKitIntegrationTests: XCTestCase {
+    @MainActor
+    func testSameDocumentHistoryNavigationSettlesWhileInspectorIsAttached() async throws {
+        let documentURL = FileManager.default.temporaryDirectory.appendingPathComponent("history-\(UUID()).html")
+        try "<html><body>History</body></html>".write(to: documentURL, atomically: true, encoding: .utf8)
+        addTeardownBlock { try FileManager.default.removeItem(at: documentURL) }
+        let tab = BrowserTab(url: documentURL, automaticallyLoadsInitialRequest: false)
+        let fixture = try HostedWebViewFixture(webView: tab.webView)
+        defer { fixture.cleanup() }
+        try await fixture.loadFileURL(documentURL)
+        tab.webView.navigationDelegate = tab
+        let proxy = try await WebInspectorProxy(attachingTo: tab.webView)
+        for name in ["_webView:navigation:didSameDocumentNavigation:", "_webView:backForwardListItemAdded:removed:"] {
+            XCTAssertTrue(tab.webView.navigationDelegate?.responds(to: NSSelectorFromString(name)) == true)
+        }
+        do {
+            _ = try await tab.webView.evaluateJavaScript("history.pushState({}, '', '#second')")
+            let historyDeadline = ContinuousClock.now + .seconds(10)
+            while !tab.webView.canGoBack, ContinuousClock.now < historyDeadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertTrue(tab.webView.canGoBack)
+            tab.goBack()
+            XCTAssertTrue(tab.isShowingProgress)
+            XCTAssertNil(tab.interactionStateData)
+
+            let deadline = ContinuousClock.now + .seconds(10)
+            while (tab.isShowingProgress || tab.interactionStateData == nil), ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertFalse(tab.isShowingProgress)
+            XCTAssertNotNil(tab.interactionStateData)
+            XCTAssertNil(tab.webView.url?.fragment)
+            await proxy.close()
+        } catch {
+            await proxy.close()
+            throw error
+        }
+    }
+
     @MainActor
     func testNavigationContinuesAfterClientDelegateIsReleased() async throws {
         let fixture = try HostedWebViewFixture()
@@ -258,7 +298,7 @@ private final class HostedWebViewFixture {
     private let previousKeyWindow: UIWindow?
     private let window: UIWindow
 
-    init() throws {
+    init(webView suppliedWebView: WKWebView? = nil) throws {
         guard let windowScene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first else {
@@ -267,7 +307,7 @@ private final class HostedWebViewFixture {
 
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
-        webView = WKWebView(frame: .zero, configuration: configuration)
+        webView = suppliedWebView ?? WKWebView(frame: .zero, configuration: configuration)
         navigationProbe = WebContentProcessNavigationProbe()
         webView.navigationDelegate = navigationProbe
         previousKeyWindow = windowScene.windows.first { $0.isKeyWindow }
@@ -292,7 +332,15 @@ private final class HostedWebViewFixture {
     }
 
     func loadHTMLString(_ html: String) async throws {
-        try await navigationProbe.loadHTMLString(html, in: webView)
+        try await navigationProbe.load {
+            webView.loadHTMLString(html, baseURL: nil)
+        }
+    }
+
+    func loadFileURL(_ url: URL) async throws {
+        try await navigationProbe.load {
+            webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+        }
     }
 
     func cleanup() {
@@ -335,7 +383,7 @@ private final class WebContentProcessNavigationProbe: NSObject, WKNavigationDele
     private var navigationOperation: NavigationOperation?
     private var relaunchOperation: RelaunchOperation?
 
-    func loadHTMLString(_ html: String, in webView: WKWebView) async throws {
+    func load(_ startNavigation: () -> WKNavigation?) async throws {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation {
                 (continuation: CheckedContinuation<Void, any Error>) in
@@ -347,7 +395,7 @@ private final class WebContentProcessNavigationProbe: NSObject, WKNavigationDele
                     navigationOperation == nil && relaunchOperation == nil,
                     "A navigation probe can own only one operation at a time."
                 )
-                guard let navigation = webView.loadHTMLString(html, baseURL: nil) else {
+                guard let navigation = startNavigation() else {
                     continuation.resume(
                         throwing: WebContentProcessHarnessError.navigationWasNotCreated
                     )

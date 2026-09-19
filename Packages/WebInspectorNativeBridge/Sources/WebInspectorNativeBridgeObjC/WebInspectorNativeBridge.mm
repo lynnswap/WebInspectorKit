@@ -608,6 +608,13 @@ static NSError *selectorFailureError(
 
 @end
 
+// Monocly uses these existing navigation callbacks to settle and persist history.
+@protocol WebInspectorNativeNavigationDelegateClient <WKNavigationDelegate>
+@optional
+- (void)_webView:(WKWebView *)webView navigation:(nullable WKNavigation *)navigation didSameDocumentNavigation:(int64_t)navigationType;
+- (void)_webView:(WKWebView *)webView backForwardListItemAdded:(nullable WKBackForwardListItem *)itemAdded removed:(nullable NSArray<WKBackForwardListItem *> *)itemsRemoved;
+@end
+
 @interface WebInspectorNativeNavigationDelegateProxy : NSObject <WKNavigationDelegate>
 
 - (instancetype)initWithWebView:(WKWebView *)webView
@@ -738,13 +745,28 @@ private:
         || selector == @selector(webView:didFinishNavigation:))
         return YES;
 
-    if (protocol_getMethodDescription(@protocol(WKNavigationDelegate), selector, NO, YES).name)
+    if (protocol_getMethodDescription(@protocol(WKNavigationDelegate), selector, NO, YES).name
+        || protocol_getMethodDescription(@protocol(WebInspectorNativeNavigationDelegateClient), selector, NO, YES).name)
         return [super respondsToSelector:selector] && [_client respondsToSelector:selector];
     return [super respondsToSelector:selector];
 }
 
 // WebKit caches optional delegate capabilities when installing the delegate.
 // Keep concrete entry points for callbacks queued before the weak client disappears.
+- (void)_webView:(WKWebView *)webView navigation:(WKNavigation *)navigation didSameDocumentNavigation:(int64_t)navigationType
+{
+    id<WebInspectorNativeNavigationDelegateClient> client = (id)_client;
+    if ([client respondsToSelector:_cmd])
+        [client _webView:webView navigation:navigation didSameDocumentNavigation:navigationType];
+}
+
+- (void)_webView:(WKWebView *)webView backForwardListItemAdded:(WKBackForwardListItem *)itemAdded removed:(NSArray<WKBackForwardListItem *> *)itemsRemoved
+{
+    id<WebInspectorNativeNavigationDelegateClient> client = (id)_client;
+    if ([client respondsToSelector:_cmd])
+        [client _webView:webView backForwardListItemAdded:itemAdded removed:itemsRemoved];
+}
+
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)action decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler
 {
     id<WKNavigationDelegate> client = _client;
