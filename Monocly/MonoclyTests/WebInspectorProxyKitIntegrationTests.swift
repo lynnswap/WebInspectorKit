@@ -1,12 +1,76 @@
 import Darwin
 import UIKit
 import WebKit
+import WebInspectorDataKit
 @testable import Monocly
 @testable import WebInspectorProxyKit
 import XCTest
 
 #if os(iOS)
 final class WebInspectorProxyKitIntegrationTests: XCTestCase {
+    @MainActor
+    func testLateInspectorAttachmentRestoresPageAndChildFrameResources() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("late-inspector-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.removeItem(at: directory) }
+        for (name, contents) in [
+            "index.html": "<html><head><link rel='stylesheet' href='style.css'><script src='app.js'></script></head><body><iframe src='child.html'></iframe></body></html>",
+            "style.css": "body { color: rgb(255, 0, 0); }",
+            "other.html": "<html><body>Other page</body></html>",
+            "app.js": "window.fixtureLoaded = true; addEventListener('message', e => { if (e.data === 'child-fixture-loaded') window.childFixtureLoaded = true; });",
+            "child.html": "<html><head><script src='child.js'></script></head><body>Child</body></html>",
+            "child.js": "parent.postMessage('child-fixture-loaded', '*');"
+        ] {
+            try contents.write(to: directory.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        let fixture = try HostedWebViewFixture()
+        defer { fixture.cleanup() }
+        try await fixture.loadFileURL(directory.appendingPathComponent("index.html"))
+        let loaded = try await fixture.webView.evaluateJavaScript("window.fixtureLoaded === true && window.childFixtureLoaded === true")
+        XCTAssertEqual(loaded as? Bool, true)
+
+        let container = try await WebInspectorContainer(attachingTo: fixture.webView)
+        do {
+            let context = container.mainContext
+            let deadline = ContinuousClock.now + .seconds(10)
+            while context.state == .attaching, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertEqual(context.state, .attached)
+            XCTAssertNil(context.networkResourceTreeError)
+            let requests = context.network.fetchedResults().items
+            for name in ["index.html", "style.css", "app.js", "child.html", "child.js"] {
+                let url = directory.appendingPathComponent(name).absoluteString
+                XCTAssertEqual(requests.filter { $0.url == url }.count, 1, "Missing or duplicated \(name)")
+            }
+            let stylesheet = try XCTUnwrap(requests.first { $0.url.hasSuffix("/style.css") })
+            XCTAssertNil(stylesheet.requestSentTimestamp)
+            XCTAssertNil(stylesheet.status)
+            await stylesheet.fetchResponseBody()
+            XCTAssertEqual(stylesheet.responseBody.phase, .loaded)
+            let otherURL = directory.appendingPathComponent("other.html")
+            try await fixture.loadFileURL(otherURL)
+            let otherDeadline = ContinuousClock.now + .seconds(10)
+            while context.rootNode?.documentURL != otherURL.absoluteString, ContinuousClock.now < otherDeadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertEqual(context.rootNode?.documentURL, otherURL.absoluteString)
+            try await fixture.goBack()
+            let returnDeadline = ContinuousClock.now + .seconds(10)
+            while !context.network.fetchedResults().items.contains(where: { $0 !== stylesheet && $0.url == stylesheet.url && $0.state == .finished }),
+                  ContinuousClock.now < returnDeadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let restored = try XCTUnwrap(context.network.fetchedResults().items.last { $0 !== stylesheet && $0.url == stylesheet.url })
+            await restored.fetchResponseBody()
+            XCTAssertEqual(restored.responseBody.phase, .loaded)
+            await container.close()
+        } catch {
+            await container.close()
+            throw error
+        }
+    }
+
     @MainActor
     func testSameDocumentHistoryNavigationSettlesWhileInspectorIsAttached() async throws {
         let documentURL = FileManager.default.temporaryDirectory.appendingPathComponent("history-\(UUID()).html")
@@ -341,6 +405,10 @@ private final class HostedWebViewFixture {
         try await navigationProbe.load {
             webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
         }
+    }
+
+    func goBack() async throws {
+        try await navigationProbe.load { webView.goBack() }
     }
 
     func cleanup() {

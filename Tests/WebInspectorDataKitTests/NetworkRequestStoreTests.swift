@@ -160,6 +160,32 @@ private struct NetworkRequestStoreTestFailure: Error {}
 
 @MainActor
 @Test
+func resourceTreeBatchPublishesOneProjectionForFilteredAndSectionedConsumers() async throws {
+    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let store = context.networkRequestsCollectionState
+    let filtered = context.network.fetchedResults(for: NetworkRequestQuery(filter: .method(equals: "GET")))
+    let sectioned = context.network.fetchedResults(for: NetworkRequestQuery(sectionBy: .method))
+    let unfiltered = context.network.fetchedResults()
+    var transactions = WebInspectorFetchedResultsController(fetchedResults: filtered).transactions.makeAsyncIterator()
+    let requests = (0..<2_305).map { index in
+        makeStoreRequest(id: "snapshot-\(index)", method: index.isMultiple(of: 2) ? "GET" : "POST", context: context)
+    }
+    store.insertResourceTreeRequests(requests)
+    let transaction = try #require(await transactions.next())
+    #expect(transaction.newSnapshot.itemIDs.count == 1_153)
+    #expect(transaction.itemChanges.count == 1_153)
+    #expect(filtered.items.count == 1_153)
+    #expect(sectioned.sections.map(\.id.rawValue) == ["GET", "POST"])
+    #expect(sectioned.items.count == 2_305)
+    #expect(unfiltered.items.map(\.id) == requests.map(\.id))
+    let last = try await insertStoreRequest("after-snapshot", store: store, context: context)
+    #expect(try #require(await transactions.next()).itemChanges == [
+        .insert(itemID: last.request.id, indexPath: .init(section: 0, item: 1_153))
+    ])
+}
+
+@MainActor
+@Test
 func everyNetworkInsertionSourceSharesStoreOrderAndDefaultProjection() async throws {
     let context = WebInspectorContext.preview(isolation: MainActor.shared)
     let store = context.networkRequestsCollectionState

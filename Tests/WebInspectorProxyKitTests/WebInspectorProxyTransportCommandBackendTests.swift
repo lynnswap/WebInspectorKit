@@ -7,6 +7,35 @@ import WebInspectorTestSupport
 private let transportCommandBackendWaitTimeout: Duration = .milliseconds(750)
 
 @Test
+func transportCommandBackendDecodesResourceTreeAndResourceContent() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    await installPageTarget(in: transport)
+    let target = pageTarget(proxy: WebInspectorProxy(backend: LiveWebInspectorProxyBackend(transport: transport)))
+    let treeTask = Task { try await target.page.resourceTree() }
+    let treeCommand = try await waitForTargetMessage(backend, method: "Page.getResourceTree")
+    #expect(try messageParameters(treeCommand.message).isEmpty)
+    await receiveTargetReply(transport, targetID: treeCommand.targetIdentifier,
+        messageID: try messageID(treeCommand.message),
+        result: #"{"frameTree":{"frame":{"id":"main-frame","loaderId":"loader","url":"https://example.test/","mimeType":"text/html"},"resources":[{"url":"https://example.test/app.js","type":"Script","mimeType":"text/javascript","failed":true,"targetId":"worker-1"}]}}"#)
+    let tree = try await treeTask.value.value
+    #expect(tree.frame.id == "main-frame")
+    #expect(tree.childFrames == nil)
+    #expect(tree.resources.first?.failed == true)
+    #expect(tree.resources.first?.targetId == "worker-1")
+    let contentTask = Task { try await target.page.resourceContent(frameID: FrameID("main-frame"), url: "https://example.test/app.js") }
+    let contentCommand = try await waitForTargetMessage(backend, method: "Page.getResourceContent")
+    let parameters = try messageParameters(contentCommand.message)
+    #expect(parameters["frameId"] as? String == "main-frame")
+    #expect(parameters["url"] as? String == "https://example.test/app.js")
+    await receiveTargetReply(transport, targetID: contentCommand.targetIdentifier,
+        messageID: try messageID(contentCommand.message), result: #"{"content":"Y29uc29sZS5sb2coMSk=","base64Encoded":true}"#)
+    let body = try await contentTask.value.value
+    #expect(body.data == "Y29uc29sZS5sb2coMSk=")
+    #expect(body.base64Encoded)
+}
+
+@Test
 func transportCommandBackendDispatchesPageReloadThroughTargetRoute() async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))

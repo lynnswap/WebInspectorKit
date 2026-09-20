@@ -3,6 +3,17 @@ import WebInspectorProxyKit
 
 @Observable
 package final class NetworkRequestStore {
+    private struct ResourceTreeKey: Hashable {
+        let frameID: FrameID
+        let loaderID: String
+        let url: String
+
+        init(url: String, origin: Network.Request.Origin) {
+            frameID = origin.frameID
+            loaderID = origin.loaderID
+            self.url = url
+        }
+    }
     struct Registration {
         let request: NetworkRequest
         let orderIndex: Int
@@ -93,6 +104,9 @@ package final class NetworkRequestStore {
 
     private var orderedRegistrations: [Registration]
     @ObservationIgnored private var registrationsByID: [NetworkRequest.ID: Registration]
+    @ObservationIgnored private var requestAliases: [NetworkRequest.ID: NetworkRequest.ID] = [:]
+    @ObservationIgnored private var clearedResourceTreeKeys: Set<ResourceTreeKey> = []
+    @ObservationIgnored private var pendingResourceTreeRequests: [ResourceTreeKey: NetworkRequest.ID] = [:]
     @ObservationIgnored private var tombstonedIDs: Set<NetworkRequest.ID>
     @ObservationIgnored private var generation: UInt64
     @ObservationIgnored private var ledger: WebInspectorFetchedResultsSingleSectionSnapshotLedger<NetworkRequest.ID>
@@ -139,7 +153,7 @@ package final class NetworkRequestStore {
         guard prepareAdmission(for: id, admission: admission) else {
             return nil
         }
-        if let registration = registrationsByID[id] {
+        if let registration = registration(for: id) {
             return .existing(registration)
         }
         let request = create()
@@ -162,7 +176,7 @@ package final class NetworkRequestStore {
         guard prepareAdmission(for: id, admission: admission) else {
             return nil
         }
-        if let registration = registrationsByID[id] {
+        if let registration = registration(for: id) {
             return .existing(registration)
         }
         let request = create()
@@ -190,6 +204,41 @@ package final class NetworkRequestStore {
             return
         }
         commitSynchronously(makeChange(registration, isInsertion: false))
+    }
+
+    func insertResourceTreeRequests(_ newRequests: [NetworkRequest]) {
+        guard !newRequests.isEmpty else { return }
+        let supersedesIndexedWork = !activeIndexSequences.isEmpty || !pendingChangedIDsByResult.isEmpty
+        for request in newRequests { _ = register(request) }
+        indexNeedsRebuild = true
+        nextIndexSequence()
+        pendingChangedIDsByResult.removeAll(keepingCapacity: true)
+        pruneFetchedResults()
+        let allRequests = requests
+        for results in fetchedResults.compactMap(\.weakReference.value) {
+            if supersedesIndexedWork, !results.usesUnfilteredNetworkProjection {
+                results.resetSynchronousIndexedNetworkItems(allRequests)
+            } else {
+                results.setNetworkItems(allRequests, plan: results.currentNetworkQueryPlan(), generation: projectionGeneration)
+            }
+        }
+    }
+
+    func invalidateResourceTreeContent(replacedBy request: Network.Request) {
+        guard let origin = request.origin else { return }
+        let key = ResourceTreeKey(url: request.url, origin: origin)
+        if let id = pendingResourceTreeRequests[key] {
+            registration(for: id)?.request.invalidateResourceTreeContent()
+        }
+    }
+
+    func invalidateResourceTreeContent(frameID: FrameID? = nil, keepingLoaderID: String? = nil) {
+        for key in Array(pendingResourceTreeRequests.keys)
+        where (frameID == nil || key.frameID == frameID) && key.loaderID != keepingLoaderID {
+            if let id = pendingResourceTreeRequests.removeValue(forKey: key) {
+                registration(for: id)?.request.invalidateResourceTreeContent()
+            }
+        }
     }
 
     func makeFetchedResults(
@@ -268,7 +317,30 @@ package final class NetworkRequestStore {
     }
 
     func registration(for id: NetworkRequest.ID) -> Registration? {
-        registrationsByID[id]
+        registrationsByID[requestAliases[id] ?? id]
+    }
+
+    func bindResourceTreeRequest(
+        id: Network.Request.ID,
+        url: String,
+        origin: Network.Request.Origin?
+    ) {
+        let modelID = NetworkRequest.ID(id)
+        guard registration(for: modelID) == nil, !isTombstoned(modelID), let origin else {
+            return
+        }
+        let key = ResourceTreeKey(url: url, origin: origin)
+        guard let snapshotID = pendingResourceTreeRequests.removeValue(forKey: key),
+              let registration = registration(for: snapshotID) else {
+            return
+        }
+        requestAliases[modelID] = registration.request.id
+        registration.request.bindResourceTreeRequest(to: id)
+    }
+
+    func isClearedResourceTreeResponse(id: Network.Request.ID, url: String, origin: Network.Request.Origin?) -> Bool {
+        guard registration(forProxyID: id) == nil, let origin else { return false }
+        return clearedResourceTreeKeys.contains(ResourceTreeKey(url: url, origin: origin))
     }
 
     func registration(forProxyID id: Network.Request.ID) -> Registration? {
@@ -292,6 +364,11 @@ package final class NetworkRequestStore {
         _ = ledger.append(request.id, expectedCount: registration.orderIndex)
         registrationsByID[request.id] = registration
         orderedRegistrations.append(registration)
+        if request.resourceContentFrameID != nil, let origin = request.origin {
+            let key = ResourceTreeKey(url: request.url, origin: origin)
+            clearedResourceTreeKeys.remove(key)
+            pendingResourceTreeRequests[key] = request.id
+        }
         return registration
     }
 
@@ -320,8 +397,16 @@ package final class NetworkRequestStore {
         switch reason {
         case .userClear:
             tombstonedIDs.formUnion(orderedRegistrations.map { $0.request.id })
+            tombstonedIDs.formUnion(requestAliases.keys)
+            for registration in orderedRegistrations {
+                let request = registration.request
+                if request.resourceContentLocation != nil, let origin = request.origin {
+                    clearedResourceTreeKeys.insert(ResourceTreeKey(url: request.url, origin: origin))
+                }
+            }
         case .newAttachment:
             tombstonedIDs.removeAll(keepingCapacity: false)
+            clearedResourceTreeKeys = []
         }
         for registration in orderedRegistrations {
             registration.request.invalidateResponseBodyFetch()
@@ -331,6 +416,8 @@ package final class NetworkRequestStore {
         generation = nextGeneration
         orderedRegistrations = []
         registrationsByID = [:]
+        requestAliases = [:]
+        pendingResourceTreeRequests = [:]
         ledger = WebInspectorFetchedResultsSingleSectionSnapshotLedger(itemIDs: [])
         indexNeedsRebuild = true
         nextIndexSequence()

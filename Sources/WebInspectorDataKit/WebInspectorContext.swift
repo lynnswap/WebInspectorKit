@@ -500,6 +500,10 @@ public final class WebInspectorContext {
     /// of an inspector error.
     public private(set) var teardownError: WebInspectorProxyError?
 
+    /// The failure from the latest initial resource-tree lookup, if any.
+    /// Live Network events remain available when only this lookup fails.
+    public private(set) var networkResourceTreeError: WebInspectorProxyError?
+
     /// The current root DOM node, if a document is loaded.
     public private(set) var rootNode: DOMNode?
 
@@ -563,6 +567,7 @@ public final class WebInspectorContext {
     private var treeStates: [WeakDOMTreeState]
     private let statusRelay: WebInspectorAsyncStreamRelay<Status>
     private let networkRequestStore: NetworkRequestStore
+    private var networkResourceTreeRevision: UInt64 = 0
     private var networkAttachmentEpoch: UInt64
     private var networkNavigationTimelines: [FrameID: NetworkFrameNavigationTimeline]
     private var pendingNetworkNavigationsByTargetID: [String: [FrameID: String]]
@@ -1873,12 +1878,25 @@ public final class WebInspectorContext {
             return .failure(.disconnected("WebInspectorDataKit has no current page target."))
         }
 
+        let contentLocation = request.resourceContentLocation
         do {
-            let body = try await currentPage.network.responseBody(
-                for: request.proxyID,
-                backendResourceIdentifier: request.backendResourceIdentifier
-            )
-            guard networkRequestStore.isCurrent(request) else {
+            let body: Network.Body
+            switch contentLocation {
+            case let .frame(frameID):
+                let reply = try await currentPage.page.resourceContent(frameID: frameID, url: request.url)
+                guard await waitForOrderedEvents(through: reply.receivedSequence, isolation: isolation) else {
+                    return .failure(NetworkBody.invalidatedResponseFetchError)
+                }
+                body = reply.value
+            case .unavailable:
+                return .failure(NetworkBody.invalidatedResponseFetchError)
+            case nil:
+                body = try await currentPage.network.responseBody(
+                    for: request.proxyID,
+                    backendResourceIdentifier: request.backendResourceIdentifier
+                )
+            }
+            guard networkRequestStore.isCurrent(request), request.resourceContentLocation == contentLocation else {
                 return .failure(NetworkBody.invalidatedResponseFetchError)
             }
             return .success(body)
@@ -1886,8 +1904,8 @@ public final class WebInspectorContext {
             return .failure(error)
         } catch {
             return .failure(.commandFailed(
-                domain: "Network",
-                method: "getResponseBody",
+                domain: contentLocation == nil ? "Network" : "Page",
+                method: contentLocation == nil ? "getResponseBody" : "getResourceContent",
                 message: String(describing: error)
             ))
         }
@@ -2323,6 +2341,7 @@ public final class WebInspectorContext {
             guard isCurrentPageGeneration(generation, isolation: isolation) else {
                 return
             }
+            try await loadNetworkResourceTree(on: target, generation: generation, isolation: isolation)
             var document = try await loadCurrentDOMDocument(
                 on: target,
                 loadID: documentLoadID,
@@ -2503,6 +2522,113 @@ public final class WebInspectorContext {
             return
         }
         networkTrackingTarget = target
+    }
+
+    private func loadNetworkResourceTree(
+        on target: WebInspectorTarget,
+        generation: Int,
+        isolation: isolated (any Actor)
+    ) async throws {
+        let storeGeneration = networkRequestStore.projectionGeneration.id
+        networkResourceTreeError = nil
+        while !Task.isCancelled, isCurrentPageGeneration(generation, isolation: isolation) {
+            let revision = networkResourceTreeRevision
+            let reply: WebInspectorProxyCommandReply<Page.ResourceTree>
+            do {
+                reply = try await target.page.resourceTree()
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                guard !Task.isCancelled, isCurrentPageGeneration(generation, isolation: isolation) else {
+                    throw CancellationError()
+                }
+                networkResourceTreeError = error as? WebInspectorProxyError ?? .commandFailed(
+                    domain: "Page", method: "getResourceTree", message: String(describing: error)
+                )
+                failIfTerminal(error, operation: "Page.getResourceTree")
+                if case .failed = state { throw error }
+                return
+            }
+            guard await waitForOrderedEvents(through: reply.receivedSequence, isolation: isolation),
+                  !Task.isCancelled,
+                  isCurrentPageGeneration(generation, isolation: isolation) else {
+                throw CancellationError()
+            }
+            // A user clear must not be undone by an in-flight snapshot.
+            guard networkRequestStore.projectionGeneration.id == storeGeneration else { return }
+            // Navigation can replace a frame while its resource snapshot is in flight.
+            guard revision == networkResourceTreeRevision else { continue }
+            applyNetworkResourceTree(reply.value)
+            networkResourceTreeError = nil
+            return
+        }
+        throw CancellationError()
+    }
+
+    private func applyNetworkResourceTree(_ tree: Page.ResourceTree) {
+        struct ResourceKey: Hashable {
+            let frameID: FrameID
+            let loaderID: String
+            let visit: NetworkNavigationVisit?
+            let url: String
+        }
+        var knownResources = Set(networkRequestStore.requests.compactMap { request -> ResourceKey? in
+            guard let origin = request.origin, request.resourceContentLocation != .unavailable else { return nil }
+            return ResourceKey(
+                frameID: origin.frameID, loaderID: origin.loaderID,
+                visit: request.navigationVisit, url: request.responseURL ?? request.url
+            )
+        })
+        var restoredRequests: [NetworkRequest] = []
+        func add(
+            url: String,
+            type: String,
+            mimeType: String,
+            failed: Bool = false,
+            canceled: Bool = false,
+            sourceMapURL: String? = nil,
+            frame: Page.ResourceTree.Frame
+        ) {
+            let frameID = FrameID(frame.id)
+            // Resource-tree entries have no protocol request ID. Keep their UI
+            // identity stable if a later response supplies that backend identity.
+            let payload = Network.Request(
+                id: Network.Request.ID("resource-tree:\(UUID().uuidString)"),
+                url: url,
+                method: "GET",
+                origin: .init(frameID: frameID, loaderID: frame.loaderId, targetID: nil)
+            )
+            let navigationVisit = networkNavigationVisit(for: payload)
+            let key = ResourceKey(frameID: frameID, loaderID: frame.loaderId, visit: navigationVisit, url: url)
+            guard knownResources.insert(key).inserted else { return }
+            let request = NetworkRequest(
+                request: payload,
+                initiator: nil,
+                navigationVisit: navigationVisit,
+                resourceType: Network.ResourceType(rawValue: type),
+                timestamp: nil,
+                chronologySequence: takeNetworkChronologySequence(),
+                requestHeaderSource: .unavailable,
+                modelContext: self
+            )
+            request.applyResourceTreeMetadata(
+                frameID: frameID, mimeType: mimeType, failed: failed,
+                canceled: canceled, sourceMapURL: sourceMapURL
+            )
+            restoredRequests.append(request)
+        }
+        func visit(_ tree: Page.ResourceTree) {
+            add(url: tree.frame.url.isEmpty ? "about:blank" : tree.frame.url,
+                type: "Document", mimeType: tree.frame.mimeType, frame: tree.frame)
+            for child in tree.childFrames ?? [] { visit(child) }
+            for resource in tree.resources {
+                add(url: resource.url, type: resource.type, mimeType: resource.mimeType,
+                    failed: resource.failed == true, canceled: resource.canceled == true,
+                    sourceMapURL: resource.sourceMapURL, frame: tree.frame)
+            }
+        }
+        visit(tree)
+        networkRequestStore.insertResourceTreeRequests(restoredRequests)
     }
 
     private func ensureStyleTracking(
@@ -3535,12 +3661,16 @@ extension WebInspectorContext {
         case let .didCommitProvisionalTarget(commit):
             applyCurrentPageTargetCommit(commit, isolation: isolation)
         case let .frameNavigated(frame):
+            networkResourceTreeRevision &+= 1
+            networkRequestStore.invalidateResourceTreeContent(frameID: frame.id, keepingLoaderID: frame.loaderID)
             commitNetworkNavigation(frame)
             applyCurrentPageFrameNavigated(frame, isolation: isolation)
         case let .targetDestroyed(targetID):
             abandonNetworkNavigation(targetID: targetID)
             applyCurrentPageTargetDestroyed(targetID, isolation: isolation)
         case let .frameDetached(frameID):
+            networkResourceTreeRevision &+= 1
+            networkRequestStore.invalidateResourceTreeContent(frameID: frameID)
             retireNetworkNavigation(frameID: frameID)
             applyCurrentPageFrameDetached(frameID, isolation: isolation)
         case .unknown:
@@ -3565,6 +3695,7 @@ extension WebInspectorContext {
             fail(.disconnected("Current page target committed while WebInspectorDataKit had no current page."))
             return
         }
+        networkRequestStore.invalidateResourceTreeContent()
         commitNetworkNavigation(commit)
         let refreshedTarget = target.withPageBinding(from: commit.newTarget)
         let retainsProtocolAgent = target.pageBindingID == refreshedTarget.pageBindingID
@@ -3666,6 +3797,7 @@ extension WebInspectorContext {
                     return
                 }
             }
+            try await loadNetworkResourceTree(on: target, generation: generation, isolation: isolation)
             var document = try await loadCurrentDOMDocument(
                 on: target,
                 loadID: documentLoadID,
@@ -5910,6 +6042,7 @@ extension WebInspectorContext {
         isolation: isolated (any Actor)
     ) async {
         _ = isolation
+        networkRequestStore.invalidateResourceTreeContent(replacedBy: payload)
         let id = NetworkRequest.ID(proxyID)
         guard let resolution = await networkRequestStore.resolve(
             id: id,
@@ -6148,6 +6281,10 @@ extension WebInspectorContext {
         isolation: isolated (any Actor)
     ) async {
         _ = isolation
+        if let url = response.url {
+            guard !networkRequestStore.isClearedResourceTreeResponse(id: proxyID, url: url, origin: response.origin) else { return }
+            networkRequestStore.bindResourceTreeRequest(id: proxyID, url: url, origin: response.origin)
+        }
         let id = NetworkRequest.ID(proxyID)
         guard networkRequestStore.isTombstoned(id) == false else {
             return

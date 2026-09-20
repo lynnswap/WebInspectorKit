@@ -1643,7 +1643,7 @@ func currentPageCommitOnSameProtocolAgentRetainsRequiredDomainLeases() async thr
     }
 
     let commands = await runtime.backend.recordedCommands()
-    for command in startupCommands where command.method != "getDocument" {
+    for command in startupCommands where command.method != "getDocument" && command.method != "getResourceTree" {
         #expect(commands.filter { $0 == command }.count == 1)
     }
     #expect(context.state == .attached)
@@ -2100,6 +2100,7 @@ func consoleEnableFailureFailsStartupBeforeAttachingDocument() async throws {
         RecordedCommand(domain: "Page", method: "enable"),
         RecordedCommand(domain: "Runtime", method: "enable"),
         RecordedCommand(domain: "Network", method: "enable"),
+        RecordedCommand(domain: "Page", method: "getResourceTree"),
         RecordedCommand(domain: "DOM", method: "getDocument"),
         RecordedCommand(domain: "Console", method: "enable"),
         RecordedCommand(domain: "Runtime", method: "disable"),
@@ -3369,12 +3370,13 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     let runtimeEnableIndex = try #require(newTargetMethods.firstIndex(of: "Runtime.enable"))
     let preRuntimeMethods = Array(newTargetMethods[..<runtimeEnableIndex])
     #expect(preRuntimeMethods.allSatisfy {
-        $0 == "DOM.getDocument" || $0 == "Inspector.enable" || $0 == "Inspector.initialized" || $0 == "Page.enable"
+        $0 == "DOM.getDocument" || $0 == "Page.getResourceTree" || $0 == "Inspector.enable" || $0 == "Inspector.initialized" || $0 == "Page.enable"
     })
     let trackingMethods = Array(newTargetMethods[runtimeEnableIndex...])
-    #expect(Array(trackingMethods.prefix(3)) == [
+    #expect(Array(trackingMethods.prefix(4)) == [
         "Runtime.enable",
         "Network.enable",
+        "Page.getResourceTree",
         "DOM.getDocument",
     ])
     #expect(trackingMethods.contains("Console.enable"))
@@ -3384,6 +3386,7 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
         "Page.enable",
         "Runtime.enable",
         "Network.enable",
+        "Page.getResourceTree",
         "DOM.getDocument",
         "Console.enable",
     ]))
@@ -9452,7 +9455,7 @@ func closeDuringStartupKeepsContextDetached() async throws {
     #expect(context.rootNode == nil)
 
     let commands = await runtime.backend.recordedCommands()
-    #expect(commands == Array(startupCommands.prefix(6)) + [
+    #expect(commands == Array(startupCommands.prefix(7)) + [
         RecordedCommand(domain: "Runtime", method: "disable"),
         RecordedCommand(domain: "Network", method: "disable"),
         RecordedCommand(domain: "Page", method: "disable"),
@@ -13977,6 +13980,282 @@ func networkResponseCookieSectionDistinguishesLoadingNoResponseEmptyAndValues() 
 }
 
 @MainActor
+@Test
+func resourceTreeRestoresLoadedResourcesAndFetchesTheirContent() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    await runtime.backend.enqueue(try loadedResourceTree(), for: "Page", method: "getResourceTree")
+    let (_, context) = try await startContext(runtime: runtime)
+    let requests = context.network.fetchedResults().items
+    #expect(context.networkResourceTreeError == nil)
+    #expect(requests.map(\.url) == [
+        "https://example.test/", "https://example.test/child", "https://example.test/child.js",
+        "https://example.test/loaded.css", "https://example.test/broken.png"
+    ])
+    let stylesheet = try #require(requests.first { $0.resourceType == .stylesheet })
+    #expect(stylesheet.state == .finished)
+    #expect(stylesheet.status == nil)
+    #expect(stylesheet.requestSentTimestamp == nil)
+    #expect(stylesheet.finishedOrFailedTimestamp == nil)
+    #expect(stylesheet.requestHeaderSource == .unavailable)
+    #expect(stylesheet.sourceMapURL == "https://example.test/loaded.css.map")
+    #expect(requests.last?.state == .failed(errorText: "", canceled: true))
+    await runtime.backend.enqueue(Network.Body(data: "body { color: red; }", base64Encoded: false), for: "Page", method: "getResourceContent")
+    await stylesheet.fetchResponseBody()
+    #expect(stylesheet.responseBody.phase == .loaded)
+    let command = try #require(await runtime.backend.recordedCommands().last)
+    #expect(command.method == "getResourceContent")
+    let payload = try #require(command.payload.cast(as: Page.ResourceContentPayload.self))
+    #expect(payload.frameID == FrameID("main-frame"))
+    #expect(payload.url == stylesheet.url)
+}
+
+@MainActor
+@Test
+func resourceTreeResponseKeepsIdentityAndDoesNotMergeLaterRequestsForSameURL() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    await runtime.backend.enqueue(try loadedResourceTree(), for: "Page", method: "getResourceTree")
+    let (target, context) = try await startContext(runtime: runtime)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
+    let original = try #require(results.items.first { $0.resourceType == .stylesheet })
+    let id = Network.Request.ID("late-response")
+    let response = Network.Response(url: original.url, status: 200, mimeType: "text/css", security: nil, origin: .init(
+        frameID: FrameID("main-frame"), loaderID: "main-loader", targetID: nil
+    ))
+    await runtime.backend.emit(.responseReceived(id: id, response: response, resourceType: .stylesheet, timestamp: 2), target: target)
+    await runtime.backend.emit(.loadingFinished(id: id, timestamp: 3, sourceMapURL: nil, metrics: nil), target: target)
+    try await waitUntil { original.finishedOrFailedTimestamp == 3 }
+    #expect(results.items.count == 5)
+    #expect(context.registeredRequest(forProxyID: id) === original)
+    #expect(original.status == 200)
+    #expect(original.resourceContentFrameID == nil)
+    await runtime.backend.enqueue(Network.Body(data: "live", base64Encoded: false), for: "Network", method: "getResponseBody")
+    await original.fetchResponseBody()
+    let bodyCommand = try #require(await runtime.backend.recordedCommands().last)
+    #expect(bodyCommand.payload.cast(as: Network.GetResponseBodyPayload.self)?.id == id)
+    await runtime.backend.emit(.requestWillBeSent(
+        id: Network.Request.ID("next-request"),
+        request: Network.Request(id: Network.Request.ID("next-request"), url: original.url, method: "GET", origin: response.origin),
+        initiator: .init(kind: "other"), resourceType: .stylesheet, redirectResponse: nil, timestamp: 4
+    ), target: target)
+    try await waitUntil { results.items.count == 6 }
+    #expect(results.items.filter { $0.url == original.url }.count == 2)
+    context.clearNetworkRequests()
+    await context.apply(.responseReceived(id: id, response: response, resourceType: .stylesheet, timestamp: 5))
+    #expect(results.items.isEmpty)
+}
+
+@MainActor
+@Test
+func resourceTreeMergesEventsReceivedWhileSnapshotIsInFlight() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    await enqueueStartupReplies(on: runtime.backend)
+    await runtime.backend.enqueue(try loadedResourceTree(), for: "Page", method: "getResourceTree")
+    let gate = WebInspectorTestGate()
+    await runtime.backend.hold(domain: "Page", method: "getResourceTree", gate: gate)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
+    let context = container.mainContext
+    _ = await runtime.backend.waitForRecordedCommands(domain: "Page", method: "getResourceTree", count: 1)
+    let id = Network.Request.ID("during-bootstrap")
+    await runtime.backend.emit(.requestWillBeSent(
+        id: id,
+        request: Network.Request(id: id, url: "https://example.test/loaded.css", method: "POST", origin: .init(
+            frameID: FrameID("main-frame"), loaderID: "main-loader", targetID: nil
+        )),
+        initiator: .init(kind: "script"), resourceType: .stylesheet, redirectResponse: nil, timestamp: 1
+    ), target: target)
+    await gate.open()
+    try await waitUntil { context.state == .attached }
+    let requests = context.network.fetchedResults().items
+    #expect(requests.count == 5)
+    let live = try #require(context.registeredRequest(forProxyID: id))
+    #expect(live.method == "POST")
+    #expect(live.state == .pending)
+    #expect(requests.filter { $0.url == live.url }.count == 1)
+}
+
+@MainActor
+@Test
+func resourceTreeDoesNotUndoUserClearWhileLookupIsInFlight() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    await enqueueStartupReplies(on: runtime.backend)
+    await runtime.backend.enqueue(try loadedResourceTree(), for: "Page", method: "getResourceTree")
+    let gate = WebInspectorTestGate()
+    await runtime.backend.hold(domain: "Page", method: "getResourceTree", gate: gate)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
+    let context = container.mainContext
+    _ = await runtime.backend.waitForRecordedCommands(domain: "Page", method: "getResourceTree", count: 1)
+    context.clearNetworkRequests()
+    await gate.open()
+    try await waitUntil { context.state == .attached }
+    #expect(context.network.fetchedResults().items.isEmpty)
+}
+
+@MainActor
+@Test
+func resourceTreeFailurePreservesLiveNetworkCollectionAndReportsError() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let failure = WebInspectorProxyError.commandFailed(domain: "Page", method: "getResourceTree", message: "Unavailable")
+    await runtime.backend.enqueueFailure(failure, for: "Page", method: "getResourceTree")
+    let (_, context) = try await startContext(runtime: runtime)
+    #expect(context.networkResourceTreeError == failure)
+    #expect(context.state == .attached)
+    let id = Network.Request.ID("after-tree-failure")
+    await context.apply(.requestWillBeSent(id: id,
+        request: Network.Request(id: id, url: "https://example.test/live", method: "GET"),
+        initiator: .init(kind: "other"), resourceType: .fetch, redirectResponse: nil, timestamp: 1))
+    #expect(context.network.fetchedResults().items.count == 1)
+}
+
+@MainActor
+@Test
+func resourceTreeRefetchesWhenChildFrameDetachesDuringLookup() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    await enqueueStartupReplies(on: runtime.backend)
+    await runtime.backend.enqueue(try loadedResourceTree(), for: "Page", method: "getResourceTree")
+    let replacement = try JSONDecoder().decode(Page.ResourceTree.self, from: Data(#"{"frame":{"id":"main-frame","loaderId":"main-loader","url":"https://example.test/new","mimeType":"text/html"},"resources":[]}"#.utf8))
+    await runtime.backend.enqueue(replacement, for: "Page", method: "getResourceTree")
+    let gate = WebInspectorTestGate()
+    await runtime.backend.hold(domain: "Page", method: "getResourceTree", gate: gate)
+    let container = WebInspectorContainer(proxy: runtime.proxy)
+    let context = container.mainContext
+    _ = await runtime.backend.waitForRecordedCommands(domain: "Page", method: "getResourceTree", count: 1)
+    await runtime.backend.emit(.frameDetached(frameID: FrameID("child-frame")), target: target)
+    await gate.open()
+    try await waitUntil { context.state == .attached }
+    #expect(context.network.fetchedResults().items.map(\.url) == ["https://example.test/new"])
+    #expect(await runtime.backend.recordedCommands().filter { $0.method == "getResourceTree" }.count == 2)
+}
+
+@MainActor
+@Test
+func resourceTreeContentExpiresOnlyForDetachedFrameAndRetainsLoadedBodies() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    await runtime.backend.enqueue(try loadedResourceTree(), for: "Page", method: "getResourceTree")
+    let (_, context) = try await startContext(runtime: runtime)
+    let requests = context.network.fetchedResults().items
+    let childScript = try #require(requests.first { $0.url.hasSuffix("child.js") })
+    let childDocument = try #require(requests.first { $0.url.hasSuffix("/child") })
+    let stylesheet = try #require(requests.first { $0.resourceType == .stylesheet })
+    await runtime.backend.enqueue(Network.Body(data: "loaded child", base64Encoded: false), for: "Page", method: "getResourceContent")
+    await childDocument.fetchResponseBody()
+    context.apply(.frameDetached(frameID: FrameID("child-frame")))
+    let commandCount = await runtime.backend.recordedCommands().count
+    await childScript.fetchResponseBody()
+    #expect(await runtime.backend.recordedCommands().count == commandCount)
+    #expect(childScript.canFetchResponseBody == false)
+    #expect(childDocument.responseBody.phase == .loaded)
+    #expect(stylesheet.canFetchResponseBody)
+}
+
+@MainActor
+@Test
+func clearingResourceTreeDoesNotResurrectUnknownResponseButAllowsNewRequests() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    await runtime.backend.enqueue(try loadedResourceTree(), for: "Page", method: "getResourceTree")
+    let (_, context) = try await startContext(runtime: runtime)
+    context.clearNetworkRequests()
+    let response = Network.Response(url: "https://example.test/loaded.css", status: 200, security: nil,
+        origin: .init(frameID: FrameID("main-frame"), loaderID: "main-loader", targetID: nil))
+    await context.apply(.responseReceived(id: Network.Request.ID("old"), response: response, resourceType: .stylesheet, timestamp: 1))
+    #expect(context.network.fetchedResults().items.isEmpty)
+    let newID = Network.Request.ID("new")
+    await context.apply(.requestWillBeSent(id: newID,
+        request: Network.Request(id: newID, url: "https://example.test/loaded.css", method: "GET", origin: response.origin),
+        initiator: .init(kind: "other"), resourceType: .stylesheet, redirectResponse: nil, timestamp: 2))
+    await context.apply(.responseReceived(id: newID, response: response, resourceType: .stylesheet, timestamp: 3))
+    #expect(context.network.fetchedResults().items.count == 1)
+    #expect(context.registeredRequest(forProxyID: newID)?.status == 200)
+}
+
+@MainActor
+@Test
+func resourceTreeBackForwardVisitDoesNotDeduplicateAgainstHistoricalRequests() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    await runtime.backend.enqueue(try loadedResourceTree(), for: "Page", method: "getResourceTree")
+    let (_, context) = try await startContext(runtime: runtime)
+    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
+    let original = try #require(results.items.first { $0.resourceType == .stylesheet })
+    let originalID = Network.Request.ID("first-visit")
+    await context.apply(.responseReceived(id: originalID,
+        response: Network.Response(url: original.url, status: 200, security: nil,
+            origin: .init(frameID: FrameID("main-frame"), loaderID: "main-loader", targetID: nil)),
+        resourceType: .stylesheet, timestamp: 1))
+    await context.apply(.loadingFinished(id: originalID, timestamp: 2, sourceMapURL: nil, metrics: nil))
+
+    func navigate(tree: Page.ResourceTree, rootID: String) async throws {
+        await enqueueStartupReplies(on: runtime.backend, document: DOM.Node(id: DOM.Node.ID(rootID), nodeType: 9, nodeName: "#document"))
+        await runtime.backend.enqueue(tree, for: "Page", method: "getResourceTree")
+        context.apply(.didCommitProvisionalTarget(.init(oldTargetID: .currentPage,
+            newTarget: .init(id: .currentPage, kind: .page, frameID: FrameID("main-frame"), isProvisional: false, pageBindingID: rootID))))
+        context.apply(.frameNavigated(.init(id: FrameID("main-frame"), parentID: nil, pageBindingID: rootID,
+            loaderID: tree.frame.loaderId, name: nil, url: tree.frame.url, securityOrigin: nil, mimeType: "text/html")))
+        try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID(rootID)) }
+        #expect(context.networkResourceTreeError == nil)
+    }
+    let otherPage = try JSONDecoder().decode(Page.ResourceTree.self, from: Data(#"{"frame":{"id":"main-frame","loaderId":"other-loader","url":"https://example.test/other","mimeType":"text/html"},"resources":[]}"#.utf8))
+    try await navigate(tree: otherPage, rootID: "other-root")
+    try await navigate(tree: loadedResourceTree(), rootID: "returned-root")
+    let stylesheets = results.items.filter { $0.url == original.url }
+    #expect(stylesheets.count == 2)
+    let restored = try #require(stylesheets.last)
+    #expect(restored !== original)
+    #expect(restored.navigationVisit != original.navigationVisit)
+    #expect(restored.canFetchResponseBody)
+    await runtime.backend.enqueue(Network.Body(data: "returned body", base64Encoded: false), for: "Page", method: "getResourceContent")
+    await restored.fetchResponseBody()
+    #expect(restored.responseBody.phase == .loaded)
+}
+
+@MainActor
+@Test
+func laterRequestCannotReplaceUnfetchedResourceTreeContent() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    await runtime.backend.enqueue(try loadedResourceTree(), for: "Page", method: "getResourceTree")
+    let (_, context) = try await startContext(runtime: runtime)
+    let original = try #require(context.network.fetchedResults().items.first { $0.resourceType == .stylesheet })
+    let id = Network.Request.ID("replacement")
+    await context.apply(.requestWillBeSent(id: id,
+        request: Network.Request(id: id, url: original.url, method: "GET", origin: original.origin),
+        initiator: .init(kind: "other"), resourceType: .stylesheet, redirectResponse: nil, timestamp: 1))
+    let commandCount = await runtime.backend.recordedCommands().count
+    await original.fetchResponseBody()
+    #expect(await runtime.backend.recordedCommands().count == commandCount)
+    #expect(!original.canFetchResponseBody)
+    #expect(context.registeredRequest(forProxyID: id) !== original)
+    // The original load may still receive its own response after the replacement starts.
+    let originalID = Network.Request.ID("original-response")
+    await context.apply(.responseReceived(id: originalID,
+        response: Network.Response(url: original.url, status: 200, security: nil, origin: original.origin),
+        resourceType: .stylesheet, timestamp: 2))
+    #expect(context.registeredRequest(forProxyID: originalID) === original)
+    #expect(original.resourceContentLocation == nil)
+}
+
+@MainActor
+@Test
+func resourceTreeContentReplyCannotOutliveFrameDetachment() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    await runtime.backend.enqueue(try loadedResourceTree(), for: "Page", method: "getResourceTree")
+    let (target, context) = try await startContext(runtime: runtime)
+    let request = try #require(context.network.fetchedResults().items.first { $0.url.hasSuffix("child.js") })
+    let gate = WebInspectorTestGate()
+    await runtime.backend.hold(domain: "Page", method: "getResourceContent", gate: gate)
+    await runtime.backend.enqueue(Network.Body(data: "replacement document", base64Encoded: false), for: "Page", method: "getResourceContent")
+    let task = Task { await request.fetchResponseBody() }
+    _ = await runtime.backend.waitForRecordedCommands(domain: "Page", method: "getResourceContent", count: 1)
+    await runtime.backend.emit(.frameDetached(frameID: FrameID("child-frame")), target: target)
+    await gate.open()
+    await task.value
+    #expect(request.responseBody.phase == .failed(NetworkBody.invalidatedResponseFetchError))
+}
+
+private func loadedResourceTree() throws -> Page.ResourceTree {
+    try JSONDecoder().decode(Page.ResourceTree.self, from: Data(#"{"frame":{"id":"main-frame","loaderId":"main-loader","url":"https://example.test/","mimeType":"text/html"},"childFrames":[{"frame":{"id":"child-frame","loaderId":"child-loader","url":"https://example.test/child","mimeType":"text/html"},"resources":[{"url":"https://example.test/child.js","type":"Script","mimeType":"text/javascript"}]}],"resources":[{"url":"https://example.test/","type":"Document","mimeType":"text/html"},{"url":"https://example.test/loaded.css","type":"Stylesheet","mimeType":"text/css","sourceMapURL":"https://example.test/loaded.css.map"},{"url":"https://example.test/broken.png","type":"Image","mimeType":"image/png","canceled":true}]}"#.utf8))
+}
+
+@MainActor
 private func startContext(
     runtime: WebInspectorProxyTestRuntime,
     document: DOM.Node = DOM.Node(id: DOM.Node.ID("document"), nodeType: 9, nodeName: "#document")
@@ -13998,6 +14277,7 @@ private var startupCommands: [RecordedCommand] {
         RecordedCommand(domain: "Page", method: "enable"),
         RecordedCommand(domain: "Runtime", method: "enable"),
         RecordedCommand(domain: "Network", method: "enable"),
+        RecordedCommand(domain: "Page", method: "getResourceTree"),
         RecordedCommand(domain: "DOM", method: "getDocument"),
         RecordedCommand(domain: "Console", method: "enable"),
     ]
