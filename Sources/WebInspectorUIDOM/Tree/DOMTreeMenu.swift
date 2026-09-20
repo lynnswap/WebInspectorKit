@@ -171,7 +171,7 @@ final class DOMTreeMenuModel {
         guard !uniqueNodeIDs.isEmpty else {
             return nil
         }
-        return Task { @MainActor in
+        return Task { @MainActor [undoManager, clearLocalSelection] in
             guard await deleteNodesAction(uniqueNodeIDs, undoManager) else {
                 return
             }

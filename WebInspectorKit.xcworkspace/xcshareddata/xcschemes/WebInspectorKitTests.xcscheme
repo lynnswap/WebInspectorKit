@@ -7,6 +7,10 @@
       buildImplicitDependencies = "YES"
       buildArchitectures = "Automatic">
       <BuildActionEntries>
+         <BuildActionEntry buildForTesting = "YES" buildForRunning = "NO" buildForProfiling = "NO" buildForArchiving = "NO" buildForAnalyzing = "NO">
+            <BuildableReference BuildableIdentifier = "primary" BlueprintIdentifier = "AB0E9E08305F57FB003CBB2A" BuildableName = "RuntimeTestHost.app" BlueprintName = "RuntimeTestHost" ReferencedContainer = "container:Tests/RuntimeTestHost/RuntimeTestHost.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
          <BuildActionEntry
             buildForTesting = "YES"
             buildForRunning = "NO"
@@ -121,20 +125,18 @@
                BlueprintName = "MonoclyTests"
                ReferencedContainer = "container:Monocly/Monocly.xcodeproj">
             </BuildableReference>
-            <SelectedTests>
-               <Test
-                  Identifier = "WebInspectorProxyKitIntegrationTests/testNativeInspectablePageRestoresOriginalInspectability()">
-               </Test>
-               <Test
-                  Identifier = "WebInspectorProxyKitIntegrationTests/testNativeInspectorReconnectsAfterWebContentProcessTermination()">
-               </Test>
-               <Test
-                  Identifier = "WebInspectorProxyKitIntegrationTests/testOverlappingNativeInspectablePagesRestoreOnlyAfterLastOwner()">
-               </Test>
-               <Test
-                  Identifier = "WebInspectorProxyKitIntegrationTests/testSecondNativeInspectorAttachmentFailsWithoutReplacingDelegate()">
-               </Test>
-            </SelectedTests>
+         </TestableReference>
+         <TestableReference skipped="NO">
+            <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="WebInspectorNativeBridgeTests" BuildableName="WebInspectorNativeBridgeTests" BlueprintName="WebInspectorNativeBridgeTests" ReferencedContainer="container:">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference skipped="NO">
+            <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="WebInspectorDataKitImportOnlyContractTests" BuildableName="WebInspectorDataKitImportOnlyContractTests" BlueprintName="WebInspectorDataKitImportOnlyContractTests" ReferencedContainer="container:ContractTests">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference skipped="NO">
+            <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="WebInspectorConsumerContractTests" BuildableName="WebInspectorConsumerContractTests" BlueprintName="WebInspectorConsumerContractTests" ReferencedContainer="container:ContractTests">
+            </BuildableReference>
          </TestableReference>
       </Testables>
    </TestAction>

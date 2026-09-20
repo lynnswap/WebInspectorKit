@@ -102,6 +102,46 @@ struct DOMTreeMenuModelTests {
     }
 
     @Test
+    func deletionKeepsTheMenuConfigurationThatStartedTheAction() async throws {
+        let fixture = try makeMenuFixture()
+        let originalUndoManager = UndoManager()
+        var receivedUndoManager: UndoManager?
+        var deletedNodeIDs: [DOMNode.ID] = []
+        var originalSelectionCleared = false
+        var replacementSelectionCleared = false
+        let model = DOMTreeMenuModel(
+            context: fixture.context,
+            copyNodeTextAction: nil,
+            deleteNodesAction: { nodeIDs, undoManager in
+                deletedNodeIDs = nodeIDs
+                receivedUndoManager = undoManager
+                return true
+            }
+        )
+        model.configure(
+            nodeIDs: [fixture.divID],
+            selectedText: nil,
+            undoManager: originalUndoManager,
+            localMarkupTextByNodeID: [:],
+            clearLocalSelection: { originalSelectionCleared = true }
+        )
+        let deletion = try #require(model.deleteSelection())
+        model.configure(
+            nodeIDs: [fixture.inputID],
+            selectedText: nil,
+            undoManager: nil,
+            localMarkupTextByNodeID: [:],
+            clearLocalSelection: { replacementSelectionCleared = true }
+        )
+        await deletion.value
+
+        #expect(deletedNodeIDs == [fixture.divID])
+        #expect(receivedUndoManager === originalUndoManager)
+        #expect(originalSelectionCleared)
+        #expect(!replacementSelectionCleared)
+    }
+
+    @Test
     func deleteSelectionClearsLocalSelectionOnlyAfterSuccessfulAction() async throws {
         let fixture = try makeMenuFixture()
         var clearCount = 0

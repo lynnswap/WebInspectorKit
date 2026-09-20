@@ -13,7 +13,7 @@ let package = Package(
     name: "WebInspectorKit",
     defaultLocalization: "en",
     platforms: [
-        .iOS(.v18), .macOS(.v15)
+        .iOS("18.4"), .macOS("15.4")
     ],
     products: [
         .library(
@@ -187,6 +187,17 @@ let package = Package(
                 "WebInspectorProxyKit"
             ],
             path: "Tests/WebInspectorTestSupport",
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebInspectorNativeSymbolFixtures",
+            path: "Packages/WebInspectorNativeBridge/Tests/WebInspectorNativeSymbolFixtures",
+            publicHeadersPath: "include"
+        ),
+        .testTarget(
+            name: "WebInspectorNativeBridgeTests",
+            dependencies: ["WebInspectorNativeBridge", "WebInspectorNativeSymbolFixtures"],
+            path: "Packages/WebInspectorNativeBridge/Tests/WebInspectorNativeBridgeTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
