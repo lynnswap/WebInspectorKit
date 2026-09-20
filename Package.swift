@@ -44,7 +44,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/lynnswap/ScrollableTabBar.git",
-            exact: "0.1.2"
+            exact: "0.1.3"
         ),
         .package(
             url: "https://github.com/lynnswap/UIHostingMenu.git",
