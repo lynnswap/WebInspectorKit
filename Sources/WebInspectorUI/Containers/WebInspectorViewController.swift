@@ -397,14 +397,11 @@ public final class WebInspectorViewController: UIViewController {
         host.webInspectorSetDrawsBackgroundTraitOverride(drawsBackgroundStorage)
 
         addChild(host)
-        host.view.translatesAutoresizingMaskIntoConstraints = false
+        // Resize the UIKit host with its parent so a sheet's initial layout
+        // does not leave the floating tab bar at its pre-presentation height.
+        host.view.frame = view.bounds
+        host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(host.view)
-        NSLayoutConstraint.activate([
-            host.view.topAnchor.constraint(equalTo: view.topAnchor),
-            host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-        ])
         host.didMove(toParent: self)
 
         activeHost = host

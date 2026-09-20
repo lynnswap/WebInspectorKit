@@ -3,6 +3,7 @@ import Testing
 
 #if os(iOS)
 import UIKit
+import WebKit
 import WebInspectorKit
 
 @Suite(.serialized)
@@ -219,6 +220,58 @@ struct MonoclyLifecycleTests {
             if #available(iOS 26.0, *) {
                 #expect(sheetController.drawsBackground == false)
             }
+        }
+    }
+
+    @Test(arguments: [UIUserInterfaceStyle.light, .dark])
+    func presentSheetShowsTabBarWithoutResizing(pageStyle: UIUserInterfaceStyle) async throws {
+        try await withCleanState { context in
+            let fixture = try makeHostedRootViewController(context: context)
+            fixture.rootViewController.traitOverrides.horizontalSizeClass = .compact
+            let pageController = try #require(
+                fixture.rootViewController.viewControllers.first as? BrowserPageViewController
+            )
+            let webView = try #require(pageController.hostedWebViewForTesting)
+            webView.underPageBackgroundColor = pageStyle == .dark ? .black : .white
+            await fixture.rootViewController.waitForInspectorSessionTransitions()
+            #expect(fixture.rootViewController.inspectorSession.pageUserInterfaceStyle == pageStyle)
+            let coordinator = BrowserInspectorCoordinator()
+            defer {
+                coordinator.invalidate()
+                fixture.rootViewController.dismiss(animated: false)
+            }
+
+            #expect(coordinator.presentSheet(
+                from: fixture.rootViewController,
+                inspectorSession: fixture.rootViewController.inspectorSession
+            ))
+            let sheetController = try #require(
+                coordinator.presentedSheetControllerForTesting as? WebInspectorViewController
+            )
+            if let transition = sheetController.transitionCoordinator {
+                await withCheckedContinuation { continuation in
+                    transition.animate(alongsideTransition: nil) { _ in
+                        continuation.resume()
+                    }
+                }
+            }
+
+            let tabController = try #require(
+                sheetController.children.first as? UITabBarController
+            )
+            let window = try #require(sheetController.view.window)
+            let tabBar = tabController.tabBar
+            let tabBarFrame = tabBar.convert(tabBar.bounds, to: window)
+            #expect(sheetController.sheetPresentationController?.selectedDetentIdentifier == .medium)
+            #expect(tabBar.isHidden == false)
+            #expect(tabBar.alpha > 0)
+            #expect(tabBarFrame.height > 0)
+            #expect(window.bounds.contains(tabBarFrame))
+            let hitView = window.hitTest(
+                CGPoint(x: tabBarFrame.midX, y: tabBarFrame.midY),
+                with: nil
+            )
+            #expect(hitView?.isDescendant(of: tabBar) == true)
         }
     }
 
