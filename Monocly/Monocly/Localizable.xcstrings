@@ -2,6 +2,7 @@
   "sourceLanguage" : "en",
   "strings" : {
     "common.cancel" : {
+      "extractionState" : "manual",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -144,6 +145,7 @@
       }
     },
     "common.ok" : {
+      "extractionState" : "manual",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -286,6 +288,7 @@
       }
     },
     "monocly.context.open_in_monocly" : {
+      "extractionState" : "manual",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -428,6 +431,7 @@
       }
     },
     "monocly.inspector.open_as_sheet" : {
+      "extractionState" : "manual",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
@@ -570,6 +574,7 @@
       }
     },
     "monocly.inspector.open_in_new_window" : {
+      "extractionState" : "manual",
       "localizations" : {
         "ar" : {
           "stringUnit" : {
