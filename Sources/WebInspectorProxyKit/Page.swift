@@ -26,6 +26,24 @@ public enum Page {
             )
         }
 
+        package func resourceTree() async throws -> WebInspectorProxyCommandReply<ResourceTree> {
+            try await context.dispatchWithReplyBoundary(
+                domain: .page,
+                method: "getResourceTree",
+                payload: ResourceTreePayload(),
+                returning: ResourceTree.self
+            )
+        }
+
+        package func resourceContent(frameID: FrameID, url: String) async throws -> WebInspectorProxyCommandReply<Network.Body> {
+            try await context.dispatchWithReplyBoundary(
+                domain: .page,
+                method: "getResourceContent",
+                payload: ResourceContentPayload(frameID: frameID, url: url),
+                returning: Network.Body.self
+            )
+        }
+
         /// Reloads the inspected page.
         public func reload(ignoringCache: Bool = false) async throws {
             try await context.dispatchVoid(
@@ -51,4 +69,34 @@ public enum Page {
             self.ignoringCache = ignoringCache
         }
     }
+
+    package struct ResourceTree: Decodable, Sendable {
+        package struct Frame: Decodable, Sendable {
+            package let id: String
+            package let loaderId: String
+            package let url: String
+            package let mimeType: String
+        }
+
+        package struct Resource: Decodable, Sendable {
+            package let url: String
+            package let type: String
+            package let mimeType: String
+            package let failed: Bool?
+            package let canceled: Bool?
+            package let sourceMapURL: String?
+            package let targetId: String?
+        }
+
+        package let frame: Frame
+        package let childFrames: [ResourceTree]?
+        package let resources: [Resource]
+    }
+
+    package struct ResourceContentPayload: Sendable {
+        package let frameID: FrameID
+        package let url: String
+    }
+
+    package struct ResourceTreePayload: Sendable {}
 }

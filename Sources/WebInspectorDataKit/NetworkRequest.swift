@@ -1385,9 +1385,22 @@ public final class NetworkRequest: WebInspectorPersistentModel {
     @ObservationIgnored weak var modelContext: WebInspectorContext?
     @ObservationIgnored private var currentRequest: Network.Request
     @ObservationIgnored private var allowsMultipartContinuation: Bool
+    enum ResourceContentLocation: Equatable {
+        case frame(FrameID)
+        case unavailable
+    }
+
+    @ObservationIgnored private(set) var resourceContentLocation: ResourceContentLocation?
+
+    var resourceContentFrameID: FrameID? {
+        guard case let .frame(frameID) = resourceContentLocation else { return nil }
+        return frameID
+    }
+
+    var origin: Network.Request.Origin? { currentRequest.origin }
 
     var proxyID: Network.Request.ID {
-        id.proxyID
+        currentRequest.id
     }
 
     var backendResourceIdentifier: Network.BackendResourceID? {
@@ -1451,6 +1464,39 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         self.modelContext = modelContext
         currentRequest = request
         allowsMultipartContinuation = false
+    }
+
+    func applyResourceTreeMetadata(
+        frameID: FrameID,
+        mimeType: String,
+        failed: Bool,
+        canceled: Bool,
+        sourceMapURL: String?
+    ) {
+        resourceContentLocation = .frame(frameID)
+        applyResponse(Network.Response(url: url, mimeType: mimeType), resourceType: resourceType, timestamp: nil)
+        self.sourceMapURL = sourceMapURL
+        state = failed || canceled ? .failed(errorText: "", canceled: canceled) : .finished
+    }
+
+    func bindResourceTreeRequest(to proxyID: Network.Request.ID) {
+        currentRequest = Network.Request(
+            id: proxyID,
+            url: currentRequest.url,
+            method: currentRequest.method,
+            headers: currentRequest.headers,
+            origin: currentRequest.origin
+        )
+        resourceContentLocation = nil
+    }
+
+    func invalidateResourceTreeContent() {
+        guard resourceContentFrameID != nil else { return }
+        resourceContentLocation = .unavailable
+        if responseBody.phase != .loaded {
+            responseBody.invalidateResponseFetch()
+            responseBody.fail(NetworkBody.invalidatedResponseFetchError)
+        }
     }
 
     /// A Boolean value indicating whether the response body can be fetched now.
@@ -1673,6 +1719,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         webSocket = resourceType == .webSocket ? WebSocketState() : nil
         responseBody.resetForResponse(fallbackURL: currentRequest.url)
         allowsMultipartContinuation = false
+        resourceContentLocation = nil
         state = .pending
     }
 

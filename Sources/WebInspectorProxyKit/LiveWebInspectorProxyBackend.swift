@@ -1181,8 +1181,13 @@ private enum LiveProxyCommandEncoder {
             let payload = try payload(command.payload, as: Page.ReloadPayload.self, command: command)
             return try data(["ignoreCache": payload.ignoringCache])
 
+        case (.page, "getResourceContent"):
+            let payload = try payload(command.payload, as: Page.ResourceContentPayload.self, command: command)
+            return try data(["frameId": payload.frameID.rawValue, "url": payload.url])
+
         case (.page, "enable"),
              (.page, "disable"),
+             (.page, "getResourceTree"),
              (.dom, "getDocument"),
              (.dom, "hideHighlight"),
              (.dom, "markUndoableState"),
@@ -1491,6 +1496,10 @@ private enum LiveProxyCommandDecoder {
         if Result.self == Void.self {
             return () as! Result
         }
+        if Result.self == Page.ResourceTree.self {
+            let payload = try decode(ResourceTreeResult.self, from: result.resultData)
+            return payload.frameTree as! Result
+        }
         if Result.self == DOM.Node.self {
             let payload = try decode(DocumentResult.self, from: result.resultData)
             return try payload.root.proxyNode() as! Result
@@ -1511,6 +1520,10 @@ private enum LiveProxyCommandDecoder {
             return try payload.proxyAttributes() as! Result
         }
         if Result.self == Network.Body.self {
+            if command.domain == .page {
+                let payload = try decode(ResourceContentResult.self, from: result.resultData)
+                return Network.Body(data: payload.content, base64Encoded: payload.base64Encoded) as! Result
+            }
             let payload = try decode(ResponseBodyResult.self, from: result.resultData)
             return Network.Body(data: payload.body, base64Encoded: payload.base64Encoded) as! Result
         }
@@ -1564,6 +1577,15 @@ private enum LiveProxyCommandDecoder {
 
     private static func decode<Payload: Decodable>(_ type: Payload.Type, from data: Data) throws -> Payload {
         try JSONDecoder().decode(type, from: data)
+    }
+
+    private struct ResourceTreeResult: Decodable {
+        let frameTree: Page.ResourceTree
+    }
+
+    private struct ResourceContentResult: Decodable {
+        let content: String
+        let base64Encoded: Bool
     }
 
     private struct DocumentResult: Decodable {
