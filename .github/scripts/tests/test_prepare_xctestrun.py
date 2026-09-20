@@ -19,6 +19,7 @@ class PrepareTestRunTests(unittest.TestCase):
                 products = Path(temporary)
                 target = {"BlueprintName": "WebInspectorNativeBridgeTests",
                           "TestBundlePath": "__TESTROOT__/Debug-iphonesimulator/Native.xctest",
+                          "TestHostPath": "__PLATFORMS__/MacOSX.platform/Developer/Library/Xcode/Agents/xctest",
                           "EnvironmentVariables": {"EXISTING": "preserved"}}
                 data = ({"TestConfigurations": [{"TestTargets": [target]}]}
                         if uses_test_plan else {"Native": target})
@@ -37,7 +38,8 @@ class PrepareTestRunTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             products = Path(temporary)
             path = products / "Workspace.xctestrun"
-            native = {"BlueprintName": "WebInspectorNativeBridgeTests", "TestBundlePath": "native.xctest"}
+            native = {"BlueprintName": "WebInspectorNativeBridgeTests", "TestBundlePath": "native.xctest",
+                      "TestHostPath": "__PLATFORMS__/MacOSX.platform/Developer/Library/Xcode/Agents/xctest"}
             consumer = {"BlueprintName": "WebInspectorConsumerContractTests", "EnvironmentVariables": {"OTHER": "preserved"}}
             content = plistlib.dumps({"TestConfigurations": [{"TestTargets": [native, consumer]}]})
             path.write_bytes(content)
@@ -45,6 +47,37 @@ class PrepareTestRunTests(unittest.TestCase):
             targets = plistlib.loads(path.read_bytes())["TestConfigurations"][0]["TestTargets"]
             self.assertEqual(targets[0]["EnvironmentVariables"]["WEBINSPECTORKIT_RUN_NATIVE_RUNTIME_SMOKE"], "1")
             self.assertEqual(targets[1], consumer)
+
+    def test_ios_native_tests_use_the_built_application_host(self):
+        for uses_test_plan in (False, True):
+            with self.subTest(uses_test_plan=uses_test_plan), tempfile.TemporaryDirectory() as temporary:
+                products = Path(temporary)
+                host = products / "Debug-iphonesimulator/RuntimeTestHost.app"
+                host.mkdir(parents=True)
+                (host / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": "test.host"}))
+                native = {
+                    "BlueprintName": "WebInspectorNativeBridgeTests",
+                    "TestBundlePath": "__TESTROOT__/Debug-iphonesimulator/Native.xctest",
+                    "TestHostPath": "__PLATFORMS__/iPhoneSimulator.platform/Developer/Library/Xcode/Agents/xctest",
+                    "TestingEnvironmentVariables": {"DYLD_INSERT_LIBRARIES": "/existing.dylib"},
+                    "DependentProductPaths": ["native.xctest"],
+                }
+                data = ({"TestConfigurations": [{"TestTargets": [native]}]}
+                        if uses_test_plan else {"Native": native})
+                path = products / "Native.xctestrun"
+                path.write_bytes(plistlib.dumps(data))
+                prepare.prepare(products)
+                updated = plistlib.loads(path.read_bytes())
+                target = (updated["TestConfigurations"][0]["TestTargets"][0]
+                          if uses_test_plan else updated["Native"])
+                self.assertTrue(target["IsAppHostedTestBundle"])
+                self.assertEqual(target["TestHostBundleIdentifier"], "test.host")
+                self.assertEqual(target["TestHostPath"], "__TESTROOT__/Debug-iphonesimulator/RuntimeTestHost.app")
+                self.assertEqual(target["DependentProductPaths"], ["native.xctest", target["TestHostPath"]])
+                self.assertEqual(target["TestBundlePath"], native["TestBundlePath"])
+                self.assertEqual(target["TestingEnvironmentVariables"]["DYLD_INSERT_LIBRARIES"],
+                                 "__PLATFORMS__/iPhoneSimulator.platform/Developer/usr/lib/libXCTestBundleInject.dylib:/existing.dylib")
+                self.assertEqual(target["TestingEnvironmentVariables"]["XCInjectBundleInto"], "unused")
 
 
 if __name__ == "__main__":
