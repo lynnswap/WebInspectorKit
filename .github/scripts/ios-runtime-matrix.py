@@ -21,7 +21,8 @@ def supported_runtimes(runtimes):
             continue
         if not runtime.get("isAvailable", False):
             continue
-        if version_components(runtime["version"]) < version_components("18.4"):
+        version = version_components(runtime["version"])
+        if version < (18, 4, 0) or (26, 0, 0) <= version < (26, 1, 0):
             continue
         selected[runtime["identifier"]] = runtime
     return sorted(selected.values(), key=lambda runtime: version_components(runtime["version"]))
@@ -73,7 +74,7 @@ def main():
         return
     runtimes = supported_runtimes(json.loads(simctl("list", "runtimes", "--json"))["runtimes"])
     if not runtimes:
-        raise ValueError("No available iOS 18.4 or later runtime is installed.")
+        raise ValueError("No available iOS runtime supported by CI is installed.")
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
         macos_version = subprocess.check_output(["sw_vers", "-productVersion"], text=True).strip()
         output.write(f"matrix={json.dumps(test_matrix(runtimes, macos_version))}\n")

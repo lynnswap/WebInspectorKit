@@ -22,9 +22,9 @@ def runtime(version, *, available=True, platform="iOS", identifier=None):
 
 class RuntimeMatrixTests(unittest.TestCase):
     def test_resolution_creates_an_isolated_device_for_the_exact_runtime(self):
-        installed = runtime("26.0.1", identifier="com.apple.CoreSimulator.SimRuntime.iOS-26-0")
+        installed = runtime("26.4.1", identifier="com.apple.CoreSimulator.SimRuntime.iOS-26-4")
         installed.update({
-            "buildversion": "23A355",
+            "buildversion": "test-build",
             "supportedDeviceTypes": [
                 {"identifier": "tablet", "productFamily": "iPad"},
                 {"identifier": "phone", "productFamily": "iPhone"},
@@ -37,15 +37,18 @@ class RuntimeMatrixTests(unittest.TestCase):
                          ("create", "WebInspectorKit CI", "phone", installed["identifier"]))
         append_environment.assert_called_once_with({
             "DESTINATION": "platform=iOS Simulator,id=fresh-udid",
-            "RESOLVED_IOS_VERSION": "26.0.1",
+            "RESOLVED_IOS_VERSION": "26.4.1",
             "WATCHDOG_SIMULATOR_UDID": "fresh-udid",
         })
 
-    def test_every_installed_minor_and_patch_version_is_selected(self):
-        installed = [runtime(version) for version in ("27.2", "18.6", "26.4.1", "18.4", "26.2", "27.0")]
+    def test_every_supported_minor_and_patch_version_is_selected(self):
+        installed = [runtime(version) for version in (
+            "27.2", "18.6", "26.4.1", "18.4", "26.2", "27.0",
+            "26.0", "26.0.1", "26.0.2", "26.1", "26.1.1",
+        )]
         self.assertEqual(
             [item["version"] for item in matrix.supported_runtimes(installed)],
-            ["18.4", "18.6", "26.2", "26.4.1", "27.0", "27.2"],
+            ["18.4", "18.6", "26.1", "26.1.1", "26.2", "26.4.1", "27.0", "27.2"],
         )
 
     def test_deployment_floor_unavailable_runtimes_and_other_platforms(self):

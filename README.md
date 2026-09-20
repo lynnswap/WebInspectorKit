@@ -97,8 +97,9 @@ let inspector = WebInspectorViewController(
 
 ## Testing against real WebKit
 
-CI discovers all installed iOS 18.4+ Simulator runtimes on the `macos-15`,
-`macos-26`, and `xcode-27` runners. Each runtime runs the NativeBridge tests,
+CI discovers installed iOS 18.4+ Simulator runtimes on the `macos-15`,
+`macos-26`, and `xcode-27` runners, with coverage of the iOS 26 series starting
+at 26.1. Each runtime runs the NativeBridge tests,
 including native symbol resolution and an Inspector protocol round trip. The
 Swift 6.3+ runners also run the ProxyKit, DataKit, UI, full Monocly, and consumer
 contract test suites. Each Xcode builds one iOS artifact and one macOS artifact,
