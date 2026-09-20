@@ -49,15 +49,9 @@ def resolve_device(runtime_id):
     runtime = next((runtime for runtime in runtimes if runtime["identifier"] == runtime_id), None)
     if runtime is None:
         raise ValueError(f"Requested runtime is unavailable: {runtime_id}")
-    devices = json.loads(simctl("list", "devices", "available", "--json"))["devices"]
-    device = next((device for device in devices.get(runtime_id, [])
-                   if device.get("isAvailable", False) and device["name"].startswith("iPhone")), None)
-    if device is None:
-        device_type = next(device_type for device_type in runtime["supportedDeviceTypes"]
-                           if device_type["productFamily"] == "iPhone")
-        udid = simctl("create", "WebInspectorKit CI", device_type["identifier"], runtime_id).strip()
-    else:
-        udid = device["udid"]
+    device_type = next(device_type for device_type in runtime["supportedDeviceTypes"]
+                       if device_type["productFamily"] == "iPhone")
+    udid = simctl("create", "WebInspectorKit CI", device_type["identifier"], runtime_id).strip()
     append_environment({
         "DESTINATION": f"platform=iOS Simulator,id={udid}",
         "RESOLVED_IOS_VERSION": runtime["version"],

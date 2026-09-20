@@ -1,6 +1,8 @@
 import importlib.util
+import json
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 spec = importlib.util.spec_from_file_location(
@@ -19,6 +21,26 @@ def runtime(version, *, available=True, platform="iOS", identifier=None):
 
 
 class RuntimeMatrixTests(unittest.TestCase):
+    def test_resolution_creates_an_isolated_device_for_the_exact_runtime(self):
+        installed = runtime("26.0.1", identifier="com.apple.CoreSimulator.SimRuntime.iOS-26-0")
+        installed.update({
+            "buildversion": "23A355",
+            "supportedDeviceTypes": [
+                {"identifier": "tablet", "productFamily": "iPad"},
+                {"identifier": "phone", "productFamily": "iPhone"},
+            ],
+        })
+        with patch.object(matrix, "simctl", side_effect=[json.dumps({"runtimes": [installed]}), "fresh-udid\n"]) as simctl, \
+                patch.object(matrix, "append_environment") as append_environment:
+            matrix.resolve_device(installed["identifier"])
+        self.assertEqual(simctl.call_args_list[-1].args,
+                         ("create", "WebInspectorKit CI", "phone", installed["identifier"]))
+        append_environment.assert_called_once_with({
+            "DESTINATION": "platform=iOS Simulator,id=fresh-udid",
+            "RESOLVED_IOS_VERSION": "26.0.1",
+            "WATCHDOG_SIMULATOR_UDID": "fresh-udid",
+        })
+
     def test_every_installed_minor_and_patch_version_is_selected(self):
         installed = [runtime(version) for version in ("27.2", "18.6", "26.4.1", "18.4", "26.2", "27.0")]
         self.assertEqual(
