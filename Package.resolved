@@ -1,5 +1,5 @@
 {
-  "originHash" : "4c5b84f9f123c8af37446af439f94616ac182842955b7f43ae2db907bb6288d8",
+  "originHash" : "5c9eb79cc76f06ca0ad812672782629144ecba27ae97d0477681ef5f7d27c487",
   "pins" : [
     {
       "identity" : "machokit",
@@ -33,8 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ScrollableTabBar.git",
       "state" : {
-        "revision" : "bfa08ce458cccbc733d0e23b27369d01503cc4af",
-        "version" : "0.1.2"
+        "revision" : "6f5d8cbf8f55e172c1c6e6d73e9620951f4b0b54",
+        "version" : "0.1.3"
       }
     },
     {
