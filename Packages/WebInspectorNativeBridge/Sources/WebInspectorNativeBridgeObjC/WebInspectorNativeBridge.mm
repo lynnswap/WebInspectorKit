@@ -5,6 +5,7 @@
 #import <WebKit/WebKit.h>
 #import <malloc/malloc.h>
 #import <mach/mach.h>
+#import <sys/sysctl.h>
 #import <os/log.h>
 #import <algorithm>
 #import <atomic>
@@ -216,15 +217,28 @@ struct TargetResolution {
     size_t matches { 0 };
 };
 
+#if defined(__arm64__) && !__has_feature(ptrauth_calls)
+__attribute__((target("pauth"), noinline))
+static void *stripDataPointerAuthentication(void *pointer)
+{
+    // An arm64 client can inspect arm64e WebKit objects. ptrauth_strip is a
+    // no-op in that client, so strip the data PAC for this identity comparison.
+    __asm__("xpacd %0" : "+r"(pointer));
+    return pointer;
+}
+#endif
+
 static void *unsignedVTablePointer(void *pointer)
 {
 #if __has_feature(ptrauth_calls)
     return ptrauth_strip(pointer, ptrauth_key_cxx_vtable_pointer);
 #elif defined(__arm64__)
-    // An arm64 client can inspect arm64e WebKit objects. ptrauth_strip is a
-    // no-op in that client, so strip the data PAC for this identity comparison.
-    __asm__("xpacd %0" : "+r"(pointer));
-    return pointer;
+    static const bool supportsPointerAuthentication = [] {
+        int supported = 0;
+        size_t size = sizeof(supported);
+        return sysctlbyname("hw.optional.arm.FEAT_PAuth", &supported, &size, nullptr, 0) == 0 && supported;
+    }();
+    return supportsPointerAuthentication ? stripDataPointerAuthentication(pointer) : pointer;
 #else
     return pointer;
 #endif
