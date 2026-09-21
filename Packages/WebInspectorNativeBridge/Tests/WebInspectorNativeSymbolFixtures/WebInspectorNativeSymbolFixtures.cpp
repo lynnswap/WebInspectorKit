@@ -153,3 +153,7 @@ uintptr_t WebInspectorNativeSymbolFixtureWTFStringFromUTF8Address(void)
 
 WIK_FIXTURE_SYMBOL WebKit::WebPageDebuggable::~WebPageDebuggable() = default;
 WIK_FIXTURE_SYMBOL void WebKit::WebPageDebuggable::dispatchMessageFromRemote(WTF::String&&) { }
+
+namespace WKRuntimeFixture {
+__attribute__((visibility("default"), used)) int value = 42;
+}

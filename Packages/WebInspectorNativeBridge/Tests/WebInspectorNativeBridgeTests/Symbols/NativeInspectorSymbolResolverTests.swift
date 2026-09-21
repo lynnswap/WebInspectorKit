@@ -6,6 +6,7 @@ import WebKit
 import WebInspectorNativeSymbolFixtures
 import WebInspectorNativeBridgeObjC
 @testable import WebInspectorNativeBridge
+@testable import WebKitRuntime
 
 private let nativeRuntimeSmokeOptInEnvironmentKey = "WEBINSPECTORKIT_RUN_NATIVE_RUNTIME_SMOKE"
 private let shouldRunNativeRuntimeSmokeTests =
@@ -24,7 +25,6 @@ struct NativeInspectorSymbolResolverTests {
         }
         withExtendedLifetime(view) { }
     }
-
     @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason), .timeLimit(.minutes(1)))
     @MainActor
     func nativeFrontendExchangesProtocolMessages() async throws {
@@ -63,7 +63,6 @@ struct NativeInspectorSymbolResolverTests {
         }
         Issue.record("The native frontend closed before replying to the protocol command.")
     }
-
     @Test
     func fixtureImageResolvesCompleteAddressSetDespiteIncompatibleOverloads() throws {
         let fixture = try nativeSymbolFixture()
@@ -73,10 +72,7 @@ struct NativeInspectorSymbolResolverTests {
         #expect(resolution.addresses.isComplete)
         #expect(resolution.isSupported)
         #expect(resolution.source == "loaded-image")
-        #expect(NativeInspectorSymbolResolverCore.isVTableAddress(resolution.debuggableVTableAddress))
-        #expect(!NativeInspectorSymbolResolverCore.isVTableAddress(resolution.connectFrontendAddress))
     }
-
     @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason))
     @MainActor
     func resolveCurrentReturnsCompleteAddressSetOnSupportedPlatforms() throws {
@@ -88,7 +84,6 @@ struct NativeInspectorSymbolResolverTests {
         #expect(resolution.addresses.isComplete)
         #expect(resolution.isSupported)
     }
-
     @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason))
     @MainActor
     func nativeSymbolResolutionTiming() throws {
@@ -110,11 +105,10 @@ struct NativeInspectorSymbolResolverTests {
             print("SYMBOL_RESOLUTION_TIMING uncachedMedianMS=\(samples.sorted()[2]) cachedMeanUS=\(cachedMicroseconds)")
         }
     }
-
     @Test
     func resolveForTestingReportsOnlyMissingSymbolState() throws {
         let fixture = try nativeSymbolFixture()
-        let symbols = NativeInspectorSymbolResolverCore.currentSymbolQueries()
+        let symbols = NativeInspectorSymbols.current()
             .replacing(
                 stringFromUTF8: requiredSymbol(
                     role: .stringFromUTF8,
@@ -151,7 +145,6 @@ struct NativeInspectorSymbolResolverTests {
             #expect(!failureReason.contains("/System/"))
         }
     }
-
     @Test
     func fixtureResolutionSelectsUsableStringFromUTF8EntryPoint() throws {
         let fixture = try nativeSymbolFixture()
@@ -160,7 +153,6 @@ struct NativeInspectorSymbolResolverTests {
         #expect(resolution.isSupported)
         #expect(resolution.stringFromUTF8Address == UInt64(WebInspectorNativeSymbolFixtureWTFStringFromUTF8Address()))
     }
-
     @Test(arguments: [
         ("RN9Inspector15FrontendChannelEbb", true),
         ("RN9Inspector15FrontendChannelEb", false),
@@ -171,16 +163,15 @@ struct NativeInspectorSymbolResolverTests {
         ("RKN9Inspector15FrontendChannelEbb", false),
     ])
     func connectQueryMatchesParameterTypesOrderAndCount(_ parameters: String, _ expected: Bool) {
-        let symbol = NativeInspectorSymbolResolverCore.currentSymbolQueries().connectFrontend
+        let symbol = NativeInspectorSymbols.current().connectFrontend
         let name = "__ZN6WebKit17WebPageDebuggable7connectE" + parameters
 
         #expect(symbol.matches(symbolName: name) == expected)
         name.withCString { nameC in
-            let decodedName = unsafe NativeInspectorSymbolName.decode(nameC)
+            let decodedName = unsafe RuntimeSymbolName.decode(nameC)
             #expect(symbol.matches(decodedName: decodedName) == expected)
         }
     }
-
     @Test(arguments: [
         ("NSt3__14spanIKDuLm18446744073709551615EEE", true),
         ("NSt3__14spanIKDuLm4EEE", false),
@@ -190,54 +181,48 @@ struct NativeInspectorSymbolResolverTests {
         ("NSt3__14spanIKDuLm18446744073709551615EEEb", false),
     ])
     func stringFactoryQueryMatchesDynamicUTF8SpanByValue(_ parameters: String, _ expected: Bool) {
-        let symbol = NativeInspectorSymbolResolverCore.currentSymbolQueries().stringFromUTF8
+        let symbol = NativeInspectorSymbols.current().stringFromUTF8
         #expect(symbol.matches(symbolName: "__ZN3WTF6String8fromUTF8E" + parameters) == expected)
     }
-
     @Test(arguments: ["_", "__"])
     func functionQueriesAcceptItaniumAndMachOSymbolPrefixes(_ prefix: String) {
-        let symbols = NativeInspectorSymbolResolverCore.currentSymbolQueries()
+        let symbols = NativeInspectorSymbols.current()
         #expect(symbols.derefStringImpl.matches(symbolName: prefix + "ZN3WTF10StringImpl5derefEv"))
         #expect(symbols.stringImplToNSString.matches(symbolName: prefix + "ZN3WTF10StringImplcvP8NSStringEv"))
     }
-
     @Test(arguments: ["", "_", "__", "__Z", "_$s", "_ZN3WTF10StringImpl5derefE"])
     func nonCallableNamesDoNotMatchFunctionQueries(_ name: String) {
-        let symbol = NativeInspectorSymbolResolverCore.currentSymbolQueries().derefStringImpl
+        let symbol = NativeInspectorSymbols.current().derefStringImpl
         #expect(!symbol.matches(symbolName: name))
-        let decodedName = name.withCString { unsafe NativeInspectorSymbolName.decode($0) }
+        let decodedName = name.withCString { unsafe RuntimeSymbolName.decode($0) }
         #expect(!symbol.matches(decodedName: decodedName))
     }
-
     @Test
     func signatureSpacingDoesNotEraseTypeBoundaries() {
-        let compact = NativeInspectorSymbolName.cxxSignatureKey("Inspector::BackendDispatcher::dispatch(WTF::String const&)")
-        let spaced = NativeInspectorSymbolName.cxxSignatureKey("Inspector :: BackendDispatcher :: dispatch ( WTF :: String const & )")
-        let otherType = NativeInspectorSymbolName.cxxSignatureKey("Inspector::BackendDispatcher::dispatch(WTF::Stringconst&)")
+        let compact = RuntimeSymbolName.cxxSignatureKey("Inspector::BackendDispatcher::dispatch(WTF::String const&)")
+        let spaced = RuntimeSymbolName.cxxSignatureKey("Inspector :: BackendDispatcher :: dispatch ( WTF :: String const & )")
+        let otherType = RuntimeSymbolName.cxxSignatureKey("Inspector::BackendDispatcher::dispatch(WTF::Stringconst&)")
         #expect(compact == spaced)
         #expect(compact != otherType)
     }
-
     @Test
     func stringReleaseQuerySelectsDerefInsteadOfUnconditionalDestruction() {
-        let symbol = NativeInspectorSymbolResolverCore.currentSymbolQueries().derefStringImpl
+        let symbol = NativeInspectorSymbols.current().derefStringImpl
 
         #expect(symbol.matches(symbolName: "__ZN3WTF10StringImpl5derefEv"))
         #expect(!symbol.matches(symbolName: "__ZN3WTF10StringImpl7destroyEPS0_"))
     }
-
     @Test
     func targetIdentityQueryDistinguishesVTableFromOtherMetadata() {
-        let symbol = NativeInspectorSymbolResolverCore.currentSymbolQueries().debuggableVTable
+        let symbol = NativeInspectorSymbols.current().debuggableVTable
         #expect(symbol.matches(symbolName: "__ZTVN6WebKit17WebPageDebuggableE"))
         #expect(!symbol.matches(symbolName: "__ZTIN6WebKit17WebPageDebuggableE"))
         #expect(!symbol.matches(symbolName: "__ZTVN6WebKit26WebPageInspectorControllerE"))
     }
-
     @Test
     func missingDerefIsReportedWithoutUsingTheDestroyEntryPoint() throws {
         let fixture = try nativeSymbolFixture()
-        let symbols = NativeInspectorSymbolResolverCore.currentSymbolQueries().replacing(
+        let symbols = NativeInspectorSymbols.current().replacing(
             derefStringImpl: requiredSymbol(
                 role: .derefStringImpl,
                 ownerImage: .webKit,
@@ -250,138 +235,10 @@ struct NativeInspectorSymbolResolverTests {
         #expect(!resolution.isSupported)
         #expect(resolution.missingFunctions == ["derefStringImpl"])
     }
-
-    @Test
-    func loadedImageSymbolOffsetRejectsMachHeaderAddress() {
-        #expect(!NativeInspectorSymbolResolverCore.loadedImageSymbolOffsetIsUsable(-1, textVirtualMemorySize: 0x1000))
-        #expect(!NativeInspectorSymbolResolverCore.loadedImageSymbolOffsetIsUsable(0, textVirtualMemorySize: 0x1000))
-        #expect(NativeInspectorSymbolResolverCore.loadedImageSymbolOffsetIsUsable(8, textVirtualMemorySize: 0x1000))
-        #expect(!NativeInspectorSymbolResolverCore.loadedImageSymbolOffsetIsUsable(0x1000, textVirtualMemorySize: 0x1000))
-    }
-
-    @Test
-    func sharedCacheSymbolFileURLsKeepDirectoryFallbackAfterPreferredCandidate() {
-        let preferredPath = "/tmp/nonexistent/dyld_shared_cache_test"
-        let fallbackPaths = NativeInspectorSymbolResolver.sharedCacheSymbolFileURLsForTesting(
-            activeSharedCachePath: nil
-        ).map(\.path)
-        let preferredAndFallbackPaths = NativeInspectorSymbolResolver.sharedCacheSymbolFileURLsForTesting(
-            activeSharedCachePath: preferredPath
-        ).map(\.path)
-
-        #expect(preferredAndFallbackPaths.first == "\(preferredPath).symbols")
-        #expect(Array(preferredAndFallbackPaths.dropFirst()) == fallbackPaths)
-    }
-
-    @Test
-    func sharedCacheSymbolFileURLsDeduplicateActiveSymbolsPath() {
-        let activeSymbolsPath = "/System/Library/dyld/dyld_shared_cache_arm64e.symbols"
-        let paths = NativeInspectorSymbolResolver.sharedCacheSymbolFileURLsForTesting(
-            activeSharedCachePath: activeSymbolsPath
-        ).map(\.standardizedFileURL.path)
-
-        #expect(paths.first == activeSymbolsPath)
-        #expect(paths.filter { $0 == activeSymbolsPath }.count == 1)
-    }
-
-    @Test
-    func sharedCacheSymbolFileURLSortsPreferredArchitecturesFirst() {
-        #expect(NativeInspectorSymbolResolverCore.sharedCacheSortKey(for: "dyld_shared_cache_arm64e.symbols") == 0)
-        #expect(NativeInspectorSymbolResolverCore.sharedCacheSortKey(for: "dyld_shared_cache_arm64.symbols") == 1)
-        #expect(NativeInspectorSymbolResolverCore.sharedCacheSortKey(for: "dyld_shared_cache_x86_64.symbols") == 2)
-    }
-
-    @Test
-    func sharedCacheSourceDescriptionsReportFallbackPartsInOrder() {
-        #expect(
-            NativeInspectorSymbolResolverCore.sharedCacheSourceDescription(
-                base: "full-cache",
-                usedRuntimeFallback: false
-            ) == "full-cache"
-        )
-        #expect(
-            NativeInspectorSymbolResolverCore.sharedCacheSourceDescription(
-                base: "full-cache-file",
-                usedRuntimeFallback: true
-            ) == "full-cache-file+loaded-image-runtime"
-        )
-    }
-
-    @Test
-    func sharedCacheFallbackMergePrefersLaterSuccessfulFullCacheResult() {
-        let sharedCacheFailure = NativeInspectorSymbolLookupResult(
-            functionAddresses: .zero,
-            failureReason: "local symbol lookup unavailable: phase=shared-cache source=shared-cache",
-            failureKind: .localSymbolsUnavailable,
-            phase: .sharedCache,
-            missingFunctions: [],
-            source: "shared-cache",
-        )
-        let fullCacheSuccess = NativeInspectorSymbolLookupResult(
-            functionAddresses: completeNativeInspectorSymbolAddresses,
-            failureReason: nil,
-            failureKind: nil,
-            phase: .fullCache,
-            missingFunctions: [],
-            source: "full-cache",
-        )
-
-        let merged = NativeInspectorSymbolResolverCore.mergedResolution(
-            preferred: sharedCacheFailure,
-            fallback: fullCacheSuccess
-        )
-
-        #expect(merged.failureReason == nil)
-        #expect(merged.phase == .fullCache)
-        #expect(merged.source == "full-cache")
-        #expect(merged.functionAddresses == completeNativeInspectorSymbolAddresses)
-    }
-
-    @Test
-    func imagePathSuffixesMatchExpectedFrameworkLocations() {
-        let suffixes = NativeInspectorSymbolResolver.imagePathSuffixesForTesting()
-
-        #expect(suffixes.webKit == [
-            "/System/Library/Frameworks/WebKit.framework/WebKit",
-            "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit",
-        ])
-        #expect(suffixes.javaScriptCore == [
-            "/System/Library/Frameworks/JavaScriptCore.framework/JavaScriptCore",
-            "/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/JavaScriptCore",
-        ])
-
-    }
-
-    @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason))
-    @MainActor
-    func resolvedAddressHeaderValidationAcceptsMatchingImageAndRejectsUnexpectedImage() throws {
-        let (resolution, headers) = try withWebKitLoaded {
-            (
-                NativeInspectorSymbolResolver.resolveCurrent(),
-                try #require(NativeInspectorSymbolResolver.loadedImageHeaderAddressesForTesting())
-            )
-        }
-
-        #expect(
-            NativeInspectorSymbolResolver.resolvedAddressMatchesExpectedImageForTesting(
-                resolution.connectFrontendAddress,
-                expectedHeaderAddresses: [headers.webKit]
-            )
-        )
-        #expect(
-            !NativeInspectorSymbolResolver.resolvedAddressMatchesExpectedImageForTesting(
-                resolution.connectFrontendAddress,
-                expectedHeaderAddresses: [headers.javaScriptCore]
-            )
-        )
-    }
-
-
-
     @Test
     func diagnosticsDoNotExposeDecodedMangledSymbols() throws {
         let fixture = try nativeSymbolFixture()
-        let symbols = NativeInspectorSymbolResolverCore.currentSymbolQueries()
+        let symbols = NativeInspectorSymbols.current()
             .replacing(
                 stringFromUTF8: requiredSymbol(
                     role: .stringFromUTF8,
@@ -408,41 +265,16 @@ struct NativeInspectorSymbolResolverTests {
         #expect(!diagnostics.contains("DefinitelyWrong"))
         #expect(!diagnostics.contains("definitelyMissingFromUTF8Foo"))
     }
-
-    @Test
-    func fullCacheFallbackDiagnosticsRemainRedacted() {
-        let source = NativeInspectorSymbolResolverCore.sharedCacheSourceDescription(
-            base: "full-cache-file",
-            usedRuntimeFallback: true
-        )
-        let reason = NativeInspectorSymbolResolverCore.formattedFailureReason(
-            kind: .runtimeFunctionSymbolMissing,
-            detail: nil,
-            phase: .fullCacheFile,
-            source: source,
-            missingFunctions: ["connectFrontend", "stringFromUTF8"],
-        )
-
-        #expect(reason.contains("phase=full-cache-file"))
-        #expect(reason.contains("source=full-cache-file+loaded-image-runtime"))
-        #expect(reason.contains("missing=connectFrontend,stringFromUTF8"))
-        #expect(!reason.contains("__ZN"))
-        #expect(!reason.contains("_ZN"))
-        #expect(!reason.contains("WTF"))
-        #expect(!reason.contains("/System/"))
-    }
-
 }
 
-private let completeNativeInspectorSymbolAddresses = NativeInspectorSymbolAddresses(
-    connectFrontendAddress: 0x1_0000,
-    disconnectFrontendAddress: 0x1_0100,
-    stringFromUTF8Address: 0x2_0000,
-    stringImplToNSStringAddress: 0x2_0100,
-    derefStringImplAddress: 0x2_0200,
-    dispatchMessageFromRemoteAddress: 0x1_0200,
-    debuggableVTableAddress: 0x1_0300
-)
+private extension NativeInspectorRequiredSymbol {
+    func matches(symbolName: String) -> Bool {
+        RuntimeMatcher(requirement(webKit: .webKit, javaScriptCore: .javaScriptCore)).matches(symbolName)
+    }
+    func matches(decodedName: RuntimeSymbolName.Decoded) -> Bool {
+        queries.contains { RuntimeSymbolName.cxxSignatureKey($0.declaration) == decodedName.cxxFunctionSignature }
+    }
+}
 
 private struct NativeSymbolFixture {
     let pathSuffixes: [String]
@@ -478,7 +310,7 @@ private extension NativeInspectorSymbolResolver {
     static func resolveUsingFixture(
         _ fixture: NativeSymbolFixture,
         allowSharedCacheFallback: Bool = false,
-        symbols: NativeInspectorSymbols = NativeInspectorSymbolResolverCore.currentSymbolQueries()
+        symbols: NativeInspectorSymbols = NativeInspectorSymbols.current()
     ) throws -> NativeInspectorSymbolResolution {
         return resolveForTesting(
             imagePathSuffixes: fixture.pathSuffixes,

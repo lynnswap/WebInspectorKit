@@ -30,6 +30,7 @@ UIKit Web Inspector for `WKWebView`.
 
 | Product | Use when |
 | --- | --- |
+| `WebKitRuntime` | You implement native WebKit features and need shared symbol discovery and scoped page access. |
 | `WebInspectorKit` | You want the built-in UIKit inspector UI. |
 | `WebInspectorDataKit` | You want observable DOM, Network, Console, Runtime, and CSS models for a custom UI. |
 | `WebInspectorDataKitTesting` | You want deterministic `WebInspectorContext` startup synchronization in tests. |
@@ -94,6 +95,31 @@ let inspector = WebInspectorViewController(
     tabs: [.dom, .network, consoleTab]
 )
 ```
+
+## Native runtime foundation
+
+`WebKitRuntime` is a separate product for native WebKit integrations. It provides
+asynchronous C++/linker symbol lookup, image and section validation, shared
+successful lookup caching, and scoped access to a `WKWebView`'s native page.
+It has no Inspector session or UI dependency. Objective-C++ consumers use
+`WebKitRuntimeObjC.h` from the same product.
+
+```swift
+import WebKitRuntime
+
+let symbol = RuntimeSymbol(
+    .cxx("WebKit::WebPageProxy::legacyMainFrameProcessPtrForSwift() const"),
+    in: .webKit,
+    kind: .function
+)
+let resolved = try await WebKitRuntime.resolve([symbol])
+```
+
+This example resolves an optional private entry point; it does not call it or
+guarantee its availability. Consumers own native calling conventions, object
+layouts, and IPC schemas. Handle lookup failures for the feature that needs
+them. See the `WebKitRuntime` DocC documentation for page lifetime and memory
+read contracts.
 
 ## Testing against real WebKit
 

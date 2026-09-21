@@ -16,6 +16,7 @@ let package = Package(
         .iOS("18.4"), .macOS("15.4")
     ],
     products: [
+        .library(name: "WebKitRuntime", targets: ["WebKitRuntime", "WebKitRuntimeObjC"]),
         .library(
             name: "WebInspectorProxyKit",
             targets: ["WebInspectorProxyKit"]
@@ -65,6 +66,18 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "WebKitRuntime",
+            dependencies: ["WebKitRuntimeObjC", .product(name: "MachOKit", package: "MachOKit")],
+            path: "Packages/WebInspectorNativeBridge/Sources/WebKitRuntime",
+            swiftSettings: strictSwiftSettings
+        ),
+        .target(
+            name: "WebKitRuntimeObjC",
+            path: "Packages/WebInspectorNativeBridge/Sources/WebKitRuntimeObjC",
+            publicHeadersPath: "include",
+            linkerSettings: [.linkedFramework("Foundation"), .linkedFramework("WebKit")]
+        ),
+        .target(
             name: "WebInspectorProxyKit",
             dependencies: [
                 "WebInspectorNativeBridge"
@@ -96,13 +109,14 @@ let package = Package(
             name: "WebInspectorNativeBridge",
             dependencies: [
                 "WebInspectorNativeBridgeObjC",
-                .product(name: "MachOKit", package: "MachOKit")
+                "WebKitRuntime"
             ],
             path: "Packages/WebInspectorNativeBridge/Sources/WebInspectorNativeBridge",
             swiftSettings: strictSwiftSettings
         ),
         .target(
             name: "WebInspectorNativeBridgeObjC",
+            dependencies: ["WebKitRuntimeObjC"],
             path: "Packages/WebInspectorNativeBridge/Sources/WebInspectorNativeBridgeObjC",
             publicHeadersPath: "include",
             linkerSettings: [
@@ -196,7 +210,7 @@ let package = Package(
         ),
         .testTarget(
             name: "WebInspectorNativeBridgeTests",
-            dependencies: ["WebInspectorNativeBridge", "WebInspectorNativeSymbolFixtures"],
+            dependencies: ["WebInspectorNativeBridge", "WebInspectorNativeSymbolFixtures", "WebKitRuntime"],
             path: "Packages/WebInspectorNativeBridge/Tests/WebInspectorNativeBridgeTests",
             swiftSettings: strictSwiftSettings
         ),

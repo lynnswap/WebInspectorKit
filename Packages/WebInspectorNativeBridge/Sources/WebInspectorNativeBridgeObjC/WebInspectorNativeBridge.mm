@@ -1,9 +1,9 @@
 #import "WebInspectorNativeBridge.h"
+#import "WebKitRuntimeObjC.h"
 #import "WebInspectorNativeABI.h"
 
 #import <TargetConditionals.h>
 #import <WebKit/WebKit.h>
-#import <malloc/malloc.h>
 #import <mach/mach.h>
 #import <sys/sysctl.h>
 #import <os/log.h>
@@ -12,23 +12,9 @@
 #import <memory>
 #import <objc/runtime.h>
 #import <vector>
-#include <cstdlib>
-#include <cxxabi.h>
 #if __has_include(<ptrauth.h>)
 #import <ptrauth.h>
 #endif
-
-NSString *WebInspectorNativeDemangleCXXSymbol(const char *name)
-{
-    // Mach-O's symbol table adds an underscore to the Itanium external name.
-    if (name[0] == '_' && name[1] == '_' && name[2] == 'Z')
-        ++name;
-    if (name[0] != '_' || name[1] != 'Z')
-        return nil;
-    std::unique_ptr<char, decltype(&std::free)> demangled(
-        abi::__cxa_demangle(name, nullptr, nullptr, nullptr), &std::free);
-    return demangled ? [NSString stringWithUTF8String:demangled.get()] : nil;
-}
 
 #if TARGET_OS_IPHONE || TARGET_OS_OSX
 namespace WebInspectorNativeBridgePrivate {
@@ -189,46 +175,6 @@ static BOOL safeReadPointer(const void *address, void **valueOut)
     return YES;
 }
 
-struct PageStorage {
-    __strong id owner { nil };
-    void *page { nullptr };
-    size_t bytes { 0 };
-};
-
-static void *pointerResult(id target, SEL selector)
-{
-    // WKObject is an NSProxy; use its concrete method rather than forwarding
-    // NSObject's methodForSelector: through the proxy.
-    Method method = class_getInstanceMethod(object_getClass(target), selector);
-    if (!method)
-        return nullptr;
-    using Getter = void *(*)(id, SEL);
-    auto getter = reinterpret_cast<Getter>(method_getImplementation(method));
-    return getter(target, selector);
-}
-
-static PageStorage pageStorage(WKWebView *webView)
-{
-    // On Cocoa, WKPageRef is the Objective-C wrapper, whose _apiObject getter
-    // returns the C++ page in its indexed storage. Query both through WebKit so
-    // neither RefPtr storage nor the wrapper's alignment is replicated here.
-    // Original: _pageForTesting
-    const uint8_t pageName[] = { 0xF8, 0xD7, 0xC6, 0xC0, 0xC2, 0xE1, 0xC8, 0xD5, 0xF3, 0xC2, 0xD4, 0xD3, 0xCE, 0xC9, 0xC0 };
-    id owner = (__bridge id)pointerResult(webView, selectorFromXORBytes(pageName, sizeof(pageName)));
-    // Original: _apiObject
-    const uint8_t objectName[] = { 0xF8, 0xC6, 0xD7, 0xCE, 0xE8, 0xC5, 0xCD, 0xC2, 0xC4, 0xD3 };
-    void *page = pointerResult(owner, selectorFromXORBytes(objectName, sizeof(objectName)));
-    if (!page)
-        return { };
-
-    const auto base = reinterpret_cast<uintptr_t>((__bridge void *)owner);
-    const auto address = reinterpret_cast<uintptr_t>(page);
-    const size_t allocationSize = malloc_size((__bridge const void *)owner);
-    if (address < base || address - base >= allocationSize)
-        return { };
-    return { owner, page, allocationSize - (address - base) };
-}
-
 struct TargetResolution {
     void *target { nullptr };
     ptrdiff_t offset { invalidTargetOffset };
@@ -293,13 +239,13 @@ static TargetResolution resolveTargetInPageProxy(void *page, size_t bytes, ptrdi
     return result;
 }
 
-static TargetResolution resolveTarget(const PageStorage& storage, ptrdiff_t cachedOffset, uint64_t vtableSymbol)
+static TargetResolution resolveTarget(WKRuntimePageStorage *storage, ptrdiff_t cachedOffset, uint64_t vtableSymbol)
 {
     if (!vtableSymbol)
         return { };
     // WebPageDebuggable has a single nonvirtual inheritance chain. Its primary
     // Itanium vtable address point follows offset-to-top and typeinfo pointers.
-    return resolveTargetInPageProxy(storage.page, storage.bytes, cachedOffset, vtableSymbol + 2 * sizeof(void *));
+    return resolveTargetInPageProxy(storage.address, storage.byteCount, cachedOffset, vtableSymbol + 2 * sizeof(void *));
 }
 
 } // namespace WebInspectorNativeBridgePrivate
@@ -655,7 +601,7 @@ private:
     if (!webView)
         return NO;
 
-    auto storage = WebInspectorNativeBridgePrivate::pageStorage(webView);
+    auto storage = [WKRuntimePageStorage storageForWebView:webView];
     auto resolution = WebInspectorNativeBridgePrivate::resolveTarget(storage, _targetOffset, _resolvedSymbols.debuggableVTableAddress);
     return resolution.target == _target;
 }
@@ -787,7 +733,7 @@ private:
         sizeof(encodedInspectorSelectorName)
     );
     _inspector = WebInspectorNativeBridgePrivate::objectResult(self.webView, inspectorSelector);
-    auto storage = WebInspectorNativeBridgePrivate::pageStorage(retainedView);
+    auto storage = [WKRuntimePageStorage storageForWebView:retainedView];
     ptrdiff_t preferredCachedOffset = _targetOffset;
     if (preferredCachedOffset == WebInspectorNativeBridgePrivate::invalidTargetOffset)
         preferredCachedOffset = WebInspectorNativeBridgePrivate::cachedTargetOffset.load();

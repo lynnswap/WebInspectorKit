@@ -18,6 +18,7 @@ let package = Package(
         .package(path: ".."),
     ],
     targets: [
+        .target(name: "RuntimeConsumerNative", dependencies: [.product(name: "WebKitRuntime", package: "WebInspectorKit")], publicHeadersPath: "include"),
         .testTarget(
             name: "WebInspectorDataKitImportOnlyContractTests",
             dependencies: [
@@ -28,6 +29,8 @@ let package = Package(
         .testTarget(
             name: "WebInspectorConsumerContractTests",
             dependencies: [
+                "RuntimeConsumerNative",
+                .product(name: "WebKitRuntime", package: "WebInspectorKit"),
                 .product(name: "WebInspectorDataKit", package: "WebInspectorKit"),
                 .product(name: "WebInspectorDataKitTesting", package: "WebInspectorKit"),
                 .product(name: "WebInspectorProxyKit", package: "WebInspectorKit"),

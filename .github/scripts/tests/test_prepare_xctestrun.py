@@ -48,15 +48,17 @@ class PrepareTestRunTests(unittest.TestCase):
             self.assertEqual(targets[0]["EnvironmentVariables"]["WEBINSPECTORKIT_RUN_NATIVE_RUNTIME_SMOKE"], "1")
             self.assertEqual(targets[1], consumer)
 
-    def test_ios_native_tests_use_the_built_application_host(self):
-        for uses_test_plan in (False, True):
-            with self.subTest(uses_test_plan=uses_test_plan), tempfile.TemporaryDirectory() as temporary:
+    def test_ios_webkit_consumers_use_the_built_application_host(self):
+        cases = [(plan, name) for plan in (False, True) for name in
+                 ("WebInspectorNativeBridgeTests", "WebInspectorConsumerContractTests")]
+        for uses_test_plan, name in cases:
+            with self.subTest(uses_test_plan=uses_test_plan, target=name), tempfile.TemporaryDirectory() as temporary:
                 products = Path(temporary)
                 host = products / "Debug-iphonesimulator/RuntimeTestHost.app"
                 host.mkdir(parents=True)
                 (host / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": "test.host"}))
                 native = {
-                    "BlueprintName": "WebInspectorNativeBridgeTests",
+                    "BlueprintName": name,
                     "TestBundlePath": "__TESTROOT__/Debug-iphonesimulator/Native.xctest",
                     "TestHostPath": "__PLATFORMS__/iPhoneSimulator.platform/Developer/Library/Xcode/Agents/xctest",
                     "TestingEnvironmentVariables": {"DYLD_INSERT_LIBRARIES": "/existing.dylib"},
@@ -78,6 +80,8 @@ class PrepareTestRunTests(unittest.TestCase):
                 self.assertEqual(target["TestingEnvironmentVariables"]["DYLD_INSERT_LIBRARIES"],
                                  "__PLATFORMS__/iPhoneSimulator.platform/Developer/usr/lib/libXCTestBundleInject.dylib:/existing.dylib")
                 self.assertEqual(target["TestingEnvironmentVariables"]["XCInjectBundleInto"], "unused")
+                self.assertEqual(target.get("EnvironmentVariables", {}).get("WEBINSPECTORKIT_RUN_NATIVE_RUNTIME_SMOKE"),
+                                 "1" if name == "WebInspectorNativeBridgeTests" else None)
 
 
 if __name__ == "__main__":
