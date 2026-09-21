@@ -20,6 +20,10 @@ typedef struct {
     uint64_t debuggableVTableAddress;
 } WebInspectorNativeResolvedSymbols;
 
+FOUNDATION_EXPORT NSString *WebInspectorNativeRoundTripStringForTesting(
+    NSString *string, WebInspectorNativeResolvedSymbols symbols
+);
+
 typedef struct {
     BOOL found;
     NSInteger offset;

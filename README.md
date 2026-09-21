@@ -100,14 +100,18 @@ let inspector = WebInspectorViewController(
 CI discovers installed iOS 18.4+ Simulator runtimes on the `macos-15`,
 `macos-26`, and `xcode-27` runners, with coverage of the iOS 26 series starting
 at 26.1. Each runtime runs the NativeBridge tests,
-including native symbol resolution and an Inspector protocol round trip. The
-Swift 6.3+ runners also run the ProxyKit, DataKit, UI, full Monocly, and consumer
-contract test suites. Each Xcode builds one iOS artifact and one macOS artifact,
-sharing dependencies across the test targets. All suites for a runtime run in
-one job using its artifact; test jobs do not rebuild the package.
-Artifacts stay with their producing Xcode because Swift Testing's runtime ABI
-can differ between Xcode versions.
-Runtimes absent from the runner images are not downloaded or covered by this matrix.
+including native symbol resolution, string ABI round trips, and Inspector
+protocol communication. The ProxyKit, DataKit, UI, full Monocly, and consumer
+contract suites run only on the newest installed iOS runtime on `xcode-27`.
+The ordinary suites have a separate job, which also runs the macOS consumer
+contract suites and excludes the NativeBridge test target. Low-level coverage
+uses one job per host environment; each builds NativeBridge once per platform
+and tests its installed runtimes sequentially. The ordinary job also builds
+and tests on the same runner, so no build products are transferred between jobs.
+Each iOS case uses a fresh Simulator that is deleted afterward. A failed case
+does not skip the remaining runtimes; per-OS logs and results are retained,
+and any failure fails the job.
+Runtimes absent from the runner images are not downloaded or covered.
 The NativeBridge tests also exercise each runner's host macOS and WebKit.
 
 The repository includes a self-authored, loopback-only integration site for

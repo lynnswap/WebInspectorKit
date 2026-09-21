@@ -27,8 +27,8 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - run: python3 -m unittest discover -s .github/scripts/tests -p 'test_*.py'
 
-  runtime-tests:
-    name: Runtime tests on ${{ matrix.runner }}
+  native-tests:
+    name: Low-level compatibility on ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -36,18 +36,24 @@ jobs:
           - runner: macos-15
             xcode_major: '26.3'
             allow_prerelease: false
-            include_workspace: false
           - runner: macos-26
             xcode_major: '26'
             allow_prerelease: false
-            include_workspace: true
           - runner: xcode-27
             xcode_major: '27'
             allow_prerelease: true
-            include_workspace: true
     uses: ./.github/workflows/workspace-tests.yml
     with:
       runner: ${{ matrix.runner }}
       xcode_major: ${{ matrix.xcode_major }}
       allow_prerelease: ${{ matrix.allow_prerelease }}
-      include_workspace: ${{ matrix.include_workspace }}
+      suite: native
+
+  workspace-tests:
+    name: Workspace tests on latest OS
+    uses: ./.github/workflows/workspace-tests.yml
+    with:
+      runner: xcode-27
+      xcode_major: '27'
+      allow_prerelease: true
+      suite: workspace

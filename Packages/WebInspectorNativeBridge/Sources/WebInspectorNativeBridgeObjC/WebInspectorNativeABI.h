@@ -12,6 +12,9 @@ class StringImpl;
 class String {
 public:
     String() = default;
+    // WebKit returns String indirectly because its destructor is nontrivial.
+    // ConstructedString releases the actual StringImpl through the runtime.
+    ~String() { }
 
     String(const String&) = delete;
     String& operator=(const String&) = delete;
@@ -63,51 +66,12 @@ inline NSString *copyNSString(const WTF::String& string, uintptr_t stringImplToN
     return [message copy] ?: @"";
 }
 
-inline void constructStringFromUTF8(
-    WTF::String *storage,
-    std::span<const char8_t> characters,
-    uintptr_t stringFromUTF8Address
-)
-{
-    if (!stringFromUTF8Address)
-        return;
-
-#if defined(__aarch64__) || defined(__arm64__)
-    register const char8_t *data asm("x0") = characters.data();
-    register size_t length asm("x1") = characters.size();
-    register WTF::String *result asm("x8") = storage;
-    void *symbol = reinterpret_cast<void *>(stringFromUTF8Address);
-    asm volatile(
-        "blr %3"
-        : "+r"(data), "+r"(length), "+r"(result)
-        : "r"(symbol)
-        : "cc", "memory", "x2", "x3", "x4", "x5", "x6", "x7", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17", "lr"
-    );
-#elif defined(__x86_64__)
-    register WTF::String *result asm("rdi") = storage;
-    register const char8_t *data asm("rsi") = characters.data();
-    register size_t length asm("rdx") = characters.size();
-    void *symbol = reinterpret_cast<void *>(stringFromUTF8Address);
-    asm volatile(
-        "call *%3"
-        : "+r"(result), "+r"(data), "+r"(length)
-        : "r"(symbol)
-        : "cc", "memory", "rax", "rcx", "r8", "r9", "r10", "r11"
-    );
-#else
-#error Unsupported architecture for WebInspectorNativeABI::constructStringFromUTF8
-#endif
-}
-
-inline void constructStringFromNSString(
-    WTF::String *storage,
-    NSString *string,
-    uintptr_t stringFromUTF8Address
-)
+inline WTF::String stringFromNSString(NSString *string, uintptr_t stringFromUTF8Address)
 {
     NSData *utf8Data = [string dataUsingEncoding:NSUTF8StringEncoding];
     auto *bytes = reinterpret_cast<const char8_t *>(utf8Data.bytes);
-    constructStringFromUTF8(storage, std::span<const char8_t>(bytes, utf8Data.length), stringFromUTF8Address);
+    using Factory = WTF::String (*)(std::span<const char8_t>);
+    return reinterpret_cast<Factory>(stringFromUTF8Address)(std::span<const char8_t>(bytes, utf8Data.length));
 }
 
 inline void derefConstructedString(const WTF::String& string, uintptr_t derefStringImplAddress)
@@ -122,9 +86,9 @@ inline void derefConstructedString(const WTF::String& string, uintptr_t derefStr
 class ConstructedString final {
 public:
     ConstructedString(NSString *string, uintptr_t stringFromUTF8Address, uintptr_t derefStringImplAddress)
-        : m_derefStringImplAddress(derefStringImplAddress)
+        : m_string(stringFromNSString(string, stringFromUTF8Address))
+        , m_derefStringImplAddress(derefStringImplAddress)
     {
-        constructStringFromNSString(&m_string, string, stringFromUTF8Address);
     }
 
     ~ConstructedString()
