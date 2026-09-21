@@ -9,8 +9,6 @@ extension NativeInspectorSymbolResolverCore {
         imagePathSuffixes: [String],
         loadedJavaScriptCoreImage: LoadedNativeInspectorImage,
         javaScriptCorePathSuffixes: [String],
-        loadedWebCoreImage: LoadedNativeInspectorImage?,
-        webCorePathSuffixes: [String] = webCoreImagePathSuffixes,
         loadedImageSymbols: NativeInspectorResolvedSymbolSet,
         symbols: NativeInspectorSymbols
     ) -> NativeInspectorSymbolLookupResult {
@@ -19,8 +17,6 @@ extension NativeInspectorSymbolResolverCore {
             imagePathSuffixes: imagePathSuffixes,
             loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
             javaScriptCorePathSuffixes: javaScriptCorePathSuffixes,
-            loadedWebCoreImage: loadedWebCoreImage,
-            webCorePathSuffixes: webCorePathSuffixes,
             loadedImageSymbols: loadedImageSymbols,
             symbols: symbols
         )
@@ -40,8 +36,6 @@ extension NativeInspectorSymbolResolverCore {
             imagePathSuffixes: imagePathSuffixes,
             loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
             javaScriptCorePathSuffixes: javaScriptCorePathSuffixes,
-            loadedWebCoreImage: loadedWebCoreImage,
-            webCorePathSuffixes: webCorePathSuffixes,
             loadedImageSymbols: loadedImageSymbols,
             symbols: symbols
         )
@@ -56,8 +50,6 @@ extension NativeInspectorSymbolResolverCore {
         imagePathSuffixes: [String],
         loadedJavaScriptCoreImage: LoadedNativeInspectorImage,
         javaScriptCorePathSuffixes: [String],
-        loadedWebCoreImage: LoadedNativeInspectorImage?,
-        webCorePathSuffixes: [String],
         loadedImageSymbols: NativeInspectorResolvedSymbolSet,
         symbols: NativeInspectorSymbols
     ) -> NativeInspectorSymbolLookupResult {
@@ -66,8 +58,6 @@ extension NativeInspectorSymbolResolverCore {
             imagePathSuffixes: imagePathSuffixes,
             loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
             javaScriptCorePathSuffixes: javaScriptCorePathSuffixes,
-            loadedWebCoreImage: loadedWebCoreImage,
-            webCorePathSuffixes: webCorePathSuffixes
         ) else {
             return failure(.sharedCacheUnavailable, shouldLog: false)
         }
@@ -88,9 +78,6 @@ extension NativeInspectorSymbolResolverCore {
                 loadedImage: loadedImage,
                 loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
                 loadedImageSymbols: loadedImageSymbols,
-                runtimeWebKit: context.webKit,
-                runtimeJavaScriptCore: context.javaScriptCore,
-                runtimeWebCore: context.webCore,
                 symbols: symbols
             )
             lastResolvedSymbols = resolution.resolvedSymbols
@@ -117,9 +104,6 @@ extension NativeInspectorSymbolResolverCore {
                     loadedImage: loadedImage,
                     loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
                     loadedImageSymbols: loadedImageSymbols,
-                    runtimeWebKit: context.webKit,
-                    runtimeJavaScriptCore: context.javaScriptCore,
-                    runtimeWebCore: context.webCore,
                     symbols: symbols
                 )
                 lastResolvedSymbols = resolution.resolvedSymbols
@@ -168,8 +152,6 @@ extension NativeInspectorSymbolResolverCore {
         imagePathSuffixes: [String],
         loadedJavaScriptCoreImage: LoadedNativeInspectorImage,
         javaScriptCorePathSuffixes: [String],
-        loadedWebCoreImage: LoadedNativeInspectorImage?,
-        webCorePathSuffixes: [String],
         loadedImageSymbols: NativeInspectorResolvedSymbolSet,
         symbols: NativeInspectorSymbols
     ) -> NativeInspectorSymbolLookupResult {
@@ -178,8 +160,6 @@ extension NativeInspectorSymbolResolverCore {
             imagePathSuffixes: imagePathSuffixes,
             loadedJavaScriptCoreImage: loadedJavaScriptCoreImage,
             javaScriptCorePathSuffixes: javaScriptCorePathSuffixes,
-            loadedWebCoreImage: loadedWebCoreImage,
-            webCorePathSuffixes: webCorePathSuffixes
         ) else {
             return failure(.sharedCacheUnavailable, shouldLog: false)
         }
@@ -374,19 +354,19 @@ extension NativeInspectorSymbolResolverCore {
             [
                 NativeInspectorSymbolMatchTarget(role: .connectFrontend, symbol: symbols.connectFrontend),
                 NativeInspectorSymbolMatchTarget(role: .disconnectFrontend, symbol: symbols.disconnectFrontend),
+                NativeInspectorSymbolMatchTarget(role: .debuggableVTable, symbol: symbols.debuggableVTable),
                 NativeInspectorSymbolMatchTarget(role: .derefStringImpl, symbol: symbols.derefStringImpl),
-                NativeInspectorSymbolMatchTarget(role: .backendDispatcherDispatch, symbol: symbols.backendDispatcherDispatch),
+                NativeInspectorSymbolMatchTarget(role: .dispatchMessageFromRemote, symbol: symbols.dispatchMessageFromRemote),
             ]
         )
         let webKitResults = webKitTargets.isEmpty ? [:] : unsafe resolveSharedCacheSymbols(
             matching: webKitTargets,
             symbols: webKitSymbols,
             symbolRange: webKitSymbolRange,
-            textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
             textRange: webKit.textRange,
             slide: webKit.slide
         )
-        var javaScriptCoreTargets = sharedCacheTargets(
+        let javaScriptCoreTargets = sharedCacheTargets(
             loadedImageSymbols: loadedImageSymbols,
             [
                 NativeInspectorSymbolMatchTarget(role: .stringFromUTF8, symbol: symbols.stringFromUTF8),
@@ -394,17 +374,10 @@ extension NativeInspectorSymbolResolverCore {
                 NativeInspectorSymbolMatchTarget(role: .derefStringImpl, symbol: symbols.derefStringImpl),
             ]
         )
-        if !loadedImageSymbols.address(for: .backendDispatcherDispatch).isFound,
-           case .missing = webKitResults[.backendDispatcherDispatch] ?? .missing {
-            javaScriptCoreTargets.append(
-                NativeInspectorSymbolMatchTarget(role: .backendDispatcherDispatch, symbol: symbols.backendDispatcherDispatch)
-            )
-        }
         let javaScriptCoreResults = javaScriptCoreTargets.isEmpty ? [:] : unsafe resolveSharedCacheSymbols(
             matching: javaScriptCoreTargets,
             symbols: javaScriptCoreSymbols,
             symbolRange: javaScriptCoreSymbolRange,
-            textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
             textRange: javaScriptCore.textRange,
             slide: javaScriptCore.slide
         )
@@ -417,10 +390,8 @@ extension NativeInspectorSymbolResolverCore {
                 webKitResults[.derefStringImpl] ?? .missing,
                 fallback: javaScriptCoreResults[.derefStringImpl] ?? .missing
             ),
-            backendDispatcherDispatch: preferredResolvedAddress(
-                webKitResults[.backendDispatcherDispatch] ?? .missing,
-                fallback: javaScriptCoreResults[.backendDispatcherDispatch] ?? .missing
-            )
+            dispatchMessageFromRemote: webKitResults[.dispatchMessageFromRemote] ?? .missing,
+            debuggableVTable: webKitResults[.debuggableVTable] ?? .missing
         )
     }
 
@@ -439,19 +410,19 @@ extension NativeInspectorSymbolResolverCore {
             [
                 NativeInspectorSymbolMatchTarget(role: .connectFrontend, symbol: symbols.connectFrontend),
                 NativeInspectorSymbolMatchTarget(role: .disconnectFrontend, symbol: symbols.disconnectFrontend),
+                NativeInspectorSymbolMatchTarget(role: .debuggableVTable, symbol: symbols.debuggableVTable),
                 NativeInspectorSymbolMatchTarget(role: .derefStringImpl, symbol: symbols.derefStringImpl),
-                NativeInspectorSymbolMatchTarget(role: .backendDispatcherDispatch, symbol: symbols.backendDispatcherDispatch),
+                NativeInspectorSymbolMatchTarget(role: .dispatchMessageFromRemote, symbol: symbols.dispatchMessageFromRemote),
             ]
         )
         let webKitResults = webKitTargets.isEmpty ? [:] : unsafe resolveSharedCacheSymbols(
             matching: webKitTargets,
             symbols: webKitSymbols,
             symbolRange: webKitSymbolRange,
-            textVMAddress: UInt64(webKit.text.virtualMemoryAddress),
             textRange: webKit.textRange,
             slide: webKit.slide
         )
-        var javaScriptCoreTargets = sharedCacheTargets(
+        let javaScriptCoreTargets = sharedCacheTargets(
             loadedImageSymbols: loadedImageSymbols,
             [
                 NativeInspectorSymbolMatchTarget(role: .stringFromUTF8, symbol: symbols.stringFromUTF8),
@@ -459,17 +430,10 @@ extension NativeInspectorSymbolResolverCore {
                 NativeInspectorSymbolMatchTarget(role: .derefStringImpl, symbol: symbols.derefStringImpl),
             ]
         )
-        if !loadedImageSymbols.address(for: .backendDispatcherDispatch).isFound,
-           case .missing = webKitResults[.backendDispatcherDispatch] ?? .missing {
-            javaScriptCoreTargets.append(
-                NativeInspectorSymbolMatchTarget(role: .backendDispatcherDispatch, symbol: symbols.backendDispatcherDispatch)
-            )
-        }
         let javaScriptCoreResults = javaScriptCoreTargets.isEmpty ? [:] : unsafe resolveSharedCacheSymbols(
             matching: javaScriptCoreTargets,
             symbols: javaScriptCoreSymbols,
             symbolRange: javaScriptCoreSymbolRange,
-            textVMAddress: UInt64(javaScriptCore.text.virtualMemoryAddress),
             textRange: javaScriptCore.textRange,
             slide: javaScriptCore.slide
         )
@@ -482,10 +446,8 @@ extension NativeInspectorSymbolResolverCore {
                 webKitResults[.derefStringImpl] ?? .missing,
                 fallback: javaScriptCoreResults[.derefStringImpl] ?? .missing
             ),
-            backendDispatcherDispatch: preferredResolvedAddress(
-                webKitResults[.backendDispatcherDispatch] ?? .missing,
-                fallback: javaScriptCoreResults[.backendDispatcherDispatch] ?? .missing
-            )
+            dispatchMessageFromRemote: webKitResults[.dispatchMessageFromRemote] ?? .missing,
+            debuggableVTable: webKitResults[.debuggableVTable] ?? .missing
         )
     }
 
@@ -503,12 +465,9 @@ extension NativeInspectorSymbolResolverCore {
 
     private static func usesLoadedImageRuntimeFallback(for role: NativeInspectorSymbolRole) -> Bool {
         switch role {
-        case .stringFromUTF8, .stringImplToNSString, .derefStringImpl, .backendDispatcherDispatch:
+        case .stringFromUTF8, .stringImplToNSString, .derefStringImpl, .dispatchMessageFromRemote, .debuggableVTable:
             return true
-        case .connectFrontend,
-             .disconnectFrontend,
-             .inspectorControllerConnectTarget,
-             .inspectorControllerDisconnectTarget:
+        case .connectFrontend, .disconnectFrontend:
             return false
         }
     }
@@ -520,27 +479,14 @@ extension NativeInspectorSymbolResolverCore {
         loadedImage: LoadedNativeInspectorImage,
         loadedJavaScriptCoreImage: LoadedNativeInspectorImage,
         loadedImageSymbols: NativeInspectorResolvedSymbolSet,
-        runtimeWebKit: NativeInspectorSharedCacheImageContext<MachOImage>,
-        runtimeJavaScriptCore: NativeInspectorSharedCacheImageContext<MachOImage>,
-        runtimeWebCore: NativeInspectorSharedCacheImageContext<MachOImage>?,
         symbols: NativeInspectorSymbols
     ) -> (lookupResult: NativeInspectorSymbolLookupResult?, resolvedSymbols: NativeInspectorResolvedSymbolSet) {
-        let resolvedSymbolsWithFallback = unsafe resolveConnectDisconnectFallbackIfNeeded(
-            resolvedSymbols,
-            image: runtimeWebKit.image,
-            text: runtimeWebKit.text,
-            webCoreImage: runtimeWebCore?.image,
-            webCoreText: runtimeWebCore?.text,
-            javaScriptCoreImage: runtimeJavaScriptCore.image,
-            javaScriptCoreText: runtimeJavaScriptCore.text,
-            symbols: symbols
-        )
         let usedRuntimeFallback = usesLoadedImageRuntimeFallback(
-            resolvedSymbols: resolvedSymbolsWithFallback.symbols,
+            resolvedSymbols: resolvedSymbols,
             loadedImageSymbols: loadedImageSymbols
         )
         let resolvedSymbolsWithRuntimeFallback = applyingLoadedImageRuntimeFallback(
-            to: resolvedSymbolsWithFallback.symbols,
+            to: resolvedSymbols,
             loadedImageSymbols: loadedImageSymbols
         )
         let lookupResult = successfulResolutionIfComplete(
@@ -548,12 +494,10 @@ extension NativeInspectorSymbolResolverCore {
             phase: phase,
             source: sharedCacheSourceDescription(
                 base: sourceBase,
-                usedConnectDisconnectFallback: resolvedSymbolsWithFallback.usedFallback,
                 usedRuntimeFallback: usedRuntimeFallback
             ),
             webKitHeaderAddress: loadedImage.headerAddress,
             javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress,
-            usedConnectDisconnectFallback: resolvedSymbolsWithFallback.usedFallback
         )
         return (lookupResult, resolvedSymbolsWithRuntimeFallback)
     }
@@ -579,12 +523,10 @@ extension NativeInspectorSymbolResolverCore {
             phase: phase,
             source: sharedCacheSourceDescription(
                 base: sourceBase,
-                usedConnectDisconnectFallback: false,
                 usedRuntimeFallback: usedRuntimeFallback
             ),
             webKitHeaderAddress: loadedImage.headerAddress,
             javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress,
-            usedConnectDisconnectFallback: false
         )
         return (lookupResult, resolvedSymbolsWithRuntimeFallback)
     }
@@ -604,7 +546,6 @@ extension NativeInspectorSymbolResolverCore {
                 source: source,
                 webKitHeaderAddress: loadedImage.headerAddress,
                 javaScriptCoreHeaderAddress: loadedJavaScriptCoreImage.headerAddress,
-                usedConnectDisconnectFallback: false
             )
                 ?? failure(
                     fallbackFailure.kind,

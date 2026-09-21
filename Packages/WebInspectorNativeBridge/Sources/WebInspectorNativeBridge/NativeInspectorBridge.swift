@@ -12,7 +12,8 @@ public struct NativeInspectorResolvedSymbols: Equatable, Sendable {
     var stringFromUTF8Address: UInt64
     var stringImplToNSStringAddress: UInt64
     var derefStringImplAddress: UInt64
-    var backendDispatcherDispatchAddress: UInt64
+    var dispatchMessageFromRemoteAddress: UInt64
+    var debuggableVTableAddress: UInt64
 
     init(
         connectFrontendAddress: UInt64,
@@ -20,14 +21,16 @@ public struct NativeInspectorResolvedSymbols: Equatable, Sendable {
         stringFromUTF8Address: UInt64,
         stringImplToNSStringAddress: UInt64,
         derefStringImplAddress: UInt64,
-        backendDispatcherDispatchAddress: UInt64
+        dispatchMessageFromRemoteAddress: UInt64,
+        debuggableVTableAddress: UInt64
     ) {
         self.connectFrontendAddress = connectFrontendAddress
         self.disconnectFrontendAddress = disconnectFrontendAddress
         self.stringFromUTF8Address = stringFromUTF8Address
         self.stringImplToNSStringAddress = stringImplToNSStringAddress
         self.derefStringImplAddress = derefStringImplAddress
-        self.backendDispatcherDispatchAddress = backendDispatcherDispatchAddress
+        self.dispatchMessageFromRemoteAddress = dispatchMessageFromRemoteAddress
+        self.debuggableVTableAddress = debuggableVTableAddress
     }
 
     var objcSymbols: WebInspectorNativeResolvedSymbols {
@@ -37,7 +40,8 @@ public struct NativeInspectorResolvedSymbols: Equatable, Sendable {
             stringFromUTF8Address: stringFromUTF8Address,
             stringImplToNSStringAddress: stringImplToNSStringAddress,
             derefStringImplAddress: derefStringImplAddress,
-            backendDispatcherDispatchAddress: backendDispatcherDispatchAddress
+            dispatchMessageFromRemoteAddress: dispatchMessageFromRemoteAddress,
+            debuggableVTableAddress: debuggableVTableAddress
         )
     }
 
@@ -63,7 +67,8 @@ public struct NativeInspectorResolvedSymbols: Equatable, Sendable {
             stringFromUTF8Address: resolution.stringFromUTF8Address,
             stringImplToNSStringAddress: resolution.stringImplToNSStringAddress,
             derefStringImplAddress: resolution.derefStringImplAddress,
-            backendDispatcherDispatchAddress: resolution.backendDispatcherDispatchAddress
+            dispatchMessageFromRemoteAddress: resolution.dispatchMessageFromRemoteAddress,
+            debuggableVTableAddress: resolution.debuggableVTableAddress
         )
     }
 }
@@ -110,59 +115,5 @@ public final class NativeInspectorBridge {
 
     func handleFrontendMessageForTesting(_ message: String) {
         WebInspectorNativeDeliverFrontendMessageForTesting(objcBridge, message)
-    }
-}
-
-struct NativeInspectorControllerDiscoveryTestResult: Equatable, Sendable {
-    var found: Bool
-    var usedFallbackRange: Bool
-    var resolvedOffset: Int
-    var attemptedOffsetCount: Int
-    var validCandidateCount: Int
-    var scannedByteCount: Int
-
-    init(_ result: WebInspectorNativeControllerDiscoveryTestResult) {
-        found = result.found.boolValue
-        usedFallbackRange = result.usedFallbackRange.boolValue
-        resolvedOffset = result.resolvedOffset
-        attemptedOffsetCount = Int(result.attemptedOffsetCount)
-        validCandidateCount = Int(result.validCandidateCount)
-        scannedByteCount = Int(result.scannedByteCount)
-    }
-}
-
-enum NativeInspectorBridgeTesting {
-    static func runControllerDiscoveryScenario(
-        pageAllocationSize: Int,
-        cachedOffset: Int,
-        primaryControllerOffset: Int,
-        secondaryControllerOffset: Int
-    ) -> NativeInspectorControllerDiscoveryTestResult {
-        NativeInspectorControllerDiscoveryTestResult(
-            WebInspectorNativeRunControllerDiscoveryScenarioForTesting(
-                UInt(pageAllocationSize),
-                cachedOffset,
-                primaryControllerOffset,
-                secondaryControllerOffset
-            )
-        )
-    }
-
-    static func runControllerDiscoveryScenarioWithInvalidCandidates(
-        pageAllocationSize: Int,
-        cachedOffset: Int,
-        primaryControllerOffset: Int,
-        invalidControllerOffset: Int,
-        secondaryInvalidControllerOffset: Int
-    ) -> NativeInspectorControllerDiscoveryTestResult {
-        NativeInspectorControllerDiscoveryTestResult(
-            WebInspectorNativeRunControllerDiscoveryScenarioWithInvalidCandidatesForTesting(
-                UInt(pageAllocationSize),
-                cachedOffset,
-                primaryControllerOffset,
-                invalidControllerOffset,
-                secondaryInvalidControllerOffset
-            )
-        )
     }
 }

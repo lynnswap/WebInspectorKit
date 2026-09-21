@@ -15,7 +15,6 @@ struct NativeInspectorLoadedSharedCacheContext {
     let cache: DyldCacheLoaded
     let webKit: NativeInspectorSharedCacheImageContext<MachOImage>
     let javaScriptCore: NativeInspectorSharedCacheImageContext<MachOImage>
-    let webCore: NativeInspectorSharedCacheImageContext<MachOImage>?
     let localSymbols: MachOImage.Symbols64?
     let localSymbolEntries: [any DyldCacheLocalSymbolsEntryProtocol]
 }
@@ -24,7 +23,6 @@ struct NativeInspectorFullSharedCacheContext {
     let cache: FullDyldCache
     let webKit: NativeInspectorSharedCacheImageContext<MachOFile>
     let javaScriptCore: NativeInspectorSharedCacheImageContext<MachOFile>
-    let webCore: NativeInspectorSharedCacheImageContext<MachOFile>?
     let localSymbols: MachOFile.Symbols64?
     let localSymbolEntries: [any DyldCacheLocalSymbolsEntryProtocol]
 }
@@ -41,8 +39,6 @@ extension NativeInspectorSymbolResolverCore {
         imagePathSuffixes: [String],
         loadedJavaScriptCoreImage: LoadedNativeInspectorImage,
         javaScriptCorePathSuffixes: [String],
-        loadedWebCoreImage: LoadedNativeInspectorImage?,
-        webCorePathSuffixes: [String]
     ) -> NativeInspectorLoadedSharedCacheContext? {
         guard let cache = unsafe MachOKitSymbolLookup.currentSharedCache,
               let slide = cache.slide,
@@ -68,25 +64,11 @@ extension NativeInspectorSymbolResolverCore {
             return nil
         }
 
-        let webCoreContext: NativeInspectorSharedCacheImageContext<MachOImage>?
-        if let loadedWebCoreImage,
-           let webCoreImage = images.first(where: { imagePathMatches($0.path, suffixes: webCorePathSuffixes) }) {
-            webCoreContext = sharedCacheImageContext(
-                image: webCoreImage,
-                loadedHeaderAddress: loadedWebCoreImage.headerAddress,
-                mainCacheHeader: cache.mainCacheHeader,
-                slide: UInt64(slide)
-            )
-        } else {
-            webCoreContext = nil
-        }
-
         let localSymbolsInfo = cache.localSymbolsInfo
         return NativeInspectorLoadedSharedCacheContext(
             cache: cache,
             webKit: webKitContext,
             javaScriptCore: javaScriptCoreContext,
-            webCore: webCoreContext,
             localSymbols: localSymbolsInfo?.symbols64(in: cache),
             localSymbolEntries: localSymbolsInfo.map { Array($0.entries(in: cache)) } ?? []
         )
@@ -97,8 +79,6 @@ extension NativeInspectorSymbolResolverCore {
         imagePathSuffixes: [String],
         loadedJavaScriptCoreImage: LoadedNativeInspectorImage,
         javaScriptCorePathSuffixes: [String],
-        loadedWebCoreImage: LoadedNativeInspectorImage?,
-        webCorePathSuffixes: [String]
     ) -> NativeInspectorFullSharedCacheContext? {
         guard let cache = unsafe MachOKitSymbolLookup.hostFullSharedCache else {
             return nil
@@ -120,24 +100,11 @@ extension NativeInspectorSymbolResolverCore {
             return nil
         }
 
-        let webCoreContext: NativeInspectorSharedCacheImageContext<MachOFile>?
-        if let loadedWebCoreImage,
-           let webCoreFile = files.first(where: { imagePathMatches($0.imagePath, suffixes: webCorePathSuffixes) }) {
-            webCoreContext = sharedCacheImageContext(
-                image: webCoreFile,
-                loadedHeaderAddress: loadedWebCoreImage.headerAddress,
-                mainCacheHeader: cache.mainCacheHeader
-            )
-        } else {
-            webCoreContext = nil
-        }
-
         let localSymbolsInfo = cache.localSymbolsInfo
         return NativeInspectorFullSharedCacheContext(
             cache: cache,
             webKit: webKitContext,
             javaScriptCore: javaScriptCoreContext,
-            webCore: webCoreContext,
             localSymbols: localSymbolsInfo?.symbols64(in: cache),
             localSymbolEntries: localSymbolsInfo.map { Array($0.entries(in: cache)) } ?? []
         )

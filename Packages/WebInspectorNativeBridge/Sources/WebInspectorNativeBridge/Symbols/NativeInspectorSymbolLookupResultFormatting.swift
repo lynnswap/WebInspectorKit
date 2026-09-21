@@ -13,7 +13,8 @@ extension NativeInspectorSymbolResolverCore {
             ("stringFromUTF8", resolvedSymbols.stringFromUTF8),
             ("stringImplToNSString", resolvedSymbols.stringImplToNSString),
             ("derefStringImpl", resolvedSymbols.derefStringImpl),
-            ("backendDispatcherDispatch", resolvedSymbols.backendDispatcherDispatch),
+            ("dispatchMessageFromRemote", resolvedSymbols.dispatchMessageFromRemote),
+            ("debuggableVTable", resolvedSymbols.debuggableVTable),
         ]
         return symbolResults.compactMap { name, result in
             switch result {
@@ -36,8 +37,8 @@ extension NativeInspectorSymbolResolverCore {
         switch result {
         case let .found(address):
             return unsafe String(format: "found(0x%llx)", address)
-        case let .outsideText(address):
-            return unsafe String(format: "outsideText(0x%llx)", address)
+        case let .outsideSection(address):
+            return unsafe String(format: "outsideSection(0x%llx)", address)
         case .missing:
             return "missing"
         case .ambiguous:
@@ -51,7 +52,6 @@ extension NativeInspectorSymbolResolverCore {
         phase: NativeInspectorSymbolResolutionPhase? = nil,
         source: String? = nil,
         missingFunctions: [String] = [],
-        usedConnectDisconnectFallback: Bool = false,
         shouldLog: Bool = true
     ) -> NativeInspectorSymbolLookupResult {
         let reason = formattedFailureReason(
@@ -60,7 +60,6 @@ extension NativeInspectorSymbolResolverCore {
             phase: phase,
             source: source,
             missingFunctions: missingFunctions,
-            usedConnectDisconnectFallback: usedConnectDisconnectFallback
         )
         if shouldLog {
             NativeInspectorSymbolLog.warning(
@@ -74,7 +73,6 @@ extension NativeInspectorSymbolResolverCore {
             phase: phase,
             missingFunctions: missingFunctions,
             source: source,
-            usedConnectDisconnectFallback: usedConnectDisconnectFallback
         )
     }
 
@@ -96,7 +94,6 @@ extension NativeInspectorSymbolResolverCore {
         phase: NativeInspectorSymbolResolutionPhase?,
         source: String?,
         missingFunctions: [String],
-        usedConnectDisconnectFallback: Bool
     ) -> String {
         var parts = [String]()
         if let phase {
@@ -107,9 +104,6 @@ extension NativeInspectorSymbolResolverCore {
         }
         if !missingFunctions.isEmpty {
             parts.append("missing=\(missingFunctions.joined(separator: ","))")
-        }
-        if usedConnectDisconnectFallback {
-            parts.append("textScanFallback=true")
         }
         if let detail, !detail.isEmpty {
             parts.append(detail)

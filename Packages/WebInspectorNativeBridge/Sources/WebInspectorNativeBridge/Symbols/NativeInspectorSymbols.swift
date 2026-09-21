@@ -4,7 +4,8 @@ struct NativeInspectorSymbolAddresses: Sendable, Equatable {
     let stringFromUTF8Address: UInt64
     let stringImplToNSStringAddress: UInt64
     let derefStringImplAddress: UInt64
-    let backendDispatcherDispatchAddress: UInt64
+    let dispatchMessageFromRemoteAddress: UInt64
+    let debuggableVTableAddress: UInt64
 
     static let zero = NativeInspectorSymbolAddresses(
         connectFrontendAddress: 0,
@@ -12,7 +13,8 @@ struct NativeInspectorSymbolAddresses: Sendable, Equatable {
         stringFromUTF8Address: 0,
         stringImplToNSStringAddress: 0,
         derefStringImplAddress: 0,
-        backendDispatcherDispatchAddress: 0
+        dispatchMessageFromRemoteAddress: 0,
+        debuggableVTableAddress: 0
     )
 
     var isComplete: Bool {
@@ -21,7 +23,8 @@ struct NativeInspectorSymbolAddresses: Sendable, Equatable {
             && stringFromUTF8Address != 0
             && stringImplToNSStringAddress != 0
             && derefStringImplAddress != 0
-            && backendDispatcherDispatchAddress != 0
+            && dispatchMessageFromRemoteAddress != 0
+            && debuggableVTableAddress != 0
     }
 }
 
@@ -32,14 +35,14 @@ struct NativeInspectorSymbolResolution: Sendable, Equatable {
     let phase: String?
     let missingFunctions: [String]
     let source: String?
-    let usedConnectDisconnectFallback: Bool
 
     var connectFrontendAddress: UInt64 { addresses.connectFrontendAddress }
     var disconnectFrontendAddress: UInt64 { addresses.disconnectFrontendAddress }
     var stringFromUTF8Address: UInt64 { addresses.stringFromUTF8Address }
     var stringImplToNSStringAddress: UInt64 { addresses.stringImplToNSStringAddress }
     var derefStringImplAddress: UInt64 { addresses.derefStringImplAddress }
-    var backendDispatcherDispatchAddress: UInt64 { addresses.backendDispatcherDispatchAddress }
+    var dispatchMessageFromRemoteAddress: UInt64 { addresses.dispatchMessageFromRemoteAddress }
+    var debuggableVTableAddress: UInt64 { addresses.debuggableVTableAddress }
 
     var diagnosticsSummary: String? {
         var parts = [String]()
@@ -54,9 +57,6 @@ struct NativeInspectorSymbolResolution: Sendable, Equatable {
         }
         if !missingFunctions.isEmpty {
             parts.append("missing=\(missingFunctions.joined(separator: ","))")
-        }
-        if usedConnectDisconnectFallback {
-            parts.append("textScanFallback=true")
         }
         guard !parts.isEmpty else {
             return nil

@@ -30,36 +30,17 @@ public:
 };
 }
 
-namespace Inspector {
-class BackendDispatcher {
-public:
-    WIK_FIXTURE_SYMBOL void dispatch(const WTF::String&);
-};
-}
-
 namespace WebKit {
-class WebPageInspectorController {
+class WebPageDebuggable {
 public:
-    WIK_FIXTURE_SYMBOL void connectFrontend(Inspector::FrontendChannel&, bool);
-    WIK_FIXTURE_SYMBOL void connectFrontend(Inspector::FrontendChannel*, bool, bool);
-    WIK_FIXTURE_SYMBOL void connectFrontend(bool, Inspector::FrontendChannel&, bool);
-    WIK_FIXTURE_SYMBOL void connectFrontend(Inspector::FrontendChannel&, bool, int);
-    WIK_FIXTURE_SYMBOL void connectFrontend(Inspector::FrontendChannel&, bool, bool);
-    WIK_FIXTURE_SYMBOL void disconnectFrontend(Inspector::FrontendChannel&);
-};
-}
-
-namespace WebCore {
-class PageInspectorController {
-public:
-    WIK_FIXTURE_SYMBOL void connectFrontend(Inspector::FrontendChannel&, bool, bool);
-    WIK_FIXTURE_SYMBOL void disconnectFrontend(Inspector::FrontendChannel&);
-};
-
-class FrameInspectorController {
-public:
-    WIK_FIXTURE_SYMBOL void connectFrontend(Inspector::FrontendChannel&, bool, bool);
-    WIK_FIXTURE_SYMBOL void disconnectFrontend(Inspector::FrontendChannel&);
+    WIK_FIXTURE_SYMBOL virtual ~WebPageDebuggable();
+    WIK_FIXTURE_SYMBOL void dispatchMessageFromRemote(WTF::String&&);
+    WIK_FIXTURE_SYMBOL void connect(Inspector::FrontendChannel&, bool);
+    WIK_FIXTURE_SYMBOL void connect(Inspector::FrontendChannel*, bool, bool);
+    WIK_FIXTURE_SYMBOL void connect(bool, Inspector::FrontendChannel&, bool);
+    WIK_FIXTURE_SYMBOL void connect(Inspector::FrontendChannel&, bool, int);
+    WIK_FIXTURE_SYMBOL void connect(Inspector::FrontendChannel&, bool, bool);
+    WIK_FIXTURE_SYMBOL void disconnect(Inspector::FrontendChannel&);
 };
 }
 
@@ -87,19 +68,19 @@ WIK_FIXTURE_SYMBOL void WTF::StringImpl::deref(unsigned)
 {
 }
 
-WIK_FIXTURE_SYMBOL void WebKit::WebPageInspectorController::connectFrontend(Inspector::FrontendChannel&, bool)
+WIK_FIXTURE_SYMBOL void WebKit::WebPageDebuggable::connect(Inspector::FrontendChannel&, bool)
 {
 }
 
-WIK_FIXTURE_SYMBOL void WebKit::WebPageInspectorController::connectFrontend(Inspector::FrontendChannel*, bool, bool)
+WIK_FIXTURE_SYMBOL void WebKit::WebPageDebuggable::connect(Inspector::FrontendChannel*, bool, bool)
 {
 }
 
-WIK_FIXTURE_SYMBOL void WebKit::WebPageInspectorController::connectFrontend(bool, Inspector::FrontendChannel&, bool)
+WIK_FIXTURE_SYMBOL void WebKit::WebPageDebuggable::connect(bool, Inspector::FrontendChannel&, bool)
 {
 }
 
-WIK_FIXTURE_SYMBOL void WebKit::WebPageInspectorController::connectFrontend(Inspector::FrontendChannel&, bool, int)
+WIK_FIXTURE_SYMBOL void WebKit::WebPageDebuggable::connect(Inspector::FrontendChannel&, bool, int)
 {
 }
 
@@ -126,11 +107,7 @@ WIK_FIXTURE_SYMBOL void WTF::StringImpl::deref()
 {
 }
 
-WIK_FIXTURE_SYMBOL void Inspector::BackendDispatcher::dispatch(const WTF::String&)
-{
-}
-
-WIK_FIXTURE_SYMBOL void WebKit::WebPageInspectorController::connectFrontend(
+WIK_FIXTURE_SYMBOL void WebKit::WebPageDebuggable::connect(
     Inspector::FrontendChannel&,
     bool,
     bool
@@ -138,50 +115,24 @@ WIK_FIXTURE_SYMBOL void WebKit::WebPageInspectorController::connectFrontend(
 {
 }
 
-WIK_FIXTURE_SYMBOL void WebKit::WebPageInspectorController::disconnectFrontend(Inspector::FrontendChannel&)
-{
-}
-
-WIK_FIXTURE_SYMBOL void WebCore::PageInspectorController::connectFrontend(
-    Inspector::FrontendChannel&,
-    bool,
-    bool
-)
-{
-}
-
-WIK_FIXTURE_SYMBOL void WebCore::PageInspectorController::disconnectFrontend(Inspector::FrontendChannel&)
-{
-}
-
-WIK_FIXTURE_SYMBOL void WebCore::FrameInspectorController::connectFrontend(
-    Inspector::FrontendChannel&,
-    bool,
-    bool
-)
-{
-}
-
-WIK_FIXTURE_SYMBOL void WebCore::FrameInspectorController::disconnectFrontend(Inspector::FrontendChannel&)
+WIK_FIXTURE_SYMBOL void WebKit::WebPageDebuggable::disconnect(Inspector::FrontendChannel&)
 {
 }
 
 void WebInspectorNativeSymbolFixtureAnchor(void)
 {
     Inspector::FrontendChannel frontendChannel;
-    WebKit::WebPageInspectorController webKitController;
-    WebCore::PageInspectorController pageController;
-    WebCore::FrameInspectorController frameController;
+    WebKit::WebPageDebuggable webKitController;
     WTF::String string = WTF::String::fromUTF8(std::span<const char8_t>());
     WTF::StringImpl stringImpl;
-    Inspector::BackendDispatcher backendDispatcher;
 
-    webKitController.connectFrontend(frontendChannel, false, false);
-    webKitController.disconnectFrontend(frontendChannel);
-    webKitController.connectFrontend(frontendChannel, false);
-    webKitController.connectFrontend(&frontendChannel, false, false);
-    webKitController.connectFrontend(false, frontendChannel, false);
-    webKitController.connectFrontend(frontendChannel, false, 0);
+    webKitController.connect(frontendChannel, false, false);
+    webKitController.disconnect(frontendChannel);
+    webKitController.dispatchMessageFromRemote(static_cast<WTF::String&&>(string));
+    webKitController.connect(frontendChannel, false);
+    webKitController.connect(&frontendChannel, false, false);
+    webKitController.connect(false, frontendChannel, false);
+    webKitController.connect(frontendChannel, false, 0);
     char8_t fixedCharacters[4] { };
     (void)WTF::String::fromUTF8(std::span<const char8_t, 4>(fixedCharacters));
     (void)WTF::String::fromUTF8(std::span<const char>());
@@ -192,11 +143,6 @@ void WebInspectorNativeSymbolFixtureAnchor(void)
     (void)static_cast<NSString*>(stringImpl);
     WTF::StringImpl::destroy(&stringImpl);
     stringImpl.deref();
-    backendDispatcher.dispatch(string);
-    pageController.connectFrontend(frontendChannel, false, false);
-    pageController.disconnectFrontend(frontendChannel);
-    frameController.connectFrontend(frontendChannel, false, false);
-    frameController.disconnectFrontend(frontendChannel);
 }
 
 uintptr_t WebInspectorNativeSymbolFixtureWTFStringFromUTF8Address(void)
@@ -204,3 +150,6 @@ uintptr_t WebInspectorNativeSymbolFixtureWTFStringFromUTF8Address(void)
     using Factory = WTF::String (*)(std::span<const char8_t>);
     return reinterpret_cast<uintptr_t>(static_cast<Factory>(&WTF::String::fromUTF8));
 }
+
+WIK_FIXTURE_SYMBOL WebKit::WebPageDebuggable::~WebPageDebuggable() = default;
+WIK_FIXTURE_SYMBOL void WebKit::WebPageDebuggable::dispatchMessageFromRemote(WTF::String&&) { }
