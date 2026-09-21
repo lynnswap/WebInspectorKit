@@ -15,6 +15,7 @@ let package = Package(
         .iOS("18.4"), .macOS("15.4")
     ],
     products: [
+        .library(name: "WebKitRuntime", targets: ["WebKitRuntime", "WebKitRuntimeObjC"]),
         .library(
             name: "WebInspectorNativeBridge",
             targets: ["WebInspectorNativeBridge"]
@@ -28,15 +29,28 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "WebKitRuntime",
+            dependencies: ["WebKitRuntimeObjC", .product(name: "MachOKit", package: "MachOKit")],
+            path: "Sources/WebKitRuntime",
+            swiftSettings: swiftSettings
+        ),
+        .target(
+            name: "WebKitRuntimeObjC",
+            path: "Sources/WebKitRuntimeObjC",
+            publicHeadersPath: "include",
+            linkerSettings: [.linkedFramework("Foundation"), .linkedFramework("WebKit")]
+        ),
+        .target(
             name: "WebInspectorNativeBridge",
             dependencies: [
                 "WebInspectorNativeBridgeObjC",
-                .product(name: "MachOKit", package: "MachOKit")
+                "WebKitRuntime"
             ],
             swiftSettings: swiftSettings
         ),
         .target(
             name: "WebInspectorNativeBridgeObjC",
+            dependencies: ["WebKitRuntimeObjC"],
             publicHeadersPath: "include",
             linkerSettings: [
                 .linkedFramework("Foundation"),
@@ -55,6 +69,7 @@ let package = Package(
             dependencies: [
                 "WebInspectorNativeBridge",
                 "WebInspectorNativeSymbolFixtures",
+                "WebKitRuntime",
             ],
             path: "Tests/WebInspectorNativeBridgeTests",
             swiftSettings: swiftSettings

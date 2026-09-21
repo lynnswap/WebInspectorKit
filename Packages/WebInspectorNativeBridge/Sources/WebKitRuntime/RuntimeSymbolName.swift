@@ -1,9 +1,9 @@
 #if os(iOS) || os(macOS)
 import Darwin
 import Foundation
-import WebInspectorNativeBridgeObjC
+import WebKitRuntimeObjC
 
-enum NativeInspectorSymbolName {
+enum RuntimeSymbolName {
     struct RawNameNeedle: Sendable {
         let cString: [CChar]
 
@@ -23,7 +23,7 @@ enum NativeInspectorSymbolName {
     }
 
     @unsafe static func decode(_ symbolNameC: UnsafePointer<CChar>) -> Decoded {
-        Decoded(cxxFunctionSignature: unsafe WebInspectorNativeDemangleCXXSymbol(symbolNameC).map(cxxSignatureKey))
+        Decoded(cxxFunctionSignature: unsafe WKRuntimeDemangleCXXSymbol(symbolNameC).map(cxxSignatureKey))
     }
 
     // Keep identifier boundaries while ignoring the demangler's punctuation spacing.
@@ -59,7 +59,11 @@ enum NativeInspectorSymbolName {
         }
         // Check the owner before demangling common method names such as `dispatch`.
         let owner = functionName.split(separator: "::").dropLast().last.map(String.init)
-        return [owner, component].compactMap { $0 }.map(RawNameNeedle.init)
+        // Itanium has predefined substitutions for these standard-library names.
+        let substitutions: Set<String> = ["std", "allocator", "basic_string", "string", "basic_istream", "basic_ostream", "basic_iostream", "istream", "ostream", "iostream"]
+        return [owner, component].compactMap { $0 }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !substitutions.contains($0) }.map(RawNameNeedle.init)
     }
 
     @inline(__always)

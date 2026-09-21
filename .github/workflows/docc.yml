@@ -73,6 +73,7 @@ jobs:
             --target WebInspectorDataKit \
             --target WebInspectorProxyKit \
             --target WebInspectorProxyKitTesting \
+            --target WebKitRuntime \
             --disable-indexing \
             --enable-experimental-combined-documentation \
             --transform-for-static-hosting \

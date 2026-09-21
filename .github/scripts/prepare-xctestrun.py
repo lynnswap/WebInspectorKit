@@ -21,7 +21,8 @@ def prepare(products):
     for target in targets:
         if target["BlueprintName"] == "WebInspectorNativeBridgeTests":
             target.setdefault("EnvironmentVariables", {})["WEBINSPECTORKIT_RUN_NATIVE_RUNTIME_SMOKE"] = "1"
-            if "/iPhoneSimulator.platform/" in target["TestHostPath"]:
+        if target["BlueprintName"] in ("WebInspectorNativeBridgeTests", "WebInspectorConsumerContractTests"):
+            if "/iPhoneSimulator.platform/" in target.get("TestHostPath", ""):
                 # Hostless xctest can stall in UIKit's initial SpringBoard registration.
                 host = Path("Debug-iphonesimulator/RuntimeTestHost.app")
                 info = plistlib.loads((products / host / "Info.plist").read_bytes())

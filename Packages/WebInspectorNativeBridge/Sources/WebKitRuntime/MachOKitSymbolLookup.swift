@@ -45,7 +45,10 @@ import MachOKit
         guard let pointer = unsafe UnsafeRawPointer(bitPattern: UInt(address)) else {
             return nil
         }
-        return unsafe MachOImage.image(for: pointer)
+        // dyld already indexes loaded images; avoid scanning every image's segments on cache hits.
+        var info = unsafe Dl_info()
+        guard unsafe dladdr(pointer, &info) != 0, let base = unsafe info.dli_fbase else { return nil }
+        return unsafe MachOImage(ptr: base.assumingMemoryBound(to: mach_header.self))
     }
 }
 #endif
