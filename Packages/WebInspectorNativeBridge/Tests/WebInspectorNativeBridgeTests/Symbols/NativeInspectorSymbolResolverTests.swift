@@ -32,7 +32,8 @@ struct NativeInspectorSymbolResolverTests {
             continuation.finish()
         }
 
-        try bridge.attach(with: NativeInspectorResolvedSymbols.resolveCurrent())
+        let symbols = try await NativeInspectorResolvedSymbols.resolveCurrentDetached()
+        try bridge.attach(with: symbols)
         let commandCount = 32
         for id in 1...commandCount {
             try bridge.sendJSONString("""
@@ -52,7 +53,7 @@ struct NativeInspectorSymbolResolverTests {
     }
 
     @Test
-    func fixtureImageResolvesCompleteAddressSet() throws {
+    func fixtureImageResolvesCompleteAddressSetDespiteIncompatibleOverloads() throws {
         let fixture = try nativeSymbolFixture()
         let resolution = try NativeInspectorSymbolResolver.resolveUsingFixture(fixture)
 
@@ -75,6 +76,28 @@ struct NativeInspectorSymbolResolverTests {
         #expect(resolution.isSupported)
     }
 
+    @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason))
+    @MainActor
+    func nativeSymbolResolutionTiming() throws {
+        try withWebKitLoaded {
+            let cached = NativeInspectorSymbolResolver.resolveCurrent()
+            try #require(cached.isSupported)
+            var samples: [Double] = []
+            for _ in 0..<5 {
+                let start = ProcessInfo.processInfo.systemUptime
+                let resolution = NativeInspectorSymbolResolver.resolveForTesting()
+                samples.append((ProcessInfo.processInfo.systemUptime - start) * 1_000)
+                #expect(resolution.addresses == cached.addresses)
+            }
+            let start = ProcessInfo.processInfo.systemUptime
+            for _ in 0..<1_000 {
+                _ = NativeInspectorSymbolResolver.resolveCurrent()
+            }
+            let cachedMicroseconds = (ProcessInfo.processInfo.systemUptime - start) * 1_000
+            print("SYMBOL_RESOLUTION_TIMING uncachedMedianMS=\(samples.sorted()[2]) cachedMeanUS=\(cachedMicroseconds)")
+        }
+    }
+
     @Test
     func resolveForTestingReportsOnlyMissingSymbolState() throws {
         let fixture = try nativeSymbolFixture()
@@ -83,7 +106,7 @@ struct NativeInspectorSymbolResolverTests {
                 stringFromUTF8: requiredSymbol(
                     role: .stringFromUTF8,
                     ownerImage: .javaScriptCore,
-                    requiredNameParts: ["definitelyMissingFromUTF8Foo"],
+                    functionName: "definitelyMissingFromUTF8Foo", parameterTypes: [],
                     resolutionPolicy: .requiredTextSymbol
                 )
             )
@@ -117,37 +140,69 @@ struct NativeInspectorSymbolResolverTests {
     }
 
     @Test
-    func resolveForTestingRejectsAmbiguousSemanticMatches() throws {
-        let fixture = try nativeSymbolFixture()
-        let symbols = NativeInspectorSymbolResolverCore.currentSymbolQueries()
-            .replacing(
-                stringFromUTF8: requiredSymbol(
-                    role: .stringFromUTF8,
-                    ownerImage: .javaScriptCore,
-                    requiredNameParts: ["WTF::String", "span", "char8_t"],
-                    resolutionPolicy: .requiredTextSymbol
-                )
-            )
-
-        let resolution = try NativeInspectorSymbolResolver.resolveUsingFixture(
-            fixture,
-            symbols: symbols
-        )
-
-        #expect(!resolution.isSupported)
-        #expect(resolution.addresses == .zero)
-        #expect(resolution.failureKind == NativeInspectorSymbolFailure.ambiguousSymbolMatch.message)
-        #expect(resolution.failureReason?.contains("symbol lookup ambiguous") == true)
-        #expect(resolution.missingFunctions.contains("stringFromUTF8"))
-    }
-
-    @Test
     func fixtureResolutionSelectsUsableStringFromUTF8EntryPoint() throws {
         let fixture = try nativeSymbolFixture()
         let resolution = try NativeInspectorSymbolResolver.resolveUsingFixture(fixture)
 
         #expect(resolution.isSupported)
         #expect(resolution.stringFromUTF8Address == UInt64(WebInspectorNativeSymbolFixtureWTFStringFromUTF8Address()))
+    }
+
+    @Test(arguments: [
+        ("RN9Inspector15FrontendChannelEbb", true),
+        ("RN9Inspector15FrontendChannelEb", false),
+        ("RN9Inspector15FrontendChannelEbbb", false),
+        ("RN9Inspector15FrontendChannelEbi", false),
+        ("bRN9Inspector15FrontendChannelEb", false),
+        ("PN9Inspector15FrontendChannelEbb", false),
+        ("RKN9Inspector15FrontendChannelEbb", false),
+    ])
+    func connectQueryMatchesParameterTypesOrderAndCount(_ parameters: String, _ expected: Bool) {
+        let symbol = NativeInspectorSymbolResolverCore.currentSymbolQueries().connectFrontend
+        let name = "__ZN6WebKit26WebPageInspectorController15connectFrontendE" + parameters
+
+        #expect(symbol.matches(symbolName: name) == expected)
+        name.withCString { nameC in
+            let decodedName = unsafe NativeInspectorSymbolName.decode(nameC)
+            #expect(symbol.matches(decodedName: decodedName) == expected)
+        }
+    }
+
+    @Test(arguments: [
+        ("NSt3__14spanIKDuLm18446744073709551615EEE", true),
+        ("NSt3__14spanIKDuLm4EEE", false),
+        ("NSt3__14spanIKcLm18446744073709551615EEE", false),
+        ("NSt3__14spanIDuLm18446744073709551615EEE", false),
+        ("RKNSt3__14spanIKDuLm18446744073709551615EEE", false),
+        ("NSt3__14spanIKDuLm18446744073709551615EEEb", false),
+    ])
+    func stringFactoryQueryMatchesDynamicUTF8SpanByValue(_ parameters: String, _ expected: Bool) {
+        let symbol = NativeInspectorSymbolResolverCore.currentSymbolQueries().stringFromUTF8
+        #expect(symbol.matches(symbolName: "__ZN3WTF6String8fromUTF8E" + parameters) == expected)
+    }
+
+    @Test(arguments: ["_", "__"])
+    func functionQueriesAcceptItaniumAndMachOSymbolPrefixes(_ prefix: String) {
+        let symbols = NativeInspectorSymbolResolverCore.currentSymbolQueries()
+        #expect(symbols.derefStringImpl.matches(symbolName: prefix + "ZN3WTF10StringImpl5derefEv"))
+        #expect(symbols.stringImplToNSString.matches(symbolName: prefix + "ZN3WTF10StringImplcvP8NSStringEv"))
+    }
+
+    @Test(arguments: ["", "_", "__", "__Z", "_$s", "_ZN3WTF10StringImpl5derefE"])
+    func nonCallableNamesDoNotMatchFunctionQueries(_ name: String) {
+        let symbol = NativeInspectorSymbolResolverCore.currentSymbolQueries().derefStringImpl
+        #expect(!symbol.matches(symbolName: name))
+        let decodedName = name.withCString { unsafe NativeInspectorSymbolName.decode($0) }
+        #expect(!symbol.matches(decodedName: decodedName))
+    }
+
+    @Test
+    func signatureSpacingDoesNotEraseTypeBoundaries() {
+        let compact = NativeInspectorSymbolName.cxxSignatureKey("Inspector::BackendDispatcher::dispatch(WTF::String const&)")
+        let spaced = NativeInspectorSymbolName.cxxSignatureKey("Inspector :: BackendDispatcher :: dispatch ( WTF :: String const & )")
+        let otherType = NativeInspectorSymbolName.cxxSignatureKey("Inspector::BackendDispatcher::dispatch(WTF::Stringconst&)")
+        #expect(compact == spaced)
+        #expect(compact != otherType)
     }
 
     @Test
@@ -165,7 +220,7 @@ struct NativeInspectorSymbolResolverTests {
             derefStringImpl: requiredSymbol(
                 role: .derefStringImpl,
                 ownerImage: .webKit,
-                requiredNameParts: ["definitelyMissingDeref"],
+                functionName: "definitelyMissingDeref", parameterTypes: [],
                 resolutionPolicy: .requiredTextSymbol
             )
         )
@@ -181,23 +236,6 @@ struct NativeInspectorSymbolResolverTests {
         #expect(!NativeInspectorSymbolResolverCore.loadedImageSymbolOffsetIsUsable(0, textVirtualMemorySize: 0x1000))
         #expect(NativeInspectorSymbolResolverCore.loadedImageSymbolOffsetIsUsable(8, textVirtualMemorySize: 0x1000))
         #expect(!NativeInspectorSymbolResolverCore.loadedImageSymbolOffsetIsUsable(0x1000, textVirtualMemorySize: 0x1000))
-    }
-
-    @Test
-    func cStringSwiftMangledNameDetectionRejectsShortNames() {
-        for symbolName in ["", "_", "_$", "$"] {
-            let isLikelySwiftMangled = unsafe symbolName.withCString { symbolNameC in
-                unsafe NativeInspectorSymbolName.isLikelySwiftMangledName(symbolNameC)
-            }
-
-            #expect(!isLikelySwiftMangled)
-        }
-
-        let isLikelySwiftMangled = unsafe "_$s".withCString { symbolNameC in
-            unsafe NativeInspectorSymbolName.isLikelySwiftMangledName(symbolNameC)
-        }
-
-        #expect(isLikelySwiftMangled)
     }
 
     @Test
@@ -396,7 +434,7 @@ struct NativeInspectorSymbolResolverTests {
                 stringFromUTF8: requiredSymbol(
                     role: .stringFromUTF8,
                     ownerImage: .javaScriptCore,
-                    requiredNameParts: ["definitelyMissingFromUTF8Foo"],
+                    functionName: "definitelyMissingFromUTF8Foo", parameterTypes: [],
                     resolutionPolicy: .requiredTextSymbol
                 )
             )
@@ -529,14 +567,15 @@ private extension NativeInspectorSymbols {
 private func requiredSymbol(
     role: NativeInspectorSymbolRole,
     ownerImage: NativeInspectorSymbolOwnerImage,
-    requiredNameParts: [String],
+    functionName: String,
+    parameterTypes: [String],
     resolutionPolicy: NativeInspectorSymbolResolutionPolicy
 ) -> NativeInspectorRequiredSymbol {
     NativeInspectorRequiredSymbol(
         role: role,
         ownerImage: ownerImage,
         queries: [
-            NativeInspectorSymbolQuery(requiredNameParts: requiredNameParts)
+            NativeInspectorSymbolQuery(functionName: functionName, parameterTypes: parameterTypes)
         ],
         resolutionPolicy: resolutionPolicy
     )

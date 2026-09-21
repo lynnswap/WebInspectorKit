@@ -154,8 +154,9 @@ extension NativeInspectorSymbolResolverCore {
         var addresses = Set<UInt64>()
 
         for symbol in image.symbols {
-            let variants = unsafe NativeInspectorSymbolName.variants(for: symbol.nameC)
-            guard unsafe requiredSymbol.matches(cStringVariants: variants) else {
+            guard unsafe requiredSymbol.mayMatch(symbolNameC: symbol.nameC) else { continue }
+            let decodedName = unsafe NativeInspectorSymbolName.decode(symbol.nameC)
+            guard requiredSymbol.matches(decodedName: decodedName) else {
                 continue
             }
             appendCallTargetAddress(

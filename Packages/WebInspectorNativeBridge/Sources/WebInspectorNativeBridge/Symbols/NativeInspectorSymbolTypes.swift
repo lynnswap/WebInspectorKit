@@ -134,158 +134,50 @@ struct NativeInspectorRequiredSymbol: Sendable {
     let resolutionPolicy: NativeInspectorSymbolResolutionPolicy
 
     func matches(symbolName: String) -> Bool {
-        matches(variants: NativeInspectorSymbolName.variants(for: symbolName))
+        guard mayMatch(rawSymbolName: symbolName) else { return false }
+        return matches(decodedName: NativeInspectorSymbolName.decode(symbolName))
     }
 
-    func matches(variants: NativeInspectorSymbolName.Variants) -> Bool {
-        matches(variants: variants, checkingRawNameNeedle: true)
-    }
-
-    func matches(
-        variants: NativeInspectorSymbolName.Variants,
-        checkingRawNameNeedle: Bool
-    ) -> Bool {
-        for query in queries {
-            if query.matches(
-                variants: variants,
-                checkingRawNameNeedle: checkingRawNameNeedle
-            ) {
-                return true
-            }
-        }
-        return false
+    func matches(decodedName: NativeInspectorSymbolName.Decoded) -> Bool {
+        queries.contains { $0.matches(decodedName: decodedName) }
     }
 
     @inline(__always)
     func mayMatch(rawSymbolName: String) -> Bool {
-        if NativeInspectorSymbolName.isLikelySwiftMangledName(rawSymbolName) {
-            return true
-        }
-        for query in queries {
-            if query.mayMatch(rawSymbolName: rawSymbolName) {
-                return true
-            }
-        }
-        return false
-    }
-
-    @unsafe func matches(cStringVariants: NativeInspectorSymbolName.CStringVariants) -> Bool {
-        unsafe matches(cStringVariants: cStringVariants, checkingRawNameNeedle: true)
+        queries.contains { $0.mayMatch(rawSymbolName: rawSymbolName) }
     }
 
     @inline(__always)
     @unsafe func mayMatch(symbolNameC: UnsafePointer<CChar>) -> Bool {
-        if unsafe NativeInspectorSymbolName.isLikelySwiftMangledName(symbolNameC) {
-            return true
-        }
-        for query in queries {
-            if unsafe query.mayMatch(symbolNameC: symbolNameC) {
-                return true
-            }
-        }
-        return false
-    }
-
-    @unsafe func matches(
-        cStringVariants: NativeInspectorSymbolName.CStringVariants,
-        checkingRawNameNeedle: Bool
-    ) -> Bool {
-        for query in queries {
-            if unsafe query.matches(
-                cStringVariants: cStringVariants,
-                checkingRawNameNeedle: checkingRawNameNeedle
-            ) {
-                return true
-            }
-        }
-        return false
+        queries.contains { unsafe $0.mayMatch(symbolNameC: symbolNameC) }
     }
 }
 
+// C++ names encode parameter types, but generally not return types or object layout.
+// The native bridge still owns those ABI assumptions.
 struct NativeInspectorSymbolQuery: Sendable {
-    private let requiredNameParts: [NativeInspectorSymbolName.Part]
-    private let forbiddenNameParts: [NativeInspectorSymbolName.Part]
-    private let rawNameNeedle: NativeInspectorSymbolName.RawNameNeedle?
+    private let rawNameNeedles: [NativeInspectorSymbolName.RawNameNeedle]
+    private let functionSignature: [UInt8]
 
-    init(
-        requiredNameParts: [String],
-        forbiddenNameParts: [String] = []
-    ) {
-        self.requiredNameParts = requiredNameParts.map(NativeInspectorSymbolName.Part.init(sourceName:))
-        self.forbiddenNameParts = forbiddenNameParts.map(NativeInspectorSymbolName.Part.init(sourceName:))
-        self.rawNameNeedle = self.requiredNameParts.lazy.compactMap(\.rawNameNeedle).first
+    init(functionName: String, parameterTypes: [String]) {
+        self.rawNameNeedles = NativeInspectorSymbolName.rawNameNeedles(for: functionName)
+        self.functionSignature = NativeInspectorSymbolName.cxxSignatureKey(
+            "\(functionName)(\(parameterTypes.joined(separator: ",")))"
+        )
     }
 
-    func matches(symbolName: String) -> Bool {
-        matches(variants: NativeInspectorSymbolName.variants(for: symbolName))
-    }
-
-    func matches(variants: NativeInspectorSymbolName.Variants) -> Bool {
-        matches(variants: variants, checkingRawNameNeedle: true)
-    }
-
-    func matches(
-        variants: NativeInspectorSymbolName.Variants,
-        checkingRawNameNeedle: Bool
-    ) -> Bool {
-        if checkingRawNameNeedle,
-           let rawNameNeedle,
-           !variants.containsRawNameNeedle(rawNameNeedle) {
-            return false
-        }
-        for requiredNamePart in requiredNameParts {
-            guard variants.contains(requiredNamePart) else {
-                return false
-            }
-        }
-        for forbiddenNamePart in forbiddenNameParts {
-            if variants.contains(forbiddenNamePart) {
-                return false
-            }
-        }
-        return true
+    func matches(decodedName: NativeInspectorSymbolName.Decoded) -> Bool {
+        decodedName.cxxFunctionSignature == functionSignature
     }
 
     @inline(__always)
     func mayMatch(rawSymbolName: String) -> Bool {
-        guard let rawNameNeedle else {
-            return true
-        }
-        return unsafe NativeInspectorSymbolName.string(rawSymbolName, containsRawNameNeedle: rawNameNeedle)
-    }
-
-    @unsafe func matches(cStringVariants: NativeInspectorSymbolName.CStringVariants) -> Bool {
-        unsafe matches(cStringVariants: cStringVariants, checkingRawNameNeedle: true)
+        rawNameNeedles.allSatisfy { NativeInspectorSymbolName.string(rawSymbolName, containsRawNameNeedle: $0) }
     }
 
     @inline(__always)
     @unsafe func mayMatch(symbolNameC: UnsafePointer<CChar>) -> Bool {
-        guard let rawNameNeedle else {
-            return true
-        }
-        return unsafe NativeInspectorSymbolName.cString(symbolNameC, containsRawNameNeedle: rawNameNeedle)
-    }
-
-    @unsafe func matches(
-        cStringVariants: NativeInspectorSymbolName.CStringVariants,
-        checkingRawNameNeedle: Bool
-    ) -> Bool {
-        if checkingRawNameNeedle,
-           let rawNameNeedle,
-           unsafe !cStringVariants.containsRawNameNeedle(rawNameNeedle) {
-            return false
-        }
-        for requiredNamePart in requiredNameParts {
-            guard unsafe cStringVariants.contains(requiredNamePart) else {
-                return false
-            }
-        }
-        for forbiddenNamePart in forbiddenNameParts {
-            if unsafe cStringVariants.contains(forbiddenNamePart) {
-                return false
-            }
-        }
-        return true
+        rawNameNeedles.allSatisfy { unsafe NativeInspectorSymbolName.cString(symbolNameC, containsRawNameNeedle: $0) }
     }
 }
 
