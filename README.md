@@ -121,37 +121,6 @@ layouts, and IPC schemas. Handle lookup failures for the feature that needs
 them. See the `WebKitRuntime` DocC documentation for page lifetime and memory
 read contracts.
 
-## Testing against real WebKit
-
-CI discovers installed iOS 18.4+ Simulator runtimes on the `macos-15`,
-`macos-26`, and `xcode-27` runners, with coverage of the iOS 26 series starting
-at 26.1. Each runtime runs the NativeBridge tests,
-including native symbol resolution, string ABI round trips, and Inspector
-protocol communication. The ProxyKit, DataKit, UI, full Monocly, and consumer
-contract suites run only on the newest installed iOS runtime on `xcode-27`.
-The ordinary suites have a separate job, which also runs the macOS consumer
-contract suites and excludes the NativeBridge test target. Low-level coverage
-uses one job per host environment; each builds NativeBridge once per platform
-and tests its installed runtimes sequentially. The ordinary job also builds
-and tests on the same runner, so no build products are transferred between jobs.
-Each iOS case uses a fresh Simulator that is deleted afterward. A failed case
-does not skip the remaining runtimes; per-OS logs and results are retained,
-and any failure fails the job.
-Runtimes absent from the runner images are not downloaded or covered.
-The NativeBridge tests also exercise each runner's host macOS and WebKit.
-
-The repository includes a self-authored, loopback-only integration site for
-manual Monocly verification through a real `WKWebView` and WebKit protocol
-backend. It combines a large DOM, mutation burst, iframe, shadow/pseudo nodes,
-navigation, and representative Network traffic without third-party assets:
-
-```sh
-DEVICE_UDID=<booted-simulator-udid> Scripts/run-monocly-fixture.sh
-```
-
-See [Inspector Integration Fixture](Tools/InspectorFixture/README.md) for the
-verification matrix and deterministic fixture regression test.
-
 ## Documentation
 
 The DocC workflow publishes [package documentation](https://lynnswap.github.io/WebInspectorKit/documentation/)
@@ -162,6 +131,7 @@ to GitHub Pages.
 | [Migration Guide](Docs/MIGRATION.md) | Version-by-version source migration notes for app code. |
 | [WebInspectorUI](Sources/WebInspectorUI/README.md) | UIKit inspector implementation notes and UI/DataKit ownership boundaries. |
 | [WebKit Version Mapping](Docs/WebKitVersionMapping.md) | Local notes for mapping iOS WebKit framework versions to public WebKit source refs. |
+| [Inspector Integration Fixture](Tools/InspectorFixture/README.md) | Manual verification with Monocly and fixture regression tests. |
 
 ## Project Structure
 
