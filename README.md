@@ -103,14 +103,15 @@ at 26.1. Each runtime runs the NativeBridge tests,
 including native symbol resolution, string ABI round trips, and Inspector
 protocol communication. The ProxyKit, DataKit, UI, full Monocly, and consumer
 contract suites run only on the newest installed iOS runtime on `xcode-27`.
-That runner also runs the macOS consumer contract suites; its older iOS
-runtimes run only NativeBridge. The `macos-15` and `macos-26` runners build and
-test only NativeBridge. Each Xcode builds one iOS artifact and one macOS
-artifact, sharing dependencies across the test targets. Each runtime runs its
-selected suites in one job; test jobs do not rebuild the package.
-Artifacts stay with their producing Xcode because Swift Testing's runtime ABI
-can differ between Xcode versions.
-Runtimes absent from the runner images are not downloaded or covered by this matrix.
+The ordinary suites have a separate job, which also runs the macOS consumer
+contract suites and excludes the NativeBridge test target. Low-level coverage
+uses one job per host environment; each builds NativeBridge once per platform
+and tests its installed runtimes sequentially. The ordinary job also builds
+and tests on the same runner, so no build products are transferred between jobs.
+Each iOS case uses a fresh Simulator that is deleted afterward. A failed case
+does not skip the remaining runtimes; per-OS logs and results are retained,
+and any failure fails the job.
+Runtimes absent from the runner images are not downloaded or covered.
 The NativeBridge tests also exercise each runner's host macOS and WebKit.
 
 The repository includes a self-authored, loopback-only integration site for
