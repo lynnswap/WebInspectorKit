@@ -13,7 +13,8 @@ on:
         default: false
         type: boolean
       include_workspace:
-        default: true
+        description: Run workspace suites on this runner's latest iOS runtime and host macOS.
+        default: false
         type: boolean
 
 permissions:
@@ -100,7 +101,7 @@ jobs:
           if-no-files-found: ignore
 
   test:
-    name: ${{ matrix.platform }} ${{ matrix.version }}
+    name: ${{ matrix.platform }} ${{ matrix.version }} / ${{ matrix.suite }}
     needs: build
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 20
@@ -112,7 +113,7 @@ jobs:
       XCODE_ALLOW_PRERELEASE: ${{ inputs.allow_prerelease }}
       RUNTIME_ID: ${{ matrix.runtime }}
       TEST_PLATFORM: ${{ matrix.platform }}
-      INCLUDE_WORKSPACE: ${{ inputs.include_workspace }}
+      TEST_SUITE: ${{ matrix.suite }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Resolve Xcode
@@ -132,14 +133,16 @@ jobs:
       - name: Boot the Simulator before starting test timeouts
         if: matrix.platform == 'iOS'
         run: xcrun simctl bootstatus "$WATCHDOG_SIMULATOR_UDID" -b
-      - name: Run all suites from the artifact
+      - name: Run selected suites from the artifact
         run: |
           set -e -o pipefail
           mkdir -p "$RUNNER_TEMP/tests"
           tar -C "$RUNNER_TEMP/tests" -xzf "$RUNNER_TEMP/test-products/$TEST_PLATFORM-tests.tar.gz"
           xctestruns=("$RUNNER_TEMP/tests/"*.xctestrun)
           args=()
-          if [[ "$TEST_PLATFORM" == macOS && "$INCLUDE_WORKSPACE" == true ]]; then
+          if [[ "$TEST_SUITE" == native ]]; then
+            args+=(-only-testing:WebInspectorNativeBridgeTests)
+          elif [[ "$TEST_PLATFORM" == macOS ]]; then
             args+=(
               -only-testing:WebInspectorNativeBridgeTests
               -only-testing:WebInspectorDataKitImportOnlyContractTests

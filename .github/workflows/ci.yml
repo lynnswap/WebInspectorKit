@@ -40,7 +40,7 @@ jobs:
           - runner: macos-26
             xcode_major: '26'
             allow_prerelease: false
-            include_workspace: true
+            include_workspace: false
           - runner: xcode-27
             xcode_major: '27'
             allow_prerelease: true

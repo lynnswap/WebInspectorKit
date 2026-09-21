@@ -28,11 +28,14 @@ def supported_runtimes(runtimes):
     return sorted(selected.values(), key=lambda runtime: version_components(runtime["version"]))
 
 
-def test_matrix(runtimes, macos_version):
+def test_matrix(runtimes, macos_version, *, include_workspace=False):
+    latest_runtime = max(runtimes, key=lambda runtime: version_components(runtime["version"]))
     return {"include": [
-        {"runtime": runtime["identifier"], "version": runtime["version"], "platform": "iOS"}
+        {"runtime": runtime["identifier"], "version": runtime["version"], "platform": "iOS",
+         "suite": "workspace" if include_workspace and runtime == latest_runtime else "native"}
         for runtime in runtimes
-    ] + [{"runtime": "", "version": macos_version, "platform": "macOS"}]}
+    ] + [{"runtime": "", "version": macos_version, "platform": "macOS",
+          "suite": "workspace" if include_workspace else "native"}]}
 
 
 def simctl(*arguments):
@@ -77,7 +80,9 @@ def main():
         raise ValueError("No available iOS runtime supported by CI is installed.")
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
         macos_version = subprocess.check_output(["sw_vers", "-productVersion"], text=True).strip()
-        output.write(f"matrix={json.dumps(test_matrix(runtimes, macos_version))}\n")
+        matrix = test_matrix(runtimes, macos_version,
+                             include_workspace=os.environ.get("INCLUDE_WORKSPACE") == "true")
+        output.write(f"matrix={json.dumps(matrix)}\n")
     for runtime in runtimes:
         print(f"iOS {runtime['version']} ({runtime['buildversion']})")
 

@@ -59,13 +59,28 @@ class RuntimeMatrixTests(unittest.TestCase):
     def test_runtime_identifier_is_preserved_when_version_contains_a_patch(self):
         installed = [runtime("26.4.1", identifier="com.apple.CoreSimulator.SimRuntime.iOS-26-4")]
         jobs = matrix.test_matrix(matrix.supported_runtimes(installed), "26.6.2")["include"]
-        self.assertEqual(jobs[0], {"runtime": installed[0]["identifier"], "version": "26.4.1", "platform": "iOS"})
+        self.assertEqual(jobs[0], {"runtime": installed[0]["identifier"], "version": "26.4.1",
+                                   "platform": "iOS", "suite": "native"})
 
     def test_one_job_per_runtime_and_one_for_the_host_macos(self):
         jobs = matrix.test_matrix([runtime("18.5"), runtime("18.6")], "15.7")["include"]
         self.assertEqual(len(jobs), 3)
         self.assertEqual([job["version"] for job in jobs if job["platform"] == "iOS"], ["18.5", "18.6"])
-        self.assertEqual(jobs[-1], {"runtime": "", "version": "15.7", "platform": "macOS"})
+        self.assertEqual(jobs[-1], {"runtime": "", "version": "15.7", "platform": "macOS", "suite": "native"})
+        self.assertTrue(all(job["suite"] == "native" for job in jobs))
+
+    def test_workspace_suites_run_only_on_the_latest_ios_and_host_macos(self):
+        installed = [runtime(version) for version in ("27.2", "18.6", "27.10", "27.9", "26.5")]
+        jobs = matrix.test_matrix(installed, "27.1", include_workspace=True)["include"]
+        self.assertEqual(len(jobs), len(installed) + 1)
+        self.assertEqual([(job["platform"], job["version"]) for job in jobs if job["suite"] == "workspace"],
+                         [("iOS", "27.10"), ("macOS", "27.1")])
+        self.assertEqual([job["version"] for job in jobs if job["suite"] == "native"],
+                         ["27.2", "18.6", "27.9", "26.5"])
+
+    def test_latest_runner_with_one_ios_runtime_keeps_full_coverage(self):
+        jobs = matrix.test_matrix([runtime("27.0")], "27.0", include_workspace=True)["include"]
+        self.assertEqual([job["suite"] for job in jobs], ["workspace", "workspace"])
 
 
 if __name__ == "__main__":
