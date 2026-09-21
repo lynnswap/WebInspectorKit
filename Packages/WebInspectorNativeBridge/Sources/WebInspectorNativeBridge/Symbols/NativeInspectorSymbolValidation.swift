@@ -11,7 +11,8 @@ extension NativeInspectorSymbolResolverCore {
             case let .found(stringFromUTF8Address) = resolvedSymbols.stringFromUTF8,
             case let .found(stringImplToNSStringAddress) = resolvedSymbols.stringImplToNSString,
             case let .found(derefStringImplAddress) = resolvedSymbols.derefStringImpl,
-            case let .found(backendDispatcherDispatchAddress) = resolvedSymbols.backendDispatcherDispatch
+            case let .found(dispatchMessageFromRemoteAddress) = resolvedSymbols.dispatchMessageFromRemote,
+            case let .found(debuggableVTableAddress) = resolvedSymbols.debuggableVTable
         else {
             return nil
         }
@@ -22,7 +23,8 @@ extension NativeInspectorSymbolResolverCore {
             stringFromUTF8Address: stringFromUTF8Address,
             stringImplToNSStringAddress: stringImplToNSStringAddress,
             derefStringImplAddress: derefStringImplAddress,
-            backendDispatcherDispatchAddress: backendDispatcherDispatchAddress
+            dispatchMessageFromRemoteAddress: dispatchMessageFromRemoteAddress,
+            debuggableVTableAddress: debuggableVTableAddress
         )
     }
 
@@ -37,13 +39,12 @@ extension NativeInspectorSymbolResolverCore {
         _ functionAddresses: NativeInspectorSymbolAddresses,
         phase: NativeInspectorSymbolResolutionPhase?,
         source: String?,
-        usedConnectDisconnectFallback: Bool
     ) -> NativeInspectorSymbolLookupResult {
         #if DEBUG
         if let phase {
             NativeInspectorSymbolLog.info(
                 unsafe String(
-                    format: "[WebInspectorNativeBridge] native inspector symbols resolved backend=native-inspector status=complete phase=%@ source=%@ connectFrontend=0x%llx disconnectFrontend=0x%llx stringFromUTF8=0x%llx stringImplToNSString=0x%llx derefStringImpl=0x%llx backendDispatcherDispatch=0x%llx textScanFallback=%@",
+                    format: "[WebInspectorNativeBridge] native inspector symbols resolved backend=native-inspector status=complete phase=%@ source=%@ connectFrontend=0x%llx disconnectFrontend=0x%llx stringFromUTF8=0x%llx stringImplToNSString=0x%llx derefStringImpl=0x%llx dispatchMessageFromRemote=0x%llx",
                     phase.message,
                     source ?? "unknown",
                     functionAddresses.connectFrontendAddress,
@@ -51,8 +52,7 @@ extension NativeInspectorSymbolResolverCore {
                     functionAddresses.stringFromUTF8Address,
                     functionAddresses.stringImplToNSStringAddress,
                     functionAddresses.derefStringImplAddress,
-                    functionAddresses.backendDispatcherDispatchAddress,
-                    usedConnectDisconnectFallback ? "true" : "false"
+                    functionAddresses.dispatchMessageFromRemoteAddress,
                 )
             )
         }
@@ -64,7 +64,6 @@ extension NativeInspectorSymbolResolverCore {
             phase: phase,
             missingFunctions: [],
             source: source,
-            usedConnectDisconnectFallback: usedConnectDisconnectFallback
         )
     }
 
@@ -74,7 +73,6 @@ extension NativeInspectorSymbolResolverCore {
         source: String?,
         webKitHeaderAddress: UInt,
         javaScriptCoreHeaderAddress: UInt,
-        usedConnectDisconnectFallback: Bool
     ) -> NativeInspectorSymbolLookupResult? {
         let allResults = [
             resolvedSymbols.connectFrontend,
@@ -82,7 +80,8 @@ extension NativeInspectorSymbolResolverCore {
             resolvedSymbols.stringFromUTF8,
             resolvedSymbols.stringImplToNSString,
             resolvedSymbols.derefStringImpl,
-            resolvedSymbols.backendDispatcherDispatch,
+            resolvedSymbols.dispatchMessageFromRemote,
+            resolvedSymbols.debuggableVTable,
         ]
 
         guard allResults.allSatisfy({
@@ -95,7 +94,7 @@ extension NativeInspectorSymbolResolverCore {
         }
 
         for result in allResults {
-            if case .outsideText = result {
+            if case .outsideSection = result {
                 return nil
             }
         }
@@ -110,7 +109,8 @@ extension NativeInspectorSymbolResolverCore {
             (resolvedSymbols.stringFromUTF8, [javaScriptCoreHeaderAddress]),
             (resolvedSymbols.stringImplToNSString, [javaScriptCoreHeaderAddress]),
             (resolvedSymbols.derefStringImpl, [webKitHeaderAddress, javaScriptCoreHeaderAddress]),
-            (resolvedSymbols.backendDispatcherDispatch, [webKitHeaderAddress, javaScriptCoreHeaderAddress]),
+            (resolvedSymbols.dispatchMessageFromRemote, [webKitHeaderAddress]),
+            (resolvedSymbols.debuggableVTable, [webKitHeaderAddress]),
         ]
         for (result, expectedHeaders) in expectedHeadersBySymbol {
             guard case let .found(address) = result else {
@@ -128,7 +128,6 @@ extension NativeInspectorSymbolResolverCore {
             functionAddresses,
             phase: phase,
             source: source,
-            usedConnectDisconnectFallback: usedConnectDisconnectFallback
         )
     }
 
@@ -138,7 +137,6 @@ extension NativeInspectorSymbolResolverCore {
         source: String?,
         webKitHeaderAddress: UInt,
         javaScriptCoreHeaderAddress: UInt,
-        usedConnectDisconnectFallback: Bool,
         shouldLogFailure: Bool = true
     ) -> NativeInspectorSymbolLookupResult? {
         let allResults = [
@@ -147,17 +145,17 @@ extension NativeInspectorSymbolResolverCore {
             resolvedSymbols.stringFromUTF8,
             resolvedSymbols.stringImplToNSString,
             resolvedSymbols.derefStringImpl,
-            resolvedSymbols.backendDispatcherDispatch,
+            resolvedSymbols.dispatchMessageFromRemote,
+            resolvedSymbols.debuggableVTable,
         ]
 
         for result in allResults {
-            if case .outsideText = result {
+            if case .outsideSection = result {
                 return failure(
-                    .resolvedAddressOutsideText,
+                    .resolvedAddressOutsideSection,
                     phase: phase,
                     source: source,
                     missingFunctions: unsafe missingFunctionNames(in: resolvedSymbols),
-                    usedConnectDisconnectFallback: usedConnectDisconnectFallback,
                     shouldLog: shouldLogFailure
                 )
             }
@@ -174,7 +172,6 @@ extension NativeInspectorSymbolResolverCore {
                 phase: phase,
                 source: source,
                 missingFunctions: unsafe missingFunctionNames(in: resolvedSymbols),
-                usedConnectDisconnectFallback: usedConnectDisconnectFallback,
                 shouldLog: shouldLogFailure
             )
         }
@@ -189,7 +186,8 @@ extension NativeInspectorSymbolResolverCore {
             (resolvedSymbols.stringFromUTF8, [javaScriptCoreHeaderAddress]),
             (resolvedSymbols.stringImplToNSString, [javaScriptCoreHeaderAddress]),
             (resolvedSymbols.derefStringImpl, [webKitHeaderAddress, javaScriptCoreHeaderAddress]),
-            (resolvedSymbols.backendDispatcherDispatch, [webKitHeaderAddress, javaScriptCoreHeaderAddress]),
+            (resolvedSymbols.dispatchMessageFromRemote, [webKitHeaderAddress]),
+            (resolvedSymbols.debuggableVTable, [webKitHeaderAddress]),
         ]
         for (result, expectedHeaders) in expectedHeadersBySymbol {
             guard case let .found(address) = result else {
@@ -201,7 +199,6 @@ extension NativeInspectorSymbolResolverCore {
                     phase: phase,
                     source: source,
                     missingFunctions: unsafe missingFunctionNames(in: resolvedSymbols),
-                    usedConnectDisconnectFallback: usedConnectDisconnectFallback,
                     shouldLog: shouldLogFailure
                 )
             }
@@ -217,7 +214,6 @@ extension NativeInspectorSymbolResolverCore {
                 phase: phase,
                 source: source,
                 missingFunctions: missingConnectDisconnect,
-                usedConnectDisconnectFallback: usedConnectDisconnectFallback,
                 shouldLog: shouldLogFailure
             )
         }
@@ -231,7 +227,6 @@ extension NativeInspectorSymbolResolverCore {
                 phase: phase,
                 source: source,
                 missingFunctions: missingRuntimeFunctions,
-                usedConnectDisconnectFallback: usedConnectDisconnectFallback,
                 shouldLog: shouldLogFailure
             )
         }
@@ -242,7 +237,6 @@ extension NativeInspectorSymbolResolverCore {
                 phase: phase,
                 source: source,
                 missingFunctions: unsafe missingFunctionNames(in: resolvedSymbols),
-                usedConnectDisconnectFallback: usedConnectDisconnectFallback,
                 shouldLog: shouldLogFailure
             )
         }
@@ -250,7 +244,6 @@ extension NativeInspectorSymbolResolverCore {
             functionAddresses,
             phase: phase,
             source: source,
-            usedConnectDisconnectFallback: usedConnectDisconnectFallback
         )
     }
 

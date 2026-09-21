@@ -16,17 +16,15 @@ typedef struct {
     uint64_t stringFromUTF8Address;
     uint64_t stringImplToNSStringAddress;
     uint64_t derefStringImplAddress;
-    uint64_t backendDispatcherDispatchAddress;
+    uint64_t dispatchMessageFromRemoteAddress;
+    uint64_t debuggableVTableAddress;
 } WebInspectorNativeResolvedSymbols;
 
 typedef struct {
     BOOL found;
-    BOOL usedFallbackRange;
-    NSInteger resolvedOffset;
-    NSUInteger attemptedOffsetCount;
-    NSUInteger validCandidateCount;
-    NSUInteger scannedByteCount;
-} WebInspectorNativeControllerDiscoveryTestResult;
+    NSInteger offset;
+    NSUInteger matches;
+} WebInspectorNativeTargetDiscoveryTestResult;
 
 @interface WebInspectorNativeBridge : NSObject
 
@@ -45,25 +43,8 @@ typedef struct {
 
 @end
 
-FOUNDATION_EXPORT WebInspectorNativeControllerDiscoveryTestResult WebInspectorNativeFindInspectorControllerForTesting(
-    const void *pageProxy,
-    NSUInteger pageAllocationSize,
-    NSInteger cachedOffset
-);
-
-FOUNDATION_EXPORT WebInspectorNativeControllerDiscoveryTestResult WebInspectorNativeRunControllerDiscoveryScenarioForTesting(
-    NSUInteger pageAllocationSize,
-    NSInteger cachedOffset,
-    NSInteger primaryControllerOffset,
-    NSInteger secondaryControllerOffset
-);
-
-FOUNDATION_EXPORT WebInspectorNativeControllerDiscoveryTestResult WebInspectorNativeRunControllerDiscoveryScenarioWithInvalidCandidatesForTesting(
-    NSUInteger pageAllocationSize,
-    NSInteger cachedOffset,
-    NSInteger primaryControllerOffset,
-    NSInteger invalidControllerOffset,
-    NSInteger secondaryInvalidControllerOffset
+FOUNDATION_EXPORT WebInspectorNativeTargetDiscoveryTestResult WebInspectorNativeRunTargetDiscoveryForTesting(
+    NSUInteger byteCount, NSInteger cachedOffset, NSInteger primaryOffset, NSInteger secondaryOffset, BOOL sameTarget
 );
 
 FOUNDATION_EXPORT void WebInspectorNativeDeliverFrontendMessageForTesting(

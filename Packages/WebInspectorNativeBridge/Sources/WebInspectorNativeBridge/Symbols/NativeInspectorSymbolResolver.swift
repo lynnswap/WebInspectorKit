@@ -15,7 +15,6 @@ enum NativeInspectorSymbolResolver {
     static func resolveForTesting(
         imagePathSuffixes: [String] = NativeInspectorSymbolResolverCore.webKitImagePathSuffixes,
         javaScriptCorePathSuffixes: [String] = NativeInspectorSymbolResolverCore.javaScriptCoreImagePathSuffixes,
-        webCorePathSuffixes: [String] = NativeInspectorSymbolResolverCore.webCoreImagePathSuffixes,
         allowSharedCacheFallback: Bool = true,
         symbols: NativeInspectorSymbols = NativeInspectorSymbolResolverCore.currentSymbolQueries()
     ) -> NativeInspectorSymbolResolution {
@@ -23,7 +22,6 @@ enum NativeInspectorSymbolResolver {
             from: NativeInspectorSymbolResolverCore.resolveForTesting(
                 imagePathSuffixes: imagePathSuffixes,
                 javaScriptCorePathSuffixes: javaScriptCorePathSuffixes,
-                webCorePathSuffixes: webCorePathSuffixes,
                 allowSharedCacheFallback: allowSharedCacheFallback,
                 symbols: symbols
             )
@@ -63,31 +61,11 @@ enum NativeInspectorSymbolResolver {
 
     static func imagePathSuffixesForTesting() -> (
         webKit: [String],
-        javaScriptCore: [String],
-        webCore: [String]
+        javaScriptCore: [String]
     ) {
         (
             webKit: NativeInspectorSymbolResolverCore.webKitImagePathSuffixes,
             javaScriptCore: NativeInspectorSymbolResolverCore.javaScriptCoreImagePathSuffixes,
-            webCore: NativeInspectorSymbolResolverCore.webCoreImagePathSuffixes
-        )
-    }
-
-    @unsafe static func uniqueFunctionStartContainingCallTargetsForTesting(
-        architecture: String,
-        textBaseAddress: UInt64,
-        textPointer: UnsafePointer<UInt8>,
-        textSize: Int,
-        functionStartAddresses: [UInt64],
-        callTargetAddresses: Set<UInt64>
-    ) -> UInt64? {
-        unsafe NativeInspectorSymbolResolverCore.uniqueFunctionStartContainingCallTargets(
-            architecture: architecture,
-            textBaseAddress: textBaseAddress,
-            textPointer: textPointer,
-            textSize: textSize,
-            functionStartAddresses: functionStartAddresses,
-            callTargetAddresses: callTargetAddresses
         )
     }
 
@@ -99,7 +77,6 @@ enum NativeInspectorSymbolResolver {
             phase: resolution.phase?.message,
             missingFunctions: resolution.missingFunctions,
             source: resolution.source,
-            usedConnectDisconnectFallback: resolution.usedConnectDisconnectFallback
         )
     }
 }
@@ -115,7 +92,6 @@ enum NativeInspectorSymbolResolver {
             phase: nil,
             missingFunctions: [],
             source: nil,
-            usedConnectDisconnectFallback: false
         )
     }
 
@@ -126,7 +102,6 @@ enum NativeInspectorSymbolResolver {
     static func resolveForTesting(
         imagePathSuffixes: [String] = [],
         javaScriptCorePathSuffixes: [String] = [],
-        webCorePathSuffixes: [String] = [],
         allowSharedCacheFallback: Bool = true
     ) -> NativeInspectorSymbolResolution {
         return resolveCurrent()

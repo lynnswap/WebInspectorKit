@@ -77,19 +77,20 @@ extension NativeInspectorSymbolResolverCore {
                     offset: symbol.offset,
                     imageBaseAddress: imageBaseAddress,
                     text: text,
+                    policy: targets[targetIndex].symbol.resolutionPolicy,
                     bucket: &buckets[targetIndex]
                 )
             }
         }
 
-        for symbol in image.exportedSymbols where buckets.contains(where: \.needsTextCandidateScan) {
+        for symbol in image.exportedSymbols where buckets.contains(where: \.needsCandidateScan) {
             guard let offset = symbol.offset else {
                 continue
             }
             var cachedDecodedName: NativeInspectorSymbolName.Decoded?
 
             for targetIndex in targets.indices {
-                guard buckets[targetIndex].needsTextCandidateScan,
+                guard buckets[targetIndex].needsCandidateScan,
                       targets[targetIndex].symbol.mayMatch(rawSymbolName: symbol.name) else {
                     continue
                 }
@@ -112,6 +113,7 @@ extension NativeInspectorSymbolResolverCore {
                     offset: offset,
                     imageBaseAddress: imageBaseAddress,
                     text: text,
+                    policy: targets[targetIndex].symbol.resolutionPolicy,
                     bucket: &buckets[targetIndex]
                 )
             }
@@ -129,24 +131,45 @@ extension NativeInspectorSymbolResolverCore {
         offset: Int,
         imageBaseAddress: UInt64,
         text: SegmentCommand64,
+        policy: NativeInspectorSymbolResolutionPolicy,
         bucket: inout NativeInspectorResolvedSymbolBucket
     ) {
-        guard loadedImageSymbolOffsetIsUsable(offset, textVirtualMemorySize: UInt64(text.virtualMemorySize)) else {
-            if offset > 0, bucket.outsideTextAddress == nil {
-                bucket.outsideTextAddress = imageBaseAddress + UInt64(offset)
-            }
-            return
-        }
+        guard offset > 0 else { return }
+        let address = imageBaseAddress + UInt64(offset)
+        recordSymbol(address: address,
+                     inCode: loadedImageSymbolOffsetIsUsable(offset, textVirtualMemorySize: UInt64(text.virtualMemorySize)),
+                     policy: policy, bucket: &bucket)
+    }
 
-        let unsignedOffset = UInt64(offset)
-        let address = imageBaseAddress + unsignedOffset
-        guard unsignedOffset < UInt64(text.virtualMemorySize) else {
-            if bucket.outsideTextAddress == nil {
-                bucket.outsideTextAddress = address
-            }
-            return
+    static func recordSymbol(address: UInt64, inCode: Bool, policy: NativeInspectorSymbolResolutionPolicy,
+                             bucket: inout NativeInspectorResolvedSymbolBucket) {
+        let valid: Bool
+        switch policy {
+        case .requiredTextSymbol:
+            valid = inCode
+        case .requiredDataSymbol:
+            valid = isVTableAddress(address)
         }
-        bucket.insertCandidate(address)
+        if valid {
+            bucket.insertCandidate(address)
+        } else if bucket.outsideSectionAddress == nil {
+            bucket.outsideSectionAddress = address
+        }
+    }
+
+    static func isVTableAddress(_ address: UInt64) -> Bool {
+        guard let image = unsafe MachOKitSymbolLookup.image(containingAddress: address),
+              let text = textSegment(in: image) else { return false }
+        let base = unsafe UInt64(UInt(bitPattern: image.ptr))
+        guard base >= UInt64(text.virtualMemoryAddress) else { return false }
+        let slide = base - UInt64(text.virtualMemoryAddress)
+        return image.sections64.contains { section in
+            guard section.sectionName == "__const",
+                  section.segmentName.hasPrefix("__DATA") || section.segmentName.hasPrefix("__AUTH"),
+                  section.address >= 0, section.size >= 3 * MemoryLayout<UInt>.size else { return false }
+            let start = UInt64(section.address) + slide
+            return address >= start && address - start <= UInt64(section.size - 3 * MemoryLayout<UInt>.size)
+        }
     }
 
     static func loadedImageSymbolOffsetIsUsable(

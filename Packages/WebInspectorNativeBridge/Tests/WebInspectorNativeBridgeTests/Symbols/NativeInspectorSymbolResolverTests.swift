@@ -61,7 +61,8 @@ struct NativeInspectorSymbolResolverTests {
         #expect(resolution.addresses.isComplete)
         #expect(resolution.isSupported)
         #expect(resolution.source == "loaded-image")
-        #expect(!resolution.usedConnectDisconnectFallback)
+        #expect(NativeInspectorSymbolResolverCore.isVTableAddress(resolution.debuggableVTableAddress))
+        #expect(!NativeInspectorSymbolResolverCore.isVTableAddress(resolution.connectFrontendAddress))
     }
 
     @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason))
@@ -159,7 +160,7 @@ struct NativeInspectorSymbolResolverTests {
     ])
     func connectQueryMatchesParameterTypesOrderAndCount(_ parameters: String, _ expected: Bool) {
         let symbol = NativeInspectorSymbolResolverCore.currentSymbolQueries().connectFrontend
-        let name = "__ZN6WebKit26WebPageInspectorController15connectFrontendE" + parameters
+        let name = "__ZN6WebKit17WebPageDebuggable7connectE" + parameters
 
         #expect(symbol.matches(symbolName: name) == expected)
         name.withCString { nameC in
@@ -211,6 +212,14 @@ struct NativeInspectorSymbolResolverTests {
 
         #expect(symbol.matches(symbolName: "__ZN3WTF10StringImpl5derefEv"))
         #expect(!symbol.matches(symbolName: "__ZN3WTF10StringImpl7destroyEPS0_"))
+    }
+
+    @Test
+    func targetIdentityQueryDistinguishesVTableFromOtherMetadata() {
+        let symbol = NativeInspectorSymbolResolverCore.currentSymbolQueries().debuggableVTable
+        #expect(symbol.matches(symbolName: "__ZTVN6WebKit17WebPageDebuggableE"))
+        #expect(!symbol.matches(symbolName: "__ZTIN6WebKit17WebPageDebuggableE"))
+        #expect(!symbol.matches(symbolName: "__ZTVN6WebKit26WebPageInspectorControllerE"))
     }
 
     @Test
@@ -275,16 +284,14 @@ struct NativeInspectorSymbolResolverTests {
         #expect(
             NativeInspectorSymbolResolverCore.sharedCacheSourceDescription(
                 base: "full-cache",
-                usedConnectDisconnectFallback: false,
                 usedRuntimeFallback: false
             ) == "full-cache"
         )
         #expect(
             NativeInspectorSymbolResolverCore.sharedCacheSourceDescription(
                 base: "full-cache-file",
-                usedConnectDisconnectFallback: true,
                 usedRuntimeFallback: true
-            ) == "full-cache-file+text-scan+loaded-image-runtime"
+            ) == "full-cache-file+loaded-image-runtime"
         )
     }
 
@@ -297,7 +304,6 @@ struct NativeInspectorSymbolResolverTests {
             phase: .sharedCache,
             missingFunctions: [],
             source: "shared-cache",
-            usedConnectDisconnectFallback: false
         )
         let fullCacheSuccess = NativeInspectorSymbolLookupResult(
             functionAddresses: completeNativeInspectorSymbolAddresses,
@@ -306,7 +312,6 @@ struct NativeInspectorSymbolResolverTests {
             phase: .fullCache,
             missingFunctions: [],
             source: "full-cache",
-            usedConnectDisconnectFallback: false
         )
 
         let merged = NativeInspectorSymbolResolverCore.mergedResolution(
@@ -332,10 +337,7 @@ struct NativeInspectorSymbolResolverTests {
             "/System/Library/Frameworks/JavaScriptCore.framework/JavaScriptCore",
             "/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/JavaScriptCore",
         ])
-        #expect(suffixes.webCore == [
-            "/System/Library/PrivateFrameworks/WebCore.framework/WebCore",
-            "/System/Library/PrivateFrameworks/WebCore.framework/Versions/A/WebCore",
-        ])
+
     }
 
     @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason))
@@ -362,69 +364,7 @@ struct NativeInspectorSymbolResolverTests {
         )
     }
 
-#if arch(arm64) || arch(arm64e)
-    @Test
-    func fallbackCallTargetScannerReturnsUniqueFunctionStart() {
-        let textBaseAddress: UInt64 = 0x1000
-        let functionStarts: [UInt64] = [textBaseAddress, textBaseAddress + 0x10]
-        let targetAddress: UInt64 = textBaseAddress + 0x40
-        let words: [UInt32] = [
-            0xD503201F,
-            encodeARM64BL(from: textBaseAddress + 4, to: targetAddress),
-            0xD503201F,
-            0xD65F03C0,
-            0xD503201F,
-            0xD503201F,
-            0xD503201F,
-            0xD65F03C0,
-        ]
-        let bytes = arm64TextBytes(from: words)
 
-        let functionStart = unsafe bytes.withUnsafeBufferPointer { rawBytes in
-            unsafe NativeInspectorSymbolResolver.uniqueFunctionStartContainingCallTargetsForTesting(
-                architecture: "arm64",
-                textBaseAddress: textBaseAddress,
-                textPointer: rawBytes.baseAddress!,
-                textSize: bytes.count,
-                functionStartAddresses: functionStarts,
-                callTargetAddresses: [targetAddress]
-            )
-        }
-
-        #expect(functionStart == textBaseAddress)
-    }
-
-    @Test
-    func fallbackCallTargetScannerRejectsAmbiguousFunctions() {
-        let textBaseAddress: UInt64 = 0x2000
-        let functionStarts: [UInt64] = [textBaseAddress, textBaseAddress + 0x10]
-        let targetAddress: UInt64 = textBaseAddress + 0x40
-        let words: [UInt32] = [
-            encodeARM64BL(from: textBaseAddress, to: targetAddress),
-            0xD503201F,
-            0xD503201F,
-            0xD65F03C0,
-            encodeARM64BL(from: textBaseAddress + 0x10, to: targetAddress),
-            0xD503201F,
-            0xD503201F,
-            0xD65F03C0,
-        ]
-        let bytes = arm64TextBytes(from: words)
-
-        let functionStart = unsafe bytes.withUnsafeBufferPointer { rawBytes in
-            unsafe NativeInspectorSymbolResolver.uniqueFunctionStartContainingCallTargetsForTesting(
-                architecture: "arm64",
-                textBaseAddress: textBaseAddress,
-                textPointer: rawBytes.baseAddress!,
-                textSize: bytes.count,
-                functionStartAddresses: functionStarts,
-                callTargetAddresses: [targetAddress]
-            )
-        }
-
-        #expect(functionStart == nil)
-    }
-#endif
 
     @Test
     func diagnosticsDoNotExposeDecodedMangledSymbols() throws {
@@ -461,7 +401,6 @@ struct NativeInspectorSymbolResolverTests {
     func fullCacheFallbackDiagnosticsRemainRedacted() {
         let source = NativeInspectorSymbolResolverCore.sharedCacheSourceDescription(
             base: "full-cache-file",
-            usedConnectDisconnectFallback: true,
             usedRuntimeFallback: true
         )
         let reason = NativeInspectorSymbolResolverCore.formattedFailureReason(
@@ -470,13 +409,11 @@ struct NativeInspectorSymbolResolverTests {
             phase: .fullCacheFile,
             source: source,
             missingFunctions: ["connectFrontend", "stringFromUTF8"],
-            usedConnectDisconnectFallback: true
         )
 
         #expect(reason.contains("phase=full-cache-file"))
-        #expect(reason.contains("source=full-cache-file+text-scan+loaded-image-runtime"))
+        #expect(reason.contains("source=full-cache-file+loaded-image-runtime"))
         #expect(reason.contains("missing=connectFrontend,stringFromUTF8"))
-        #expect(reason.contains("textScanFallback=true"))
         #expect(!reason.contains("__ZN"))
         #expect(!reason.contains("_ZN"))
         #expect(!reason.contains("WTF"))
@@ -491,7 +428,8 @@ private let completeNativeInspectorSymbolAddresses = NativeInspectorSymbolAddres
     stringFromUTF8Address: 0x2_0000,
     stringImplToNSStringAddress: 0x2_0100,
     derefStringImplAddress: 0x2_0200,
-    backendDispatcherDispatchAddress: 0x1_0200
+    dispatchMessageFromRemoteAddress: 0x1_0200,
+    debuggableVTableAddress: 0x1_0300
 )
 
 private struct NativeSymbolFixture {
@@ -533,7 +471,6 @@ private extension NativeInspectorSymbolResolver {
         return resolveForTesting(
             imagePathSuffixes: fixture.pathSuffixes,
             javaScriptCorePathSuffixes: fixture.pathSuffixes,
-            webCorePathSuffixes: fixture.pathSuffixes,
             allowSharedCacheFallback: allowSharedCacheFallback,
             symbols: symbols
         )
@@ -544,22 +481,20 @@ private extension NativeInspectorSymbols {
     func replacing(
         connectFrontend: NativeInspectorRequiredSymbol? = nil,
         disconnectFrontend: NativeInspectorRequiredSymbol? = nil,
-        inspectorControllerConnectTargets: NativeInspectorRequiredSymbol? = nil,
-        inspectorControllerDisconnectTargets: NativeInspectorRequiredSymbol? = nil,
+        debuggableVTable: NativeInspectorRequiredSymbol? = nil,
         stringFromUTF8: NativeInspectorRequiredSymbol? = nil,
         stringImplToNSString: NativeInspectorRequiredSymbol? = nil,
         derefStringImpl: NativeInspectorRequiredSymbol? = nil,
-        backendDispatcherDispatch: NativeInspectorRequiredSymbol? = nil
+        dispatchMessageFromRemote: NativeInspectorRequiredSymbol? = nil
     ) -> NativeInspectorSymbols {
         NativeInspectorSymbols(
             connectFrontend: connectFrontend ?? self.connectFrontend,
             disconnectFrontend: disconnectFrontend ?? self.disconnectFrontend,
-            inspectorControllerConnectTargets: inspectorControllerConnectTargets ?? self.inspectorControllerConnectTargets,
-            inspectorControllerDisconnectTargets: inspectorControllerDisconnectTargets ?? self.inspectorControllerDisconnectTargets,
+            debuggableVTable: debuggableVTable ?? self.debuggableVTable,
             stringFromUTF8: stringFromUTF8 ?? self.stringFromUTF8,
             stringImplToNSString: stringImplToNSString ?? self.stringImplToNSString,
             derefStringImpl: derefStringImpl ?? self.derefStringImpl,
-            backendDispatcherDispatch: backendDispatcherDispatch ?? self.backendDispatcherDispatch
+            dispatchMessageFromRemote: dispatchMessageFromRemote ?? self.dispatchMessageFromRemote
         )
     }
 }
@@ -589,24 +524,4 @@ private func withWebKitLoaded<T>(_ body: () throws -> T) rethrows -> T {
     }
 }
 
-#if arch(arm64) || arch(arm64e)
-private func encodeARM64BL(from instructionAddress: UInt64, to targetAddress: UInt64) -> UInt32 {
-    let delta = Int64(targetAddress) - Int64(instructionAddress)
-    let immediate = UInt32(bitPattern: Int32(delta >> 2)) & 0x03FF_FFFF
-    return 0x9400_0000 | immediate
-}
-
-private func arm64TextBytes(from words: [UInt32]) -> [UInt8] {
-    var bytes: [UInt8] = []
-    bytes.reserveCapacity(words.count * MemoryLayout<UInt32>.size)
-    for word in words {
-        let encoded = word.littleEndian
-        bytes.append(UInt8(truncatingIfNeeded: encoded))
-        bytes.append(UInt8(truncatingIfNeeded: encoded >> 8))
-        bytes.append(UInt8(truncatingIfNeeded: encoded >> 16))
-        bytes.append(UInt8(truncatingIfNeeded: encoded >> 24))
-    }
-    return bytes
-}
-#endif
 #endif

@@ -1,98 +1,38 @@
 #if os(iOS) || os(macOS)
 import Testing
 import WebKit
+import WebInspectorNativeBridgeObjC
 @testable import WebInspectorNativeBridge
 
 struct WebInspectorNativeBridgeTests {
-    @Test
-    func cachedOffsetResolvesImmediately() {
-        let result = NativeInspectorBridgeTesting.runControllerDiscoveryScenario(
-            pageAllocationSize: 0x1000,
-            cachedOffset: 0x580,
-            primaryControllerOffset: 0x580,
-            secondaryControllerOffset: -1
-        )
-
-        #expect(result.found)
-        #expect(result.resolvedOffset == 0x580)
-        #expect(result.attemptedOffsetCount == 1)
-        #expect(result.validCandidateCount == 1)
-        #expect(result.usedFallbackRange == false)
+    @Test(arguments: [0, 0x580, 0x1300])
+    func findsTargetAtAnyOffset(_ offset: Int) {
+        let result = WebInspectorNativeRunTargetDiscoveryForTesting(0x1800, -1, offset, -1, false)
+        #expect(result.found.boolValue)
+        #expect(result.offset == offset)
     }
 
     @Test
-    func fullScanFindsUniqueControllerWhenKnownOffsetsMiss() {
-        let result = NativeInspectorBridgeTesting.runControllerDiscoveryScenario(
-            pageAllocationSize: 0x1000,
-            cachedOffset: -1,
-            primaryControllerOffset: 0x540,
-            secondaryControllerOffset: -1
-        )
-
-        #expect(result.found)
-        #expect(result.resolvedOffset == 0x540)
-        #expect(result.validCandidateCount == 1)
-        #expect(result.attemptedOffsetCount > 9)
-        #expect(result.scannedByteCount == 0x1000)
+    func invalidCachedOffsetFallsBackToTargetDiscovery() {
+        let result = WebInspectorNativeRunTargetDiscoveryForTesting(0x1000, 0x10000, 0x580, -1, false)
+        #expect(result.found.boolValue)
+        #expect(result.offset == 0x580)
     }
 
     @Test
-    func multipleCandidatesFailResolution() {
-        let result = NativeInspectorBridgeTesting.runControllerDiscoveryScenario(
-            pageAllocationSize: 0x1000,
-            cachedOffset: -1,
-            primaryControllerOffset: 0x540,
-            secondaryControllerOffset: 0x5A0
-        )
-
-        #expect(result.found == false)
-        #expect(result.resolvedOffset == -1)
-        #expect(result.validCandidateCount == 2)
+    func differentTargetsAreAmbiguousButAliasesAreNot() {
+        let different = WebInspectorNativeRunTargetDiscoveryForTesting(0x1000, -1, 0x580, 0x600, false)
+        #expect(!different.found.boolValue)
+        #expect(different.matches == 2)
+        let aliases = WebInspectorNativeRunTargetDiscoveryForTesting(0x1000, -1, 0x580, 0x600, true)
+        #expect(aliases.found.boolValue)
+        #expect(aliases.matches == 1)
     }
 
-    @Test
-    func invalidControllerShapeCandidatesDoNotBlockResolution() {
-        let result = NativeInspectorBridgeTesting.runControllerDiscoveryScenarioWithInvalidCandidates(
-            pageAllocationSize: 0x1000,
-            cachedOffset: -1,
-            primaryControllerOffset: 0x540,
-            invalidControllerOffset: 0x580,
-            secondaryInvalidControllerOffset: 0x5A0
-        )
-
-        #expect(result.found)
-        #expect(result.resolvedOffset == 0x540)
-        #expect(result.validCandidateCount == 1)
-    }
-
-    @Test
-    func invalidCachedOffsetFallsBackToValidController() {
-        let result = NativeInspectorBridgeTesting.runControllerDiscoveryScenarioWithInvalidCandidates(
-            pageAllocationSize: 0x1000,
-            cachedOffset: 0x580,
-            primaryControllerOffset: 0x540,
-            invalidControllerOffset: 0x580,
-            secondaryInvalidControllerOffset: -1
-        )
-
-        #expect(result.found)
-        #expect(result.resolvedOffset == 0x540)
-        #expect(result.validCandidateCount == 1)
-    }
-
-    @Test
-    func zeroAllocationSizeUsesFallbackRange() {
-        let result = NativeInspectorBridgeTesting.runControllerDiscoveryScenario(
-            pageAllocationSize: 0,
-            cachedOffset: -1,
-            primaryControllerOffset: 0x540,
-            secondaryControllerOffset: -1
-        )
-
-        #expect(result.found)
-        #expect(result.resolvedOffset == 0x540)
-        #expect(result.usedFallbackRange)
-        #expect(result.scannedByteCount == 0x1000)
+    @Test(arguments: [0, 7, 0x1000])
+    func missingTargetsAreUnavailable(_ bytes: Int) {
+        let result = WebInspectorNativeRunTargetDiscoveryForTesting(UInt(bytes), -1, -1, -1, false)
+        #expect(!result.found.boolValue)
     }
 
     @MainActor

@@ -49,7 +49,7 @@ namespace WebInspectorNativeABI {
 
 using StringImplToNSStringFn = NSString *(*)(void *);
 using DerefStringImplFn = void (*)(void *);
-using BackendDispatcherDispatchFn = void (*)(void *, const WTF::String&);
+using DispatchMessageFromRemoteFn = void (*)(void *, WTF::String&&);
 
 inline NSString *copyNSString(const WTF::String& string, uintptr_t stringImplToNSStringAddress)
 {
@@ -135,7 +135,7 @@ public:
     ConstructedString(const ConstructedString&) = delete;
     ConstructedString& operator=(const ConstructedString&) = delete;
 
-    const WTF::String& get() const
+    WTF::String& get()
     {
         return m_string;
     }
@@ -145,17 +145,17 @@ private:
     uintptr_t m_derefStringImplAddress { 0 };
 };
 
-inline void dispatchToBackendDispatcher(
-    void *backendDispatcher,
-    const WTF::String& string,
-    uintptr_t backendDispatcherDispatchAddress
+inline void dispatchToRemoteTarget(
+    void *target,
+    WTF::String& string,
+    uintptr_t dispatchMessageFromRemoteAddress
 )
 {
-    if (!backendDispatcher || !backendDispatcherDispatchAddress)
+    if (!target || !dispatchMessageFromRemoteAddress)
         return;
 
-    auto *dispatch = reinterpret_cast<BackendDispatcherDispatchFn>(backendDispatcherDispatchAddress);
-    dispatch(backendDispatcher, string);
+    auto *dispatch = reinterpret_cast<DispatchMessageFromRemoteFn>(dispatchMessageFromRemoteAddress);
+    dispatch(target, static_cast<WTF::String&&>(string));
 }
 
 } // namespace WebInspectorNativeABI

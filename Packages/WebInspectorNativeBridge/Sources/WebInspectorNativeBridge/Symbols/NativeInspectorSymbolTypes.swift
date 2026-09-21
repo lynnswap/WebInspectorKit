@@ -10,7 +10,7 @@ enum NativeInspectorSymbolFailure {
     case localSymbolEntryMissing
     case connectDisconnectSymbolMissing
     case runtimeFunctionSymbolMissing
-    case resolvedAddressOutsideText
+    case resolvedAddressOutsideSection
     case resolvedAddressImageMismatch
     case ambiguousSymbolMatch
 
@@ -30,7 +30,7 @@ enum NativeInspectorSymbolFailure {
             return "attach entry point unavailable"
         case .runtimeFunctionSymbolMissing:
             return "runtime helper unavailable"
-        case .resolvedAddressOutsideText:
+        case .resolvedAddressOutsideSection:
             return "resolved address invalid"
         case .resolvedAddressImageMismatch:
             return "resolved address image mismatch"
@@ -84,7 +84,7 @@ struct NativeInspectorSymbolLookupFailure: Error {
 enum ResolvedNativeInspectorAddress {
     case found(UInt64)
     case missing
-    case outsideText(UInt64)
+    case outsideSection(UInt64)
     case ambiguous
 
     var isFound: Bool {
@@ -102,7 +102,6 @@ struct NativeInspectorSymbolLookupResult: Sendable {
     let phase: NativeInspectorSymbolResolutionPhase?
     let missingFunctions: [String]
     let source: String?
-    let usedConnectDisconnectFallback: Bool
 }
 
 enum NativeInspectorSymbolRole: String, Hashable, Sendable {
@@ -111,20 +110,18 @@ enum NativeInspectorSymbolRole: String, Hashable, Sendable {
     case stringFromUTF8
     case stringImplToNSString
     case derefStringImpl
-    case backendDispatcherDispatch
-    case inspectorControllerConnectTarget
-    case inspectorControllerDisconnectTarget
+    case dispatchMessageFromRemote
+    case debuggableVTable
 }
 
 enum NativeInspectorSymbolOwnerImage: Sendable {
     case webKit
     case javaScriptCore
-    case webCore
 }
 
 enum NativeInspectorSymbolResolutionPolicy: Sendable {
     case requiredTextSymbol
-    case fallbackCallTarget
+    case requiredDataSymbol
 }
 
 struct NativeInspectorRequiredSymbol: Sendable {
@@ -166,6 +163,11 @@ struct NativeInspectorSymbolQuery: Sendable {
         )
     }
 
+    init(vtableFor typeName: String) {
+        self.rawNameNeedles = NativeInspectorSymbolName.rawNameNeedles(for: typeName)
+        self.functionSignature = NativeInspectorSymbolName.cxxSignatureKey("vtable for \(typeName)")
+    }
+
     func matches(decodedName: NativeInspectorSymbolName.Decoded) -> Bool {
         decodedName.cxxFunctionSignature == functionSignature
     }
@@ -184,12 +186,11 @@ struct NativeInspectorSymbolQuery: Sendable {
 struct NativeInspectorSymbols {
     let connectFrontend: NativeInspectorRequiredSymbol
     let disconnectFrontend: NativeInspectorRequiredSymbol
-    let inspectorControllerConnectTargets: NativeInspectorRequiredSymbol
-    let inspectorControllerDisconnectTargets: NativeInspectorRequiredSymbol
+    let debuggableVTable: NativeInspectorRequiredSymbol
     let stringFromUTF8: NativeInspectorRequiredSymbol
     let stringImplToNSString: NativeInspectorRequiredSymbol
     let derefStringImpl: NativeInspectorRequiredSymbol
-    let backendDispatcherDispatch: NativeInspectorRequiredSymbol
+    let dispatchMessageFromRemote: NativeInspectorRequiredSymbol
 }
 
 struct NativeInspectorResolvedSymbolSet {
@@ -198,7 +199,8 @@ struct NativeInspectorResolvedSymbolSet {
     let stringFromUTF8: ResolvedNativeInspectorAddress
     let stringImplToNSString: ResolvedNativeInspectorAddress
     let derefStringImpl: ResolvedNativeInspectorAddress
-    let backendDispatcherDispatch: ResolvedNativeInspectorAddress
+    let dispatchMessageFromRemote: ResolvedNativeInspectorAddress
+    let debuggableVTable: ResolvedNativeInspectorAddress
 
     func address(for role: NativeInspectorSymbolRole) -> ResolvedNativeInspectorAddress {
         switch role {
@@ -212,16 +214,12 @@ struct NativeInspectorResolvedSymbolSet {
             stringImplToNSString
         case .derefStringImpl:
             derefStringImpl
-        case .backendDispatcherDispatch:
-            backendDispatcherDispatch
-        case .inspectorControllerConnectTarget, .inspectorControllerDisconnectTarget:
-            .missing
+        case .dispatchMessageFromRemote:
+            dispatchMessageFromRemote
+        case .debuggableVTable:
+            debuggableVTable
         }
     }
 }
 
-struct NativeInspectorAttachEntryPointFallbackResult {
-    let symbols: NativeInspectorResolvedSymbolSet
-    let usedFallback: Bool
-}
 #endif
