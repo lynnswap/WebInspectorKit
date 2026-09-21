@@ -12,7 +12,7 @@ extension NativeInspectorSymbolResolverCore {
             ("disconnectFrontend", resolvedSymbols.disconnectFrontend),
             ("stringFromUTF8", resolvedSymbols.stringFromUTF8),
             ("stringImplToNSString", resolvedSymbols.stringImplToNSString),
-            ("destroyStringImpl", resolvedSymbols.destroyStringImpl),
+            ("derefStringImpl", resolvedSymbols.derefStringImpl),
             ("backendDispatcherDispatch", resolvedSymbols.backendDispatcherDispatch),
         ]
         return symbolResults.compactMap { name, result in

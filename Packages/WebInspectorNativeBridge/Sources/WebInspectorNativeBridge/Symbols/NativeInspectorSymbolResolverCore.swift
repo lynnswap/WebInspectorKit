@@ -175,13 +175,13 @@ enum NativeInspectorSymbolResolverCore {
                 ],
                 resolutionPolicy: .requiredTextSymbol
             ),
-            destroyStringImpl: NativeInspectorRequiredSymbol(
-                role: .destroyStringImpl,
-                ownerImage: .javaScriptCore,
+            derefStringImpl: NativeInspectorRequiredSymbol(
+                role: .derefStringImpl,
+                ownerImage: .webKit,
                 queries: [
                     query(requiredNameParts: [
-                        // WTF::StringImpl::destroy
-                        [0xF0, 0xF3, 0xE1, 0x9D, 0x9D, 0xF4, 0xD3, 0xD5, 0xCE, 0xC9, 0xC0, 0xEE, 0xCA, 0xD7, 0xCB, 0x9D, 0x9D, 0xC3, 0xC2, 0xD4, 0xD3, 0xD5, 0xC8, 0xDE],
+                        // WTF::StringImpl::deref
+                        [0xF0, 0xF3, 0xE1, 0x9D, 0x9D, 0xF4, 0xD3, 0xD5, 0xCE, 0xC9, 0xC0, 0xEE, 0xCA, 0xD7, 0xCB, 0x9D, 0x9D, 0xC3, 0xC2, 0xD5, 0xC2, 0xC1],
                     ])
                 ],
                 resolutionPolicy: .requiredTextSymbol

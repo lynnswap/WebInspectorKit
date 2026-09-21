@@ -34,6 +34,7 @@ extension NativeInspectorSymbolResolverCore {
             matching: [
                 NativeInspectorSymbolMatchTarget(role: .connectFrontend, symbol: symbols.connectFrontend),
                 NativeInspectorSymbolMatchTarget(role: .disconnectFrontend, symbol: symbols.disconnectFrontend),
+                NativeInspectorSymbolMatchTarget(role: .derefStringImpl, symbol: symbols.derefStringImpl),
                 NativeInspectorSymbolMatchTarget(role: .backendDispatcherDispatch, symbol: symbols.backendDispatcherDispatch),
             ],
             in: image,
@@ -43,7 +44,7 @@ extension NativeInspectorSymbolResolverCore {
             matching: [
                 NativeInspectorSymbolMatchTarget(role: .stringFromUTF8, symbol: symbols.stringFromUTF8),
                 NativeInspectorSymbolMatchTarget(role: .stringImplToNSString, symbol: symbols.stringImplToNSString),
-                NativeInspectorSymbolMatchTarget(role: .destroyStringImpl, symbol: symbols.destroyStringImpl),
+                NativeInspectorSymbolMatchTarget(role: .derefStringImpl, symbol: symbols.derefStringImpl),
                 NativeInspectorSymbolMatchTarget(role: .backendDispatcherDispatch, symbol: symbols.backendDispatcherDispatch),
             ],
             in: javaScriptCoreImage,
@@ -54,7 +55,10 @@ extension NativeInspectorSymbolResolverCore {
             disconnectFrontend: loadedWebKitResults[.disconnectFrontend] ?? .missing,
             stringFromUTF8: loadedJavaScriptCoreResults[.stringFromUTF8] ?? .missing,
             stringImplToNSString: loadedJavaScriptCoreResults[.stringImplToNSString] ?? .missing,
-            destroyStringImpl: loadedJavaScriptCoreResults[.destroyStringImpl] ?? .missing,
+            derefStringImpl: preferredResolvedAddress(
+                loadedWebKitResults[.derefStringImpl] ?? .missing,
+                fallback: loadedJavaScriptCoreResults[.derefStringImpl] ?? .missing
+            ),
             backendDispatcherDispatch: preferredResolvedAddress(
                 loadedWebKitResults[.backendDispatcherDispatch] ?? .missing,
                 fallback: loadedJavaScriptCoreResults[.backendDispatcherDispatch] ?? .missing
@@ -213,9 +217,9 @@ extension NativeInspectorSymbolResolverCore {
                 resolvedSymbols.stringImplToNSString,
                 fallback: loadedImageSymbols.stringImplToNSString
             ),
-            destroyStringImpl: preferredResolvedAddress(
-                resolvedSymbols.destroyStringImpl,
-                fallback: loadedImageSymbols.destroyStringImpl
+            derefStringImpl: preferredResolvedAddress(
+                resolvedSymbols.derefStringImpl,
+                fallback: loadedImageSymbols.derefStringImpl
             ),
             backendDispatcherDispatch: preferredResolvedAddress(
                 resolvedSymbols.backendDispatcherDispatch,
@@ -231,7 +235,7 @@ extension NativeInspectorSymbolResolverCore {
         let symbolPairs: [(ResolvedNativeInspectorAddress, ResolvedNativeInspectorAddress)] = [
             (resolvedSymbols.stringFromUTF8, loadedImageSymbols.stringFromUTF8),
             (resolvedSymbols.stringImplToNSString, loadedImageSymbols.stringImplToNSString),
-            (resolvedSymbols.destroyStringImpl, loadedImageSymbols.destroyStringImpl),
+            (resolvedSymbols.derefStringImpl, loadedImageSymbols.derefStringImpl),
             (resolvedSymbols.backendDispatcherDispatch, loadedImageSymbols.backendDispatcherDispatch),
         ]
 

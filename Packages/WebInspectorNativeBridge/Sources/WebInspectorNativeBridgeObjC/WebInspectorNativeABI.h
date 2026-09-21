@@ -1,6 +1,5 @@
 #import <CoreFoundation/CoreFoundation.h>
 #import <Foundation/Foundation.h>
-#include <atomic>
 #include <cstdint>
 #include <span>
 
@@ -9,7 +8,7 @@ namespace WTF {
 class StringImpl;
 
 // Minimal ABI shim for the inspector probe. We only rely on String being a single
-// StringImpl pointer and construct/destroy it through exported JSC symbols.
+// StringImpl pointer and construct/release it through runtime entry points.
 class String {
 public:
     String() = default;
@@ -48,15 +47,8 @@ public:
 
 namespace WebInspectorNativeABI {
 
-struct StringImplRefCountHeader {
-    std::atomic<uint32_t> refCount;
-};
-
-static constexpr uint32_t stringImplStaticFlag = 0x1;
-static constexpr uint32_t stringImplRefCountIncrement = 0x2;
-
 using StringImplToNSStringFn = NSString *(*)(void *);
-using DestroyStringImplFn = void (*)(void *);
+using DerefStringImplFn = void (*)(void *);
 using BackendDispatcherDispatchFn = void (*)(void *, const WTF::String&);
 
 inline NSString *copyNSString(const WTF::String& string, uintptr_t stringImplToNSStringAddress)
@@ -118,34 +110,26 @@ inline void constructStringFromNSString(
     constructStringFromUTF8(storage, std::span<const char8_t>(bytes, utf8Data.length), stringFromUTF8Address);
 }
 
-inline void derefConstructedString(const WTF::String& string, uintptr_t destroyStringImplAddress)
+inline void derefConstructedString(const WTF::String& string, uintptr_t derefStringImplAddress)
 {
     if (!string.impl())
         return;
 
-    auto *header = reinterpret_cast<StringImplRefCountHeader *>(string.impl());
-    uint32_t currentRefCount = header->refCount.load(std::memory_order_relaxed);
-    if (currentRefCount & stringImplStaticFlag)
-        return;
-
-    uint32_t oldRefCount = header->refCount.fetch_sub(stringImplRefCountIncrement, std::memory_order_relaxed);
-    if (oldRefCount == stringImplRefCountIncrement && destroyStringImplAddress) {
-        auto *destroyStringImpl = reinterpret_cast<DestroyStringImplFn>(destroyStringImplAddress);
-        destroyStringImpl(string.impl());
-    }
+    auto *derefStringImpl = reinterpret_cast<DerefStringImplFn>(derefStringImplAddress);
+    derefStringImpl(string.impl());
 }
 
 class ConstructedString final {
 public:
-    ConstructedString(NSString *string, uintptr_t stringFromUTF8Address, uintptr_t destroyStringImplAddress)
-        : m_destroyStringImplAddress(destroyStringImplAddress)
+    ConstructedString(NSString *string, uintptr_t stringFromUTF8Address, uintptr_t derefStringImplAddress)
+        : m_derefStringImplAddress(derefStringImplAddress)
     {
         constructStringFromNSString(&m_string, string, stringFromUTF8Address);
     }
 
     ~ConstructedString()
     {
-        derefConstructedString(m_string, m_destroyStringImplAddress);
+        derefConstructedString(m_string, m_derefStringImplAddress);
     }
 
     ConstructedString(const ConstructedString&) = delete;
@@ -158,7 +142,7 @@ public:
 
 private:
     WTF::String m_string;
-    uintptr_t m_destroyStringImplAddress { 0 };
+    uintptr_t m_derefStringImplAddress { 0 };
 };
 
 inline void dispatchToBackendDispatcher(
