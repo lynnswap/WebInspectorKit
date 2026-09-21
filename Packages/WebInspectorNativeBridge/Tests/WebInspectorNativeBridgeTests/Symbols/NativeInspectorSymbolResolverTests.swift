@@ -4,6 +4,7 @@ import Foundation
 import Testing
 import WebKit
 import WebInspectorNativeSymbolFixtures
+import WebInspectorNativeBridgeObjC
 @testable import WebInspectorNativeBridge
 
 private let nativeRuntimeSmokeOptInEnvironmentKey = "WEBINSPECTORKIT_RUN_NATIVE_RUNTIME_SMOKE"
@@ -13,6 +14,17 @@ private let nativeRuntimeSmokeDisabledReason: Comment =
     "Native WebKit runtime smoke tests depend on the host WebKit dyld image and shared cache state; set WEBINSPECTORKIT_RUN_NATIVE_RUNTIME_SMOKE=1 to run them."
 
 struct NativeInspectorSymbolResolverTests {
+    @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason))
+    @MainActor
+    func nativeStringsPreserveUTF8AndEmptyValues() async throws {
+        let view = WKWebView(frame: .zero)
+        let symbols = try await NativeInspectorResolvedSymbols.resolveCurrentDetached()
+        for string in ["", "ASCII", "日本語 😀 e\u{301}", "before\0after", String(repeating: "🦋", count: 2_048)] {
+            #expect(WebInspectorNativeRoundTripStringForTesting(string, symbols.objcSymbols) == string)
+        }
+        withExtendedLifetime(view) { }
+    }
+
     @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason), .timeLimit(.minutes(1)))
     @MainActor
     func nativeFrontendExchangesProtocolMessages() async throws {

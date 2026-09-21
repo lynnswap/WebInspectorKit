@@ -37,9 +37,6 @@ using ConnectFrontendFn = void (*)(void *, Inspector::FrontendChannel&, bool, bo
 using DisconnectFrontendFn = void (*)(void *, Inspector::FrontendChannel&);
 
 static constexpr ptrdiff_t invalidTargetOffset = -1;
-// bmalloc allocations may not be visible to malloc_size. Keep the existing
-// bounded fallback for those pages; unreadable slots are skipped via Mach reads.
-static constexpr size_t fallbackTargetScanBytes = 0x1000;
 static std::atomic<ptrdiff_t> cachedTargetOffset { invalidTargetOffset };
 
 static NSString *const errorDomain = @"WebInspectorNativeBridge.Transport";
@@ -192,23 +189,44 @@ static BOOL safeReadPointer(const void *address, void **valueOut)
     return YES;
 }
 
-static ptrdiff_t ivarOffset(Class cls, NSString *name)
+struct PageStorage {
+    __strong id owner { nil };
+    void *page { nullptr };
+    size_t bytes { 0 };
+};
+
+static void *pointerResult(id target, SEL selector)
 {
-    Ivar ivar = class_getInstanceVariable(cls, name.UTF8String);
-    return ivar ? ivar_getOffset(ivar) : NSNotFound;
+    // WKObject is an NSProxy; use its concrete method rather than forwarding
+    // NSObject's methodForSelector: through the proxy.
+    Method method = class_getInstanceMethod(object_getClass(target), selector);
+    if (!method)
+        return nullptr;
+    using Getter = void *(*)(id, SEL);
+    auto getter = reinterpret_cast<Getter>(method_getImplementation(method));
+    return getter(target, selector);
 }
 
-static void *pageProxyPointer(WKWebView *webView)
+static PageStorage pageStorage(WKWebView *webView)
 {
-    // Original: _page
-    static const uint8_t encodedPageIvarName[] = { 0xF8, 0xD7, 0xC6, 0xC0, 0xC2 };
-    ptrdiff_t offset = ivarOffset(WKWebView.class, deobfuscateXORBytes(encodedPageIvarName, sizeof(encodedPageIvarName)));
-    if (offset == NSNotFound)
-        return nullptr;
+    // On Cocoa, WKPageRef is the Objective-C wrapper, whose _apiObject getter
+    // returns the C++ page in its indexed storage. Query both through WebKit so
+    // neither RefPtr storage nor the wrapper's alignment is replicated here.
+    // Original: _pageForTesting
+    const uint8_t pageName[] = { 0xF8, 0xD7, 0xC6, 0xC0, 0xC2, 0xE1, 0xC8, 0xD5, 0xF3, 0xC2, 0xD4, 0xD3, 0xCE, 0xC9, 0xC0 };
+    id owner = (__bridge id)pointerResult(webView, selectorFromXORBytes(pageName, sizeof(pageName)));
+    // Original: _apiObject
+    const uint8_t objectName[] = { 0xF8, 0xC6, 0xD7, 0xCE, 0xE8, 0xC5, 0xCD, 0xC2, 0xC4, 0xD3 };
+    void *page = pointerResult(owner, selectorFromXORBytes(objectName, sizeof(objectName)));
+    if (!page)
+        return { };
 
-    auto *storage = reinterpret_cast<uint8_t *>((__bridge void *)webView) + offset;
-    void *page = nullptr;
-    return safeReadPointer(storage, &page) ? page : nullptr;
+    const auto base = reinterpret_cast<uintptr_t>((__bridge void *)owner);
+    const auto address = reinterpret_cast<uintptr_t>(page);
+    const size_t allocationSize = malloc_size((__bridge const void *)owner);
+    if (address < base || address - base >= allocationSize)
+        return { };
+    return { owner, page, allocationSize - (address - base) };
 }
 
 struct TargetResolution {
@@ -275,16 +293,13 @@ static TargetResolution resolveTargetInPageProxy(void *page, size_t bytes, ptrdi
     return result;
 }
 
-static TargetResolution resolveTargetInPageProxy(void *page, ptrdiff_t cachedOffset, uint64_t vtableSymbol)
+static TargetResolution resolveTarget(const PageStorage& storage, ptrdiff_t cachedOffset, uint64_t vtableSymbol)
 {
-    if (!page || !vtableSymbol)
+    if (!vtableSymbol)
         return { };
-    size_t bytes = malloc_size(page);
-    if (!bytes)
-        bytes = fallbackTargetScanBytes;
     // WebPageDebuggable has a single nonvirtual inheritance chain. Its primary
     // Itanium vtable address point follows offset-to-top and typeinfo pointers.
-    return resolveTargetInPageProxy(page, bytes, cachedOffset, vtableSymbol + 2 * sizeof(void *));
+    return resolveTargetInPageProxy(storage.page, storage.bytes, cachedOffset, vtableSymbol + 2 * sizeof(void *));
 }
 
 } // namespace WebInspectorNativeBridgePrivate
@@ -640,11 +655,8 @@ private:
     if (!webView)
         return NO;
 
-    void *page = WebInspectorNativeBridgePrivate::pageProxyPointer(webView);
-    if (!page)
-        return NO;
-
-    auto resolution = WebInspectorNativeBridgePrivate::resolveTargetInPageProxy(page, _targetOffset, _resolvedSymbols.debuggableVTableAddress);
+    auto storage = WebInspectorNativeBridgePrivate::pageStorage(webView);
+    auto resolution = WebInspectorNativeBridgePrivate::resolveTarget(storage, _targetOffset, _resolvedSymbols.debuggableVTableAddress);
     return resolution.target == _target;
 }
 
@@ -775,12 +787,12 @@ private:
         sizeof(encodedInspectorSelectorName)
     );
     _inspector = WebInspectorNativeBridgePrivate::objectResult(self.webView, inspectorSelector);
-    void *page = WebInspectorNativeBridgePrivate::pageProxyPointer(self.webView);
+    auto storage = WebInspectorNativeBridgePrivate::pageStorage(retainedView);
     ptrdiff_t preferredCachedOffset = _targetOffset;
     if (preferredCachedOffset == WebInspectorNativeBridgePrivate::invalidTargetOffset)
         preferredCachedOffset = WebInspectorNativeBridgePrivate::cachedTargetOffset.load();
 
-    auto resolution = WebInspectorNativeBridgePrivate::resolveTargetInPageProxy(page, preferredCachedOffset, resolvedSymbols.debuggableVTableAddress);
+    auto resolution = WebInspectorNativeBridgePrivate::resolveTarget(storage, preferredCachedOffset, resolvedSymbols.debuggableVTableAddress);
     _target = resolution.target;
     _targetOffset = resolution.offset;
     if (_targetOffset != WebInspectorNativeBridgePrivate::invalidTargetOffset)
@@ -960,6 +972,12 @@ WebInspectorNativeTargetDiscoveryTestResult WebInspectorNativeRunTargetDiscovery
     vtable = WebInspectorNativeBridgePrivate::unsignedVTablePointer(vtable);
     auto result = WebInspectorNativeBridgePrivate::resolveTargetInPageProxy(page.data(), page.size(), cachedOffset, reinterpret_cast<uintptr_t>(vtable));
     return { !!result.target, result.offset, result.matches };
+}
+
+NSString *WebInspectorNativeRoundTripStringForTesting(NSString *string, WebInspectorNativeResolvedSymbols symbols)
+{
+    WebInspectorNativeABI::ConstructedString value(string, symbols.stringFromUTF8Address, symbols.derefStringImplAddress);
+    return WebInspectorNativeABI::copyNSString(value.get(), symbols.stringImplToNSStringAddress);
 }
 
 void WebInspectorNativeDeliverFrontendMessageForTesting(
