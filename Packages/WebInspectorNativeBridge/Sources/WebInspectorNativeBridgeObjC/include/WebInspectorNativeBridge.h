@@ -4,6 +4,8 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+FOUNDATION_EXPORT NSString * _Nullable WebInspectorNativeDemangleCXXSymbol(const char *name);
+
 typedef void (^WebInspectorNativeMessageHandler)(NSString *message);
 typedef void (^WebInspectorNativeFatalFailureHandler)(NSString *message);
 typedef void (^WebInspectorNativeWebContentProcessTerminationHandler)(void);

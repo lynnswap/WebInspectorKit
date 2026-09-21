@@ -14,6 +14,9 @@ namespace WTF {
 class String {
 public:
     WIK_FIXTURE_SYMBOL static String fromUTF8(std::span<const char8_t>);
+    WIK_FIXTURE_SYMBOL static String fromUTF8(std::span<const char8_t, 4>);
+    WIK_FIXTURE_SYMBOL static String fromUTF8(std::span<const char>);
+    WIK_FIXTURE_SYMBOL static String fromUTF8(std::span<const char8_t>, bool);
     WIK_FIXTURE_SYMBOL static String fromUTF8ReplacingInvalidSequences(std::span<const char8_t>);
     WIK_FIXTURE_SYMBOL static String fromUTF8WithLatin1Fallback(std::span<const char8_t>);
 };
@@ -23,6 +26,7 @@ public:
     WIK_FIXTURE_SYMBOL operator NSString*();
     WIK_FIXTURE_SYMBOL static void destroy(StringImpl*);
     WIK_FIXTURE_SYMBOL void deref();
+    WIK_FIXTURE_SYMBOL void deref(unsigned);
 };
 }
 
@@ -36,6 +40,10 @@ public:
 namespace WebKit {
 class WebPageInspectorController {
 public:
+    WIK_FIXTURE_SYMBOL void connectFrontend(Inspector::FrontendChannel&, bool);
+    WIK_FIXTURE_SYMBOL void connectFrontend(Inspector::FrontendChannel*, bool, bool);
+    WIK_FIXTURE_SYMBOL void connectFrontend(bool, Inspector::FrontendChannel&, bool);
+    WIK_FIXTURE_SYMBOL void connectFrontend(Inspector::FrontendChannel&, bool, int);
     WIK_FIXTURE_SYMBOL void connectFrontend(Inspector::FrontendChannel&, bool, bool);
     WIK_FIXTURE_SYMBOL void disconnectFrontend(Inspector::FrontendChannel&);
 };
@@ -58,6 +66,41 @@ public:
 WIK_FIXTURE_SYMBOL WTF::String WTF::String::fromUTF8(std::span<const char8_t>)
 {
     return { };
+}
+
+WIK_FIXTURE_SYMBOL WTF::String WTF::String::fromUTF8(std::span<const char8_t, 4>)
+{
+    return { };
+}
+
+WIK_FIXTURE_SYMBOL WTF::String WTF::String::fromUTF8(std::span<const char>)
+{
+    return { };
+}
+
+WIK_FIXTURE_SYMBOL WTF::String WTF::String::fromUTF8(std::span<const char8_t>, bool)
+{
+    return { };
+}
+
+WIK_FIXTURE_SYMBOL void WTF::StringImpl::deref(unsigned)
+{
+}
+
+WIK_FIXTURE_SYMBOL void WebKit::WebPageInspectorController::connectFrontend(Inspector::FrontendChannel&, bool)
+{
+}
+
+WIK_FIXTURE_SYMBOL void WebKit::WebPageInspectorController::connectFrontend(Inspector::FrontendChannel*, bool, bool)
+{
+}
+
+WIK_FIXTURE_SYMBOL void WebKit::WebPageInspectorController::connectFrontend(bool, Inspector::FrontendChannel&, bool)
+{
+}
+
+WIK_FIXTURE_SYMBOL void WebKit::WebPageInspectorController::connectFrontend(Inspector::FrontendChannel&, bool, int)
+{
 }
 
 WIK_FIXTURE_SYMBOL WTF::String WTF::String::fromUTF8ReplacingInvalidSequences(std::span<const char8_t>)
@@ -135,6 +178,15 @@ void WebInspectorNativeSymbolFixtureAnchor(void)
 
     webKitController.connectFrontend(frontendChannel, false, false);
     webKitController.disconnectFrontend(frontendChannel);
+    webKitController.connectFrontend(frontendChannel, false);
+    webKitController.connectFrontend(&frontendChannel, false, false);
+    webKitController.connectFrontend(false, frontendChannel, false);
+    webKitController.connectFrontend(frontendChannel, false, 0);
+    char8_t fixedCharacters[4] { };
+    (void)WTF::String::fromUTF8(std::span<const char8_t, 4>(fixedCharacters));
+    (void)WTF::String::fromUTF8(std::span<const char>());
+    (void)WTF::String::fromUTF8(std::span<const char8_t>(), false);
+    stringImpl.deref(1);
     (void)WTF::String::fromUTF8ReplacingInvalidSequences(std::span<const char8_t>());
     (void)WTF::String::fromUTF8WithLatin1Fallback(std::span<const char8_t>());
     (void)static_cast<NSString*>(stringImpl);
@@ -149,5 +201,6 @@ void WebInspectorNativeSymbolFixtureAnchor(void)
 
 uintptr_t WebInspectorNativeSymbolFixtureWTFStringFromUTF8Address(void)
 {
-    return reinterpret_cast<uintptr_t>(&WTF::String::fromUTF8);
+    using Factory = WTF::String (*)(std::span<const char8_t>);
+    return reinterpret_cast<uintptr_t>(static_cast<Factory>(&WTF::String::fromUTF8));
 }

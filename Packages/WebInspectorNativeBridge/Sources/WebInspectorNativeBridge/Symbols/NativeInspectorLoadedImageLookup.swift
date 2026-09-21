@@ -66,11 +66,10 @@ extension NativeInspectorSymbolResolverCore {
                 continue
             }
 
-            let symbolVariants = unsafe NativeInspectorSymbolName.variants(for: symbol.nameC)
+            let decodedName = unsafe NativeInspectorSymbolName.decode(symbol.nameC)
             for targetIndex in candidateTargetIndices {
-                guard unsafe targets[targetIndex].symbol.matches(
-                    cStringVariants: symbolVariants,
-                    checkingRawNameNeedle: false
+                guard targets[targetIndex].symbol.matches(
+                    decodedName: decodedName
                 ) else {
                     continue
                 }
@@ -87,7 +86,7 @@ extension NativeInspectorSymbolResolverCore {
             guard let offset = symbol.offset else {
                 continue
             }
-            var variants: NativeInspectorSymbolName.Variants?
+            var cachedDecodedName: NativeInspectorSymbolName.Decoded?
 
             for targetIndex in targets.indices {
                 guard buckets[targetIndex].needsTextCandidateScan,
@@ -95,18 +94,17 @@ extension NativeInspectorSymbolResolverCore {
                     continue
                 }
 
-                let symbolVariants: NativeInspectorSymbolName.Variants
-                if let variants {
-                    symbolVariants = variants
+                let decodedName: NativeInspectorSymbolName.Decoded
+                if let cachedDecodedName {
+                    decodedName = cachedDecodedName
                 } else {
-                    let resolvedVariants = NativeInspectorSymbolName.variants(for: symbol.name)
-                    variants = resolvedVariants
-                    symbolVariants = resolvedVariants
+                    let newDecodedName = NativeInspectorSymbolName.decode(symbol.name)
+                    cachedDecodedName = newDecodedName
+                    decodedName = newDecodedName
                 }
 
                 guard targets[targetIndex].symbol.matches(
-                    variants: symbolVariants,
-                    checkingRawNameNeedle: false
+                    decodedName: decodedName
                 ) else {
                     continue
                 }

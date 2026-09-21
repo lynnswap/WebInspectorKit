@@ -11,9 +11,23 @@
 #import <memory>
 #import <objc/runtime.h>
 #import <vector>
+#include <cstdlib>
+#include <cxxabi.h>
 #if __has_include(<ptrauth.h>)
 #import <ptrauth.h>
 #endif
+
+NSString *WebInspectorNativeDemangleCXXSymbol(const char *name)
+{
+    // Mach-O's symbol table adds an underscore to the Itanium external name.
+    if (name[0] == '_' && name[1] == '_' && name[2] == 'Z')
+        ++name;
+    if (name[0] != '_' || name[1] != 'Z')
+        return nil;
+    std::unique_ptr<char, decltype(&std::free)> demangled(
+        abi::__cxa_demangle(name, nullptr, nullptr, nullptr), &std::free);
+    return demangled ? [NSString stringWithUTF8String:demangled.get()] : nil;
+}
 
 #if TARGET_OS_IPHONE || TARGET_OS_OSX
 namespace WebInspectorNativeBridgePrivate {
