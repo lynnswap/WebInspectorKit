@@ -110,7 +110,7 @@ enum NativeInspectorSymbolRole: String, Hashable, Sendable {
     case disconnectFrontend
     case stringFromUTF8
     case stringImplToNSString
-    case destroyStringImpl
+    case derefStringImpl
     case backendDispatcherDispatch
     case inspectorControllerConnectTarget
     case inspectorControllerDisconnectTarget
@@ -296,7 +296,7 @@ struct NativeInspectorSymbols {
     let inspectorControllerDisconnectTargets: NativeInspectorRequiredSymbol
     let stringFromUTF8: NativeInspectorRequiredSymbol
     let stringImplToNSString: NativeInspectorRequiredSymbol
-    let destroyStringImpl: NativeInspectorRequiredSymbol
+    let derefStringImpl: NativeInspectorRequiredSymbol
     let backendDispatcherDispatch: NativeInspectorRequiredSymbol
 }
 
@@ -305,7 +305,7 @@ struct NativeInspectorResolvedSymbolSet {
     let disconnectFrontend: ResolvedNativeInspectorAddress
     let stringFromUTF8: ResolvedNativeInspectorAddress
     let stringImplToNSString: ResolvedNativeInspectorAddress
-    let destroyStringImpl: ResolvedNativeInspectorAddress
+    let derefStringImpl: ResolvedNativeInspectorAddress
     let backendDispatcherDispatch: ResolvedNativeInspectorAddress
 
     func address(for role: NativeInspectorSymbolRole) -> ResolvedNativeInspectorAddress {
@@ -318,8 +318,8 @@ struct NativeInspectorResolvedSymbolSet {
             stringFromUTF8
         case .stringImplToNSString:
             stringImplToNSString
-        case .destroyStringImpl:
-            destroyStringImpl
+        case .derefStringImpl:
+            derefStringImpl
         case .backendDispatcherDispatch:
             backendDispatcherDispatch
         case .inspectorControllerConnectTarget, .inspectorControllerDisconnectTarget:

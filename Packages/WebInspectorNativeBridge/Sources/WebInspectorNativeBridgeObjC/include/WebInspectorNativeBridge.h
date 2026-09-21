@@ -13,7 +13,7 @@ typedef struct {
     uint64_t disconnectFrontendAddress;
     uint64_t stringFromUTF8Address;
     uint64_t stringImplToNSStringAddress;
-    uint64_t destroyStringImplAddress;
+    uint64_t derefStringImplAddress;
     uint64_t backendDispatcherDispatchAddress;
 } WebInspectorNativeResolvedSymbols;
 

@@ -374,6 +374,7 @@ extension NativeInspectorSymbolResolverCore {
             [
                 NativeInspectorSymbolMatchTarget(role: .connectFrontend, symbol: symbols.connectFrontend),
                 NativeInspectorSymbolMatchTarget(role: .disconnectFrontend, symbol: symbols.disconnectFrontend),
+                NativeInspectorSymbolMatchTarget(role: .derefStringImpl, symbol: symbols.derefStringImpl),
                 NativeInspectorSymbolMatchTarget(role: .backendDispatcherDispatch, symbol: symbols.backendDispatcherDispatch),
             ]
         )
@@ -390,7 +391,7 @@ extension NativeInspectorSymbolResolverCore {
             [
                 NativeInspectorSymbolMatchTarget(role: .stringFromUTF8, symbol: symbols.stringFromUTF8),
                 NativeInspectorSymbolMatchTarget(role: .stringImplToNSString, symbol: symbols.stringImplToNSString),
-                NativeInspectorSymbolMatchTarget(role: .destroyStringImpl, symbol: symbols.destroyStringImpl),
+                NativeInspectorSymbolMatchTarget(role: .derefStringImpl, symbol: symbols.derefStringImpl),
             ]
         )
         if !loadedImageSymbols.address(for: .backendDispatcherDispatch).isFound,
@@ -412,7 +413,10 @@ extension NativeInspectorSymbolResolverCore {
             disconnectFrontend: webKitResults[.disconnectFrontend] ?? .missing,
             stringFromUTF8: javaScriptCoreResults[.stringFromUTF8] ?? .missing,
             stringImplToNSString: javaScriptCoreResults[.stringImplToNSString] ?? .missing,
-            destroyStringImpl: javaScriptCoreResults[.destroyStringImpl] ?? .missing,
+            derefStringImpl: preferredResolvedAddress(
+                webKitResults[.derefStringImpl] ?? .missing,
+                fallback: javaScriptCoreResults[.derefStringImpl] ?? .missing
+            ),
             backendDispatcherDispatch: preferredResolvedAddress(
                 webKitResults[.backendDispatcherDispatch] ?? .missing,
                 fallback: javaScriptCoreResults[.backendDispatcherDispatch] ?? .missing
@@ -435,6 +439,7 @@ extension NativeInspectorSymbolResolverCore {
             [
                 NativeInspectorSymbolMatchTarget(role: .connectFrontend, symbol: symbols.connectFrontend),
                 NativeInspectorSymbolMatchTarget(role: .disconnectFrontend, symbol: symbols.disconnectFrontend),
+                NativeInspectorSymbolMatchTarget(role: .derefStringImpl, symbol: symbols.derefStringImpl),
                 NativeInspectorSymbolMatchTarget(role: .backendDispatcherDispatch, symbol: symbols.backendDispatcherDispatch),
             ]
         )
@@ -451,7 +456,7 @@ extension NativeInspectorSymbolResolverCore {
             [
                 NativeInspectorSymbolMatchTarget(role: .stringFromUTF8, symbol: symbols.stringFromUTF8),
                 NativeInspectorSymbolMatchTarget(role: .stringImplToNSString, symbol: symbols.stringImplToNSString),
-                NativeInspectorSymbolMatchTarget(role: .destroyStringImpl, symbol: symbols.destroyStringImpl),
+                NativeInspectorSymbolMatchTarget(role: .derefStringImpl, symbol: symbols.derefStringImpl),
             ]
         )
         if !loadedImageSymbols.address(for: .backendDispatcherDispatch).isFound,
@@ -473,7 +478,10 @@ extension NativeInspectorSymbolResolverCore {
             disconnectFrontend: webKitResults[.disconnectFrontend] ?? .missing,
             stringFromUTF8: javaScriptCoreResults[.stringFromUTF8] ?? .missing,
             stringImplToNSString: javaScriptCoreResults[.stringImplToNSString] ?? .missing,
-            destroyStringImpl: javaScriptCoreResults[.destroyStringImpl] ?? .missing,
+            derefStringImpl: preferredResolvedAddress(
+                webKitResults[.derefStringImpl] ?? .missing,
+                fallback: javaScriptCoreResults[.derefStringImpl] ?? .missing
+            ),
             backendDispatcherDispatch: preferredResolvedAddress(
                 webKitResults[.backendDispatcherDispatch] ?? .missing,
                 fallback: javaScriptCoreResults[.backendDispatcherDispatch] ?? .missing
@@ -495,7 +503,7 @@ extension NativeInspectorSymbolResolverCore {
 
     private static func usesLoadedImageRuntimeFallback(for role: NativeInspectorSymbolRole) -> Bool {
         switch role {
-        case .stringFromUTF8, .stringImplToNSString, .destroyStringImpl, .backendDispatcherDispatch:
+        case .stringFromUTF8, .stringImplToNSString, .derefStringImpl, .backendDispatcherDispatch:
             return true
         case .connectFrontend,
              .disconnectFrontend,

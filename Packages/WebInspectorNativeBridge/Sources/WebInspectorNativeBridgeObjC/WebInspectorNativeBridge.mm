@@ -107,7 +107,7 @@ static WebInspectorNativeResolvedSymbols emptyResolvedSymbols()
         .disconnectFrontendAddress = 0,
         .stringFromUTF8Address = 0,
         .stringImplToNSStringAddress = 0,
-        .destroyStringImplAddress = 0,
+        .derefStringImplAddress = 0,
         .backendDispatcherDispatchAddress = 0,
     };
 }
@@ -118,7 +118,7 @@ static BOOL resolvedSymbolsAreComplete(WebInspectorNativeResolvedSymbols resolve
         && resolvedSymbols.disconnectFrontendAddress
         && resolvedSymbols.stringFromUTF8Address
         && resolvedSymbols.stringImplToNSStringAddress
-        && resolvedSymbols.destroyStringImplAddress
+        && resolvedSymbols.derefStringImplAddress
         && resolvedSymbols.backendDispatcherDispatchAddress;
 }
 
@@ -133,8 +133,8 @@ static NSString *missingResolvedSymbolNames(WebInspectorNativeResolvedSymbols re
         [names addObject:@"stringFromUTF8"];
     if (!resolvedSymbols.stringImplToNSStringAddress)
         [names addObject:@"stringImplToNSString"];
-    if (!resolvedSymbols.destroyStringImplAddress)
-        [names addObject:@"destroyStringImpl"];
+    if (!resolvedSymbols.derefStringImplAddress)
+        [names addObject:@"derefStringImpl"];
     if (!resolvedSymbols.backendDispatcherDispatchAddress)
         [names addObject:@"backendDispatcherDispatch"];
     return [names componentsJoinedByString:@","];
@@ -1202,7 +1202,7 @@ private:
     WebInspectorNativeABI::ConstructedString payloadString(
         message,
         _resolvedSymbols.stringFromUTF8Address,
-        _resolvedSymbols.destroyStringImplAddress
+        _resolvedSymbols.derefStringImplAddress
     );
     WebInspectorNativeABI::dispatchToBackendDispatcher(
         _backendDispatcher,

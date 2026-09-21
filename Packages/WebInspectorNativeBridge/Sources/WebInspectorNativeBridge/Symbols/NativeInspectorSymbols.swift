@@ -3,7 +3,7 @@ struct NativeInspectorSymbolAddresses: Sendable, Equatable {
     let disconnectFrontendAddress: UInt64
     let stringFromUTF8Address: UInt64
     let stringImplToNSStringAddress: UInt64
-    let destroyStringImplAddress: UInt64
+    let derefStringImplAddress: UInt64
     let backendDispatcherDispatchAddress: UInt64
 
     static let zero = NativeInspectorSymbolAddresses(
@@ -11,7 +11,7 @@ struct NativeInspectorSymbolAddresses: Sendable, Equatable {
         disconnectFrontendAddress: 0,
         stringFromUTF8Address: 0,
         stringImplToNSStringAddress: 0,
-        destroyStringImplAddress: 0,
+        derefStringImplAddress: 0,
         backendDispatcherDispatchAddress: 0
     )
 
@@ -20,7 +20,7 @@ struct NativeInspectorSymbolAddresses: Sendable, Equatable {
             && disconnectFrontendAddress != 0
             && stringFromUTF8Address != 0
             && stringImplToNSStringAddress != 0
-            && destroyStringImplAddress != 0
+            && derefStringImplAddress != 0
             && backendDispatcherDispatchAddress != 0
     }
 }
@@ -38,7 +38,7 @@ struct NativeInspectorSymbolResolution: Sendable, Equatable {
     var disconnectFrontendAddress: UInt64 { addresses.disconnectFrontendAddress }
     var stringFromUTF8Address: UInt64 { addresses.stringFromUTF8Address }
     var stringImplToNSStringAddress: UInt64 { addresses.stringImplToNSStringAddress }
-    var destroyStringImplAddress: UInt64 { addresses.destroyStringImplAddress }
+    var derefStringImplAddress: UInt64 { addresses.derefStringImplAddress }
     var backendDispatcherDispatchAddress: UInt64 { addresses.backendDispatcherDispatchAddress }
 
     var diagnosticsSummary: String? {

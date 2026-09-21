@@ -33,13 +33,20 @@ struct NativeInspectorSymbolResolverTests {
         }
 
         try bridge.attach(with: NativeInspectorResolvedSymbols.resolveCurrent())
-        try bridge.sendJSONString(#"{"id":1,"method":"Target.setPauseOnStart","params":{"pauseOnStart":false}}"#)
+        let commandCount = 32
+        for id in 1...commandCount {
+            try bridge.sendJSONString("""
+                {"id":\(id),"method":"Target.setPauseOnStart","params":{"pauseOnStart":false}}
+                """)
+        }
+        var replies = Set<Int>()
         for try await message in messages {
             let response = try JSONSerialization.jsonObject(with: Data(message.utf8)) as? [String: Any]
-            guard response?["id"] as? Int == 1 else { continue }
+            guard let id = response?["id"] as? Int, (1...commandCount).contains(id) else { continue }
             #expect(response?["error"] == nil)
             #expect(response?["result"] != nil)
-            return
+            replies.insert(id)
+            if replies.count == commandCount { return }
         }
         Issue.record("The native frontend closed before replying to the protocol command.")
     }
@@ -141,6 +148,31 @@ struct NativeInspectorSymbolResolverTests {
 
         #expect(resolution.isSupported)
         #expect(resolution.stringFromUTF8Address == UInt64(WebInspectorNativeSymbolFixtureWTFStringFromUTF8Address()))
+    }
+
+    @Test
+    func stringReleaseQuerySelectsDerefInsteadOfUnconditionalDestruction() {
+        let symbol = NativeInspectorSymbolResolverCore.currentSymbolQueries().derefStringImpl
+
+        #expect(symbol.matches(symbolName: "__ZN3WTF10StringImpl5derefEv"))
+        #expect(!symbol.matches(symbolName: "__ZN3WTF10StringImpl7destroyEPS0_"))
+    }
+
+    @Test
+    func missingDerefIsReportedWithoutUsingTheDestroyEntryPoint() throws {
+        let fixture = try nativeSymbolFixture()
+        let symbols = NativeInspectorSymbolResolverCore.currentSymbolQueries().replacing(
+            derefStringImpl: requiredSymbol(
+                role: .derefStringImpl,
+                ownerImage: .webKit,
+                requiredNameParts: ["definitelyMissingDeref"],
+                resolutionPolicy: .requiredTextSymbol
+            )
+        )
+        let resolution = try NativeInspectorSymbolResolver.resolveUsingFixture(fixture, symbols: symbols)
+
+        #expect(!resolution.isSupported)
+        #expect(resolution.missingFunctions == ["derefStringImpl"])
     }
 
     @Test
@@ -420,7 +452,7 @@ private let completeNativeInspectorSymbolAddresses = NativeInspectorSymbolAddres
     disconnectFrontendAddress: 0x1_0100,
     stringFromUTF8Address: 0x2_0000,
     stringImplToNSStringAddress: 0x2_0100,
-    destroyStringImplAddress: 0x2_0200,
+    derefStringImplAddress: 0x2_0200,
     backendDispatcherDispatchAddress: 0x1_0200
 )
 
@@ -478,7 +510,7 @@ private extension NativeInspectorSymbols {
         inspectorControllerDisconnectTargets: NativeInspectorRequiredSymbol? = nil,
         stringFromUTF8: NativeInspectorRequiredSymbol? = nil,
         stringImplToNSString: NativeInspectorRequiredSymbol? = nil,
-        destroyStringImpl: NativeInspectorRequiredSymbol? = nil,
+        derefStringImpl: NativeInspectorRequiredSymbol? = nil,
         backendDispatcherDispatch: NativeInspectorRequiredSymbol? = nil
     ) -> NativeInspectorSymbols {
         NativeInspectorSymbols(
@@ -488,7 +520,7 @@ private extension NativeInspectorSymbols {
             inspectorControllerDisconnectTargets: inspectorControllerDisconnectTargets ?? self.inspectorControllerDisconnectTargets,
             stringFromUTF8: stringFromUTF8 ?? self.stringFromUTF8,
             stringImplToNSString: stringImplToNSString ?? self.stringImplToNSString,
-            destroyStringImpl: destroyStringImpl ?? self.destroyStringImpl,
+            derefStringImpl: derefStringImpl ?? self.derefStringImpl,
             backendDispatcherDispatch: backendDispatcherDispatch ?? self.backendDispatcherDispatch
         )
     }

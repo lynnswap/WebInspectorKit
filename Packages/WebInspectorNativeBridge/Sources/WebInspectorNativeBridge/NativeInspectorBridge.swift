@@ -11,7 +11,7 @@ public struct NativeInspectorResolvedSymbols: Equatable, Sendable {
     var disconnectFrontendAddress: UInt64
     var stringFromUTF8Address: UInt64
     var stringImplToNSStringAddress: UInt64
-    var destroyStringImplAddress: UInt64
+    var derefStringImplAddress: UInt64
     var backendDispatcherDispatchAddress: UInt64
 
     init(
@@ -19,14 +19,14 @@ public struct NativeInspectorResolvedSymbols: Equatable, Sendable {
         disconnectFrontendAddress: UInt64,
         stringFromUTF8Address: UInt64,
         stringImplToNSStringAddress: UInt64,
-        destroyStringImplAddress: UInt64,
+        derefStringImplAddress: UInt64,
         backendDispatcherDispatchAddress: UInt64
     ) {
         self.connectFrontendAddress = connectFrontendAddress
         self.disconnectFrontendAddress = disconnectFrontendAddress
         self.stringFromUTF8Address = stringFromUTF8Address
         self.stringImplToNSStringAddress = stringImplToNSStringAddress
-        self.destroyStringImplAddress = destroyStringImplAddress
+        self.derefStringImplAddress = derefStringImplAddress
         self.backendDispatcherDispatchAddress = backendDispatcherDispatchAddress
     }
 
@@ -36,7 +36,7 @@ public struct NativeInspectorResolvedSymbols: Equatable, Sendable {
             disconnectFrontendAddress: disconnectFrontendAddress,
             stringFromUTF8Address: stringFromUTF8Address,
             stringImplToNSStringAddress: stringImplToNSStringAddress,
-            destroyStringImplAddress: destroyStringImplAddress,
+            derefStringImplAddress: derefStringImplAddress,
             backendDispatcherDispatchAddress: backendDispatcherDispatchAddress
         )
     }
@@ -62,7 +62,7 @@ public struct NativeInspectorResolvedSymbols: Equatable, Sendable {
             disconnectFrontendAddress: resolution.disconnectFrontendAddress,
             stringFromUTF8Address: resolution.stringFromUTF8Address,
             stringImplToNSStringAddress: resolution.stringImplToNSStringAddress,
-            destroyStringImplAddress: resolution.destroyStringImplAddress,
+            derefStringImplAddress: resolution.derefStringImplAddress,
             backendDispatcherDispatchAddress: resolution.backendDispatcherDispatchAddress
         )
     }

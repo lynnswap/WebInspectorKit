@@ -22,6 +22,7 @@ class StringImpl {
 public:
     WIK_FIXTURE_SYMBOL operator NSString*();
     WIK_FIXTURE_SYMBOL static void destroy(StringImpl*);
+    WIK_FIXTURE_SYMBOL void deref();
 };
 }
 
@@ -75,6 +76,10 @@ WIK_FIXTURE_SYMBOL WTF::StringImpl::operator NSString*()
 }
 
 WIK_FIXTURE_SYMBOL void WTF::StringImpl::destroy(StringImpl*)
+{
+}
+
+WIK_FIXTURE_SYMBOL void WTF::StringImpl::deref()
 {
 }
 
@@ -134,6 +139,7 @@ void WebInspectorNativeSymbolFixtureAnchor(void)
     (void)WTF::String::fromUTF8WithLatin1Fallback(std::span<const char8_t>());
     (void)static_cast<NSString*>(stringImpl);
     WTF::StringImpl::destroy(&stringImpl);
+    stringImpl.deref();
     backendDispatcher.dispatch(string);
     pageController.connectFrontend(frontendChannel, false, false);
     pageController.disconnectFrontend(frontendChannel);

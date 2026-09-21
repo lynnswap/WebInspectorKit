@@ -10,7 +10,7 @@ extension NativeInspectorSymbolResolverCore {
             case let .found(disconnectAddress) = resolvedSymbols.disconnectFrontend,
             case let .found(stringFromUTF8Address) = resolvedSymbols.stringFromUTF8,
             case let .found(stringImplToNSStringAddress) = resolvedSymbols.stringImplToNSString,
-            case let .found(destroyStringImplAddress) = resolvedSymbols.destroyStringImpl,
+            case let .found(derefStringImplAddress) = resolvedSymbols.derefStringImpl,
             case let .found(backendDispatcherDispatchAddress) = resolvedSymbols.backendDispatcherDispatch
         else {
             return nil
@@ -21,7 +21,7 @@ extension NativeInspectorSymbolResolverCore {
             disconnectFrontendAddress: disconnectAddress,
             stringFromUTF8Address: stringFromUTF8Address,
             stringImplToNSStringAddress: stringImplToNSStringAddress,
-            destroyStringImplAddress: destroyStringImplAddress,
+            derefStringImplAddress: derefStringImplAddress,
             backendDispatcherDispatchAddress: backendDispatcherDispatchAddress
         )
     }
@@ -43,14 +43,14 @@ extension NativeInspectorSymbolResolverCore {
         if let phase {
             NativeInspectorSymbolLog.info(
                 unsafe String(
-                    format: "[WebInspectorNativeBridge] native inspector symbols resolved backend=native-inspector status=complete phase=%@ source=%@ connectFrontend=0x%llx disconnectFrontend=0x%llx stringFromUTF8=0x%llx stringImplToNSString=0x%llx destroyStringImpl=0x%llx backendDispatcherDispatch=0x%llx textScanFallback=%@",
+                    format: "[WebInspectorNativeBridge] native inspector symbols resolved backend=native-inspector status=complete phase=%@ source=%@ connectFrontend=0x%llx disconnectFrontend=0x%llx stringFromUTF8=0x%llx stringImplToNSString=0x%llx derefStringImpl=0x%llx backendDispatcherDispatch=0x%llx textScanFallback=%@",
                     phase.message,
                     source ?? "unknown",
                     functionAddresses.connectFrontendAddress,
                     functionAddresses.disconnectFrontendAddress,
                     functionAddresses.stringFromUTF8Address,
                     functionAddresses.stringImplToNSStringAddress,
-                    functionAddresses.destroyStringImplAddress,
+                    functionAddresses.derefStringImplAddress,
                     functionAddresses.backendDispatcherDispatchAddress,
                     usedConnectDisconnectFallback ? "true" : "false"
                 )
@@ -81,7 +81,7 @@ extension NativeInspectorSymbolResolverCore {
             resolvedSymbols.disconnectFrontend,
             resolvedSymbols.stringFromUTF8,
             resolvedSymbols.stringImplToNSString,
-            resolvedSymbols.destroyStringImpl,
+            resolvedSymbols.derefStringImpl,
             resolvedSymbols.backendDispatcherDispatch,
         ]
 
@@ -109,7 +109,7 @@ extension NativeInspectorSymbolResolverCore {
             (resolvedSymbols.disconnectFrontend, attachHeaders),
             (resolvedSymbols.stringFromUTF8, [javaScriptCoreHeaderAddress]),
             (resolvedSymbols.stringImplToNSString, [javaScriptCoreHeaderAddress]),
-            (resolvedSymbols.destroyStringImpl, [javaScriptCoreHeaderAddress]),
+            (resolvedSymbols.derefStringImpl, [webKitHeaderAddress, javaScriptCoreHeaderAddress]),
             (resolvedSymbols.backendDispatcherDispatch, [webKitHeaderAddress, javaScriptCoreHeaderAddress]),
         ]
         for (result, expectedHeaders) in expectedHeadersBySymbol {
@@ -146,7 +146,7 @@ extension NativeInspectorSymbolResolverCore {
             resolvedSymbols.disconnectFrontend,
             resolvedSymbols.stringFromUTF8,
             resolvedSymbols.stringImplToNSString,
-            resolvedSymbols.destroyStringImpl,
+            resolvedSymbols.derefStringImpl,
             resolvedSymbols.backendDispatcherDispatch,
         ]
 
@@ -188,7 +188,7 @@ extension NativeInspectorSymbolResolverCore {
             (resolvedSymbols.disconnectFrontend, attachHeaders),
             (resolvedSymbols.stringFromUTF8, [javaScriptCoreHeaderAddress]),
             (resolvedSymbols.stringImplToNSString, [javaScriptCoreHeaderAddress]),
-            (resolvedSymbols.destroyStringImpl, [javaScriptCoreHeaderAddress]),
+            (resolvedSymbols.derefStringImpl, [webKitHeaderAddress, javaScriptCoreHeaderAddress]),
             (resolvedSymbols.backendDispatcherDispatch, [webKitHeaderAddress, javaScriptCoreHeaderAddress]),
         ]
         for (result, expectedHeaders) in expectedHeadersBySymbol {
