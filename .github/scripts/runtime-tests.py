@@ -28,9 +28,27 @@ def supported_runtimes(runtimes):
     return sorted(selected.values(), key=lambda runtime: version_components(runtime["version"]))
 
 
-def test_cases(runtimes, macos_version, suite):
+def native_test_runtimes(runtimes, latest_ios_major):
+    by_major = {}
+    for runtime in runtimes:
+        major = version_components(runtime["version"])[0]
+        by_major.setdefault(major, []).append(runtime)
+    # Older hosts may not have the newest major installed; the workflow supplies
+    # the same newest-major policy to every host.
+    selected = []
+    for major, releases in by_major.items():
+        if major == latest_ios_major:
+            selected.extend(releases)
+        else:
+            selected.append(max(releases, key=lambda item: version_components(item["version"])))
+    return sorted(selected, key=lambda item: version_components(item["version"]))
+
+
+def test_cases(runtimes, macos_version, suite, latest_ios_major):
     if suite == "workspace":
         runtimes = [max(runtimes, key=lambda runtime: version_components(runtime["version"]))]
+    else:
+        runtimes = native_test_runtimes(runtimes, latest_ios_major)
     return [
         {"runtime": runtime["identifier"], "version": runtime["version"], "platform": "iOS",
          "suite": suite}
@@ -68,9 +86,9 @@ def run_logged(command, path, **options):
             print(path.read_text(errors="replace"), flush=True)
 
 
-def run_tests(runtimes, macos_version, build_root, suite):
+def run_tests(runtimes, macos_version, build_root, suite, latest_ios_major):
     results = []
-    for case in test_cases(runtimes, macos_version, suite):
+    for case in test_cases(runtimes, macos_version, suite, latest_ios_major):
         label = f"{case['platform']} {case['version']} / {suite}"
         print(f"::group::{label}", flush=True)
         diagnostics = build_root / "runtime-tests" / f"{case['platform']}-{case['version']}"
@@ -121,13 +139,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("build_root", type=Path)
     parser.add_argument("--suite", choices=("native", "workspace"), required=True)
+    parser.add_argument("--latest-ios-major", type=int, required=True,
+                        help="Newest iOS major covered by CI, shared across all runner hosts")
     args = parser.parse_args()
 
     runtimes = supported_runtimes(json.loads(simctl("list", "runtimes", "--json"))["runtimes"])
     if not runtimes:
         raise ValueError("No available iOS runtime supported by CI is installed.")
     macos_version = subprocess.check_output(["sw_vers", "-productVersion"], text=True).strip()
-    return run_tests(runtimes, macos_version, args.build_root, args.suite)
+    return run_tests(runtimes, macos_version, args.build_root, args.suite, args.latest_ios_major)
 
 
 if __name__ == "__main__":
