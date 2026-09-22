@@ -3,12 +3,7 @@ import WebInspectorUIBase
 import UIKit
 
 @MainActor
-package protocol NetworkBodyScrollEdgeSink: AnyObject {
-    var contentScrollView: UIScrollView? { get set }
-}
-
-@MainActor
-final class NetworkDetailScrollEdgeController: NetworkBodyScrollEdgeSink {
+final class NetworkDetailScrollEdgeController {
     private var interaction: UIInteraction?
     private weak var registeredInteractionScrollView: UIScrollView?
     private var previewRoleControlIsVisible = false

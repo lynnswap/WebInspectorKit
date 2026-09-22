@@ -6,18 +6,18 @@ import WebInspectorUINetwork
 /// Owns controllers and models whose lifetime is bounded by one root
 /// inspector presentation.
 @MainActor
-package final class PresentationContentStore {
+final class PresentationContentStore {
     private let contentCache = WebInspectorTab.ContentCache()
     private var networkPanelModel: NetworkPanelModel?
     private var contextEpoch: Int?
 
-    package init() {}
+    init() {}
 
     isolated deinit {
         contentCache.removeAll()
     }
 
-    package func viewController<Content: UIViewController>(
+    func viewController<Content: UIViewController>(
         for key: WebInspectorTab.ContentKey,
         contextEpoch: Int,
         make: () -> Content
@@ -26,7 +26,7 @@ package final class PresentationContentStore {
         return contentCache.viewController(for: key, epoch: contextEpoch, make: make)
     }
 
-    package func networkPanelModel(
+    func networkPanelModel(
         for context: WebInspectorContext,
         contextEpoch: Int
     ) -> NetworkPanelModel {
@@ -44,7 +44,7 @@ package final class PresentationContentStore {
         return model
     }
 
-    package func prepare(for contextEpoch: Int) {
+    func prepare(for contextEpoch: Int) {
         guard self.contextEpoch != contextEpoch else {
             return
         }
@@ -52,11 +52,11 @@ package final class PresentationContentStore {
         self.contextEpoch = contextEpoch
     }
 
-    package func pruneContent(retaining keys: Set<WebInspectorTab.ContentKey>) {
+    func pruneContent(retaining keys: Set<WebInspectorTab.ContentKey>) {
         contentCache.prune(retaining: keys)
     }
 
-    package func clear() {
+    func clear() {
         clearResources()
         contextEpoch = nil
     }
@@ -67,11 +67,11 @@ package final class PresentationContentStore {
     }
 
     #if DEBUG
-    package var contentCountForTesting: Int {
+    var contentCountForTesting: Int {
         contentCache.countForTesting
     }
 
-    package var networkPanelModelForTesting: NetworkPanelModel? {
+    var networkPanelModelForTesting: NetworkPanelModel? {
         networkPanelModel
     }
     #endif

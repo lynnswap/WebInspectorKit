@@ -2,12 +2,11 @@
 import UIKit
 import WebInspectorUIBase
 import WebInspectorUINetwork
-import WebInspectorUISyntaxBody
 
 @MainActor
-package struct NetworkTabController: WebInspectorTab.BuiltInController {
-    package let tabID = WebInspectorTab.network.id
-    package let descriptor = WebInspectorTab.DisplayDescriptor(
+struct NetworkTabController: WebInspectorTab.BuiltInController {
+    let tabID = WebInspectorTab.network.id
+    let descriptor = WebInspectorTab.DisplayDescriptor(
         title: WebInspectorTab.network.title,
         image: WebInspectorTab.network.image
     )
@@ -17,7 +16,7 @@ package struct NetworkTabController: WebInspectorTab.BuiltInController {
         static let detail = "detail"
     }
 
-    package func contentKeys(
+    func contentKeys(
         for layout: WebInspectorTab.HostLayout,
         displayItem: WebInspectorTab.DisplayItem
     ) -> [WebInspectorTab.ContentKey] {
@@ -27,7 +26,7 @@ package struct NetworkTabController: WebInspectorTab.BuiltInController {
         ]
     }
 
-    package func makeViewController(
+    func makeViewController(
         for displayItem: WebInspectorTab.DisplayItem,
         session: WebInspectorSession,
         contentStore: PresentationContentStore,
@@ -88,10 +87,7 @@ package struct NetworkTabController: WebInspectorTab.BuiltInController {
             for: contentKey(ContentID.detail),
             contextEpoch: session.interface.contextBoundContentRevision
         ) {
-            NetworkDetailViewController(
-                model: model,
-                makeBodyViewController: NetworkBodyPreviewFactory.make(scrollEdgeSink:)
-            )
+            NetworkDetailViewController(model: model)
         }
     }
 

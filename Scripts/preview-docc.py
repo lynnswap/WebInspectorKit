@@ -21,7 +21,7 @@ BASE_PATH = "WebInspectorKit"
 HOST = "127.0.0.1"
 SIMULATOR_TRIPLE = "arm64-apple-ios18.4-simulator"
 TARGETS = [
-    "WebInspectorUI",
+    "WebInspectorKit",
     "WebInspectorDataKit",
     "WebInspectorProxyKit",
     "WebInspectorProxyKitTesting",
@@ -30,7 +30,7 @@ MODULE_PATHS = {
     "webinspectordatakit",
     "webinspectorproxykit",
     "webinspectorproxykittesting",
-    "webinspectorui",
+    "webinspectorkit",
 }
 
 
@@ -242,12 +242,6 @@ def short_docc_redirect_path(request_path: str) -> str | None:
         return None
 
     if len(segments) == 1:
-        return urlunsplit(("", "", f"/{BASE_PATH}/documentation/", parsed.query, parsed.fragment))
-
-    if segments[1] == "webinspectorkit":
-        return urlunsplit(("", "", f"/{BASE_PATH}/documentation/", parsed.query, parsed.fragment))
-
-    if len(segments) >= 3 and segments[1] == "documentation" and segments[2] == "webinspectorkit":
         return urlunsplit(("", "", f"/{BASE_PATH}/documentation/", parsed.query, parsed.fragment))
 
     if segments[1] not in MODULE_PATHS:

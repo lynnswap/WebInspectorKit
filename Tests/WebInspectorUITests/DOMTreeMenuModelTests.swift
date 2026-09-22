@@ -3,8 +3,7 @@ import Testing
 import UIKit
 @testable import WebInspectorDataKit
 @testable import WebInspectorProxyKit
-@testable import WebInspectorUI
-@testable import WebInspectorUISyntaxBody
+@testable import WebInspectorKit
 @testable import WebInspectorUINetwork
 @testable import WebInspectorUIDOM
 @testable import WebInspectorUIBase

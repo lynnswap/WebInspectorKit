@@ -5,9 +5,9 @@ import WebInspectorKit
 
 @MainActor
 @Test
-func dropInUIKitFacadeAttachShapeCompilesForConsumers() {
-    let session = WebInspectorSession()
-    let inspector = WebInspectorViewController(session: session)
+func publicUIKitModuleSupportsAttachAndDetachForConsumers() {
+    let session = WebInspectorKit.WebInspectorSession()
+    let inspector = WebInspectorKit.WebInspectorViewController(session: session)
 
     let sessionAttach: @MainActor @Sendable (WKWebView) async throws -> Void = { webView in
         try await session.attach(to: webView)
@@ -16,6 +16,11 @@ func dropInUIKitFacadeAttachShapeCompilesForConsumers() {
         try await inspector.attach(to: webView)
     }
 
+    let sessionDetach: @MainActor @Sendable () async -> Void = {
+        await session.detach()
+    }
+
+    _ = sessionDetach
     _ = sessionAttach
     _ = inspectorAttach
     _ = WebInspectorViewController()

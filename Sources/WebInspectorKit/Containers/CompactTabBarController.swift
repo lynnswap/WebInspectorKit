@@ -4,7 +4,7 @@ import UIKit
 import WebInspectorUIBase
 
 @MainActor
-package final class CompactTabBarController: UITabBarController, UITabBarControllerDelegate {
+final class CompactTabBarController: UITabBarController, UITabBarControllerDelegate {
     private let session: WebInspectorSession
     private let contentStore: PresentationContentStore
     private let tabTransitionAnimator = NoAnimationTabTransitionAnimator()
@@ -13,7 +13,7 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
     private var interfaceObservation: PortableObservationTracking.Token?
     private var isRenderingSelection = false
 
-    package init(
+    init(
         session: WebInspectorSession,
         contentStore: PresentationContentStore = PresentationContentStore()
     ) {
@@ -35,7 +35,7 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
         interfaceObservation?.cancel()
     }
 
-    override package func viewDidLoad() {
+    override func viewDidLoad() {
         super.viewDidLoad()
         applyBackgroundFromTraits()
         if #available(iOS 26.0, *) {
@@ -50,7 +50,7 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
         view.backgroundColor = webInspectorBackgroundPolicy.backgroundColor
     }
 
-    package func tabBarController(
+    func tabBarController(
         _ tabBarController: UITabBarController,
         animationControllerForTransitionFrom fromVC: UIViewController,
         to toVC: UIViewController
@@ -58,7 +58,7 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
         tabTransitionAnimator
     }
 
-    package func tabBarController(
+    func tabBarController(
         _ tabBarController: UITabBarController,
         didSelectTab selectedTab: UITab,
         previousTab: UITab?
@@ -161,19 +161,19 @@ package final class CompactTabBarController: UITabBarController, UITabBarControl
         return nativeTab
     }
 
-    package var currentUITabsForTesting: [UITab] {
+    var currentUITabsForTesting: [UITab] {
         tabs
     }
 
-    package var displayedTabIdentifiersForTesting: [String] {
+    var displayedTabIdentifiersForTesting: [String] {
         tabs.map(\.identifier)
     }
 
-    package var selectedDisplayItemIDForTesting: WebInspectorTab.DisplayItem.ID? {
+    var selectedDisplayItemIDForTesting: WebInspectorTab.DisplayItem.ID? {
         selectedTab?.identifier
     }
 
-    package var interfaceObservationDeliveryForTesting: PortableObservationTracking.Token? {
+    var interfaceObservationDeliveryForTesting: PortableObservationTracking.Token? {
         interfaceObservation
     }
 }

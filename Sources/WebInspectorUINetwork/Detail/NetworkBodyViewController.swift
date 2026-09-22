@@ -4,7 +4,6 @@ import AVKit
 import WebInspectorDataKit
 import WebInspectorProxyKit
 import WebInspectorUIBase
-import WebInspectorUINetwork
 import Observation
 import ObservationBridge
 import SyntaxEditorUI
@@ -15,8 +14,8 @@ extension NetworkBodyViewController {
 }
 
 @MainActor
-package final class NetworkBodyViewController: UIViewController, NetworkBodyPreviewControlling {
-    package typealias MoviePreviewPlayerFactory = @MainActor () -> AVPlayer
+final class NetworkBodyViewController: UIViewController {
+    typealias MoviePreviewPlayerFactory = @MainActor () -> AVPlayer
 
     private let syntaxModel = SyntaxEditorModel(
         text: "",
@@ -67,7 +66,7 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         return scrollView
     }()
     private var bodyObservation: PortableObservationTracking.Token?
-    private weak var scrollEdgeSink: (any NetworkBodyScrollEdgeSink)?
+    private weak var scrollEdgeSink: NetworkDetailScrollEdgeController?
     private var surface = NetworkBodySurface.none
     private var isRenderingActive = false
     private var mediaPlayerViewController: AVPlayerViewController?
@@ -94,8 +93,8 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
     private var previewRenderObservationDelivery: PortableObservationTracking.Token?
 #endif
 
-    package init(
-        scrollEdgeSink: (any NetworkBodyScrollEdgeSink)? = nil,
+    init(
+        scrollEdgeSink: NetworkDetailScrollEdgeController? = nil,
         moviePreviewPlayerFactory: @escaping MoviePreviewPlayerFactory = {
             AVPlayer()
         }
@@ -110,7 +109,7 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         nil
     }
 
-    override package func viewDidLoad() {
+    override func viewDidLoad() {
         super.viewDidLoad()
         applyBackgroundFromTraits()
         if #available(iOS 26.0, *) {
@@ -124,7 +123,7 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
 #endif
     }
 
-    override package func viewDidLayoutSubviews() {
+    override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         updateImagePreviewLayoutIfNeeded()
     }
@@ -139,11 +138,11 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         textPreviewCoordinator.cancel()
     }
 
-    package func setSurface(_ nextSurface: NetworkBodySurface) {
+    func setSurface(_ nextSurface: NetworkBodySurface) {
         setSurface(nextSurface, discardsVisibleResources: nextSurface.isRenderable == false)
     }
 
-    package func resumeRendering() {
+    func resumeRendering() {
         guard isRenderingActive == false else {
             if surface.isRenderable {
                 renderCurrentSurface()
@@ -158,7 +157,7 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
         }
     }
 
-    package func suspendKeepingSurface() {
+    func suspendKeepingSurface() {
         guard isRenderingActive else {
             return
         }
@@ -928,13 +927,13 @@ package final class NetworkBodyViewController: UIViewController, NetworkBodyPrev
 }
 
 extension NetworkBodyViewController: UIScrollViewDelegate {
-    nonisolated package func viewForZooming(in scrollView: UIScrollView) -> UIView? {
+    nonisolated func viewForZooming(in scrollView: UIScrollView) -> UIView? {
         MainActor.assumeIsolated {
             scrollView === imageScrollView ? imageView : nil
         }
     }
 
-    nonisolated package func scrollViewDidChangeAdjustedContentInset(_ scrollView: UIScrollView) {
+    nonisolated func scrollViewDidChangeAdjustedContentInset(_ scrollView: UIScrollView) {
         MainActor.assumeIsolated {
             guard scrollView === imageScrollView else {
                 return

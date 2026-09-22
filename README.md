@@ -129,7 +129,7 @@ to GitHub Pages.
 | Document | Purpose |
 | --- | --- |
 | [Migration Guide](Docs/MIGRATION.md) | Version-by-version source migration notes for app code. |
-| [WebInspectorUI](Sources/WebInspectorUI/README.md) | UIKit inspector implementation notes and UI/DataKit ownership boundaries. |
+| [WebInspectorKit UIKit implementation](Sources/WebInspectorKit/README.md) | UIKit inspector implementation notes and UI/DataKit ownership boundaries. |
 | [WebKit Version Mapping](Docs/WebKitVersionMapping.md) | Local notes for mapping iOS WebKit framework versions to public WebKit source refs. |
 | [Inspector Integration Fixture](Tools/InspectorFixture/README.md) | Manual verification with Monocly and fixture regression tests. |
 
@@ -142,7 +142,7 @@ Sources/
   WebInspectorDataKitTesting/  Deterministic DataKit consumer test helpers.
   WebInspectorProxyKit/        Typed protocol proxy product.
   WebInspectorProxyKitTesting/ Controllable proxy test runtime and fixtures.
-  WebInspectorUI*/             Internal UIKit implementation targets.
+  WebInspectorUI*/             Shared UIKit resources and DOM/Network content.
   WebInspectorNativeBridge*/   Internal Swift/Objective-C++ bridge targets.
   WebKitRuntime*/              Shared native runtime product targets.
 Tests/

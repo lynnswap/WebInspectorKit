@@ -3,31 +3,31 @@ import UIKit
 import WebInspectorUIBase
 
 extension WebInspectorTab {
-    package enum HostLayout: Hashable {
+    enum HostLayout: Hashable {
         case compact
         case regular
     }
 }
 
 extension WebInspectorTab {
-    package enum DisplayItem: Hashable, Identifiable {
-        package typealias ID = String
+    enum DisplayItem: Hashable, Identifiable {
+        typealias ID = String
 
         case tab(WebInspectorTab.ID)
         case customTab(WebInspectorTab.ID)
         case domElement(parent: WebInspectorTab.ID)
 
-        package static let domElementID: ID = domElementID(parent: "webinspector_dom")
+        static let domElementID: ID = domElementID(parent: "webinspector_dom")
 
-        package static func customTabID(_ tabID: WebInspectorTab.ID) -> ID {
+        static func customTabID(_ tabID: WebInspectorTab.ID) -> ID {
             "webinspector_custom.\(tabID)"
         }
 
-        package static func domElementID(parent: WebInspectorTab.ID) -> ID {
+        static func domElementID(parent: WebInspectorTab.ID) -> ID {
             "\(parent).element"
         }
 
-        package var id: ID {
+        var id: ID {
             switch self {
             case let .tab(tabID):
                 tabID
@@ -38,7 +38,7 @@ extension WebInspectorTab {
             }
         }
 
-        package var sourceTabID: WebInspectorTab.ID {
+        var sourceTabID: WebInspectorTab.ID {
             switch self {
             case let .tab(tabID), let .customTab(tabID), let .domElement(parent: tabID):
                 tabID
@@ -48,11 +48,11 @@ extension WebInspectorTab {
 }
 
 extension WebInspectorTab {
-    package struct ContentKey: Hashable {
-        package let tabID: WebInspectorTab.ID
-        package let contentID: String
+    struct ContentKey: Hashable {
+        let tabID: WebInspectorTab.ID
+        let contentID: String
 
-        package init(tabID: WebInspectorTab.ID, contentID: String) {
+        init(tabID: WebInspectorTab.ID, contentID: String) {
             self.tabID = tabID
             self.contentID = contentID
         }
@@ -61,19 +61,19 @@ extension WebInspectorTab {
 
 extension WebInspectorTab {
     @MainActor
-    package struct DisplayDescriptor {
-        package let title: String
-        package let image: UIImage?
+    struct DisplayDescriptor {
+        let title: String
+        let image: UIImage?
     }
 }
 
 extension WebInspectorTab {
     @MainActor
-    package final class ContentCache {
+    final class ContentCache {
         private var epoch = 0
         private var viewControllerByKey: [WebInspectorTab.ContentKey: UIViewController] = [:]
 
-        package func viewController<Content: UIViewController>(
+        func viewController<Content: UIViewController>(
             for key: WebInspectorTab.ContentKey,
             epoch: Int,
             make: () -> Content
@@ -97,14 +97,14 @@ extension WebInspectorTab {
             return viewController
         }
 
-        package func prune(retaining keys: Set<WebInspectorTab.ContentKey>) {
+        func prune(retaining keys: Set<WebInspectorTab.ContentKey>) {
             for (key, viewController) in viewControllerByKey where keys.contains(key) == false {
                 viewController.webInspectorDetachFromContainerForReuse()
                 viewControllerByKey[key] = nil
             }
         }
 
-        package func removeAll() {
+        func removeAll() {
             for viewController in viewControllerByKey.values {
                 viewController.webInspectorDetachFromContainerForReuse()
             }
@@ -112,7 +112,7 @@ extension WebInspectorTab {
         }
 
         #if DEBUG
-        package var countForTesting: Int {
+        var countForTesting: Int {
             viewControllerByKey.count
         }
         #endif
@@ -121,12 +121,12 @@ extension WebInspectorTab {
 
 extension WebInspectorTab {
     @MainActor
-    package struct DisplayProjection {
+    struct DisplayProjection {
         private let catalog = WebInspectorTab.BuiltInCatalog()
 
-        package init() {}
+        init() {}
 
-        package func displayItems(
+        func displayItems(
             for hostLayout: WebInspectorTab.HostLayout,
             tabs: [WebInspectorTab]
         ) -> [WebInspectorTab.DisplayItem] {
@@ -138,7 +138,7 @@ extension WebInspectorTab {
             }
         }
 
-        package func resolvedSelection(
+        func resolvedSelection(
             for hostLayout: WebInspectorTab.HostLayout,
             tabs: [WebInspectorTab],
             selectedItemID: WebInspectorTab.DisplayItem.ID?
@@ -158,7 +158,7 @@ extension WebInspectorTab {
             return displayItems.first
         }
 
-        package func descriptor(
+        func descriptor(
             for displayItem: WebInspectorTab.DisplayItem,
             tabs: [WebInspectorTab]
         ) -> WebInspectorTab.DisplayDescriptor? {
@@ -188,7 +188,7 @@ extension WebInspectorTab {
             }
         }
 
-        package func contentKeys(
+        func contentKeys(
             for hostLayout: WebInspectorTab.HostLayout,
             tabs: [WebInspectorTab]
         ) -> Set<WebInspectorTab.ContentKey> {

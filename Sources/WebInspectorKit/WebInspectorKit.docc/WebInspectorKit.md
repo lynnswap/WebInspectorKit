@@ -1,13 +1,12 @@
-# ``WebInspectorUI``
+# ``WebInspectorKit``
 
 UIKit Web Inspector components for presenting and extending the built-in inspector.
 
 ## Overview
 
-Use WebInspectorUI when you want to present the built-in UIKit inspector or add
-UIKit tabs to the inspector surface. Application code normally imports
-`WebInspectorKit`, which re-exports this module, but the symbols documented here
-are the UI entry points behind that product.
+Import `WebInspectorKit` to present the built-in UIKit inspector or add custom
+UIKit tabs. The module declares the public UI entry points and provides the DOM
+and Network panels, including request and response body previews.
 
 Create a ``WebInspectorViewController``, attach it to a `WKWebView`, and present
 it from your app UI:

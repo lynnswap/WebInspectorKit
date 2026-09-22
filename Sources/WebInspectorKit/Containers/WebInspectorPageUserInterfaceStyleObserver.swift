@@ -4,8 +4,8 @@ import UIKit
 import WebKit
 
 @MainActor
-package enum WebInspectorPageUserInterfaceStyle {
-    package static func style(
+enum WebInspectorPageUserInterfaceStyle {
+    static func style(
         for color: UIColor?,
         in traitCollection: UITraitCollection
     ) -> UIUserInterfaceStyle {
@@ -35,20 +35,20 @@ package enum WebInspectorPageUserInterfaceStyle {
 }
 
 @MainActor
-package protocol WebInspectorPageUserInterfaceStyleObserving: AnyObject {
+protocol WebInspectorPageUserInterfaceStyleObserving: AnyObject {
     func start()
     func invalidate()
 }
 
 @MainActor
-package final class WebInspectorPageUserInterfaceStyleObserver {
+final class WebInspectorPageUserInterfaceStyleObserver {
     private weak var webView: WKWebView?
     private let apply: @MainActor (UIUserInterfaceStyle) -> Void
     private var backgroundObservation: NSKeyValueObservation?
     private var traitRegistration: (any UITraitChangeRegistration)?
     private let generation = WebInspectorPageUserInterfaceStyleObserverGeneration()
 
-    package init(
+    init(
         webView: WKWebView,
         apply: @escaping @MainActor (UIUserInterfaceStyle) -> Void
     ) {
@@ -60,7 +60,7 @@ package final class WebInspectorPageUserInterfaceStyleObserver {
         invalidate()
     }
 
-    package func start() {
+    func start() {
         guard let webView else {
             apply(.unspecified)
             return
@@ -92,7 +92,7 @@ package final class WebInspectorPageUserInterfaceStyleObserver {
         }
     }
 
-    package func invalidate() {
+    func invalidate() {
         generation.advance()
         backgroundObservation?.invalidate()
         backgroundObservation = nil
