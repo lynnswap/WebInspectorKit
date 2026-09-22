@@ -3493,8 +3493,6 @@ struct NetworkDetailViewControllerTests {
             viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString
                 == playlistURL
         }
-        await Task.yield()
-
         #expect(didShowPlayer)
         #expect(playerFactory.players.count == 1)
         #expect(request.responseBody.phase == .available)
@@ -3554,13 +3552,9 @@ struct NetworkDetailViewControllerTests {
             ]
         )
 
-        for _ in 0..<100 {
-            if viewController.hasMoviePreviewFailureForTesting {
-                break
-            }
-            await Task.yield()
+        try await waitForTestCondition {
+            viewController.hasMoviePreviewFailureForTesting
         }
-        #expect(viewController.hasMoviePreviewFailureForTesting)
         #expect(viewController.isMoviePreviewStatusVisibleForTesting == false)
         #expect(viewController.mediaPlayerViewControllerIdentityForTesting == playerViewControllerIdentity)
 
@@ -6504,7 +6498,10 @@ struct NetworkDetailViewControllerTests {
             listSnapshotBuilderFactory: snapshotBuilder
         )
         let window = showInWindow(listViewController, makeVisible: true)
-        defer { window.isHidden = true }
+        defer {
+            listViewController.suspendRenderingForTesting()
+            window.isHidden = true
+        }
 
         try #require(frameScheduler.hasScheduledFrame)
         frameScheduler.fireScheduledFrame()
@@ -6531,15 +6528,15 @@ struct NetworkDetailViewControllerTests {
             )
         }
 
-        #expect(await model.waitForRawTransactionDeliveryForTesting(
+        try #require(await model.waitForRawTransactionDeliveryForTesting(
             after: rawTransactionBaseline + insertedRequestCount - 1,
             timeout: .seconds(10)
         ))
-        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+        try #require(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
             after: frameRequestDeliveryBaseline
         ))
         #expect(frameScheduler.scheduledFrameCount == scheduledFrameBaseline + 1)
-        #expect(frameScheduler.hasScheduledFrame)
+        try #require(frameScheduler.hasScheduledFrame)
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyBaseline)
 
         frameScheduler.fireScheduledFrame()
@@ -6552,7 +6549,7 @@ struct NetworkDetailViewControllerTests {
 
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyBaseline)
         #expect(frameScheduler.scheduledFrameCount == scheduledFrameBaseline + 2)
-        #expect(frameScheduler.hasScheduledFrame)
+        try #require(frameScheduler.hasScheduledFrame)
 
         frameScheduler.fireScheduledFrame()
         await listViewController.waitForSnapshotPipelineQuiescenceForTesting()

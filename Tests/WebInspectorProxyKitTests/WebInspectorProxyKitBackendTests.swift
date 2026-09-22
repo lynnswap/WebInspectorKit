@@ -147,18 +147,17 @@ func domInspectEventPassesThroughWithoutRequestNode() async throws {
 func inspectorInspectIgnoresNonNodeRemoteObject() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
-    let recorder = EventRecorder<DOM.Event>()
-
+    let nodeID = DOM.Node.ID("following-node")
+    let objectID = Runtime.RemoteObject.ID("following-node-object")
     let eventTask = Task {
         var iterator = target.dom.events.makeAsyncIterator()
-        if let event = await iterator.next() {
-            await recorder.record(event)
-        }
+        return await iterator.next()
     }
+    defer { eventTask.cancel() }
 
     try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
     try await runtime.backend.waitForSubscribers(domain: "Inspector", target: target, count: 1)
-
+    await runtime.backend.enqueue(nodeID, for: "DOM", method: "requestNode")
     await runtime.backend.emit(
         .inspect(
             Runtime.RemoteObject(
@@ -169,11 +168,26 @@ func inspectorInspectIgnoresNonNodeRemoteObject() async throws {
         ),
         target: target
     )
+    // Both inputs use the Inspector feed, so resolving the later node proves
+    // the preceding non-node input has been consumed.
+    await runtime.backend.emit(
+        .inspect(
+            Runtime.RemoteObject(id: objectID, kind: .object, subtype: Runtime.Subtype(rawValue: "node")),
+            hints: .object([:])
+        ),
+        target: target
+    )
 
-    try await Task.sleep(for: .milliseconds(100))
-    #expect(await recorder.value() == nil)
-    eventTask.cancel()
-    #expect(await runtime.backend.recordedCommands().isEmpty)
+    let event = try #require(try await value(of: eventTask))
+    guard case let .inspect(actualNodeID) = event else {
+        Issue.record("Expected the later node inspection to be the first DOM event.")
+        return
+    }
+    #expect(actualNodeID == nodeID)
+    let commands = await runtime.backend.recordedCommands()
+    try #require(commands.count == 1)
+    let payload = try #require(commands[0].payload.cast(as: DOM.RequestNodePayload.self))
+    #expect(payload.objectID == objectID)
 }
 
 @Test
@@ -551,18 +565,6 @@ private struct TimedOut: Error {}
 private enum TaskValueRace<Value: Sendable>: Sendable {
     case value(Value)
     case timedOut
-}
-
-private actor EventRecorder<Element: Sendable> {
-    private var recordedValue: Element?
-
-    func record(_ value: Element) {
-        recordedValue = value
-    }
-
-    func value() -> Element? {
-        recordedValue
-    }
 }
 
 @Test

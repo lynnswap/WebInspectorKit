@@ -142,6 +142,9 @@ public final class WebInspectorViewController: UIViewController {
     public var automaticallyDetachesOnDismiss = true
     private var drawsBackgroundStorage = true
     private let presentationLifecycleCoordinator = WebInspectorRootPresentationLifecycleCoordinator()
+    #if DEBUG
+    package private(set) var rootPresentationRetirementTaskForTesting: Task<Void, Never>?
+    #endif
     private lazy var presentationHostWindowObserver: WebInspectorPresentationHostWindowObserverView = {
         let view = WebInspectorPresentationHostWindowObserverView(frame: .zero)
         view.isHidden = true
@@ -307,7 +310,7 @@ public final class WebInspectorViewController: UIViewController {
             presentationLifecycleCoordinator,
         ] generation in
             removeActiveHost()
-            Task { @MainActor in
+            let task = Task { @MainActor in
                 defer {
                     #if DEBUG
                     presentationLifecycleCoordinator.recordRetirementTaskCompletionForTesting()
@@ -325,6 +328,9 @@ public final class WebInspectorViewController: UIViewController {
                     detach: automaticallyDetachesOnDismiss
                 )
             }
+            #if DEBUG
+            rootPresentationRetirementTaskForTesting = task
+            #endif
         }
     }
 

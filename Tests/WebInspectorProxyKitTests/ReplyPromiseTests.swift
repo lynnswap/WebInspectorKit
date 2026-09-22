@@ -6,7 +6,15 @@ private enum ReplyPromiseTestError: Error, Equatable {
     case duplicate
 }
 
-private final class ReplyPromiseLifetimeToken: Sendable {}
+private final class ReplyPromiseLifetimeToken: Sendable {
+    let onDeinit: @Sendable () -> Void
+
+    init(onDeinit: @escaping @Sendable () -> Void) {
+        self.onDeinit = onDeinit
+    }
+
+    deinit { onDeinit() }
+}
 
 @Test
 func replyPromiseReplaysFulfillmentBeforeWait() async throws {
@@ -21,10 +29,8 @@ func replyPromiseReplaysFulfillmentBeforeWait() async throws {
 @Test
 func replyPromiseResumesConcurrentWaitersWithOneTerminalResult() async throws {
     let promise = ReplyPromise<Int>()
-    let first = Task { try await promise.value() }
-    let second = Task { try await promise.value() }
-
-    #expect(await waitForReplyPromiseWaiterCount(2, in: promise))
+    let first = await registeredWaiter(in: promise)
+    let second = await registeredWaiter(in: promise)
     #expect(promise.fulfill(.success(42)))
     #expect(try await first.value == 42)
     #expect(try await second.value == 42)
@@ -67,17 +73,14 @@ func replyPromiseUnresolvedWaitObservesPreexistingCancellation() async throws {
 @Test
 func replyPromiseCancelledWaiterDoesNotPoisonLaterFulfillment() async throws {
     let promise = ReplyPromise<Int>()
-    let cancelledWaiter = Task { try await promise.value() }
-
-    #expect(await waitForReplyPromiseWaiterCount(1, in: promise))
+    let cancelledWaiter = await registeredWaiter(in: promise)
     cancelledWaiter.cancel()
     await #expect(throws: CancellationError.self) {
         try await cancelledWaiter.value
     }
     #expect(promise.bookkeepingCountForTesting() == 0)
 
-    let laterWaiter = Task { try await promise.value() }
-    #expect(await waitForReplyPromiseWaiterCount(1, in: promise))
+    let laterWaiter = await registeredWaiter(in: promise)
     #expect(promise.fulfill(.success(45)))
     #expect(try await laterWaiter.value == 45)
     #expect(promise.bookkeepingCountForTesting() == 0)
@@ -104,8 +107,7 @@ func replyPromiseCancellationAndFulfillmentRaceResumesExactlyOnce() async throws
     for value in 0..<100 {
         let promise = ReplyPromise<Int>()
         let raceGate = WebInspectorCancellationAwareTestGate()
-        let waiter = Task { try await promise.value() }
-        #expect(await waitForReplyPromiseWaiterCount(1, in: promise))
+        let waiter = await registeredWaiter(in: promise)
 
         let cancellation = Task {
             await raceGate.wait()
@@ -134,44 +136,51 @@ func replyPromiseCancellationAndFulfillmentRaceResumesExactlyOnce() async throws
 
 @Test
 func replyPromiseAndPendingTaskReleaseAfterExplicitTerminal() async throws {
-    weak var weakPromise: ReplyPromise<Int>?
-    weak var weakTaskToken: ReplyPromiseLifetimeToken?
+    let promiseRelease = AsyncStream<Void>.makeStream()
+    let taskRelease = AsyncStream<Void>.makeStream()
+    defer {
+        promiseRelease.continuation.finish()
+        taskRelease.continuation.finish()
+    }
 
     do {
-        let promise = ReplyPromise<Int>()
-        let taskToken = ReplyPromiseLifetimeToken()
-        weakPromise = promise
-        weakTaskToken = taskToken
+        let promise = ReplyPromise<ReplyPromiseLifetimeToken>()
+        let taskToken = ReplyPromiseLifetimeToken { taskRelease.continuation.yield(()) }
+        let registration = AsyncStream<Void>.makeStream()
         let waiter = Task {
-            let value = try await promise.value()
+            let value = try await promise.value {
+                registration.continuation.yield(())
+            }
             withExtendedLifetime(taskToken) {}
             return value
         }
-        #expect(await waitForReplyPromiseWaiterCount(1, in: promise))
+        var registrations = registration.stream.makeAsyncIterator()
+        _ = await registrations.next()
+        registration.continuation.finish()
 
-        #expect(promise.fulfill(.success(47)))
-        #expect(try await waiter.value == 47)
+        // The resolved value remains owned by the promise and the task result.
+        // Its deinit proves that both terminal owners released it.
+        #expect(promise.fulfill(.success(ReplyPromiseLifetimeToken {
+            promiseRelease.continuation.yield(())
+        })))
+        _ = try await waiter.value
     }
 
-    for _ in 0..<10_000 {
-        guard weakPromise != nil || weakTaskToken != nil else {
-            break
-        }
-        await Task.yield()
-    }
-    #expect(weakPromise == nil)
-    #expect(weakTaskToken == nil)
+    var promiseReleases = promiseRelease.stream.makeAsyncIterator()
+    var taskReleases = taskRelease.stream.makeAsyncIterator()
+    #expect(await promiseReleases.next() != nil)
+    #expect(await taskReleases.next() != nil)
 }
 
-private func waitForReplyPromiseWaiterCount<Value: Sendable>(
-    _ expectedCount: Int,
+private func registeredWaiter<Value: Sendable>(
     in promise: ReplyPromise<Value>
-) async -> Bool {
-    for _ in 0..<10_000 {
-        if promise.waiterCountForTesting() == expectedCount {
-            return true
-        }
-        await Task.yield()
+) async -> Task<Value, any Error> {
+    let registration = AsyncStream<Void>.makeStream()
+    let waiter = Task {
+        try await promise.value { registration.continuation.yield(()) }
     }
-    return false
+    var iterator = registration.stream.makeAsyncIterator()
+    _ = await iterator.next()
+    registration.continuation.finish()
+    return waiter
 }

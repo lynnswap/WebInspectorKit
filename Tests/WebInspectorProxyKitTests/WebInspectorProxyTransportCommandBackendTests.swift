@@ -3783,16 +3783,11 @@ func transportBackendDoesNotDeliverFrameDocumentUpdatedToCurrentPageDOMRoute() a
     let target = try await proxy.waitForCurrentPage()
     #expect(target.route == .currentPage)
 
-    let eventProbe = CompletionProbe()
     let eventTask = Task {
         var iterator = target.dom.events.makeAsyncIterator()
-        if await iterator.next() != nil {
-            await eventProbe.finish()
-        }
+        return await iterator.next()
     }
-    defer {
-        eventTask.cancel()
-    }
+    defer { eventTask.cancel() }
 
     await waitForEventSubscription(target, domain: .dom)
     await receiveTargetEvent(
@@ -3802,8 +3797,19 @@ func transportBackendDoesNotDeliverFrameDocumentUpdatedToCurrentPageDOMRoute() a
         params: "{}"
     )
 
-    try await Task.sleep(for: .milliseconds(100))
-    #expect(await eventProbe.isFinished() == false)
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "DOM.inspect",
+        params: #"{"nodeId":42}"#
+    )
+
+    let event = try #require(try await value(of: eventTask))
+    guard case let .inspect(nodeID) = event else {
+        Issue.record("Expected the later page inspection, not the frame document update.")
+        return
+    }
+    #expect(nodeID == DOM.Node.ID("42"))
 }
 
 @Test

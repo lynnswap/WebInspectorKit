@@ -40,6 +40,7 @@ public final class WebInspectorSession {
     @ObservationIgnored private var pageUserInterfaceStyleObserver: (any WebInspectorPageUserInterfaceStyleObserving)?
     #if DEBUG
     package private(set) var detachCountForTesting = 0
+    @ObservationIgnored package private(set) var abandonmentRetirementTaskForTesting: Task<Void, Never>?
     #endif
 
     /// Creates a session with the provided inspector tabs.
@@ -188,9 +189,13 @@ public final class WebInspectorSession {
               let retirement = takeDeferredRootPresentationRetirement() else {
             return
         }
-        Task { @MainActor [weak self] in
-            await self?.completeRootPresentationRetirement(retirement)
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await completeRootPresentationRetirement(retirement)
         }
+        #if DEBUG
+        abandonmentRetirementTaskForTesting = task
+        #endif
     }
 
     package func retireRootPresentation(detach: Bool) async {
