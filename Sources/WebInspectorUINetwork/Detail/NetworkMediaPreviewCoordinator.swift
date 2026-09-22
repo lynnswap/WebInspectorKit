@@ -4,19 +4,19 @@ import Foundation
 import UIKit
 import WebInspectorDataKit
 
-package enum NetworkMediaPreviewSourcePolicy: Equatable, Sendable {
+enum NetworkMediaPreviewSourcePolicy: Equatable, Sendable {
     case body
     case syntax
     case preferredRemotePlayback(URL)
 }
 
-package struct NetworkMediaPreviewMetadata: Equatable, Sendable {
-    package var mimeType: String?
-    package var url: String?
-    package var sourcePolicy: NetworkMediaPreviewSourcePolicy
-    package var remotePlaybackHTTPUserAgent: String?
+struct NetworkMediaPreviewMetadata: Equatable, Sendable {
+    var mimeType: String?
+    var url: String?
+    var sourcePolicy: NetworkMediaPreviewSourcePolicy
+    var remotePlaybackHTTPUserAgent: String?
 
-    package init(
+    init(
         mimeType: String?,
         url: String?,
         sourcePolicy: NetworkMediaPreviewSourcePolicy,
@@ -29,19 +29,19 @@ package struct NetworkMediaPreviewMetadata: Equatable, Sendable {
     }
 }
 
-package struct NetworkMoviePreview: Equatable, Sendable {
-    package let bodyID: ObjectIdentifier
-    package let url: URL
-    package let httpUserAgent: String?
+struct NetworkMoviePreview: Equatable, Sendable {
+    let bodyID: ObjectIdentifier
+    let url: URL
+    let httpUserAgent: String?
 
-    package init(bodyID: ObjectIdentifier, url: URL, httpUserAgent: String? = nil) {
+    init(bodyID: ObjectIdentifier, url: URL, httpUserAgent: String? = nil) {
         self.bodyID = bodyID
         self.url = url
         self.httpUserAgent = httpUserAgent
     }
 }
 
-package enum NetworkMediaPreviewPreparationAction {
+enum NetworkMediaPreviewPreparationAction {
     case unavailable
     case failed
     case active
@@ -52,7 +52,7 @@ package enum NetworkMediaPreviewPreparationAction {
     case startedLoading
 }
 
-package enum NetworkMediaPreviewResultAction {
+enum NetworkMediaPreviewResultAction {
     case ignore
     case fallback
     case showImage(UIImage)
@@ -60,7 +60,7 @@ package enum NetworkMediaPreviewResultAction {
 }
 
 @MainActor
-package final class NetworkMediaPreviewCoordinator {
+final class NetworkMediaPreviewCoordinator {
     private var generation = 0
     private var task: Task<Void, Never>?
     private var pendingInput: NetworkMediaPreviewInput?
@@ -68,9 +68,9 @@ package final class NetworkMediaPreviewCoordinator {
     private var failedInput: NetworkMediaPreviewInput?
     private var temporaryFile: NetworkMediaTemporaryFile?
 
-    package init() {}
+    init() {}
 
-    package func preparePreview(
+    func preparePreview(
         for body: NetworkBody,
         metadata: NetworkMediaPreviewMetadata?,
         completion: @escaping @MainActor (NetworkMediaPreviewResultAction) -> Void
@@ -94,29 +94,29 @@ package final class NetworkMediaPreviewCoordinator {
         }
     }
 
-    package func prepareSyntaxPreview() {
+    func prepareSyntaxPreview() {
         cancelPending()
         displayedIdentity = nil
     }
 
-    package func hideMediaPreview() {
-        cancelPending()
-        displayedIdentity = nil
-        removeCachedTemporaryFile()
-    }
-
-    package func cancel() {
+    func hideMediaPreview() {
         cancelPending()
         displayedIdentity = nil
         removeCachedTemporaryFile()
     }
 
-    package func suspendPreparation() {
+    func cancel() {
+        cancelPending()
+        displayedIdentity = nil
+        removeCachedTemporaryFile()
+    }
+
+    func suspendPreparation() {
         cancelPending()
     }
 
 #if DEBUG
-    package func waitUntilPreparationFinishedForTesting() async {
+    func waitUntilPreparationFinishedForTesting() async {
         while let task {
             await task.value
         }

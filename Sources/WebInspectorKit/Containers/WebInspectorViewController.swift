@@ -143,7 +143,7 @@ public final class WebInspectorViewController: UIViewController {
     private var drawsBackgroundStorage = true
     private let presentationLifecycleCoordinator = WebInspectorRootPresentationLifecycleCoordinator()
     #if DEBUG
-    package private(set) var rootPresentationRetirementTaskForTesting: Task<Void, Never>?
+    private(set) var rootPresentationRetirementTaskForTesting: Task<Void, Never>?
     #endif
     private lazy var presentationHostWindowObserver: WebInspectorPresentationHostWindowObserverView = {
         let view = WebInspectorPresentationHostWindowObserverView(frame: .zero)
@@ -166,7 +166,7 @@ public final class WebInspectorViewController: UIViewController {
 
     private var activeHost: UIViewController?
     private var activeHostKind: HostKind?
-    package var horizontalSizeClassOverrideForTesting: UIUserInterfaceSizeClass? {
+    var horizontalSizeClassOverrideForTesting: UIUserInterfaceSizeClass? {
         didSet {
             rebuildLayout(forceHostReplacement: true)
         }
@@ -426,16 +426,16 @@ public final class WebInspectorViewController: UIViewController {
         activeHostKind = nil
     }
 
-    package var activeHostViewControllerForTesting: UIViewController? {
+    var activeHostViewControllerForTesting: UIViewController? {
         activeHost
     }
 
     #if DEBUG
-    package var presentationContentStoreForTesting: PresentationContentStore {
+    var presentationContentStoreForTesting: PresentationContentStore {
         presentationContentStore
     }
 
-    package func finishRootPresentationLifecycleForTesting(cancelled: Bool = false) {
+    func finishRootPresentationLifecycleForTesting(cancelled: Bool = false) {
         guard cancelled == false,
               presentationLifecycleCoordinator.hasFinishedCurrentPresentationForTesting == false else {
             return
@@ -444,15 +444,15 @@ public final class WebInspectorViewController: UIViewController {
         finishRootPresentationLifecycle()
     }
 
-    package var hasFinishedRootPresentationLifecycleForTesting: Bool {
+    var hasFinishedRootPresentationLifecycleForTesting: Bool {
         presentationLifecycleCoordinator.hasFinishedCurrentPresentationForTesting
     }
 
-    package var rootPresentationRetirementTaskCompletionCountForTesting: UInt64 {
+    var rootPresentationRetirementTaskCompletionCountForTesting: UInt64 {
         presentationLifecycleCoordinator.retirementTaskCompletionCountForTesting
     }
 
-    package func waitForRootPresentationRetirementTaskCompletionForTesting(
+    func waitForRootPresentationRetirementTaskCompletionForTesting(
         after baselineCount: UInt64
     ) async -> Bool {
         await presentationLifecycleCoordinator.waitForRetirementTaskCompletionForTesting(after: baselineCount)

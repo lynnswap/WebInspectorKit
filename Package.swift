@@ -153,41 +153,22 @@ let package = Package(
                     condition: .when(platforms: [.iOS])
                 ),
                 .product(name: "ObservationBridge", package: "ObservationBridge"),
+                .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS])),
                 .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS]))
-            ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WebInspectorUISyntaxBody",
-            dependencies: [
-                "WebInspectorDataKit",
-                "WebInspectorProxyKit",
-                "WebInspectorUIBase",
-                "WebInspectorUINetwork",
-                .product(name: "ObservationBridge", package: "ObservationBridge"),
-                .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))
-            ],
-            swiftSettings: strictSwiftSettings
-        ),
-        .target(
-            name: "WebInspectorUI",
-            dependencies: [
-                "WebInspectorDataKit",
-                "WebInspectorUIBase",
-                "WebInspectorUIDOM",
-                "WebInspectorUINetwork",
-                "WebInspectorUISyntaxBody",
-                .product(name: "ObservationBridge", package: "ObservationBridge")
-            ],
-            exclude: [
-                "README.md"
             ],
             swiftSettings: strictSwiftSettings
         ),
         .target(
             name: "WebInspectorKit",
             dependencies: [
-                "WebInspectorUI"
+                "WebInspectorDataKit",
+                "WebInspectorUIBase",
+                "WebInspectorUIDOM",
+                "WebInspectorUINetwork",
+                .product(name: "ObservationBridge", package: "ObservationBridge")
+            ],
+            exclude: [
+                "README.md"
             ],
             swiftSettings: strictSwiftSettings
         ),
@@ -240,8 +221,7 @@ let package = Package(
                 "WebInspectorUIBase",
                 "WebInspectorUIDOM",
                 "WebInspectorUINetwork",
-                "WebInspectorUISyntaxBody",
-                "WebInspectorUI",
+                "WebInspectorKit",
                 "WebInspectorTestSupport",
                 .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))
             ],

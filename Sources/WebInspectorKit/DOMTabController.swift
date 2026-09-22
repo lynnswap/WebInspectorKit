@@ -4,9 +4,9 @@ import WebInspectorUIBase
 import WebInspectorUIDOM
 
 @MainActor
-package struct DOMTabController: WebInspectorTab.BuiltInController {
-    package let tabID = WebInspectorTab.dom.id
-    package let descriptor = WebInspectorTab.DisplayDescriptor(
+struct DOMTabController: WebInspectorTab.BuiltInController {
+    let tabID = WebInspectorTab.dom.id
+    let descriptor = WebInspectorTab.DisplayDescriptor(
         title: WebInspectorTab.dom.title,
         image: WebInspectorTab.dom.image
     )
@@ -25,7 +25,7 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
         static let element = "element"
     }
 
-    package func displayItems(for layout: WebInspectorTab.HostLayout) -> [WebInspectorTab.DisplayItem] {
+    func displayItems(for layout: WebInspectorTab.HostLayout) -> [WebInspectorTab.DisplayItem] {
         switch layout {
         case .compact:
             [.tab(tabID), .domElement(parent: tabID)]
@@ -34,7 +34,7 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
         }
     }
 
-    package func descriptor(for displayItem: WebInspectorTab.DisplayItem) -> WebInspectorTab.DisplayDescriptor? {
+    func descriptor(for displayItem: WebInspectorTab.DisplayItem) -> WebInspectorTab.DisplayDescriptor? {
         switch displayItem {
         case let .tab(tabID):
             tabID == self.tabID ? descriptor : nil
@@ -45,7 +45,7 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
         }
     }
 
-    package func contentKeys(
+    func contentKeys(
         for layout: WebInspectorTab.HostLayout,
         displayItem: WebInspectorTab.DisplayItem
     ) -> [WebInspectorTab.ContentKey] {
@@ -64,7 +64,7 @@ package struct DOMTabController: WebInspectorTab.BuiltInController {
         }
     }
 
-    package func makeViewController(
+    func makeViewController(
         for displayItem: WebInspectorTab.DisplayItem,
         session: WebInspectorSession,
         contentStore: PresentationContentStore,

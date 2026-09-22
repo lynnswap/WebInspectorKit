@@ -4,7 +4,7 @@ import WebInspectorUIBase
 
 extension WebInspectorTab {
     @MainActor
-    package protocol BuiltInController {
+    protocol BuiltInController {
         var tabID: WebInspectorTab.ID { get }
         var descriptor: WebInspectorTab.DisplayDescriptor { get }
 
@@ -24,18 +24,18 @@ extension WebInspectorTab {
 }
 
 extension WebInspectorTab.BuiltInController {
-    package func displayItems(for layout: WebInspectorTab.HostLayout) -> [WebInspectorTab.DisplayItem] {
+    func displayItems(for layout: WebInspectorTab.HostLayout) -> [WebInspectorTab.DisplayItem] {
         [.tab(tabID)]
     }
 
-    package func descriptor(for displayItem: WebInspectorTab.DisplayItem) -> WebInspectorTab.DisplayDescriptor? {
+    func descriptor(for displayItem: WebInspectorTab.DisplayItem) -> WebInspectorTab.DisplayDescriptor? {
         guard displayItem == .tab(tabID) else {
             return nil
         }
         return descriptor
     }
 
-    package func contentKeys(
+    func contentKeys(
         for layout: WebInspectorTab.HostLayout,
         displayItem: WebInspectorTab.DisplayItem
     ) -> [WebInspectorTab.ContentKey] {
@@ -45,20 +45,20 @@ extension WebInspectorTab.BuiltInController {
 
 extension WebInspectorTab {
     @MainActor
-    package struct BuiltInCatalog {
+    struct BuiltInCatalog {
         private let domController = DOMTabController()
         private let networkController = NetworkTabController()
 
-        package init() {}
+        init() {}
 
-        package func controller(for tab: WebInspectorTab) -> (any WebInspectorTab.BuiltInController)? {
+        func controller(for tab: WebInspectorTab) -> (any WebInspectorTab.BuiltInController)? {
             guard let builtIn = tab.builtIn else {
                 return nil
             }
             return controller(for: builtIn)
         }
 
-        package func controller(for builtIn: WebInspectorTab.BuiltIn) -> any WebInspectorTab.BuiltInController {
+        func controller(for builtIn: WebInspectorTab.BuiltIn) -> any WebInspectorTab.BuiltInController {
             switch builtIn {
             case .dom:
                 domController
@@ -71,10 +71,10 @@ extension WebInspectorTab {
 
 extension WebInspectorTab {
     @MainActor
-    package enum ContentFactory {
+    enum ContentFactory {
         private static let catalog = WebInspectorTab.BuiltInCatalog()
 
-        package static func makeViewController(
+        static func makeViewController(
             for tab: WebInspectorTab,
             session: WebInspectorSession,
             contentStore: PresentationContentStore,
@@ -89,7 +89,7 @@ extension WebInspectorTab {
             )
         }
 
-        package static func makeViewController(
+        static func makeViewController(
             for displayItem: WebInspectorTab.DisplayItem,
             session: WebInspectorSession,
             contentStore: PresentationContentStore,
@@ -104,7 +104,7 @@ extension WebInspectorTab {
             )
         }
 
-        package static func makeViewController(
+        static func makeViewController(
             for displayItem: WebInspectorTab.DisplayItem,
             session: WebInspectorSession,
             contentStore: PresentationContentStore,
@@ -160,7 +160,7 @@ extension WebInspectorTab {
             )
         }
 
-        package static func contentKeys(
+        static func contentKeys(
             for hostLayout: WebInspectorTab.HostLayout,
             displayItem: WebInspectorTab.DisplayItem,
             tabs: [WebInspectorTab]

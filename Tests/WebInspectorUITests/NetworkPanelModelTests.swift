@@ -4,7 +4,7 @@ import Testing
 @testable import WebInspectorDataKit
 import WebInspectorProxyKit
 import WebInspectorProxyKitTesting
-@testable import WebInspectorUI
+@testable import WebInspectorKit
 @testable import WebInspectorUIBase
 @testable import WebInspectorUIDOM
 @testable import WebInspectorUINetwork

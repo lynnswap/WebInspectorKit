@@ -8,7 +8,7 @@ import WebInspectorUIBase
 
 private let webInspectorSessionLifecycleLogger = Logger(
     subsystem: "com.lynnswap.WebInspectorKit",
-    category: "WebInspectorUI.Lifecycle"
+    category: "WebInspectorKit.Lifecycle"
 )
 
 /// The UIKit-facing inspection session used by `WebInspectorViewController`.
@@ -23,7 +23,7 @@ public final class WebInspectorSession {
         var detachesSession: Bool
     }
 
-    package let interface: InterfaceModel
+    let interface: InterfaceModel
     /// The user interface style inferred from the inspected page.
     ///
     /// The value is `.unspecified` until the page style is known or when no useful style can be inferred.
@@ -39,8 +39,8 @@ public final class WebInspectorSession {
     ) -> any WebInspectorPageUserInterfaceStyleObserving
     @ObservationIgnored private var pageUserInterfaceStyleObserver: (any WebInspectorPageUserInterfaceStyleObserving)?
     #if DEBUG
-    package private(set) var detachCountForTesting = 0
-    @ObservationIgnored package private(set) var abandonmentRetirementTaskForTesting: Task<Void, Never>?
+    private(set) var detachCountForTesting = 0
+    @ObservationIgnored private(set) var abandonmentRetirementTaskForTesting: Task<Void, Never>?
     #endif
 
     /// Creates a session with the provided inspector tabs.
@@ -52,7 +52,7 @@ public final class WebInspectorSession {
         }
     }
 
-    package init(
+    init(
         context: WebInspectorContext,
         tabs: [WebInspectorTab] = [.dom, .network],
         makePageUserInterfaceStyleObserver: @escaping @MainActor (
@@ -71,7 +71,7 @@ public final class WebInspectorSession {
         stopPageUserInterfaceStyleObservation()
     }
 
-    package var context: WebInspectorContext {
+    var context: WebInspectorContext {
         dataContext
     }
 
@@ -90,7 +90,7 @@ public final class WebInspectorSession {
         )
     }
 
-    package func attach(
+    func attach(
         to webView: WKWebView,
         makeContainer: @MainActor (WKWebView) async throws -> WebInspectorContainer
     ) async throws {
@@ -104,7 +104,7 @@ public final class WebInspectorSession {
         )
     }
 
-    package func attachForTesting(
+    func attachForTesting(
         makeContainer: @escaping @MainActor () async throws -> WebInspectorContainer,
         makePageUserInterfaceStyleObserver: @escaping @MainActor (
             @escaping @MainActor (UIUserInterfaceStyle) -> Void
@@ -164,11 +164,11 @@ public final class WebInspectorSession {
         await stopContainer(replaceContextWithDetached: true)
     }
 
-    package func beginRootPresentation(id: UUID) {
+    func beginRootPresentation(id: UUID) {
         activeRootPresentationIDs.insert(id)
     }
 
-    package func retireRootPresentation(id: UUID, detach: Bool) async {
+    func retireRootPresentation(id: UUID, detach: Bool) async {
         guard activeRootPresentationIDs.remove(id) != nil else {
             return
         }
@@ -180,7 +180,7 @@ public final class WebInspectorSession {
         await completeRootPresentationRetirement(retirement)
     }
 
-    package func abandonRootPresentation(id: UUID, detach: Bool) {
+    func abandonRootPresentation(id: UUID, detach: Bool) {
         guard activeRootPresentationIDs.remove(id) != nil else {
             return
         }
@@ -198,7 +198,7 @@ public final class WebInspectorSession {
         #endif
     }
 
-    package func retireRootPresentation(detach: Bool) async {
+    func retireRootPresentation(detach: Bool) async {
         guard activeRootPresentationIDs.isEmpty else {
             return
         }
@@ -321,7 +321,7 @@ public final class WebInspectorSession {
         attachmentGeneration == generation
     }
 
-    package func installDataContext(_ context: WebInspectorContext) {
+    func installDataContext(_ context: WebInspectorContext) {
         dataContext = context
         interface.contextDidChange()
     }
@@ -346,7 +346,7 @@ public final class WebInspectorSession {
 
 #if DEBUG
 extension WebInspectorSession {
-    package var hasPageUserInterfaceStyleObserverForTesting: Bool {
+    var hasPageUserInterfaceStyleObserverForTesting: Bool {
         pageUserInterfaceStyleObserver != nil
     }
 }
@@ -354,23 +354,23 @@ extension WebInspectorSession {
 
 @MainActor
 @Observable
-package final class InterfaceModel {
-    package private(set) var tabs: [WebInspectorTab]
-    package private(set) var selectedItemID: WebInspectorTab.DisplayItem.ID?
-    package private(set) var contextBoundContentRevision = 0
+final class InterfaceModel {
+    private(set) var tabs: [WebInspectorTab]
+    private(set) var selectedItemID: WebInspectorTab.DisplayItem.ID?
+    private(set) var contextBoundContentRevision = 0
     @ObservationIgnored private let projection = WebInspectorTab.DisplayProjection()
 
-    package init(tabs: [WebInspectorTab] = [.dom, .network]) {
+    init(tabs: [WebInspectorTab] = [.dom, .network]) {
         let uniqueTabs = Self.uniqueTabs(tabs)
         self.tabs = uniqueTabs
         selectedItemID = uniqueTabs.first.map { Self.displayItem(for: $0).id }
     }
 
-    package func displayItems(for hostLayout: WebInspectorTab.HostLayout) -> [WebInspectorTab.DisplayItem] {
+    func displayItems(for hostLayout: WebInspectorTab.HostLayout) -> [WebInspectorTab.DisplayItem] {
         projection.displayItems(for: hostLayout, tabs: tabs)
     }
 
-    package func resolvedSelection(for hostLayout: WebInspectorTab.HostLayout) -> WebInspectorTab.DisplayItem? {
+    func resolvedSelection(for hostLayout: WebInspectorTab.HostLayout) -> WebInspectorTab.DisplayItem? {
         projection.resolvedSelection(
             for: hostLayout,
             tabs: tabs,
@@ -378,25 +378,25 @@ package final class InterfaceModel {
         )
     }
 
-    package func descriptor(for displayItem: WebInspectorTab.DisplayItem) -> WebInspectorTab.DisplayDescriptor? {
+    func descriptor(for displayItem: WebInspectorTab.DisplayItem) -> WebInspectorTab.DisplayDescriptor? {
         projection.descriptor(for: displayItem, tabs: tabs)
     }
 
-    package func selectTab(_ tab: WebInspectorTab) {
+    func selectTab(_ tab: WebInspectorTab) {
         guard tabs.contains(tab) else {
             return
         }
         selectItem(Self.displayItem(for: tab))
     }
 
-    package func selectTab(withID tabID: WebInspectorTab.ID) {
+    func selectTab(withID tabID: WebInspectorTab.ID) {
         guard let tab = tabs.first(where: { $0.id == tabID }) else {
             return
         }
         selectTab(tab)
     }
 
-    package func selectItem(_ displayItem: WebInspectorTab.DisplayItem) {
+    func selectItem(_ displayItem: WebInspectorTab.DisplayItem) {
         guard isValidItemID(displayItem.id),
               selectedItemID != displayItem.id else {
             return
@@ -404,7 +404,7 @@ package final class InterfaceModel {
         selectedItemID = displayItem.id
     }
 
-    package func selectItem(withID displayItemID: WebInspectorTab.DisplayItem.ID) {
+    func selectItem(withID displayItemID: WebInspectorTab.DisplayItem.ID) {
         guard isValidItemID(displayItemID),
               selectedItemID != displayItemID else {
             return
@@ -412,7 +412,7 @@ package final class InterfaceModel {
         selectedItemID = displayItemID
     }
 
-    package func setTabs(_ tabs: [WebInspectorTab]) {
+    func setTabs(_ tabs: [WebInspectorTab]) {
         let uniqueTabs = Self.uniqueTabs(tabs)
         self.tabs = uniqueTabs
         guard let selectedItemID,
@@ -422,16 +422,16 @@ package final class InterfaceModel {
         }
     }
 
-    package func contextDidChange() {
+    func contextDidChange() {
         contextBoundContentRevision &+= 1
     }
 
-    package func reachableContentKeys() -> Set<WebInspectorTab.ContentKey> {
+    func reachableContentKeys() -> Set<WebInspectorTab.ContentKey> {
         projection.contentKeys(for: .compact, tabs: tabs)
             .union(projection.contentKeys(for: .regular, tabs: tabs))
     }
 
-    package var selectedTab: WebInspectorTab? {
+    var selectedTab: WebInspectorTab? {
         guard let selectedItemID else {
             return nil
         }

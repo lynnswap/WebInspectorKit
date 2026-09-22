@@ -7,8 +7,7 @@ import Testing
 import WebInspectorProxyKit
 import WebInspectorProxyKitTesting
 import UIKit
-@testable import WebInspectorUI
-@testable import WebInspectorUISyntaxBody
+@testable import WebInspectorKit
 @testable import WebInspectorUINetwork
 @testable import WebInspectorUIBase
 
@@ -112,7 +111,7 @@ struct NetworkDetailViewControllerTests {
     @Test
     func detailShowsEmptyStateWithoutSelection() {
         let model = NetworkPanelModel(context: makeContext())
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -142,7 +141,7 @@ struct NetworkDetailViewControllerTests {
         }
 
         let model = NetworkPanelModel(context: makeContext())
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         viewController.traitOverrides.webInspectorDrawsBackground = false
 
         viewController.loadViewIfNeeded()
@@ -155,7 +154,7 @@ struct NetworkDetailViewControllerTests {
             viewController.webSocketPreviewViewControllerForTesting.collectionView.backgroundColor
                 == .clear
         )
-        #expect(viewController.syntaxBodyViewControllerForTesting.view.backgroundColor == .clear)
+        #expect(viewController.bodyViewControllerForTesting.view.backgroundColor == .clear)
     }
 
     @Test
@@ -263,7 +262,7 @@ struct NetworkDetailViewControllerTests {
     func regularSplitKeepsPrimarySecondaryLayout() throws {
         let model = NetworkPanelModel(context: makeContext())
         let listViewController = NetworkListViewController(model: model)
-        let detailViewController = makeNetworkDetailViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
         let splitViewController = NetworkSplitViewController(
             model: model,
             listViewController: listViewController,
@@ -291,7 +290,7 @@ struct NetworkDetailViewControllerTests {
     @Test
     func detailContentKeepsPreviewRoleControlInSafeArea() {
         let model = NetworkPanelModel(context: makeContext())
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         viewController.additionalSafeAreaInsets = UIEdgeInsets(top: 44, left: 120, bottom: 10, right: 24)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -347,7 +346,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -427,7 +426,7 @@ struct NetworkDetailViewControllerTests {
 
         let didRenderRequestPreview = await waitUntilRendered(in: viewController) {
             viewController.currentPreviewRoleForTesting == .request
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
         }
         #expect(didRenderRequestPreview)
     }
@@ -467,7 +466,7 @@ struct NetworkDetailViewControllerTests {
         let request = try #require(context.registeredRequest(forProxyID: requestID))
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(
+        let viewController = NetworkDetailViewController(
             model: model,
             initialMode: .security
         )
@@ -558,7 +557,7 @@ struct NetworkDetailViewControllerTests {
         ))
         let model = NetworkPanelModel(context: context)
         try selectEntry(containing: explicit, in: model)
-        let viewController = makeNetworkDetailViewController(
+        let viewController = NetworkDetailViewController(
             model: model,
             initialMode: .security
         )
@@ -640,7 +639,7 @@ struct NetworkDetailViewControllerTests {
         let original = try #require(context.registeredRequest(forProxyID: proxyID))
         let model = NetworkPanelModel(context: context)
         model.selectRequest(original)
-        let viewController = makeNetworkDetailViewController(
+        let viewController = NetworkDetailViewController(
             model: model,
             initialMode: .security
         )
@@ -1245,7 +1244,7 @@ struct NetworkDetailViewControllerTests {
         ))
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model, initialMode: .cookies)
+        let viewController = NetworkDetailViewController(model: model, initialMode: .cookies)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -1314,7 +1313,7 @@ struct NetworkDetailViewControllerTests {
         ))
         let model = NetworkPanelModel(context: context)
         try selectEntry(containing: first, in: model)
-        let viewController = makeNetworkDetailViewController(model: model, initialMode: .cookies)
+        let viewController = NetworkDetailViewController(model: model, initialMode: .cookies)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -1361,7 +1360,7 @@ struct NetworkDetailViewControllerTests {
         ))
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model, initialMode: .cookies)
+        let viewController = NetworkDetailViewController(model: model, initialMode: .cookies)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -2238,7 +2237,7 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(context: context)
         try selectEntry(containing: webSocketFirst, in: model)
         let frameScheduler = ManualNetworkFrameScheduler()
-        let viewController = makeNetworkDetailViewController(
+        let viewController = NetworkDetailViewController(
             model: model,
             initialMode: .preview,
             webSocketFrameScheduler: frameScheduler
@@ -2355,7 +2354,7 @@ struct NetworkDetailViewControllerTests {
         #expect(await waitUntilPreparedTextPreviewRendered(in: viewController) {
             viewController.webSocketPreviewViewControllerForTesting.view.isHidden
                 && viewController.previewViewForTesting.isHidden == false
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text
                     .contains("ordinary-second")
         })
         #expect(
@@ -2366,7 +2365,7 @@ struct NetworkDetailViewControllerTests {
         try selectEntry(containing: ordinaryFirst, in: model)
         #expect(await waitUntilPreparedTextPreviewRendered(in: viewController) {
             viewController.webSocketPreviewViewControllerForTesting.view.isHidden
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text
                     .contains("ordinary-first")
         })
 
@@ -2393,7 +2392,7 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(context: context)
         model.selectRequest(first)
         let frameScheduler = ManualNetworkFrameScheduler()
-        let viewController = makeNetworkDetailViewController(
+        let viewController = NetworkDetailViewController(
             model: model,
             initialMode: .preview,
             webSocketFrameScheduler: frameScheduler
@@ -2731,7 +2730,7 @@ struct NetworkDetailViewControllerTests {
         let request = try #require(context.registeredRequest(forProxyID: requestID))
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -2782,7 +2781,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         model.selectRequest(bodyRequest)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
@@ -2790,7 +2789,7 @@ struct NetworkDetailViewControllerTests {
         let didRenderBody = await waitUntilRendered(in: viewController) {
             viewController.currentModeForTesting == .preview
                 && viewController.currentPreviewRoleForTesting == .request
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
         }
         #expect(didRenderBody)
 
@@ -2804,10 +2803,10 @@ struct NetworkDetailViewControllerTests {
         let didReplaceBody = await waitUntilRendered(in: viewController) {
             viewController.previewViewForTesting.isHidden == false
                 && viewController.isPreviewRoleControlHiddenForTesting
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == emptyText
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == emptyText
         }
         #expect(didReplaceBody)
-        #expect(viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text.contains("Jane") == false)
+        #expect(viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains("Jane") == false)
     }
 
     @Test
@@ -2835,7 +2834,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         model.selectRequest(responseOnlyRequest)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
@@ -2882,7 +2881,7 @@ struct NetworkDetailViewControllerTests {
         applyResponseBody(to: context, request: responseOnlyRequest, body: "response only body", base64Encoded: false)
         let model = NetworkPanelModel(context: context)
         model.selectRequest(requestAndResponse)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
@@ -2897,7 +2896,7 @@ struct NetworkDetailViewControllerTests {
 
         let didRenderRequestPreview = await waitUntilRendered(in: viewController) {
             viewController.currentPreviewRoleForTesting == .request
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
         }
         #expect(didRenderRequestPreview)
 
@@ -2907,7 +2906,7 @@ struct NetworkDetailViewControllerTests {
             viewController.currentPreviewRoleForTesting == .response
                 && viewController.logicalPreviewRoleForTesting == .request
                 && viewController.isPreviewRoleControlHiddenForTesting
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "response only body"
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "response only body"
         }
         #expect(didRenderResponseOnly)
 
@@ -2917,7 +2916,7 @@ struct NetworkDetailViewControllerTests {
             viewController.currentPreviewRoleForTesting == .request
                 && viewController.logicalPreviewRoleForTesting == .request
                 && viewController.isPreviewRoleControlHiddenForTesting == false
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
         }
         #expect(didRestoreRequestPreview)
     }
@@ -2934,7 +2933,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -2956,7 +2955,7 @@ struct NetworkDetailViewControllerTests {
             viewController.currentModeForTesting == .preview
                 && viewController.previewViewForTesting.isHidden == false
                 && viewController.isPreviewRoleControlHiddenForTesting
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == emptyText
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == emptyText
         }
         #expect(didRenderPlaceholder)
     }
@@ -2973,7 +2972,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.headers)
@@ -3014,7 +3013,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
@@ -3029,7 +3028,7 @@ struct NetworkDetailViewControllerTests {
         viewController.selectPreviewRoleForTesting(.request)
 
         let didRenderBody = await waitUntilRendered(in: viewController) {
-            viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
+            viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
         }
         #expect(didRenderBody)
     }
@@ -3047,7 +3046,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -3079,7 +3078,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
@@ -3140,7 +3139,7 @@ struct NetworkDetailViewControllerTests {
         let request = try #require(context.registeredRequest(forProxyID: requestID))
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(
+        let viewController = NetworkDetailViewController(
             model: model,
             initialMode: .preview
         )
@@ -3232,7 +3231,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         try selectEntry(containing: errorRequest, in: model)
-        let viewController = makeNetworkDetailViewController(
+        let viewController = NetworkDetailViewController(
             model: model,
             initialMode: .preview
         )
@@ -3241,7 +3240,7 @@ struct NetworkDetailViewControllerTests {
 
         #expect(await waitUntilPreparedTextPreviewRendered(in: viewController) {
             viewController.previewRequestIDForTesting == errorRequest.id
-                && viewController.syntaxBodyViewControllerForTesting
+                && viewController.bodyViewControllerForTesting
                     .syntaxViewForTesting.text.contains(#""error" : "not found""#)
         })
         #expect(model.selectedEntryRequests.map(\.id) == [successfulRequest.id, errorRequest.id])
@@ -3261,7 +3260,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.headers)
@@ -3308,27 +3307,27 @@ struct NetworkDetailViewControllerTests {
         applyResponseBody(to: context, request: request, body: #"{"visible":true}"#, base64Encoded: false)
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let viewController = NetworkDetailViewController(model: model, initialMode: .preview)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
         let didRenderVisibleBody = await waitUntilPreparedTextPreviewRendered(in: viewController) {
-            viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""visible" : true"#)
+            viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""visible" : true"#)
         }
         #expect(didRenderVisibleBody)
-        let renderedBodyBeforeHide = viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text
+        let renderedBodyBeforeHide = viewController.bodyViewControllerForTesting.syntaxViewForTesting.text
 
         viewController.beginAppearanceTransition(false, animated: false)
         viewController.endAppearanceTransition()
         applyResponseBody(to: context, request: request, body: #"{"hidden":true}"#, base64Encoded: false)
 
-        #expect(viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == renderedBodyBeforeHide)
+        #expect(viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == renderedBodyBeforeHide)
 
         viewController.beginAppearanceTransition(true, animated: false)
         viewController.endAppearanceTransition()
 
         let didRenderHiddenBody = await waitUntilPreparedTextPreviewRendered(in: viewController) {
-            viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""hidden" : true"#)
+            viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""hidden" : true"#)
         }
         #expect(didRenderHiddenBody)
     }
@@ -3349,18 +3348,18 @@ struct NetworkDetailViewControllerTests {
         applyResponseBody(to: context, request: request, body: bodyText, base64Encoded: false)
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let viewController = NetworkDetailViewController(model: model, initialMode: .preview)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
         let didRenderRawBody = await waitUntilRendered(in: viewController) {
-            viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == bodyText
+            viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == bodyText
         }
         #expect(didRenderRawBody)
 
-        await viewController.syntaxBodyViewControllerForTesting.waitUntilTextPreviewPreparationFinishedForTesting()
+        await viewController.bodyViewControllerForTesting.waitUntilTextPreviewPreparationFinishedForTesting()
 
-        #expect(viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == bodyText)
+        #expect(viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == bodyText)
     }
 
     @Test
@@ -3379,12 +3378,12 @@ struct NetworkDetailViewControllerTests {
         applyResponseBody(to: context, request: request, body: bodyText, base64Encoded: false)
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let viewController = NetworkDetailViewController(model: model, initialMode: .preview)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
         let didRenderPrettyBody = await waitUntilPreparedTextPreviewRendered(in: viewController) {
-            viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == """
+            viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == """
             {
               "a" : 1,
               "b" : [
@@ -3478,9 +3477,9 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
-        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+        viewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
             playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
@@ -3488,7 +3487,7 @@ struct NetworkDetailViewControllerTests {
         viewController.setModeForTesting(.preview)
 
         let didShowPlayer = await waitUntilRendered(in: viewController) {
-            viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString
+            viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString
                 == playlistURL
         }
         #expect(didShowPlayer)
@@ -3604,12 +3603,12 @@ struct NetworkDetailViewControllerTests {
             ))
             let model = NetworkPanelModel(context: context)
             model.selectRequest(request)
-            let viewController = makeNetworkDetailViewController(
+            let viewController = NetworkDetailViewController(
                 model: model,
                 initialMode: .preview
             )
             var playerCreationCount = 0
-            viewController.syntaxBodyViewControllerForTesting
+            viewController.bodyViewControllerForTesting
                 .setMoviePreviewPlayerFactoryForTesting {
                     playerCreationCount += 1
                     return StubMoviePreviewPlayer()
@@ -3619,12 +3618,12 @@ struct NetworkDetailViewControllerTests {
 
             #expect(await waitUntilRendered(in: viewController) {
                 viewController.currentModeForTesting == .preview
-                    && viewController.syntaxBodyViewControllerForTesting
+                    && viewController.bodyViewControllerForTesting
                         .syntaxViewForTesting.text.isEmpty == false
                     && viewController.responseBodyFetchObservationDeliveryForTesting == nil
             }, Comment(rawValue: input.name))
             #expect(
-                viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == nil,
+                viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == nil,
                 Comment(rawValue: input.name)
             )
             #expect(playerCreationCount == 0, Comment(rawValue: input.name))
@@ -3658,9 +3657,9 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
-        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+        viewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
             playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
@@ -3668,7 +3667,7 @@ struct NetworkDetailViewControllerTests {
         viewController.setModeForTesting(.preview)
 
         let didShowPlaylistText = await waitUntilPreparedTextPreviewRendered(in: viewController) {
-            viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text == playlist
+            viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == playlist
         }
 
         #expect(didShowPlaylistText)
@@ -3677,7 +3676,7 @@ struct NetworkDetailViewControllerTests {
             return
         }
         #expect(viewController.responseBodyFetchObservationDeliveryForTesting != nil)
-        #expect(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == nil)
+        #expect(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == nil)
         #expect(playerFactory.players.isEmpty)
     }
 
@@ -3699,9 +3698,9 @@ struct NetworkDetailViewControllerTests {
         ))
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
-        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+        viewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
             playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
@@ -3709,7 +3708,7 @@ struct NetworkDetailViewControllerTests {
         viewController.setModeForTesting(.preview)
 
         let didShowRemoteMovie = await waitUntilRendered(in: viewController) {
-            viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString
+            viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString
                 == movieURL
         }
 
@@ -3775,14 +3774,14 @@ struct NetworkDetailViewControllerTests {
             ))
             let model = NetworkPanelModel(context: context)
             model.selectRequest(request)
-            let viewController = makeNetworkDetailViewController(model: model)
+            let viewController = NetworkDetailViewController(model: model)
             let window = showInWindow(viewController)
             defer { window.isHidden = true }
             viewController.setModeForTesting(.preview)
 
             let didSettleWithoutRemotePlayback = await waitUntilRendered(in: viewController) {
                 guard viewController.currentModeForTesting == .preview,
-                      viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == nil,
+                      viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == nil,
                       viewController.responseBodyFetchObservationDeliveryForTesting == nil else {
                     return false
                 }
@@ -3797,7 +3796,7 @@ struct NetworkDetailViewControllerTests {
 
             #expect(didSettleWithoutRemotePlayback, Comment(rawValue: input.id))
             #expect(
-                viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == nil,
+                viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == nil,
                 Comment(rawValue: input.id)
             )
         }
@@ -3993,9 +3992,9 @@ struct NetworkDetailViewControllerTests {
         applyResponseBody(to: context, request: request, body: "not a real movie", base64Encoded: false)
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
-        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+        viewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
             playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
@@ -4004,10 +4003,10 @@ struct NetworkDetailViewControllerTests {
         await waitUntilMediaPreviewPrepared(in: viewController)
 
         let didRenderMediaPreview = await waitUntilRendered(in: viewController) {
-            viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
+            viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
         }
         #expect(didRenderMediaPreview)
-        let temporaryFileURL = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
+        let temporaryFileURL = try #require(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting)
         #expect(playerFactory.players.count == 1)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
@@ -4015,7 +4014,7 @@ struct NetworkDetailViewControllerTests {
 
         let didReleaseMediaPreview = await waitUntilRendered(in: viewController) {
             viewController.currentModeForTesting == .headers
-                && viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == nil
+                && viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == nil
                 && FileManager.default.fileExists(atPath: temporaryFileURL.path) == false
         }
         #expect(didReleaseMediaPreview)
@@ -4026,7 +4025,7 @@ struct NetworkDetailViewControllerTests {
 
         let didRestoreMediaPreview = await waitUntilRendered(in: viewController) {
             viewController.currentModeForTesting == .preview
-                && viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
+                && viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
         }
         #expect(didRestoreMediaPreview)
         #expect(playerFactory.players.count == 2)
@@ -4047,9 +4046,9 @@ struct NetworkDetailViewControllerTests {
         applyResponseBody(to: context, request: request, body: "not a real movie", base64Encoded: false)
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
-        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+        viewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
             playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
@@ -4058,12 +4057,12 @@ struct NetworkDetailViewControllerTests {
         await waitUntilMediaPreviewPrepared(in: viewController)
 
         let didRenderMediaPreview = await waitUntilRendered(in: viewController) {
-            viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
-                && viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting != nil
+            viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
+                && viewController.bodyViewControllerForTesting.mediaPlayerIdentityForTesting != nil
         }
         #expect(didRenderMediaPreview)
-        let temporaryFileURL = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
-        let playerIdentity = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting)
+        let temporaryFileURL = try #require(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting)
+        let playerIdentity = try #require(viewController.bodyViewControllerForTesting.mediaPlayerIdentityForTesting)
         #expect(playerFactory.players.count == 1)
 
         await applyDataReceived(
@@ -4075,8 +4074,8 @@ struct NetworkDetailViewControllerTests {
         )
 
         #expect(request.encodedDataLength == 64)
-        #expect(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == temporaryFileURL)
-        #expect(viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting == playerIdentity)
+        #expect(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == temporaryFileURL)
+        #expect(viewController.bodyViewControllerForTesting.mediaPlayerIdentityForTesting == playerIdentity)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
         #expect(playerFactory.players.count == 1)
     }
@@ -4144,9 +4143,9 @@ struct NetworkDetailViewControllerTests {
         applyResponseBody(to: context, request: request, body: "not a real movie", base64Encoded: false)
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
-        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+        viewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
             playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
@@ -4155,10 +4154,10 @@ struct NetworkDetailViewControllerTests {
         await waitUntilMediaPreviewPrepared(in: viewController)
 
         let didRenderMediaPreview = await waitUntilRendered(in: viewController) {
-            viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
+            viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
         }
         #expect(didRenderMediaPreview)
-        let temporaryFileURL = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
+        let temporaryFileURL = try #require(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting)
         let player = try #require(playerFactory.players.first)
         #expect(playerFactory.players.count == 1)
         #expect(player.pauseCallCount == 0)
@@ -4168,7 +4167,7 @@ struct NetworkDetailViewControllerTests {
         viewController.endAppearanceTransition()
 
         #expect(player.pauseCallCount == 1)
-        #expect(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == temporaryFileURL)
+        #expect(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == temporaryFileURL)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
         viewController.beginAppearanceTransition(true, animated: false)
@@ -4176,7 +4175,7 @@ struct NetworkDetailViewControllerTests {
         await waitUntilMediaPreviewPrepared(in: viewController)
 
         #expect(playerFactory.players.count == 1)
-        #expect(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == temporaryFileURL)
+        #expect(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == temporaryFileURL)
         #expect(player.pauseCallCount == 1)
     }
 
@@ -4195,9 +4194,9 @@ struct NetworkDetailViewControllerTests {
         applyResponseBody(to: context, request: request, body: "not a real movie", base64Encoded: false)
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
-        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+        viewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
             playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
@@ -4206,10 +4205,10 @@ struct NetworkDetailViewControllerTests {
         await waitUntilMediaPreviewPrepared(in: viewController)
 
         let didRenderMediaPreview = await waitUntilRendered(in: viewController) {
-            viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
+            viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
         }
         #expect(didRenderMediaPreview)
-        let temporaryFileURL = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
+        let temporaryFileURL = try #require(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting)
         #expect(playerFactory.players.count == 1)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
@@ -4218,7 +4217,7 @@ struct NetworkDetailViewControllerTests {
         let didReleaseMediaPreview = await waitUntilRendered(in: viewController) {
             viewController.contentUnavailableConfiguration != nil
                 && viewController.previewViewForTesting.isHidden
-                && viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == nil
+                && viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == nil
                 && FileManager.default.fileExists(atPath: temporaryFileURL.path) == false
         }
         #expect(didReleaseMediaPreview)
@@ -4240,9 +4239,9 @@ struct NetworkDetailViewControllerTests {
         applyResponseBody(to: context, request: request, body: "not a real movie", base64Encoded: false)
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let playerFactory = MoviePreviewPlayerFactorySpy()
-        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+        viewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
             playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
@@ -4251,10 +4250,10 @@ struct NetworkDetailViewControllerTests {
         await waitUntilMediaPreviewPrepared(in: viewController)
 
         let didRenderMediaPreview = await waitUntilRendered(in: viewController) {
-            viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
+            viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
         }
         #expect(didRenderMediaPreview)
-        let temporaryFileURL = try #require(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
+        let temporaryFileURL = try #require(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting)
         #expect(playerFactory.players.count == 1)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
@@ -4262,7 +4261,7 @@ struct NetworkDetailViewControllerTests {
         viewController.endAppearanceTransition()
         model.selectRequest(nil)
 
-        #expect(viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == temporaryFileURL)
+        #expect(viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == temporaryFileURL)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
         viewController.beginAppearanceTransition(true, animated: false)
@@ -4271,7 +4270,7 @@ struct NetworkDetailViewControllerTests {
         let didReleaseMediaPreview = await waitUntilRendered(in: viewController) {
             viewController.contentUnavailableConfiguration != nil
                 && viewController.previewViewForTesting.isHidden
-                && viewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == nil
+                && viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == nil
                 && FileManager.default.fileExists(atPath: temporaryFileURL.path) == false
         }
         #expect(didReleaseMediaPreview)
@@ -4295,8 +4294,8 @@ struct NetworkDetailViewControllerTests {
         applyResponseBody(to: context, request: request, body: pngBase64String(size: imageSize), base64Encoded: true)
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
-        viewController.syntaxBodyViewControllerForTesting.additionalSafeAreaInsets = UIEdgeInsets(
+        let viewController = NetworkDetailViewController(model: model)
+        viewController.bodyViewControllerForTesting.additionalSafeAreaInsets = UIEdgeInsets(
             top: 44,
             left: 0,
             bottom: 34,
@@ -4308,7 +4307,7 @@ struct NetworkDetailViewControllerTests {
         await waitUntilMediaPreviewPrepared(in: viewController)
 
         let didRenderImage = await waitUntilRendered(in: viewController) {
-            let bodyViewController = viewController.syntaxBodyViewControllerForTesting
+            let bodyViewController = viewController.bodyViewControllerForTesting
             let imageLayout = bodyViewController.imagePreviewRenderSnapshotForTesting
             let didCompleteImageLayout = imageLayout.map { layout in
                 let fitScale = min(
@@ -4326,7 +4325,7 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(didRenderImage)
 
-        let imageScrollView = viewController.syntaxBodyViewControllerForTesting.imageScrollViewForTesting
+        let imageScrollView = viewController.bodyViewControllerForTesting.imageScrollViewForTesting
         #expect(imageScrollView.contentInsetAdjustmentBehavior == .automatic)
         #expect(imageScrollView.contentAlignmentPoint == CGPoint(x: 0.5, y: 0.5))
         let fitScale = expectedImageFitScale(scrollView: imageScrollView, imageSize: imageSize)
@@ -4352,18 +4351,18 @@ struct NetworkDetailViewControllerTests {
         applyResponseBody(to: context, request: request, body: pngBase64String(size: imageSize), base64Encoded: true)
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
         await waitUntilMediaPreviewPrepared(in: viewController)
 
         let didRenderImage = await waitUntilRendered(in: viewController) {
-            viewController.syntaxBodyViewControllerForTesting.isImagePreviewVisibleForTesting
+            viewController.bodyViewControllerForTesting.isImagePreviewVisibleForTesting
         }
         #expect(didRenderImage)
 
-        let imageScrollView = viewController.syntaxBodyViewControllerForTesting.imageScrollViewForTesting
+        let imageScrollView = viewController.bodyViewControllerForTesting.imageScrollViewForTesting
         let initialBounds = imageScrollView.bounds
         let initialMinimumZoomScale = imageScrollView.minimumZoomScale
         window.frame = CGRect(x: 0, y: 0, width: 390, height: 700)
@@ -4399,18 +4398,18 @@ struct NetworkDetailViewControllerTests {
         applyResponseBody(to: context, request: request, body: pngBase64String(size: imageSize), base64Encoded: true)
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
         await waitUntilMediaPreviewPrepared(in: viewController)
 
         let didRenderImage = await waitUntilRendered(in: viewController) {
-            viewController.syntaxBodyViewControllerForTesting.isImagePreviewVisibleForTesting
+            viewController.bodyViewControllerForTesting.isImagePreviewVisibleForTesting
         }
         #expect(didRenderImage)
 
-        let imageScrollView = viewController.syntaxBodyViewControllerForTesting.imageScrollViewForTesting
+        let imageScrollView = viewController.bodyViewControllerForTesting.imageScrollViewForTesting
         #expect(imageScrollView.minimumZoomScale == 1)
         #expect(imageScrollView.zoomScale == 1)
         #expect(imageScrollView.contentInset == .zero)
@@ -4432,7 +4431,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
@@ -4485,7 +4484,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: fixture.context)
         try selectEntry(containing: visibleCandidate, in: model)
-        let viewController = makeNetworkDetailViewController(
+        let viewController = NetworkDetailViewController(
             model: model,
             initialMode: .preview
         )
@@ -4543,7 +4542,7 @@ struct NetworkDetailViewControllerTests {
         ))
         let model = NetworkPanelModel(context: fixture.context)
         model.selectRequest(first)
-        let viewController = makeNetworkDetailViewController(
+        let viewController = NetworkDetailViewController(
             model: model,
             initialMode: .preview
         )
@@ -4612,7 +4611,7 @@ struct NetworkDetailViewControllerTests {
         #expect(didFailInitialFetch)
 
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
@@ -4620,7 +4619,7 @@ struct NetworkDetailViewControllerTests {
         let didRenderFailure = await waitUntilRendered(in: viewController) {
             viewController.currentModeForTesting == .preview
                 && viewController.currentPreviewRoleForTesting == .response
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text.isEmpty == false
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.isEmpty == false
         }
         #expect(didRenderFailure)
         let failedPhase = request.responseBody.phase
@@ -4647,7 +4646,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.headers)
@@ -4675,7 +4674,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.headers)
@@ -4712,7 +4711,7 @@ struct NetworkDetailViewControllerTests {
         ))
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -4818,7 +4817,7 @@ struct NetworkDetailViewControllerTests {
 
         let model = NetworkPanelModel(context: context)
         model.selectRequest(canceledRequest)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -4999,7 +4998,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func requestDataMetadataTagAndAtomicActionRenderTheExactRequestBody() async throws {
+    func requestDataMetadataActionShowsUnavailablePreviewForOpaqueBody() async throws {
         let context = makeContext()
         let request = try #require(
             await applyRequest(
@@ -5017,11 +5016,7 @@ struct NetworkDetailViewControllerTests {
             ))
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let bodyPreview = RecordingNetworkBodyPreviewViewController()
-        let viewController = makeNetworkDetailViewController(
-            model: model,
-            makeBodyViewController: { _ in bodyPreview }
-        )
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -5094,15 +5089,19 @@ struct NetworkDetailViewControllerTests {
 
         headers.activateRequestPreviewForTesting()
 
-        let requestBody = try #require(request.requestBody)
+        let unavailable = String(
+            localized: "network.body.unavailable",
+            bundle: WebInspectorUILocalization.bundle
+        )
         #expect(
             await waitUntilRendered(in: viewController) {
                 viewController.currentModeForTesting == .preview
                     && viewController.currentPreviewRoleForTesting == .request
                     && model.selectedRequest === request
-                    && bodyPreview.currentBodyForTesting === requestBody
+                    && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == unavailable
                     && viewController.responseBodyFetchObservationDeliveryForTesting == nil
             })
+        #expect(request.requestBody?.full == "raw-body-secret")
         #expect(request.responseBody.phase == .available)
     }
 
@@ -5142,10 +5141,10 @@ struct NetworkDetailViewControllerTests {
             ))
         let model = NetworkPanelModel(context: context)
         try selectEntry(containing: hlsSibling, in: model)
-        let bodyPreview = RecordingNetworkBodyPreviewViewController()
-        let viewController = makeNetworkDetailViewController(
-            model: model,
-            makeBodyViewController: { _ in bodyPreview }
+        let viewController = NetworkDetailViewController(model: model)
+        let playerFactory = MoviePreviewPlayerFactorySpy()
+        viewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+            playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
@@ -5168,10 +5167,7 @@ struct NetworkDetailViewControllerTests {
         #expect(groupedTagRange.location > representativeHeadingRange.location)
         #expect(NSMaxRange(groupedTagRange) < hlsHeadingRange.location)
 
-        let renderCountBeforeRepresentativeAction = viewController
-            .selectedRequestRenderCountForTesting
         viewController.headersTextViewForTesting.activateRequestPreviewForTesting()
-        let representativeBody = try #require(representative.requestBody)
         #expect(
             await waitUntilRendered(in: viewController) {
                 guard case let .request(_, requestID) = model.selection else {
@@ -5181,12 +5177,9 @@ struct NetworkDetailViewControllerTests {
                     && model.selectedRequest === representative
                     && viewController.currentModeForTesting == .preview
                     && viewController.currentPreviewRoleForTesting == .request
-                    && bodyPreview.currentBodyForTesting === representativeBody
+                    && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""member" : "representative""#)
             })
-        #expect(
-            viewController.selectedRequestRenderCountForTesting
-                == renderCountBeforeRepresentativeAction + 1
-        )
+        #expect(playerFactory.players.isEmpty)
         #expect(representative.responseBody.phase == .available)
         #expect(hlsSibling.responseBody.phase == .available)
 
@@ -5202,15 +5195,15 @@ struct NetworkDetailViewControllerTests {
             })
 
         viewController.headersTextViewForTesting.activateRequestPreviewForTesting()
-        let hlsRequestBody = try #require(hlsSibling.requestBody)
         #expect(
             await waitUntilRendered(in: viewController) {
                 model.selectedRequest === hlsSibling
                     && viewController.currentModeForTesting == .preview
                     && viewController.currentPreviewRoleForTesting == .request
-                    && bodyPreview.currentBodyForTesting === hlsRequestBody
+                    && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.contains(#""member" : "hls""#)
                     && viewController.responseBodyFetchObservationDeliveryForTesting == nil
             })
+        #expect(playerFactory.players.isEmpty)
         #expect(representative.responseBody.phase == .available)
         #expect(hlsSibling.responseBody.phase == .available)
     }
@@ -5236,7 +5229,7 @@ struct NetworkDetailViewControllerTests {
         ))
         let model = NetworkPanelModel(context: context)
         model.selectRequest(first)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         #expect(await waitUntilRendered(in: viewController) {
@@ -5278,7 +5271,7 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(context: context)
         try selectEntry(containing: originalRepresentative, in: model)
         let originalIntentID = try #require(model.detailSubject?.intentID)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         #expect(await waitUntilRendered(in: viewController) {
@@ -5338,7 +5331,7 @@ struct NetworkDetailViewControllerTests {
         let request = try #require(context.registeredRequest(forProxyID: requestID))
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -5377,7 +5370,7 @@ struct NetworkDetailViewControllerTests {
         let body = try #require(request.requestBody)
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -5437,11 +5430,7 @@ struct NetworkDetailViewControllerTests {
             ))
         let model = NetworkPanelModel(context: context)
         model.selectRequest(original)
-        let bodyPreview = RecordingNetworkBodyPreviewViewController()
-        let viewController = makeNetworkDetailViewController(
-            model: model,
-            makeBodyViewController: { _ in bodyPreview }
-        )
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -5488,12 +5477,15 @@ struct NetworkDetailViewControllerTests {
             })
 
         viewController.headersTextViewForTesting.activateRequestPreviewForTesting()
-        let replacementBody = try #require(replacement.requestBody)
+        let unavailable = String(
+            localized: "network.body.unavailable",
+            bundle: WebInspectorUILocalization.bundle
+        )
         #expect(
             await waitUntilRendered(in: viewController) {
                 viewController.currentModeForTesting == .preview
                     && model.selectedRequest === replacement
-                    && bodyPreview.currentBodyForTesting === replacementBody
+                    && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == unavailable
             })
 
         viewController.setModeForTesting(.headers)
@@ -5560,7 +5552,7 @@ struct NetworkDetailViewControllerTests {
             ))
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -5603,7 +5595,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.headers)
@@ -5638,7 +5630,8 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func requestPreviewRoleDoesNotFetchResponseBodyAfterLoadingFinishes() async throws {
-        let context = makeContext()
+        let fixture = try await makeLiveNetworkDetailFixture()
+        let context = fixture.context
         let request = try #require(
             await applyRequest(
                 to: context,
@@ -5653,11 +5646,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         model.selectRequest(request)
-        let bodyPreview = RecordingNetworkBodyPreviewViewController()
-        let viewController = makeNetworkDetailViewController(
-            model: model,
-            makeBodyViewController: { _ in bodyPreview }
-        )
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
@@ -5670,10 +5659,9 @@ struct NetworkDetailViewControllerTests {
 
         viewController.selectPreviewRoleForTesting(.request)
 
-        let requestBody = try #require(request.requestBody)
         let didRenderRequestBody = await waitUntilRendered(in: viewController) {
             viewController.currentPreviewRoleForTesting == .request
-                && bodyPreview.currentBodyForTesting === requestBody
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
                 && viewController.responseBodyFetchObservationDeliveryForTesting == nil
         }
         #expect(didRenderRequestBody)
@@ -5682,11 +5670,22 @@ struct NetworkDetailViewControllerTests {
 
         let didStayOnRequestBody = await waitUntilRendered(in: viewController) {
             viewController.currentPreviewRoleForTesting == .request
-                && bodyPreview.currentBodyForTesting === requestBody
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe"
                 && viewController.responseBodyFetchObservationDeliveryForTesting == nil
         }
         #expect(didStayOnRequestBody)
         #expect(request.responseBody.phase == .available)
+        #expect(await fixture.runtime.backend.recordedCommands().filter {
+            $0.domain == "Network" && $0.method == "getResponseBody"
+        }.isEmpty)
+
+        await fixture.runtime.backend.enqueue((), for: "Console", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Runtime", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Network", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Page", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Inspector", method: "disable")
+        await context.stop()
+        #expect(context.state == .detached)
     }
 
     @Test
@@ -5712,7 +5711,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         model.selectRequest(firstRequest)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.headers)
@@ -5833,7 +5832,7 @@ struct NetworkDetailViewControllerTests {
         let request = try #require(await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js"))
         let model = NetworkPanelModel(context: context)
         let listViewController = NetworkListViewController(model: model)
-        let detailViewController = makeNetworkDetailViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
         let navigationController = NetworkCompactNavigationController(
             model: model,
             listViewController: listViewController,
@@ -5868,7 +5867,7 @@ struct NetworkDetailViewControllerTests {
         _ = try #require(await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js"))
         let model = NetworkPanelModel(context: context)
         let listViewController = NetworkListViewController(model: model)
-        let detailViewController = makeNetworkDetailViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
         let navigationController = NetworkCompactNavigationController(
             model: model,
             listViewController: listViewController,
@@ -5914,7 +5913,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         let listViewController = NetworkListViewController(model: model)
-        let detailViewController = makeNetworkDetailViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
         let navigationController = NetworkCompactNavigationController(
             model: model,
             listViewController: listViewController,
@@ -5941,7 +5940,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         let listViewController = NetworkListViewController(model: model)
-        let detailViewController = makeNetworkDetailViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
         let navigationController = NetworkCompactNavigationController(
             model: model,
             listViewController: listViewController,
@@ -5972,7 +5971,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         let listViewController = NetworkListViewController(model: model)
-        let detailViewController = makeNetworkDetailViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
         let navigationController = NetworkCompactNavigationController(
             model: model,
             listViewController: listViewController,
@@ -6008,7 +6007,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         let listViewController = NetworkListViewController(model: model)
-        let detailViewController = makeNetworkDetailViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
         let navigationController = NetworkCompactNavigationController(
             model: model,
             listViewController: listViewController,
@@ -6048,7 +6047,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         let listViewController = NetworkListViewController(model: model)
-        let detailViewController = makeNetworkDetailViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
         let navigationController = NetworkCompactNavigationController(
             model: model,
             listViewController: listViewController,
@@ -6079,7 +6078,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         let listViewController = NetworkListViewController(model: model)
-        let detailViewController = makeNetworkDetailViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
         let navigationController = NetworkCompactNavigationController(
             model: model,
             listViewController: listViewController,
@@ -6115,7 +6114,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         let listViewController = NetworkListViewController(model: model)
-        let detailViewController = makeNetworkDetailViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
         let navigationController = NetworkCompactNavigationController(
             model: model,
             listViewController: listViewController,
@@ -6146,7 +6145,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         let listViewController = NetworkListViewController(model: model)
-        let detailViewController = makeNetworkDetailViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
         let navigationController = NetworkCompactNavigationController(
             model: model,
             listViewController: listViewController,
@@ -6180,7 +6179,7 @@ struct NetworkDetailViewControllerTests {
         )
         let model = NetworkPanelModel(context: context)
         let listViewController = NetworkListViewController(model: model)
-        let detailViewController = makeNetworkDetailViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
         let navigationController = NetworkCompactNavigationController(
             model: model,
             listViewController: listViewController,
@@ -6216,7 +6215,7 @@ struct NetworkDetailViewControllerTests {
         let entryID = try #require(model.entryID(containing: request.id))
         let entry = try #require(model.entry(for: entryID))
         let listViewController = NetworkListViewController(model: model)
-        let detailViewController = makeNetworkDetailViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
         let navigationController = NetworkCompactNavigationController(
             model: model,
             listViewController: listViewController,
@@ -6261,7 +6260,7 @@ struct NetworkDetailViewControllerTests {
         ))
         let model = NetworkPanelModel(context: context)
         let listViewController = NetworkListViewController(model: model)
-        let detailViewController = makeNetworkDetailViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
         let navigationController = NetworkCompactNavigationController(
             model: model,
             listViewController: listViewController,
@@ -6326,7 +6325,7 @@ struct NetworkDetailViewControllerTests {
         let model = NetworkPanelModel(context: context)
         let entryID = try #require(model.entryID(containing: firstRequest.id))
         let listViewController = NetworkListViewController(model: model)
-        let detailViewController = makeNetworkDetailViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
         let navigationController = NetworkCompactNavigationController(
             model: model,
             listViewController: listViewController,
@@ -6361,10 +6360,10 @@ struct NetworkDetailViewControllerTests {
         applyResponseBody(to: context, request: request, body: "not a real movie", base64Encoded: false)
         let model = NetworkPanelModel(context: context)
         let listViewController = NetworkListViewController(model: model)
-        let detailViewController = makeNetworkDetailViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
         detailViewController.setModeForTesting(.preview)
         let playerFactory = MoviePreviewPlayerFactorySpy()
-        detailViewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+        detailViewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
             playerFactory.makePlayer
         )
         let navigationController = NetworkCompactNavigationController(
@@ -6384,10 +6383,10 @@ struct NetworkDetailViewControllerTests {
         await waitUntilMediaPreviewPrepared(in: detailViewController)
 
         let didRenderMediaPreview = await waitUntilRendered(in: detailViewController) {
-            detailViewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
+            detailViewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.pathExtension == "mp4"
         }
         #expect(didRenderMediaPreview)
-        let temporaryFileURL = try #require(detailViewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting)
+        let temporaryFileURL = try #require(detailViewController.bodyViewControllerForTesting.mediaPlayerURLForTesting)
         #expect(playerFactory.players.count == 1)
         #expect(FileManager.default.fileExists(atPath: temporaryFileURL.path))
 
@@ -6396,7 +6395,7 @@ struct NetworkDetailViewControllerTests {
         let didReturnToListAndReleasePreview = await waitUntilNavigationStackSynced(in: navigationController) {
             navigationController.viewControllers == [listViewController]
                 && model.selectedRequest == nil
-                && detailViewController.syntaxBodyViewControllerForTesting.mediaPlayerURLForTesting == nil
+                && detailViewController.bodyViewControllerForTesting.mediaPlayerURLForTesting == nil
                 && FileManager.default.fileExists(atPath: temporaryFileURL.path) == false
         }
         #expect(didReturnToListAndReleasePreview)
@@ -6409,7 +6408,7 @@ struct NetworkDetailViewControllerTests {
         let request = try #require(await applyRequest(to: context, requestID: "1", url: "https://example.com/app.js"))
         let model = NetworkPanelModel(context: context)
         let listViewController = NetworkListViewController(model: model)
-        let detailViewController = makeNetworkDetailViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
         let navigationController = NetworkCompactNavigationController(
             model: model,
             listViewController: listViewController,
@@ -8041,7 +8040,7 @@ struct NetworkDetailViewControllerTests {
             listSnapshotBuilderFactory: snapshotBuilder,
             snapshotApplyCompletionScheduler: applyCompletionScheduler
         )
-        let detailViewController = makeNetworkDetailViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
         let compactViewController = NetworkCompactNavigationController(
             model: model,
             listViewController: listViewController,
@@ -8270,7 +8269,7 @@ struct NetworkDetailViewControllerTests {
         ))
         let model = NetworkPanelModel(context: context)
         try selectEntry(containing: secondRequest, in: model)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -8316,7 +8315,7 @@ struct NetworkDetailViewControllerTests {
         ))
         let model = NetworkPanelModel(context: context)
         model.selectRequest(secondRequest)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -8364,7 +8363,7 @@ struct NetworkDetailViewControllerTests {
         ))
         let model = NetworkPanelModel(context: context)
         try selectEntry(containing: partialSegmentRequest, in: model)
-        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let viewController = NetworkDetailViewController(model: model, initialMode: .preview)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -8412,7 +8411,7 @@ struct NetworkDetailViewControllerTests {
         ))
         let model = NetworkPanelModel(context: context)
         model.selectRequest(partialSegmentRequest)
-        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let viewController = NetworkDetailViewController(model: model, initialMode: .preview)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -8889,7 +8888,7 @@ struct NetworkDetailViewControllerTests {
         let entryID = try #require(model.entryID(containing: firstRequest.id))
         let entry = try #require(model.entry(for: entryID))
         model.selectEntry(entry)
-        let detailViewController = makeNetworkDetailViewController(model: model)
+        let detailViewController = NetworkDetailViewController(model: model)
         let window = showInWindow(detailViewController)
         defer { window.isHidden = true }
         let picker = NetworkDetailRequestPickerViewController(
@@ -9051,9 +9050,9 @@ struct NetworkDetailViewControllerTests {
         ))
         let model = NetworkPanelModel(context: context)
         try selectEntry(containing: firstRequest, in: model)
-        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let viewController = NetworkDetailViewController(model: model, initialMode: .preview)
         let playerFactory = MoviePreviewPlayerFactorySpy()
-        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+        viewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
             playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
@@ -9064,7 +9063,7 @@ struct NetworkDetailViewControllerTests {
                 && playerFactory.players.count == 1
         })
         let firstPlayerID = try #require(
-            viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting
+            viewController.bodyViewControllerForTesting.mediaPlayerIdentityForTesting
         )
 
         let secondRequest = try #require(await applyGroupedRequest(
@@ -9084,7 +9083,7 @@ struct NetworkDetailViewControllerTests {
                 && playerFactory.players.count == 2
         })
         #expect(
-            viewController.syntaxBodyViewControllerForTesting.mediaPlayerIdentityForTesting
+            viewController.bodyViewControllerForTesting.mediaPlayerIdentityForTesting
                 != firstPlayerID
         )
         #expect(model.selectedEntryRequests.map(\.id) == [firstRequest.id, secondRequest.id])
@@ -9109,9 +9108,9 @@ struct NetworkDetailViewControllerTests {
         ))
         let model = NetworkPanelModel(context: context)
         try selectEntry(containing: firstRequest, in: model)
-        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let viewController = NetworkDetailViewController(model: model, initialMode: .preview)
         let playerFactory = MoviePreviewPlayerFactorySpy()
-        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+        viewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
             playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
@@ -9119,7 +9118,7 @@ struct NetworkDetailViewControllerTests {
 
         #expect(await waitUntilRendered(in: viewController) {
             viewController.previewRequestIDForTesting == firstRequest.id
-                && viewController.syntaxBodyViewControllerForTesting
+                && viewController.bodyViewControllerForTesting
                     .mediaPlayerURLForTesting?.absoluteString == firstRequest.url
                 && playerFactory.players.count == 1
         })
@@ -9138,7 +9137,7 @@ struct NetworkDetailViewControllerTests {
 
         #expect(await waitUntilRendered(in: viewController) {
             viewController.previewRequestIDForTesting == secondRequest.id
-                && viewController.syntaxBodyViewControllerForTesting
+                && viewController.bodyViewControllerForTesting
                     .mediaPlayerURLForTesting?.absoluteString == secondRequest.url
                 && playerFactory.players.count == 2
         })
@@ -9200,9 +9199,9 @@ struct NetworkDetailViewControllerTests {
         }
         let model = NetworkPanelModel(context: context)
         try selectEntry(containing: partialRequest, in: model)
-        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let viewController = NetworkDetailViewController(model: model, initialMode: .preview)
         let playerFactory = MoviePreviewPlayerFactorySpy()
-        viewController.syntaxBodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
+        viewController.bodyViewControllerForTesting.setMoviePreviewPlayerFactoryForTesting(
             playerFactory.makePlayer
         )
         let window = showInWindow(viewController)
@@ -9263,7 +9262,7 @@ struct NetworkDetailViewControllerTests {
         ))
         let model = NetworkPanelModel(context: context)
         try selectEntry(containing: noContentRequest, in: model)
-        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let viewController = NetworkDetailViewController(model: model, initialMode: .preview)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -9308,7 +9307,7 @@ struct NetworkDetailViewControllerTests {
         ))
         let model = NetworkPanelModel(context: context)
         try selectEntry(containing: unavailableMediaRequest, in: model)
-        let viewController = makeNetworkDetailViewController(model: model, initialMode: .preview)
+        let viewController = NetworkDetailViewController(model: model, initialMode: .preview)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
@@ -9318,7 +9317,7 @@ struct NetworkDetailViewControllerTests {
         viewController.selectPreviewRoleForTesting(.request)
         #expect(await waitUntilRendered(in: viewController) {
             viewController.currentPreviewRoleForTesting == .request
-                && viewController.syntaxBodyViewControllerForTesting.syntaxViewForTesting.text
+                && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text
                     .contains("metadata")
         })
     }
@@ -9393,7 +9392,7 @@ struct NetworkDetailViewControllerTests {
         ))
         let model = NetworkPanelModel(context: context)
         try selectEntry(containing: firstRequest, in: model)
-        let viewController = makeNetworkDetailViewController(model: model)
+        let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         #expect(await waitUntilRendered(in: viewController) {
@@ -10077,7 +10076,7 @@ struct NetworkDetailViewControllerTests {
         if await waitUntilRendered(in: viewController, condition) {
             return true
         }
-        await viewController.syntaxBodyViewControllerForTesting.waitUntilTextPreviewPreparationFinishedForTesting()
+        await viewController.bodyViewControllerForTesting.waitUntilTextPreviewPreparationFinishedForTesting()
         return await waitUntilRendered(in: viewController, condition)
     }
 
@@ -10098,7 +10097,7 @@ struct NetworkDetailViewControllerTests {
     private func waitUntilMediaPreviewPrepared(
         in viewController: NetworkDetailViewController
     ) async {
-        await viewController.syntaxBodyViewControllerForTesting.waitUntilMediaPreviewPreparationFinishedForTesting()
+        await viewController.bodyViewControllerForTesting.waitUntilMediaPreviewPreparationFinishedForTesting()
         viewController.view.layoutIfNeeded()
     }
 
@@ -10140,12 +10139,11 @@ struct NetworkDetailViewControllerTests {
             viewController.webSocketPreviewViewControllerForTesting
                 .timelineObservationDeliveryForTesting,
         ].compactMap { $0 }
-        if let syntaxBodyViewController = viewController.bodyViewControllerForTesting as? NetworkBodyViewController {
-            deliveries.append(contentsOf: [
-                syntaxBodyViewController.bodyObservationDeliveryForTesting,
-                syntaxBodyViewController.previewRenderObservationDeliveryForTesting,
-            ].compactMap { $0 })
-        }
+        let bodyViewController = viewController.bodyViewControllerForTesting
+        deliveries.append(contentsOf: [
+            bodyViewController.bodyObservationDeliveryForTesting,
+            bodyViewController.previewRenderObservationDeliveryForTesting,
+        ].compactMap { $0 })
         return deliveries
     }
 
@@ -10208,31 +10206,6 @@ struct NetworkDetailViewControllerTests {
         }
     }
 }
-}
-
-@MainActor
-private func makeNetworkDetailViewController(
-    model: NetworkPanelModel,
-    initialMode: NetworkDetailViewController.Mode = .headers,
-    webSocketFrameScheduler: any NetworkFrameScheduling = NetworkDisplayLinkFrameScheduler(),
-    makeBodyViewController: @escaping NetworkBodyViewControllerFactory = NetworkBodyPreviewFactory.make(scrollEdgeSink:)
-) -> NetworkDetailViewController {
-    NetworkDetailViewController(
-        model: model,
-        initialMode: initialMode,
-        webSocketFrameScheduler: webSocketFrameScheduler,
-        makeBodyViewController: makeBodyViewController
-    )
-}
-
-@MainActor
-private extension NetworkDetailViewController {
-    var syntaxBodyViewControllerForTesting: NetworkBodyViewController {
-        guard let viewController = bodyViewControllerForTesting as? NetworkBodyViewController else {
-            preconditionFailure("Expected NetworkDetailViewController to use NetworkBodyViewController in tests.")
-        }
-        return viewController
-    }
 }
 
 private final class StubMoviePreviewPlayer: AVPlayer {
@@ -10304,28 +10277,6 @@ private actor NetworkListBuilderStartGate {
         isReleased = true
         releaseContinuation?.resume()
         releaseContinuation = nil
-    }
-}
-
-@MainActor
-private final class RecordingNetworkBodyPreviewViewController: UIViewController, NetworkBodyPreviewControlling {
-    private var surface = NetworkBodySurface.none
-    private(set) var isRenderingActiveForTesting = false
-
-    var currentBodyForTesting: NetworkBody? {
-        surface.body
-    }
-
-    func setSurface(_ nextSurface: NetworkBodySurface) {
-        surface = nextSurface
-    }
-
-    func resumeRendering() {
-        isRenderingActiveForTesting = true
-    }
-
-    func suspendKeepingSurface() {
-        isRenderingActiveForTesting = false
     }
 }
 
