@@ -14,6 +14,9 @@ private let shouldRunNativeRuntimeSmokeTests =
 private let nativeRuntimeSmokeDisabledReason: Comment =
     "Native WebKit runtime smoke tests depend on the host WebKit dyld image and shared cache state; set WEBINSPECTORKIT_RUN_NATIVE_RUNTIME_SMOKE=1 to run them."
 
+@MainActor
+private final class NativeSmokeNavigationDelegate: NSObject, WKNavigationDelegate {}
+
 struct NativeInspectorSymbolResolverTests {
     @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason))
     @MainActor
@@ -46,6 +49,12 @@ struct NativeInspectorSymbolResolverTests {
 
         let symbols = try await NativeInspectorResolvedSymbols.resolveCurrentDetached()
         try bridge.attach(with: symbols)
+        do {
+            try bridge.sendJSONString("")
+            Issue.record("An empty message must fail without invalidating the connection.")
+        } catch let error as NativeInspectorBridgeError {
+            #expect(error.code == .encodingFailed)
+        }
         let commandCount = 32
         for id in 1...commandCount {
             try bridge.sendJSONString("""
@@ -63,6 +72,29 @@ struct NativeInspectorSymbolResolverTests {
         }
         Issue.record("The native frontend closed before replying to the protocol command.")
     }
+    @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason))
+    @MainActor
+    func detachedNativeAttachmentRejectsCommandsAndRestoresDelegate() async throws {
+        let webView = WKWebView(frame: .zero)
+        let delegate = NativeSmokeNavigationDelegate()
+        webView.navigationDelegate = delegate
+        webView.isInspectable = true
+        let bridge = NativeInspectorBridge(webView: webView)
+        let symbols = try await NativeInspectorResolvedSymbols.resolveCurrentDetached()
+        try bridge.attach(with: symbols)
+        bridge.detach()
+        #expect(webView.navigationDelegate === delegate)
+
+        for _ in 0..<2 {
+            do {
+                try bridge.sendJSONString(#"{"id":1,"method":"Target.setPauseOnStart"}"#)
+                Issue.record("A detached page cannot receive a native command.")
+            } catch let error as NativeInspectorBridgeError {
+                #expect(error.code == .attachmentInvalidated)
+            }
+        }
+    }
+
     @Test
     func fixtureImageResolvesCompleteAddressSetDespiteIncompatibleOverloads() throws {
         let fixture = try nativeSymbolFixture()

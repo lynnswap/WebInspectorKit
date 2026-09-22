@@ -17,6 +17,8 @@
 #endif
 
 #if TARGET_OS_IPHONE || TARGET_OS_OSX
+NSErrorDomain const WebInspectorNativeBridgeErrorDomain = @"WebInspectorNativeBridge.Transport";
+
 namespace WebInspectorNativeBridgePrivate {
 
 using ConnectFrontendFn = void (*)(void *, Inspector::FrontendChannel&, bool, bool);
@@ -25,20 +27,11 @@ using DisconnectFrontendFn = void (*)(void *, Inspector::FrontendChannel&);
 static constexpr ptrdiff_t invalidTargetOffset = -1;
 static std::atomic<ptrdiff_t> cachedTargetOffset { invalidTargetOffset };
 
-static NSString *const errorDomain = @"WebInspectorNativeBridge.Transport";
-
 static os_log_t nativeBridgeLog()
 {
     static os_log_t log = os_log_create("com.lynnswap.WebInspectorKit", "NativeBridge");
     return log;
 }
-
-enum ErrorCode : NSInteger {
-    ErrorCodeUnsupported = 1,
-    ErrorCodeAttachFailed = 2,
-    ErrorCodeNotAttached = 3,
-    ErrorCodeEncodingFailed = 4,
-};
 
 static constexpr uint8_t obfuscatedSymbolKey = 0xA7;
 
@@ -85,12 +78,12 @@ static BOOL invokeVoid(id target, SEL selector)
     return YES;
 }
 
-static NSError *makeError(ErrorCode code, NSString *description, NSString *details = nil)
+static NSError *makeError(WebInspectorNativeBridgeError code, NSString *description, NSString *details = nil)
 {
     NSMutableDictionary *userInfo = [NSMutableDictionary dictionaryWithObject:description forKey:NSLocalizedDescriptionKey];
     if (details.length)
         userInfo[NSDebugDescriptionErrorKey] = details;
-    return [NSError errorWithDomain:errorDomain code:code userInfo:userInfo];
+    return [NSError errorWithDomain:WebInspectorNativeBridgeErrorDomain code:code userInfo:userInfo];
 }
 
 static WebInspectorNativeResolvedSymbols emptyResolvedSymbols()
@@ -691,7 +684,7 @@ private:
 
     if (!self.webView) {
         NSError *transportError = WebInspectorNativeBridgePrivate::makeError(
-            WebInspectorNativeBridgePrivate::ErrorCodeAttachFailed,
+            WebInspectorNativeBridgeErrorAttachFailed,
             @"WKWebView was released before attach."
         );
         if (error)
@@ -702,7 +695,7 @@ private:
 
     if ([self.webView.navigationDelegate isKindOfClass:WebInspectorNativeNavigationDelegateProxy.class]) {
         NSError *transportError = WebInspectorNativeBridgePrivate::makeError(
-            WebInspectorNativeBridgePrivate::ErrorCodeAttachFailed,
+            WebInspectorNativeBridgeErrorAttachFailed,
             @"This WKWebView already has an attached native inspector."
         );
         if (error)
@@ -713,7 +706,7 @@ private:
 
     if (!WebInspectorNativeBridgePrivate::resolvedSymbolsAreComplete(resolvedSymbols)) {
         NSError *transportError = WebInspectorNativeBridgePrivate::makeError(
-            WebInspectorNativeBridgePrivate::ErrorCodeUnsupported,
+            WebInspectorNativeBridgeErrorUnsupported,
             @"Required runtime functions were unavailable.",
             WebInspectorNativeBridgePrivate::missingResolvedSymbolNames(resolvedSymbols)
         );
@@ -753,7 +746,7 @@ private:
     SEL connectSelector = @selector(connect);
     if ((requiresInspectorConnection && (!_inspector || ![_inspector respondsToSelector:connectSelector])) || !_target) {
         NSError *transportError = WebInspectorNativeBridgePrivate::makeError(
-            WebInspectorNativeBridgePrivate::ErrorCodeAttachFailed,
+            WebInspectorNativeBridgeErrorAttachFailed,
             @"The inspected page's native target was unavailable.");
         if (error)
             *error = transportError;
@@ -771,7 +764,7 @@ private:
 
     if (![self connectFrontendToCurrentWebProcess]) {
         NSError *transportError = WebInspectorNativeBridgePrivate::makeError(
-            WebInspectorNativeBridgePrivate::ErrorCodeAttachFailed,
+            WebInspectorNativeBridgeErrorAttachFailed,
             @"The inspector frontend could not connect to the current WebContent process."
         );
         if (error)
@@ -795,7 +788,7 @@ private:
         [self invalidateAttachmentState];
         if (error) {
             *error = WebInspectorNativeBridgePrivate::makeError(
-                WebInspectorNativeBridgePrivate::ErrorCodeUnsupported,
+                WebInspectorNativeBridgeErrorAttachmentInvalidated,
                 @"Required runtime functions were unavailable."
             );
         }
@@ -805,7 +798,7 @@ private:
         [self invalidateAttachmentState];
         if (error) {
             *error = WebInspectorNativeBridgePrivate::makeError(
-                WebInspectorNativeBridgePrivate::ErrorCodeNotAttached,
+                WebInspectorNativeBridgeErrorAttachmentInvalidated,
                 @"The inspected page's native target is unavailable."
             );
         }
@@ -817,7 +810,7 @@ private:
         [self reportFatalFailure:failureMessage];
         if (error) {
             *error = WebInspectorNativeBridgePrivate::makeError(
-                WebInspectorNativeBridgePrivate::ErrorCodeNotAttached,
+                WebInspectorNativeBridgeErrorAttachmentInvalidated,
                 failureMessage
             );
         }
@@ -826,7 +819,7 @@ private:
     if (!message.length) {
         if (error) {
             *error = WebInspectorNativeBridgePrivate::makeError(
-                WebInspectorNativeBridgePrivate::ErrorCodeEncodingFailed,
+                WebInspectorNativeBridgeErrorEncodingFailed,
                 @"The inspector message was empty."
             );
         }

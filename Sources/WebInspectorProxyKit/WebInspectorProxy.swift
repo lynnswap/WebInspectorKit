@@ -1146,7 +1146,7 @@ public actor WebInspectorProxy {
             return WebInspectorProxyError.disconnected(
                 "Failed to decode \(method): \(message)"
             )
-        case .messageDecodingFailed:
+        case .messageDecodingFailed, .nativeAttachmentInvalidated:
             return WebInspectorProxyTerminalFailure.transportFailed(transportError).publicError
         case let .missingTarget(targetID):
             return WebInspectorProxyError.disconnected("Target \(targetID.rawValue) disappeared during bootstrap.")

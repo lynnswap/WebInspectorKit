@@ -37,6 +37,22 @@ struct WebInspectorNativeBridgeTests {
 
     @MainActor
     @Test
+    func sendWithoutAttachmentReturnsTypedInvalidationOnEveryAttempt() throws {
+        let webView = WKWebView(frame: .zero)
+        let bridge = NativeInspectorBridge(webView: webView)
+        for _ in 0..<2 {
+            do {
+                try bridge.sendJSONString(#"{"id":1,"method":"Target.setPauseOnStart"}"#)
+                Issue.record("Sending without an attachment must fail.")
+            } catch let error as NativeInspectorBridgeError {
+                #expect(error.code == .attachmentInvalidated)
+            }
+        }
+        bridge.detach()
+    }
+
+    @MainActor
+    @Test
     func rawFrontendMessageIsDeliveredOnceWithoutTargetDemux() {
         let bridge = NativeInspectorBridge(webView: WKWebView(frame: .zero))
         var deliveredMessages: [String] = []

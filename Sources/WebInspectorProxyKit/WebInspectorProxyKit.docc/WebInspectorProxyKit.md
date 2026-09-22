@@ -44,11 +44,14 @@ for await event in page.network.events {
 }
 ```
 
-Malformed protocol envelopes and failures decoding known events terminate the
-connection. Pending commands fail, domain streams finish, and
+Malformed protocol envelopes, failures decoding known events, and permanent
+native attachment invalidation terminate the connection. Pending commands fail, domain streams finish, and
 ``WebInspectorProxy/waitUntilClosed()`` throws the terminal disconnected error.
 An explicit close completes without a failure. Unknown event methods remain
 supported as raw events; omitted optional fields are not decoding failures.
+Ordinary command errors remain local to the operation. WebContent process
+termination can interrupt pending work while retaining a reconnectable native
+attachment.
 
 ProxyKit is the lowest public layer in WebInspectorKit. Prefer
 WebInspectorDataKit when you want observable model objects for UI binding,

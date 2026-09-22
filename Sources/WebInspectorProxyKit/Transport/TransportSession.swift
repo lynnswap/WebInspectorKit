@@ -243,9 +243,10 @@ package actor TransportSession {
         }
     }
 
-    private func finish(error: Error) {
-        guard terminalError == nil else {
-            return
+    @discardableResult
+    private func finish(error: Error) -> Error {
+        if let terminalError {
+            return terminalError
         }
         terminalError = error
         terminalFailureHandler = nil
@@ -260,6 +261,23 @@ package actor TransportSession {
         provisionalTargetMessageStore.removeAll()
         networkRouting.removeAll()
         eventSubscribers.finishAndRemoveAll()
+        return error
+    }
+
+    private func fail(_ error: Error) async -> Error {
+        if let terminalError { return terminalError }
+        // The owner chooses the winning reason and starts cleanup without
+        // waiting for the active native send or receiver turn to finish.
+        let reason = await terminalFailureHandler?(error) ?? error
+        return finish(error: reason)
+    }
+
+    private func handleSendFailure(_ error: any Swift.Error, for key: PendingKey) async -> any Swift.Error {
+        if let failure = error as? Error, case .nativeAttachmentInvalidated = failure {
+            return await fail(failure)
+        }
+        failPendingReply(key, error: error)
+        return error
     }
 
     package func waitForCurrentMainPageTarget(timeout: Duration? = nil) async throws -> TransportSession.MainPageTarget {
@@ -368,8 +386,7 @@ package actor TransportSession {
             try await backend.sendJSONString(message)
             try Task.checkCancellation()
         } catch {
-            failPendingReply(.root(commandID), error: error)
-            throw error
+            throw await handleSendFailure(error, for: .root(commandID))
         }
         return try await awaitReply(
             promise,
@@ -442,8 +459,7 @@ package actor TransportSession {
             try await backend.sendJSONString(wrapperMessage)
             try Task.checkCancellation()
         } catch {
-            failPendingReply(.target(key), error: error)
-            throw error
+            throw await handleSendFailure(error, for: .target(key))
         }
         return try await awaitReply(
             promise,
@@ -486,11 +502,7 @@ package actor TransportSession {
                 guard terminalError == nil else { return }
                 try await handleRootMessage(parsed)
             } catch {
-                guard terminalError == nil else { return }
-                // The connection owner starts cleanup without awaiting this
-                // receiver turn, which must return before native detachment.
-                let reason = await terminalFailureHandler?(error) ?? error
-                finish(error: reason)
+                _ = await fail(error)
                 return
             }
         }
