@@ -64,10 +64,8 @@ jobs:
               destination='platform=macOS,arch=arm64'
               scheme=WebInspectorKit
             fi
-            if [[ "$TEST_SUITE" == workspace ]]; then
-              workspace=WebInspectorKit.xcworkspace
-            else
-              workspace=Packages/WebInspectorNativeBridge/WebInspectorNativeBridge.xcworkspace
+            workspace=WebInspectorKit.xcworkspace
+            if [[ "$TEST_SUITE" == native ]]; then
               scheme=WebInspectorNativeBridgeTests
             fi
             derived_data="$RUNNER_TEMP/build-$platform"

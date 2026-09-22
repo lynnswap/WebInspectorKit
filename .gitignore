@@ -4,8 +4,6 @@
 /ContractTests/Package.resolved
 /WebInspectorKit/.build/
 .build-temp
-/Packages/WebInspectorNativeBridge/.build/
-/Packages/WebInspectorNativeBridge/.swiftpm/
 .swiftpm/*
 !.swiftpm/xcode/
 .swiftpm/xcode/*
