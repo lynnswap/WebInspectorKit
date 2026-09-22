@@ -4,6 +4,15 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+FOUNDATION_EXPORT NSErrorDomain const WebInspectorNativeBridgeErrorDomain;
+
+typedef NS_ERROR_ENUM(WebInspectorNativeBridgeErrorDomain, WebInspectorNativeBridgeError) {
+    WebInspectorNativeBridgeErrorUnsupported = 1,
+    WebInspectorNativeBridgeErrorAttachFailed = 2,
+    WebInspectorNativeBridgeErrorEncodingFailed = 4,
+    WebInspectorNativeBridgeErrorAttachmentInvalidated = 5,
+};
+
 typedef void (^WebInspectorNativeMessageHandler)(NSString *message);
 typedef void (^WebInspectorNativeFatalFailureHandler)(NSString *message);
 typedef void (^WebInspectorNativeWebContentProcessTerminationHandler)(void);

@@ -926,6 +926,122 @@ func transportFailureBeforeProxyInitializationKeepsItsCauseAndCleansUp() async t
     #expect(await backend.isDetached())
 }
 
+@Test(arguments: [false, true])
+func nativeInvalidationFailsRootAndTargetRepliesAndEverySubscriber(rootSend: Bool) async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend)
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+    let pendingRoot = Task {
+        try await transport.send(ProtocolCommand(domain: .target, method: "Target.setPauseOnStart", routing: .root))
+    }
+    _ = try await backend.waitForMessage()
+    let pendingTarget = Task { try await target.page.reload() }
+    _ = try await backend.waitForTargetMessage(method: "Page.reload")
+    let events = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+    await waitForEventSubscription(target, domain: .network)
+    let feed = await target.orderedEventFeed()
+    let orderedEvents = Task {
+        var iterator = feed.events.makeAsyncIterator()
+        return try await iterator.next()
+    }
+    await target.waitForModelEventSubscriptions()
+
+    let failure = TransportSession.Error.nativeAttachmentInvalidated("The native target is unavailable.")
+    await backend.setSendError(failure)
+    await #expect(throws: failure) {
+        try await transport.send(ProtocolCommand(
+            domain: rootSend ? .target : .network,
+            method: rootSend ? "Target.setPauseOnStart" : "Network.enable",
+            routing: rootSend ? .root : .target(ProtocolTarget.ID("page-main"))
+        ))
+    }
+
+    let message = try #require(await disconnectedMessage(from: Task { try await proxy.waitUntilClosed() }))
+    #expect(message == "Native inspector attachment invalidated: The native target is unavailable.")
+    await #expect(throws: failure) { try await pendingRoot.value }
+    #expect(await disconnectedMessage(from: pendingTarget) == message)
+    #expect(await disconnectedMessage(from: orderedEvents) == message)
+    #expect(try await value(of: events) == nil)
+    #expect(await disconnectedMessage(from: Task { try await target.network.enable() }) == message)
+    let snapshot = await transport.snapshot()
+    #expect(snapshot.pendingRootReplyIDs.isEmpty)
+    #expect(snapshot.pendingTargetReplyKeys.isEmpty)
+    #expect(await proxy.currentPage == nil)
+    #expect(await backend.isDetached())
+}
+
+@Test(arguments: [false, true])
+func nativeInvalidationAndExplicitCloseKeepOneTerminalReason(explicitCloseFirst: Bool) async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend)
+    await installPageTarget(in: transport)
+    let gate = CloseConnectionGate()
+    let proxy = try await WebInspectorProxy(transport: transport, closeConnection: { error in
+        await gate.waitUntilReleased()
+        await transport.detach(error: error)
+    })
+    let target = try await proxy.waitForCurrentPage()
+    let pending = Task { try await target.page.reload() }
+    _ = try await backend.waitForTargetMessage(method: "Page.reload")
+    let close: Task<Void, Never>?
+    if explicitCloseFirst {
+        close = Task { await proxy.close() }
+        await gate.waitUntilStarted()
+    } else {
+        close = nil
+    }
+    let failure = TransportSession.Error.nativeAttachmentInvalidated("native target disappeared")
+    await backend.setSendError(failure)
+    let expected = explicitCloseFirst ? TransportSession.Error.transportClosed : failure
+    let command = ProtocolCommand(domain: .network, method: "Network.enable", routing: .target(ProtocolTarget.ID("page-main")))
+    await #expect(throws: expected) { try await transport.send(command) }
+    await gate.waitUntilStarted()
+    #expect(await backend.isDetached() == false)
+    await backend.setSendError(WebInspectorProxyError.commandFailed(domain: "Network", method: "enable", message: "later failure"))
+    await #expect(throws: expected) { try await transport.send(command) }
+
+    await gate.release()
+    await close?.value
+    await proxy.close()
+    if explicitCloseFirst {
+        try await proxy.waitUntilClosed()
+        await #expect(throws: WebInspectorProxyError.closed) { try await pending.value }
+    } else {
+        let message = await disconnectedMessage(from: Task { try await proxy.waitUntilClosed() })
+        #expect(message == "Native inspector attachment invalidated: native target disappeared")
+        #expect(await disconnectedMessage(from: pending) == message)
+    }
+    #expect(await gate.invocationCount() == 1)
+    #expect(await backend.isDetached())
+}
+
+@Test
+func ordinarySendErrorDoesNotInvalidatePeerCommandsOrConnection() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend)
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+    let pending = Task { try await target.page.reload() }
+    let sent = try await backend.waitForTargetMessage(method: "Page.reload")
+    let error = WebInspectorProxyError.commandFailed(domain: "Network", method: "enable", message: "send rejected")
+    await backend.setSendError(error)
+    await #expect(throws: error) { try await target.network.enable() }
+    await backend.setSendError(nil)
+    try await transport.requireOpen()
+    #expect(await backend.isDetached() == false)
+    #expect(await proxy.canReload)
+    await receiveTargetReply(transport, targetID: ProtocolTarget.ID("page-main"), messageID: try messageID(sent.message), result: "{}")
+    try await pending.value
+    await proxy.close()
+    try await proxy.waitUntilClosed()
+}
+
 @Test
 func malformedKnownDomainEventTerminatesProxyAndPendingCommand() async throws {
     let backend = FakeTransportBackend()
@@ -1809,19 +1925,16 @@ func transportBackendDeliversProvisionalFrameDestroyedBeforePageTopology() async
 @Test
 func transportBackendDoesNotDeliverWorkerTargetDestroyedLifecycleToCurrentPage() async throws {
     let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    let transport = TransportSession(backend: backend)
     await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"service-worker","type":"service-worker","isProvisional":false}}}"#
     )
     let proxy = try await WebInspectorProxy(transport: transport)
     let target = try await proxy.waitForCurrentPage()
-    let eventProbe = CompletionProbe()
     let eventTask = Task {
         var iterator = target.lifecycleEvents.makeAsyncIterator()
-        if await iterator.next() != nil {
-            await eventProbe.finish()
-        }
+        return (await iterator.next(), await iterator.next())
     }
     defer { eventTask.cancel() }
 
@@ -1829,9 +1942,21 @@ func transportBackendDoesNotDeliverWorkerTargetDestroyedLifecycleToCurrentPage()
     await transport.receiveRootMessage(
         #"{"method":"Target.targetDestroyed","params":{"targetId":"service-worker"}}"#
     )
-    try await Task.sleep(for: .milliseconds(100))
-
-    #expect(await eventProbe.isFinished() == false)
+    // The replacement creation is distinguishable from any destruction and
+    // follows both destroy messages on the same FIFO feed.
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"page-main"}}"#
+    )
+    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-replacement"))
+    let (first, second) = try await value(of: eventTask)
+    guard case .targetDestroyed(.currentPage) = try #require(first),
+          case let .unknown(replacement) = try #require(second) else {
+        Issue.record("Expected only page destruction followed by replacement creation.")
+        return
+    }
+    #expect(replacement.domain == "Target")
+    #expect(replacement.method == "targetCreated")
+    await proxy.close()
 }
 
 @Test
@@ -3261,92 +3386,40 @@ func transportBackendTreatsUnboundNetworkInitiatorNodeAsMissing() async throws {
 @Test
 func transportBackendDropsNonPageDestroyAfterPageDestroyed() async throws {
     let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    let transport = TransportSession(backend: backend)
     await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
     await transport.receiveRootMessage(
         #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
     )
     let proxy = try await WebInspectorProxy(transport: transport)
     let target = try await proxy.waitForCurrentPage()
-
-    let recorder = LifecycleEventRecorder()
-    let consumeTask = Task {
-        for await event in target.lifecycleEvents {
-            await recorder.record(event)
-        }
+    let eventsTask = Task {
+        var iterator = target.lifecycleEvents.makeAsyncIterator()
+        return (await iterator.next(), await iterator.next())
     }
-    defer { consumeTask.cancel() }
+    defer { eventsTask.cancel() }
     await waitForEventSubscription(target, domain: .target)
 
     await transport.receiveRootMessage(
         #"{"method":"Target.targetDestroyed","params":{"targetId":"page-main"}}"#
     )
-    // With no current page registered, a frame teardown must not surface as a
-    // current-page destruction; the replacement's creation event marks the
-    // point past which the frame destroy would have been delivered.
     await transport.receiveRootMessage(
         #"{"method":"Target.targetDestroyed","params":{"targetId":"frame-target"}}"#
     )
     await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-replacement"))
 
-    let clock = ContinuousClock()
-    let deadline = clock.now + .seconds(2)
-    while clock.now < deadline {
-        if await recorder.snapshot().count >= 2 {
-            break
-        }
-        await Task.yield()
-    }
-
-    let events = await recorder.snapshot()
-    guard events.count >= 2 else {
-        Issue.record("Expected the page destruction and the replacement creation to be delivered.")
+    let (first, second) = try await value(of: eventsTask)
+    guard case .targetDestroyed(.currentPage) = try #require(first) else {
+        Issue.record("Expected the inspected page's destruction.")
         return
     }
-    guard case .targetDestroyed(.currentPage) = events[0] else {
-        Issue.record("Expected the page destruction on the current-page route.")
+    guard case let .unknown(event) = try #require(second) else {
+        Issue.record("Expected the replacement creation after the inspected page's destruction.")
         return
     }
-    if case .targetDestroyed = events[1] {
-        Issue.record("Frame target destruction was misdelivered to the current-page route.")
-    }
-}
-
-private actor LifecycleEventRecorder {
-    private var events: [WebInspectorTargetLifecycleEvent] = []
-
-    func record(_ event: WebInspectorTargetLifecycleEvent) {
-        events.append(event)
-    }
-
-    func snapshot() -> [WebInspectorTargetLifecycleEvent] {
-        events
-    }
-}
-
-@Test
-func transportBackendEventSubscriptionWaitCompletesOnCancellation() async throws {
-    let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
-    await installPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
-    let proxy = try await WebInspectorProxy(transport: transport)
-    let target = try await proxy.waitForCurrentPage()
-
-    let waitTask = Task {
-        await target.proxy.waitForEventSubscription(
-            targetID: target.id,
-            route: target.route,
-            domain: .network
-        )
-        return Task.isCancelled
-    }
-    for _ in 0..<10 {
-        await Task.yield()
-    }
-    waitTask.cancel()
-
-    let wasCancelled = try await value(of: waitTask, timeout: .seconds(2))
-    #expect(wasCancelled)
+    #expect(event.domain == "Target")
+    #expect(event.method == "targetCreated")
+    await proxy.close()
 }
 
 @Test

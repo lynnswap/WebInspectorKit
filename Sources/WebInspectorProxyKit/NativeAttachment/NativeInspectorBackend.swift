@@ -45,7 +45,11 @@ package final class NativeInspectorBackend: TransportBackend {
             guard let bridge else {
                 throw TransportSession.Error.transportClosed
             }
-            try bridge.sendJSONString(message)
+            do {
+                try bridge.sendJSONString(message)
+            } catch let error as NativeInspectorBridgeError where error.code == .attachmentInvalidated {
+                throw TransportSession.Error.nativeAttachmentInvalidated(error.localizedDescription)
+            }
         }
     }
 

@@ -2,6 +2,8 @@ import Foundation
 import WebKit
 import WebInspectorNativeBridgeObjC
 
+package typealias NativeInspectorBridgeError = WebInspectorNativeBridgeObjC.WebInspectorNativeBridgeError
+
 public enum NativeInspectorSymbolResolutionError: Error, Equatable, Sendable {
     case missingSymbols([String])
 }

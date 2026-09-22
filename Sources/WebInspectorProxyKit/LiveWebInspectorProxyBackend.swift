@@ -241,7 +241,7 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
             return WebInspectorProxyError.disconnected(
                 "Failed to decode \(method): \(message)"
             )
-        case .messageDecodingFailed:
+        case .messageDecodingFailed, .nativeAttachmentInvalidated:
             return WebInspectorProxyTerminalFailure.transportFailed(transportError).publicError
         case let .replyTimeout(method, _):
             return WebInspectorProxyError.timeout(domain: domain, method: method)

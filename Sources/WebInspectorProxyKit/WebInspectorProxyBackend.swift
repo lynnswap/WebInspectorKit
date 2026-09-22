@@ -33,6 +33,8 @@ package struct WebInspectorProxyTerminalFailure: Sendable {
             description = "Failed to decode \(boundary): \(message)"
         case let .eventDecodingFailed(method, message):
             description = "Failed to decode \(method): \(message)"
+        case let .nativeAttachmentInvalidated(message):
+            description = "Native inspector attachment invalidated: \(message)"
         default:
             description = "Inspector transport failed: \(error)"
         }
