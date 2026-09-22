@@ -143,8 +143,11 @@ Sources/
   WebInspectorProxyKit/        Typed protocol proxy product.
   WebInspectorProxyKitTesting/ Controllable proxy test runtime and fixtures.
   WebInspectorUI*/             Internal UIKit implementation targets.
-Packages/
-  WebInspectorNativeBridge/    Local native bridge package for ProxyKit internals.
+  WebInspectorNativeBridge*/   Internal Swift/Objective-C++ bridge targets.
+  WebKitRuntime*/              Shared native runtime product targets.
+Tests/
+  WebInspectorNativeBridgeTests/   Native bridge and runtime tests.
+  WebInspectorNativeSymbolFixtures/ Native symbol fixtures.
 Docs/
   MIGRATION.md                 Version-by-version migration notes.
   WebKitVersionMapping.md      WebKit runtime/source mapping notes.

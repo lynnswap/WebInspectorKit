@@ -8,7 +8,7 @@
       buildArchitectures = "Automatic">
       <BuildActionEntries>
          <BuildActionEntry buildForTesting = "YES" buildForRunning = "NO" buildForProfiling = "NO" buildForArchiving = "NO" buildForAnalyzing = "NO">
-            <BuildableReference BuildableIdentifier = "primary" BlueprintIdentifier = "AB0E9E08305F57FB003CBB2A" BuildableName = "RuntimeTestHost.app" BlueprintName = "RuntimeTestHost" ReferencedContainer = "container:../../Tests/RuntimeTestHost/RuntimeTestHost.xcodeproj">
+            <BuildableReference BuildableIdentifier = "primary" BlueprintIdentifier = "AB0E9E08305F57FB003CBB2A" BuildableName = "RuntimeTestHost.app" BlueprintName = "RuntimeTestHost" ReferencedContainer = "container:Tests/RuntimeTestHost/RuntimeTestHost.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
          <BuildActionEntry

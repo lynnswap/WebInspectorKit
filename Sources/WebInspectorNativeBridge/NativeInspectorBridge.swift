@@ -4,11 +4,11 @@ import WebInspectorNativeBridgeObjC
 
 package typealias NativeInspectorBridgeError = WebInspectorNativeBridgeObjC.WebInspectorNativeBridgeError
 
-public enum NativeInspectorSymbolResolutionError: Error, Equatable, Sendable {
+package enum NativeInspectorSymbolResolutionError: Error, Equatable, Sendable {
     case missingSymbols([String])
 }
 
-public struct NativeInspectorResolvedSymbols: Equatable, Sendable {
+package struct NativeInspectorResolvedSymbols: Equatable, Sendable {
     var connectFrontendAddress: UInt64
     var disconnectFrontendAddress: UInt64
     var stringFromUTF8Address: UInt64
@@ -47,11 +47,11 @@ public struct NativeInspectorResolvedSymbols: Equatable, Sendable {
         )
     }
 
-    public static func resolveCurrent() throws -> NativeInspectorResolvedSymbols {
+    package static func resolveCurrent() throws -> NativeInspectorResolvedSymbols {
         try makeResolvedSymbols(from: NativeInspectorSymbolResolver.resolveCurrent())
     }
 
-    public static func resolveCurrentDetached() async throws -> NativeInspectorResolvedSymbols {
+    package static func resolveCurrentDetached() async throws -> NativeInspectorResolvedSymbols {
         let resolution = await NativeInspectorSymbolResolver.resolveCurrentDetached()
         return try makeResolvedSymbols(from: resolution)
     }
@@ -76,22 +76,22 @@ public struct NativeInspectorResolvedSymbols: Equatable, Sendable {
 }
 
 @MainActor
-public final class NativeInspectorBridge {
-    public var messageHandler: ((String) -> Void)? {
+package final class NativeInspectorBridge {
+    package var messageHandler: ((String) -> Void)? {
         didSet {
             objcBridge.messageHandler = messageHandler.map { handler in
                 { message in handler(message) }
             }
         }
     }
-    public var fatalFailureHandler: ((String) -> Void)? {
+    package var fatalFailureHandler: ((String) -> Void)? {
         didSet {
             objcBridge.fatalFailureHandler = fatalFailureHandler.map { handler in
                 { message in handler(message) }
             }
         }
     }
-    public var webContentProcessTerminationHandler: (() -> Void)? {
+    package var webContentProcessTerminationHandler: (() -> Void)? {
         didSet {
             objcBridge.webContentProcessTerminationHandler = webContentProcessTerminationHandler
         }
@@ -99,19 +99,19 @@ public final class NativeInspectorBridge {
 
     private let objcBridge: WebInspectorNativeBridgeObjC.WebInspectorNativeBridge
 
-    public init(webView: WKWebView) {
+    package init(webView: WKWebView) {
         objcBridge = WebInspectorNativeBridgeObjC.WebInspectorNativeBridge(webView: webView)
     }
 
-    public func attach(with resolvedSymbols: NativeInspectorResolvedSymbols) throws {
+    package func attach(with resolvedSymbols: NativeInspectorResolvedSymbols) throws {
         try objcBridge.attach(with: resolvedSymbols.objcSymbols)
     }
 
-    public func sendJSONString(_ message: String) throws {
+    package func sendJSONString(_ message: String) throws {
         try objcBridge.sendJSONString(message)
     }
 
-    public func detach() {
+    package func detach() {
         objcBridge.detach()
     }
 

@@ -68,12 +68,10 @@ let package = Package(
         .target(
             name: "WebKitRuntime",
             dependencies: ["WebKitRuntimeObjC", .product(name: "MachOKit", package: "MachOKit")],
-            path: "Packages/WebInspectorNativeBridge/Sources/WebKitRuntime",
             swiftSettings: strictSwiftSettings
         ),
         .target(
             name: "WebKitRuntimeObjC",
-            path: "Packages/WebInspectorNativeBridge/Sources/WebKitRuntimeObjC",
             publicHeadersPath: "include",
             linkerSettings: [.linkedFramework("Foundation"), .linkedFramework("WebKit")]
         ),
@@ -111,13 +109,11 @@ let package = Package(
                 "WebInspectorNativeBridgeObjC",
                 "WebKitRuntime"
             ],
-            path: "Packages/WebInspectorNativeBridge/Sources/WebInspectorNativeBridge",
             swiftSettings: strictSwiftSettings
         ),
         .target(
             name: "WebInspectorNativeBridgeObjC",
             dependencies: ["WebKitRuntimeObjC"],
-            path: "Packages/WebInspectorNativeBridge/Sources/WebInspectorNativeBridgeObjC",
             publicHeadersPath: "include",
             linkerSettings: [
                 .linkedFramework("Foundation"),
@@ -205,13 +201,13 @@ let package = Package(
         ),
         .target(
             name: "WebInspectorNativeSymbolFixtures",
-            path: "Packages/WebInspectorNativeBridge/Tests/WebInspectorNativeSymbolFixtures",
+            path: "Tests/WebInspectorNativeSymbolFixtures",
             publicHeadersPath: "include"
         ),
         .testTarget(
             name: "WebInspectorNativeBridgeTests",
             dependencies: ["WebInspectorNativeBridge", "WebInspectorNativeSymbolFixtures", "WebKitRuntime"],
-            path: "Packages/WebInspectorNativeBridge/Tests/WebInspectorNativeBridgeTests",
+            path: "Tests/WebInspectorNativeBridgeTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
