@@ -143,7 +143,7 @@ class RuntimeExecutionTests(unittest.TestCase):
         def run(command, **options):
             self.commands.append((command, options))
             if fail:
-                fail(command)
+                fail(command, **options)
             return subprocess.CompletedProcess(command, 0)
         with patch.object(runner.subprocess, "run", side_effect=run):
             return runner.run_tests(self.runtimes, "27.0", self.root, suite, latest_ios_major=27,
@@ -185,7 +185,7 @@ class RuntimeExecutionTests(unittest.TestCase):
                                         all_native_runtimes=True)
 
     def test_test_failure_continues_with_remaining_runtimes_and_cleans_devices(self):
-        def fail(command):
+        def fail(command, **options):
             if "platform=iOS Simulator,id=first-device" in command:
                 raise subprocess.CalledProcessError(65, command)
         self.assertEqual(self.execute("native", fail), 1)
@@ -203,18 +203,33 @@ class RuntimeExecutionTests(unittest.TestCase):
                         for command, options in self.commands if "xcodebuild" in command]
         self.assertEqual(environments, ["first-device", "second-device", ""])
 
+    def test_slow_initial_migration_still_runs_tests_and_cleans_devices(self):
+        def slow_boot(command, **options):
+            if command[:3] == ["xcrun", "simctl", "bootstatus"]:
+                if options["timeout"] < 240:
+                    raise subprocess.TimeoutExpired(command, options["timeout"])
+        self.assertEqual(self.execute("native", slow_boot), 0)
+        commands = [command for command, _ in self.commands]
+        self.assertEqual(sum("xcodebuild" in command for command in commands), 3)
+        for device in ("first-device", "second-device"):
+            self.assertIn(["xcrun", "simctl", "delete", device], commands)
+        self.assertIn("| iOS 18.6 / native | Passed |", self.summary.read_text())
+        self.assertIn("| iOS 27.0 / native | Passed |", self.summary.read_text())
+
     def test_boot_timeout_cleans_device_and_does_not_block_later_tests(self):
-        def fail(command):
+        def fail(command, **options):
             if command == ["xcrun", "simctl", "bootstatus", "first-device", "-b"]:
-                raise subprocess.TimeoutExpired(command, 180)
+                self.assertLessEqual(options["timeout"], 600)
+                raise subprocess.TimeoutExpired(command, options["timeout"])
         self.assertEqual(self.execute("native", fail), 1)
         commands = [command for command, _ in self.commands]
         self.assertIn(["xcrun", "simctl", "delete", "first-device"], commands)
         self.assertEqual(sum("xcodebuild" in command for command in commands), 2)
+        self.assertIn("| iOS 18.6 / native | Failed |", self.summary.read_text())
         self.assertIn("| iOS 27.0 / native | Passed |", self.summary.read_text())
 
     def test_cleanup_failure_is_reported_without_hiding_test_failure(self):
-        def fail(command):
+        def fail(command, **options):
             if "platform=iOS Simulator,id=first-device" in command:
                 raise subprocess.CalledProcessError(65, command)
             if command == ["xcrun", "simctl", "delete", "first-device"]:

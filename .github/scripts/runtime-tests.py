@@ -102,8 +102,9 @@ def run_tests(runtimes, macos_version, build_root, suite, latest_ios_major, *, a
                 runtime = next(runtime for runtime in runtimes if runtime["identifier"] == case["runtime"])
                 udid = create_device(runtime)
                 destination = f"platform=iOS Simulator,id={udid}"
-                # Bound startup separately so a stuck Simulator cannot consume the whole job.
-                run_logged(["xcrun", "simctl", "bootstatus", udid, "-b"], diagnostics / "boot.log", timeout=180)
+                # Fresh devices can spend more than three minutes in data migration on hosted runners.
+                # Keep a separate startup bound so a stuck Simulator cannot consume the whole job.
+                run_logged(["xcrun", "simctl", "bootstatus", udid, "-b"], diagnostics / "boot.log", timeout=600)
             products = build_root / f"build-{case['platform']}" / "Build/Products"
             xctestrun = next(products.glob("*.xctestrun"))
             run_logged([

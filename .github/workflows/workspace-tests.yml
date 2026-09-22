@@ -33,7 +33,9 @@ jobs:
   test:
     name: Build and test ${{ inputs.suite }} suites
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 45
+    # Native coverage runs runtimes sequentially, each with a ten-minute boot budget.
+    # Use the hosted-runner ceiling; individual boot/test stalls remain bounded.
+    timeout-minutes: ${{ inputs.suite == 'native' && 360 || 45 }}
     env:
       XCODE_MAJOR: ${{ inputs.xcode_major }}
       XCODE_ALLOW_PRERELEASE: ${{ inputs.allow_prerelease }}
