@@ -84,7 +84,8 @@ struct DOMTabController: WebInspectorTab.BuiltInController {
                 rootViewController: cachedElementViewController(
                     session: session,
                     contentStore: contentStore
-                )
+                ),
+                context: session.context
             )
         case (_, .customTab):
             UIViewController()
