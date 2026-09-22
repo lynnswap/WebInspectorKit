@@ -84,7 +84,13 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
                         return
                     }
                 }
-                continuation.finish()
+                if let error = await transport.terminalFailure {
+                    let failure = WebInspectorProxyTerminalFailure.transportFailed(error)
+                    await terminalFailureHandler(failure)
+                    continuation.finish(throwing: failure.publicError)
+                } else {
+                    continuation.finish()
+                }
             }
             continuation.onTermination = { _ in
                 task.cancel()
@@ -235,6 +241,8 @@ package struct LiveWebInspectorProxyBackend: WebInspectorProxyBackend {
             return WebInspectorProxyError.disconnected(
                 "Failed to decode \(method): \(message)"
             )
+        case .messageDecodingFailed:
+            return WebInspectorProxyTerminalFailure.transportFailed(transportError).publicError
         case let .replyTimeout(method, _):
             return WebInspectorProxyError.timeout(domain: domain, method: method)
         case let .remoteError(method, _, message):

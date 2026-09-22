@@ -41,6 +41,35 @@ package struct TransportMessageParsePolicy: Equatable, Sendable {
 }
 
 package enum TransportMessageParser {
+    private enum ParseError: Error {
+        case invalidJSON
+        case invalidEnvelope
+        case invalidField(String)
+    }
+
+    // Decoder descriptions can include inspected-page values. Report only the
+    // failure category and schema field at the transport boundary.
+    package static func failureDescription(_ error: any Error) -> String {
+        switch error {
+        case ParseError.invalidJSON:
+            return "Invalid JSON."
+        case ParseError.invalidEnvelope:
+            return "Expected a protocol message object with an id or method."
+        case let ParseError.invalidField(field):
+            return "Invalid protocol field: \(field)."
+        case let DecodingError.keyNotFound(key, _):
+            return "Missing required field: \(key.stringValue)."
+        case DecodingError.typeMismatch:
+            return "A protocol field has an unexpected type."
+        case DecodingError.valueNotFound:
+            return "A required protocol value is null."
+        case DecodingError.dataCorrupted:
+            return "Invalid encoded protocol data."
+        default:
+            return "Protocol message decoding failed."
+        }
+    }
+
     package static func parse(
         _ message: String,
         policy: TransportMessageParsePolicy = .default
@@ -110,52 +139,69 @@ package enum TransportMessageParser {
         return try JSONSerialization.jsonObject(with: data, options: [])
     }
 
-    package static func jsonData(_ object: Any?) -> Data {
+    private static func jsonData(_ object: Any?, field: String) throws -> Data {
         guard let object else {
             return Data("{}".utf8)
         }
-        if object is NSNull {
-            return Data("{}".utf8)
+        guard object is [String: Any] else {
+            throw ParseError.invalidField(field)
         }
-        guard JSONSerialization.isValidJSONObject(object),
-              let data = try? JSONSerialization.data(withJSONObject: object, options: []) else {
-            return Data("{}".utf8)
-        }
-        return data
+        return try JSONSerialization.data(withJSONObject: object, options: [])
     }
 
     private static func parseSync(_ message: String) throws -> ParsedProtocolMessage {
-        guard let data = message.data(using: .utf8),
-              let object = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
-            throw TransportSession.Error.malformedMessage
+        let decoded: Any
+        do {
+            decoded = try JSONSerialization.jsonObject(with: Data(message.utf8), options: .fragmentsAllowed)
+        } catch {
+            throw ParseError.invalidJSON
+        }
+        guard let object = decoded as? [String: Any] else {
+            throw ParseError.invalidEnvelope
+        }
+        let id = try identifierValue(object["id"])
+        let method = try stringValue(object["method"], field: "method")
+        guard id != nil || method != nil else {
+            throw ParseError.invalidEnvelope
+        }
+        let errorMessage: String?
+        if let error = object["error"] {
+            guard let error = error as? [String: Any],
+                  let message = try stringValue(error["message"], field: "error.message") else {
+                throw ParseError.invalidField("error")
+            }
+            errorMessage = message
+        } else {
+            errorMessage = nil
         }
 
         return ParsedProtocolMessage(
-            id: identifierValue(object["id"]),
-            method: stringValue(object["method"]),
-            paramsData: jsonData(object["params"]),
-            resultData: jsonData(object["result"]),
-            errorMessage: stringValue((object["error"] as? [String: Any])?["message"])
+            id: id,
+            method: method,
+            paramsData: try jsonData(object["params"], field: "params"),
+            resultData: try jsonData(object["result"], field: "result"),
+            errorMessage: errorMessage
         )
     }
 
-    private static func identifierValue(_ value: Any?) -> UInt64? {
-        if let number = value as? NSNumber {
-            return number.uint64Value
+    private static func identifierValue(_ value: Any?) throws -> UInt64? {
+        guard let value else { return nil }
+        if let number = value as? NSNumber,
+           CFGetTypeID(number) != CFBooleanGetTypeID(),
+           let id = UInt64(number.stringValue) {
+            return id
         }
-        if let string = value as? String {
-            return UInt64(string)
+        if let string = value as? String, let id = UInt64(string) {
+            return id
         }
-        return nil
+        throw ParseError.invalidField("id")
     }
 
-    private static func stringValue(_ value: Any?) -> String? {
+    private static func stringValue(_ value: Any?, field: String) throws -> String? {
+        guard let value else { return nil }
         if let string = value as? String {
             return string
         }
-        if let number = value as? NSNumber {
-            return number.stringValue
-        }
-        return nil
+        throw ParseError.invalidField(field)
     }
 }

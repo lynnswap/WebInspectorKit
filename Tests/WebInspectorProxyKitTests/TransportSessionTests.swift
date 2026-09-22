@@ -68,6 +68,69 @@ func transportMessageParserUsesPolicyForInlineAndDetachedDecoding() async throws
     #expect(detached.value == "decoded")
 }
 
+@Test(arguments: [
+    #"{"method":"Future.optionalEvent"}"#,
+    #"{"id":42}"#,
+    #"{"id":"42","result":{}}"#,
+    #"{"id":18446744073709551615,"result":{}}"#,
+])
+func transportParserPreservesValidEmptyAndForwardCompatibleMessages(message: String) async throws {
+    let parsed = try await TransportMessageParser.parse(message)
+    #expect(parsed.paramsData == Data("{}".utf8))
+    #expect(parsed.resultData == Data("{}".utf8))
+    #expect(parsed.id != nil || parsed.method == "Future.optionalEvent")
+}
+
+@Test(arguments: ["true", "-1", "1.5", "null", #""not-an-id""#, "18446744073709551616"])
+func invalidReplyIdentityCannotResolveAnotherCommand(identifier: String) async throws {
+    let session = TransportSession(backend: FakeTransportBackend())
+    await session.receiveRootMessage(#"{"id":\#(identifier),"result":{}}"#)
+    await #expect(throws: TransportSession.Error.messageDecodingFailed(
+        boundary: "root envelope", message: "Invalid protocol field: id."
+    )) {
+        try await session.requireOpen()
+    }
+    await session.detach()
+}
+
+@Test
+func unknownEventAndOmittedParametersDoNotCloseTransport() async throws {
+    let backend = FakeTransportBackend()
+    let session = TransportSession(backend: backend)
+    let stream = await session.orderedEvents()
+    await session.receiveRootMessage(#"{"method":"Future.optionalEvent"}"#)
+    let event = try #require(try await nextEvent(from: stream))
+    #expect(event.method == "Future.optionalEvent")
+    #expect(event.paramsData == Data("{}".utf8))
+
+    let send = Task {
+        try await session.send(ProtocolCommand(domain: .target, method: "Target.setPauseOnStart", routing: .root))
+    }
+    let sent = try await backend.waitForMessage()
+    await session.receiveRootMessage(#"{"id":\#(try messageID(sent))}"#)
+    #expect(try await send.value.resultData == Data("{}".utf8))
+    try await session.requireOpen()
+    await session.detach()
+}
+
+@Test
+func malformedEnvelopeFailsBootstrapWaiterAndStopsLaterMessages() async throws {
+    let backend = FakeTransportBackend()
+    let timeout = ManualResponseTimeout()
+    let session = TransportSession(backend: backend, timeoutSleep: { try await timeout.sleep(for: $0) })
+    let waiter = Task { try await session.waitForCurrentMainPageTarget(timeout: .seconds(1)) }
+    await timeout.waitUntilSuspended()
+
+    await session.receiveRootMessage("{")
+    let failure = TransportSession.Error.messageDecodingFailed(boundary: "root envelope", message: "Invalid JSON.")
+    await #expect(throws: failure) { try await waiter.value }
+    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"late-page","type":"page","isProvisional":false}}}"#)
+    #expect(await session.snapshot().targetsByID.isEmpty)
+    await #expect(throws: failure) { try await session.waitForCurrentMainPageTarget() }
+    await session.detach()
+    #expect(await backend.isDetached())
+}
+
 @Test
 func rootCommandResolvesFromRootReply() async throws {
     let backend = FakeTransportBackend()

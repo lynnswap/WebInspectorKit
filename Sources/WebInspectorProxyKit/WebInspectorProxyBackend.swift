@@ -26,6 +26,19 @@ package struct WebInspectorProxyTerminalFailure: Sendable {
     package let publicError: WebInspectorProxyError
     package let transportError: TransportSession.Error
 
+    package static func transportFailed(_ error: TransportSession.Error) -> Self {
+        let description: String
+        switch error {
+        case let .messageDecodingFailed(boundary, message):
+            description = "Failed to decode \(boundary): \(message)"
+        case let .eventDecodingFailed(method, message):
+            description = "Failed to decode \(method): \(message)"
+        default:
+            description = "Inspector transport failed: \(error)"
+        }
+        return Self(publicError: .disconnected(description), transportError: error)
+    }
+
     package static func eventDecodingFailed(
         method: String,
         error: any Error

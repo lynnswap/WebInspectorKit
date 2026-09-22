@@ -279,6 +279,7 @@ package extension TransportSession {
         case replyTimeout(method: String, targetID: ProtocolTarget.ID?)
         case remoteError(method: String, targetID: ProtocolTarget.ID?, message: String)
         case eventDecodingFailed(method: String, message: String)
+        case messageDecodingFailed(boundary: String, message: String)
         case inspectedPageProcessTerminated
         case transportClosed
     }

@@ -30,6 +30,8 @@ package actor TransportSession {
     private var eventSubscribers: TransportEventSubscriberRegistry
     private var inboundMessageQueue: TransportInboundMessageQueue
     private var terminalError: TransportSession.Error?
+    private var isBackendDetached = false
+    private var terminalFailureHandler: (@Sendable (Error) async -> Error)?
 
     package init(
         backend: any TransportBackend,
@@ -222,10 +224,31 @@ package actor TransportSession {
     package func detach(
         error: TransportSession.Error = .transportClosed
     ) async {
+        finish(error: error)
+        guard !isBackendDetached else { return }
+        isBackendDetached = true
+        await backend.detach()
+    }
+
+    package var terminalFailure: Error? {
+        terminalError == .transportClosed ? nil : terminalError
+    }
+
+    package func setTerminalFailureHandler(
+        _ handler: @escaping @Sendable (Error) async -> Error
+    ) async {
+        terminalFailureHandler = handler
+        if let terminalFailure {
+            _ = await handler(terminalFailure)
+        }
+    }
+
+    private func finish(error: Error) {
         guard terminalError == nil else {
             return
         }
         terminalError = error
+        terminalFailureHandler = nil
         for pending in replyStore.pendingReplies {
             pending.promise.fulfill(.failure(error))
         }
@@ -233,10 +256,10 @@ package actor TransportSession {
             waiter.fulfill(.failure(error))
         }
         replyStore.removeAll()
+        inboundMessageQueue = TransportInboundMessageQueue()
         provisionalTargetMessageStore.removeAll()
         networkRouting.removeAll()
         eventSubscribers.finishAndRemoveAll()
-        await backend.detach()
     }
 
     package func waitForCurrentMainPageTarget(timeout: Duration? = nil) async throws -> TransportSession.MainPageTarget {
@@ -457,12 +480,46 @@ package actor TransportSession {
             inboundMessageQueue.finishDraining()
         }
 
-        while let rawMessage = inboundMessageQueue.popNext() {
-            guard let parsed = try? await messageParser(rawMessage) else {
-                continue
+        while terminalError == nil, let rawMessage = inboundMessageQueue.popNext() {
+            do {
+                let parsed = try await parseMessage(rawMessage, boundary: "root envelope")
+                guard terminalError == nil else { return }
+                try await handleRootMessage(parsed)
+            } catch {
+                guard terminalError == nil else { return }
+                // The connection owner starts cleanup without awaiting this
+                // receiver turn, which must return before native detachment.
+                let reason = await terminalFailureHandler?(error) ?? error
+                finish(error: reason)
+                return
             }
-            await handleRootMessage(parsed)
         }
+    }
+
+    private func parseMessage(_ message: String, boundary: String) async throws(Error) -> ParsedProtocolMessage {
+        do {
+            return try await messageParser(message)
+        } catch {
+            throw Error.messageDecodingFailed(
+                boundary: boundary,
+                message: TransportMessageParser.failureDescription(error)
+            )
+        }
+    }
+
+    private func dispatchTargetMessage(_ paramsData: Data) async throws(Error) {
+        let dispatch: TargetDispatchParams
+        do {
+            dispatch = try TransportMessageParser.decode(TargetDispatchParams.self, from: paramsData)
+        } catch {
+            throw Error.messageDecodingFailed(
+                boundary: "Target.dispatchMessageFromTarget parameters",
+                message: TransportMessageParser.failureDescription(error)
+            )
+        }
+        let message = try await parseMessage(dispatch.message, boundary: "target envelope")
+        guard terminalError == nil else { return }
+        try await handleTargetMessage(message, targetID: dispatch.targetId)
     }
 
     private func awaitReply(
@@ -507,7 +564,7 @@ package actor TransportSession {
         }
     }
 
-    private func handleRootMessage(_ parsed: ParsedProtocolMessage) async {
+    private func handleRootMessage(_ parsed: ParsedProtocolMessage) async throws(Error) {
         if let id = parsed.id,
            let key = replyStore.takeTargetReplyKey(forRootWrapperID: id) {
             if parsed.errorMessage != nil,
@@ -528,13 +585,7 @@ package actor TransportSession {
         }
 
         if method == "Target.dispatchMessageFromTarget" {
-            guard let dispatch = try? TransportMessageParser.decode(TargetDispatchParams.self, from: parsed.paramsData) else {
-                return
-            }
-            guard let targetMessage = try? await messageParser(dispatch.message) else {
-                return
-            }
-            await handleTargetMessage(targetMessage, targetID: dispatch.targetId)
+            try await dispatchTargetMessage(parsed.paramsData)
             return
         }
 
@@ -599,10 +650,10 @@ package actor TransportSession {
             detachedCurrentPageFrameTarget: detachedCurrentPageFrameTarget
         )
         await emitResolvedStyleSheetAddedEvents(pendingStyleSheetAddedEvents)
-        await dispatchCommittedProvisionalTargetMessagesIfNeeded(method: method, paramsData: parsed.paramsData)
+        try await dispatchCommittedProvisionalTargetMessagesIfNeeded(method: method, paramsData: parsed.paramsData)
     }
 
-    private func handleTargetMessage(_ parsed: ParsedProtocolMessage, targetID: ProtocolTarget.ID) async {
+    private func handleTargetMessage(_ parsed: ParsedProtocolMessage, targetID: ProtocolTarget.ID) async throws(Error) {
         if targetRegistry.target(for: targetID)?.isProvisional == true {
             markTargetReplyAsBufferedIfNeeded(parsed, targetID: targetID)
             provisionalTargetMessageStore.append(parsed, for: targetID)
@@ -622,11 +673,7 @@ package actor TransportSession {
         }
 
         if method == "Target.dispatchMessageFromTarget" {
-            guard let dispatch = try? TransportMessageParser.decode(TargetDispatchParams.self, from: parsed.paramsData),
-                  let targetMessage = try? await messageParser(dispatch.message) else {
-                return
-            }
-            await handleTargetMessage(targetMessage, targetID: dispatch.targetId)
+            try await dispatchTargetMessage(parsed.paramsData)
             return
         }
 
@@ -888,7 +935,7 @@ package actor TransportSession {
         provisionalTargetMessageStore.retargetMessages(from: oldTargetID, to: newTargetID)
     }
 
-    private func dispatchCommittedProvisionalTargetMessagesIfNeeded(method: String, paramsData: Data) async {
+    private func dispatchCommittedProvisionalTargetMessagesIfNeeded(method: String, paramsData: Data) async throws(Error) {
         guard method == "Target.didCommitProvisionalTarget",
               let params = try? TransportMessageParser.decode(TargetCommittedParams.self, from: paramsData) else {
             return
@@ -896,7 +943,8 @@ package actor TransportSession {
 
         let messages = provisionalTargetMessageStore.takeMessages(for: params.newTargetId)
         for message in messages {
-            await handleTargetMessage(message, targetID: params.newTargetId)
+            guard terminalError == nil else { return }
+            try await handleTargetMessage(message, targetID: params.newTargetId)
         }
     }
 
