@@ -133,6 +133,11 @@ public enum WebInspectorTestBackendError: Error, Equatable, Sendable {
 }
 
 /// Controllable in-memory backend for `WebInspectorProxyKit` tests.
+///
+/// Emit events with the target handle whose route should receive them. Events
+/// reach active subscribers only; they are not replayed to later subscriptions.
+/// Use `waitForSubscribers(domain:target:count:)` before emitting when a test
+/// needs to assert delivery.
 public actor WebInspectorTestBackend {
     private var enqueuedReplies: [CommandKey: [QueuedReply]]
     private var commands: [RecordedCommand]
@@ -193,71 +198,41 @@ public actor WebInspectorTestBackend {
         enqueuedReplies[key, default: []].append(QueuedReply(failure: error))
     }
 
-    /// Emits a Network event to subscribers for a target identity.
-    public func emit(_ event: Network.Event, target: WebInspectorTarget.ID) async {
-        emit(.network(event), target: target, route: nil, domain: .network)
-    }
-
     /// Emits a Network event to subscribers for a target.
     public func emit(_ event: Network.Event, target: WebInspectorTarget) async {
-        emit(.network(event), target: target.id, route: target.route, domain: .network)
-    }
-
-    /// Emits a DOM event to subscribers for a target identity.
-    public func emit(_ event: DOM.Event, target: WebInspectorTarget.ID) async {
-        emit(.dom(event), target: target, route: nil, domain: .dom)
+        emit(.network(event), target: target, domain: .network)
     }
 
     /// Emits a DOM event to subscribers for a target.
     public func emit(_ event: DOM.Event, target: WebInspectorTarget) async {
-        emit(.dom(event), target: target.id, route: target.route, domain: .dom)
-    }
-
-    package func emit(_ event: Inspector.Event, target: WebInspectorTarget.ID) async {
-        emit(.inspector(event), target: target, route: nil, domain: .inspector)
+        emit(.dom(event), target: target, domain: .dom)
     }
 
     package func emit(_ event: Inspector.Event, target: WebInspectorTarget) async {
-        emit(.inspector(event), target: target.id, route: target.route, domain: .inspector)
-    }
-
-    /// Emits a CSS event to subscribers for a target identity.
-    public func emit(_ event: CSS.Event, target: WebInspectorTarget.ID) async {
-        emit(.css(event), target: target, route: nil, domain: .css)
+        emit(.inspector(event), target: target, domain: .inspector)
     }
 
     /// Emits a CSS event to subscribers for a target.
     public func emit(_ event: CSS.Event, target: WebInspectorTarget) async {
-        emit(.css(event), target: target.id, route: target.route, domain: .css)
-    }
-
-    /// Emits a Console event to subscribers for a target identity.
-    public func emit(_ event: Console.Event, target: WebInspectorTarget.ID) async {
-        emit(.console(Console.TargetedEvent(event: event, targetID: target)), target: target, route: nil, domain: .console)
+        emit(.css(event), target: target, domain: .css)
     }
 
     /// Emits a Console event to subscribers for a target.
     public func emit(_ event: Console.Event, target: WebInspectorTarget) async {
         emit(
             .console(Console.TargetedEvent(event: event, targetID: target.id)),
-            target: target.id,
-            route: target.route,
+            target: target,
             domain: .console
         )
     }
 
-    /// Emits a Runtime event to subscribers for a target identity.
-    public func emit(_ event: Runtime.Event, target: WebInspectorTarget.ID) async {
-        emit(.runtime(event), target: target, route: nil, domain: .runtime)
-    }
-
     /// Emits a Runtime event to subscribers for a target.
     public func emit(_ event: Runtime.Event, target: WebInspectorTarget) async {
-        emit(.runtime(event), target: target.id, route: target.route, domain: .runtime)
+        emit(.runtime(event), target: target, domain: .runtime)
     }
 
     package func emit(_ event: WebInspectorTargetLifecycleEvent, target: WebInspectorTarget) async {
-        emit(.targetLifecycle(event), target: target.id, route: target.route, domain: lifecycleDomain(for: event))
+        emit(.targetLifecycle(event), target: target, domain: lifecycleDomain(for: event))
     }
 
     /// Returns commands recorded by the backend.
@@ -410,8 +385,7 @@ public actor WebInspectorTestBackend {
 
     private func emit(
         _ event: WebInspectorProxyEvent,
-        target targetID: WebInspectorTarget.ID,
-        route: RoutingTargetID?,
+        target: WebInspectorTarget,
         domain: WebInspectorProxyEventDomain
     ) {
         guard eventTermination == nil else {
@@ -420,17 +394,16 @@ public actor WebInspectorTestBackend {
         let (nextSequence, overflow) = orderedEventSequence.addingReportingOverflow(1)
         precondition(!overflow, "Test event sequence exhausted.")
         orderedEventSequence = nextSequence
-        let resolvedRoute = route ?? unambiguousRoute(for: targetID, domain: domain)
         let key = EventSubscriptionKey(
-            route: resolvedRoute,
-            targetID: targetID,
+            route: target.route,
+            targetID: target.id,
             domain: domain
         )
         for continuation in eventContinuations[key, default: [:]].values {
             continuation.yield(event)
         }
         for (orderedKey, continuations) in orderedEventContinuations {
-            let deliveredEvent = orderedKey.route == resolvedRoute && orderedKey.targetID == targetID
+            let deliveredEvent = orderedKey.route == target.route && orderedKey.targetID == target.id
                 ? event
                 : nil
             for continuation in continuations.values {
@@ -521,30 +494,6 @@ public actor WebInspectorTestBackend {
                 count += entry.value.count
             }
         }
-    }
-
-    private func unambiguousRoute(
-        for targetID: WebInspectorTarget.ID,
-        domain: WebInspectorProxyEventDomain,
-        matching keys: [EventSubscriptionKey]? = nil
-    ) -> RoutingTargetID {
-        let matchingKeys = keys ?? eventContinuations.keys.filter {
-            $0.targetID == targetID && $0.domain == domain
-        }
-        let routes = Set(matchingKeys.map(\.route)).union(
-            orderedEventContinuations.keys.compactMap {
-                $0.targetID == targetID ? $0.route : nil
-            }
-        )
-        guard routes.count <= 1 else {
-            preconditionFailure(
-                "Multiple routes are subscribed for \(domain.rawValue) target \(targetID); emit with WebInspectorTarget."
-            )
-        }
-        guard let route = routes.first else {
-            preconditionFailure("No route is subscribed for \(domain.rawValue) target \(targetID).")
-        }
-        return route
     }
 
     private func resolveSubscriberWaiters() {
