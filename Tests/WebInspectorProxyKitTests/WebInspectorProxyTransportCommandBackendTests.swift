@@ -811,6 +811,121 @@ func liveSubscriptionWaitersReleaseOnCancellationAndExplicitClose() async throws
     #expect(await backend.isDetached())
 }
 
+@Test(arguments: [
+    "{",
+    "[]",
+    "{}",
+    #"{"method":"Target.dispatchMessageFromTarget","params":{}}"#,
+    #"{"method":"Target.dispatchMessageFromTarget","params":{"targetId":"page-main","message":42}}"#,
+    #"{"method":"Network.loadingFinished","params":"INSPECTED_SECRET"}"#,
+    #"{"id":0,"result":"INSPECTED_SECRET"}"#,
+    #"{"id":0,"result":[]}"#,
+    #"{"id":0,"result":null}"#,
+    #"{"id":0,"error":{"message":null}}"#,
+], [0, 1, 2])
+func malformedTransportEnvelopeTerminatesEveryConsumer(message: String, wrapperDepth: Int) async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend)
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let target = try await proxy.waitForCurrentPage()
+
+    let events = Task {
+        var iterator = target.network.events.makeAsyncIterator()
+        return await iterator.next()
+    }
+    await waitForEventSubscription(target, domain: .network)
+    let feed = await target.orderedEventFeed()
+    let orderedEvents = Task {
+        var iterator = feed.events.makeAsyncIterator()
+        return try await iterator.next()
+    }
+    await target.waitForModelEventSubscriptions()
+
+    let closeWait = Task { try await proxy.waitUntilClosed() }
+    await proxy.waitForCloseWaiterForTesting()
+    let reload = Task { try await target.page.reload() }
+    _ = try await waitForTargetMessage(backend, method: "Page.reload")
+    let enable = Task { try await target.network.enable() }
+    _ = try await waitForTargetMessage(backend, method: "Network.enable")
+
+    var input = message
+    for _ in 0..<wrapperDepth {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "method": "Target.dispatchMessageFromTarget",
+            "params": ["targetId": "page-main", "message": input],
+        ])
+        input = String(decoding: data, as: UTF8.self)
+    }
+    await transport.receiveRootMessage(input)
+
+    let failure = try #require(await disconnectedMessage(from: closeWait))
+    #expect(failure.contains("Failed to decode"))
+    #expect(!failure.contains("INSPECTED_SECRET"))
+    #expect(await disconnectedMessage(from: reload) == failure)
+    #expect(await disconnectedMessage(from: enable) == failure)
+    #expect(await disconnectedMessage(from: orderedEvents) == failure)
+    #expect(try await value(of: events) == nil)
+    #expect(await disconnectedMessage(from: Task { try await target.network.enable() }) == failure)
+    #expect(await disconnectedMessage(from: Task { try await proxy.waitForCurrentPage() }) == failure)
+    let lateFeed = await target.orderedEventFeed()
+    #expect(await disconnectedMessage(from: Task {
+        var iterator = lateFeed.events.makeAsyncIterator()
+        return try await iterator.next()
+    }) == failure)
+    let snapshot = await transport.snapshot()
+    #expect(snapshot.pendingRootReplyIDs.isEmpty)
+    #expect(snapshot.pendingTargetReplyKeys.isEmpty)
+    #expect(await backend.isDetached())
+    #expect(await proxy.currentPage == nil)
+}
+
+@Test
+func transportFailureClosesProxyWithoutEventSubscribers() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend)
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+
+    await transport.receiveRootMessage("{")
+
+    #expect(await disconnectedMessage(from: Task { try await proxy.waitUntilClosed() })
+        == "Failed to decode root envelope: Invalid JSON.")
+    #expect(await backend.isDetached())
+}
+
+@Test
+func malformedEnvelopeFailsPendingRootCommand() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend)
+    await installPageTarget(in: transport)
+    let proxy = try await WebInspectorProxy(transport: transport)
+    let pending = Task {
+        try await transport.send(ProtocolCommand(domain: .target, method: "Target.setPauseOnStart", routing: .root))
+    }
+    _ = try await backend.waitForMessage()
+
+    await transport.receiveRootMessage("{")
+
+    let failure = try #require(await transport.terminalFailure)
+    await #expect(throws: failure) { try await pending.value }
+    #expect(await disconnectedMessage(from: Task { try await proxy.waitUntilClosed() })
+        == "Failed to decode root envelope: Invalid JSON.")
+    #expect(await transport.snapshot().pendingRootReplyIDs.isEmpty)
+}
+
+@Test
+func transportFailureBeforeProxyInitializationKeepsItsCauseAndCleansUp() async throws {
+    let backend = FakeTransportBackend()
+    let transport = TransportSession(backend: backend)
+    await transport.receiveRootMessage("{")
+
+    await #expect(throws: WebInspectorProxyError.disconnected("Failed to decode root envelope: Invalid JSON.")) {
+        _ = try await WebInspectorProxy(transport: transport)
+    }
+    #expect(await backend.isDetached())
+}
+
 @Test
 func malformedKnownDomainEventTerminatesProxyAndPendingCommand() async throws {
     let backend = FakeTransportBackend()

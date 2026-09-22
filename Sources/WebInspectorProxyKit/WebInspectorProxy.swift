@@ -81,6 +81,7 @@ public actor WebInspectorProxy {
     )]
     private var cancelledCloseWaiterIDs: Set<UInt64>
     private var closeState: CloseState
+    private var terminationTask: Task<Void, Never>?
 
     private enum TerminationReason {
         case requested
@@ -165,6 +166,7 @@ public actor WebInspectorProxy {
         cancelledCloseWaiterIDs = []
         closeState = .open
 
+        await observeTransportFailure(nativeConnection.transport)
         do {
             try await bootstrapCurrentPage(from: nativeConnection.transport)
         } catch {
@@ -210,6 +212,7 @@ public actor WebInspectorProxy {
         cancelledCloseWaiterIDs = []
         closeState = .open
 
+        await observeTransportFailure(transport)
         do {
             try await bootstrapCurrentPage(from: transport)
         } catch {
@@ -305,14 +308,8 @@ public actor WebInspectorProxy {
     /// Calling `close()` more than once is allowed. Await
     /// ``waitUntilClosed()`` when another task needs to observe completion.
     public func close() async {
-        switch closeState {
-        case .open:
-            await terminate(.requested)
-        case .closing:
-            try? await waitUntilClosed()
-        case .closed:
-            break
-        }
+        _ = beginTermination(.requested)
+        await terminationTask?.value
     }
 
     /// Suspends until ``close()`` has finished.
@@ -993,15 +990,25 @@ public actor WebInspectorProxy {
     private func terminate(
         _ failure: WebInspectorProxyTerminalFailure
     ) async {
-        _ = await terminate(.failed(failure))
+        _ = beginTermination(.failed(failure))
+        await terminationTask?.value
     }
 
-    @discardableResult
-    private func terminate(
+    private func observeTransportFailure(_ transport: TransportSession) async {
+        await transport.setTerminalFailureHandler { [weak self] error in
+            guard let self else { return error }
+            return await self.beginTermination(.failed(.transportFailed(error))).transportError
+        }
+    }
+
+    private func beginTermination(
         _ reason: TerminationReason
-    ) async -> Bool {
-        guard case .open = closeState else {
-            return false
+    ) -> TerminationReason {
+        switch closeState {
+        case let .closing(existing), let .closed(existing):
+            return existing
+        case .open:
+            break
         }
         closeState = .closing(reason)
         pageTarget = nil
@@ -1010,11 +1017,17 @@ public actor WebInspectorProxy {
                 "Inspector connection failed: \(String(describing: failure.publicError), privacy: .private)"
             )
         }
+        terminationTask = Task {
+            await finishTermination(reason)
+        }
+        return reason
+    }
+
+    private func finishTermination(_ reason: TerminationReason) async {
         await backend?.finishEventSubscriptions(throwing: reason.failureError)
         await closeConnection?(reason.transportError)
         closeState = .closed(reason)
         resumeCloseWaiters(with: reason)
-        return true
     }
 
     private func applyTargetLifecycleEventToProxyState(_ event: WebInspectorTargetLifecycleEvent) {
@@ -1133,6 +1146,8 @@ public actor WebInspectorProxy {
             return WebInspectorProxyError.disconnected(
                 "Failed to decode \(method): \(message)"
             )
+        case .messageDecodingFailed:
+            return WebInspectorProxyTerminalFailure.transportFailed(transportError).publicError
         case let .missingTarget(targetID):
             return WebInspectorProxyError.disconnected("Target \(targetID.rawValue) disappeared during bootstrap.")
         case let .unsupportedDomain(domain, targetID):

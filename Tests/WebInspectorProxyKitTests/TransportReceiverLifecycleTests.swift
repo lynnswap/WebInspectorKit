@@ -220,6 +220,51 @@ func nativeConnectionCloseAwaitsActiveReceiverTurnBeforeBackendDetach() async {
     )
 }
 
+@Test(arguments: [false, true])
+func malformedReceiverMessageClosesWithoutWaitingOnItself(explicitCloseFirst: Bool) async throws {
+    let parser = ControlledMessageParser(blockingInvocation: 2)
+    let graph = ReceiverTransportGraph(parser: parser.parse)
+    graph.receiver.receive(targetCreatedMessage(id: "page-main", type: "page"))
+    await graph.receiver.waitUntilDrained(through: graph.receiver.tailOrdinal())
+    let proxy = try await WebInspectorProxy(transport: graph.transport, closeConnection: { error in
+        await graph.receiver.close()
+        await graph.transport.detach(error: error)
+    })
+    let target = try await proxy.waitForCurrentPage()
+    let pending = Task { try await target.page.reload() }
+    _ = try await graph.backend.waitForTargetMessage(method: "Page.reload")
+
+    graph.receiver.receive("{")
+    await parser.waitUntilBlocked()
+    let completion = CompletionProbe()
+    let close: Task<Void, Never>?
+    if explicitCloseFirst {
+        close = Task {
+            await proxy.close()
+            await completion.finish()
+        }
+        await waitForReceiverCloseWaiter(receiver: graph.receiver)
+        close?.cancel()
+        #expect(await completion.isFinished == false)
+        #expect(await graph.backend.isDetached() == false)
+    } else {
+        close = nil
+    }
+
+    await parser.release()
+    if explicitCloseFirst {
+        await close?.value
+        try await proxy.waitUntilClosed()
+        await #expect(throws: WebInspectorProxyError.closed) { try await pending.value }
+    } else {
+        let failure = WebInspectorProxyError.disconnected("Failed to decode root envelope: Invalid JSON.")
+        await #expect(throws: failure) { try await proxy.waitUntilClosed() }
+        await #expect(throws: failure) { try await pending.value }
+    }
+    #expect(await graph.backend.isDetached())
+    #expect(await proxy.currentPage == nil)
+}
+
 private struct ReceiverTransportGraph: Sendable {
     let receiver: TransportReceiver
     let backend: FakeTransportBackend
