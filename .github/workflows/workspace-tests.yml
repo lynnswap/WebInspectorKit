@@ -13,9 +13,14 @@ on:
         default: false
         type: boolean
       suite:
-        description: native for all installed runtimes; workspace for the latest OS only.
+        description: native for current-major minors and latest older releases; workspace for the latest OS only.
         required: true
         type: string
+
+      latest_ios_major:
+        description: Newest iOS major covered by CI, including hosts without that major installed.
+        type: number
+        default: 27
 
 permissions:
   contents: read
@@ -29,6 +34,7 @@ jobs:
       XCODE_MAJOR: ${{ inputs.xcode_major }}
       XCODE_ALLOW_PRERELEASE: ${{ inputs.allow_prerelease }}
       TEST_SUITE: ${{ inputs.suite }}
+      LATEST_IOS_MAJOR: ${{ inputs.latest_ios_major }}
       SPM_CACHE_DIR: ${{ github.workspace }}/.ci/spm-cache
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -71,7 +77,7 @@ jobs:
             python3 .github/scripts/prepare-xctestrun.py "$derived_data/Build/Products"
           done
       - name: Test selected runtimes sequentially
-        run: python3 .github/scripts/runtime-tests.py "$RUNNER_TEMP" --suite "$TEST_SUITE"
+        run: python3 .github/scripts/runtime-tests.py "$RUNNER_TEMP" --suite "$TEST_SUITE" --latest-ios-major "$LATEST_IOS_MAJOR"
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -39,7 +39,7 @@ class RuntimeSelectionTests(unittest.TestCase):
         self.assertEqual(simctl.call_args_list[-1].args,
                          ("create", "WebInspectorKit CI", "phone", installed["identifier"]))
 
-    def test_every_supported_minor_and_patch_version_is_selected(self):
+    def test_inventory_preserves_supported_minor_and_patch_versions(self):
         installed = [runtime(version) for version in (
             "27.2", "18.6", "26.4.1", "18.4", "26.2", "27.0",
             "26.0", "26.0.1", "26.0.2", "26.1", "26.1.1",
@@ -56,20 +56,43 @@ class RuntimeSelectionTests(unittest.TestCase):
 
     def test_runtime_identifier_is_preserved_when_version_contains_a_patch(self):
         installed = [runtime("26.4.1", identifier="com.apple.CoreSimulator.SimRuntime.iOS-26-4")]
-        jobs = runner.test_cases(runner.supported_runtimes(installed), "26.6.2", "native")
+        jobs = runner.test_cases(runner.supported_runtimes(installed), "26.6.2", "native", latest_ios_major=27)
         self.assertEqual(jobs[0], {"runtime": installed[0]["identifier"], "version": "26.4.1",
                                    "platform": "iOS", "suite": "native"})
 
-    def test_low_level_cases_cover_every_runtime_and_the_host_macos(self):
-        jobs = runner.test_cases([runtime("18.5"), runtime("18.6")], "15.7", "native")
-        self.assertEqual(len(jobs), 3)
-        self.assertEqual([job["version"] for job in jobs if job["platform"] == "iOS"], ["18.5", "18.6"])
-        self.assertEqual(jobs[-1], {"runtime": "", "version": "15.7", "platform": "macOS", "suite": "native"})
+    def test_native_keeps_all_newest_major_minors_and_latest_older_releases(self):
+        installed = [runtime(version) for version in (
+            "27.2", "18.4", "26.9", "27.0", "18.6", "26.10.1", "26.10.2", "27.10",
+        )]
+        jobs = runner.test_cases(installed, "26.6.2", "native", latest_ios_major=27)
+        self.assertEqual([job["version"] for job in jobs if job["platform"] == "iOS"],
+                         ["18.6", "26.10.2", "27.0", "27.2", "27.10"])
+        self.assertEqual(jobs[-1], {"runtime": "", "version": "26.6.2", "platform": "macOS", "suite": "native"})
         self.assertTrue(all(job["suite"] == "native" for job in jobs))
+        reversed_jobs = runner.test_cases(list(reversed(installed)), "26.6.2", "native", latest_ios_major=27)
+        self.assertEqual(jobs, reversed_jobs)
+
+    def test_older_host_does_not_treat_its_local_latest_major_as_current(self):
+        installed = [runtime(version) for version in ("18.5", "18.6", "26.1", "26.4.1")]
+        jobs = runner.test_cases(installed, "15.7", "native", latest_ios_major=27)
+        self.assertEqual([job["version"] for job in jobs if job["platform"] == "iOS"],
+                         ["18.6", "26.4.1"])
+
+    def test_current_major_keeps_all_available_patch_runtimes(self):
+        installed = [runtime(version) for version in ("27.1", "27.1.1", "27.2")]
+        jobs = runner.test_cases(installed, "26.6.2", "native", latest_ios_major=27)
+        self.assertEqual([job["version"] for job in jobs if job["platform"] == "iOS"],
+                         ["27.1", "27.1.1", "27.2"])
+
+    def test_advancing_the_shared_major_retires_previous_major_minors(self):
+        installed = [runtime(version) for version in ("27.0", "27.2", "28.0", "28.1")]
+        jobs = runner.test_cases(installed, "27.1", "native", latest_ios_major=28)
+        self.assertEqual([job["version"] for job in jobs if job["platform"] == "iOS"],
+                         ["27.2", "28.0", "28.1"])
 
     def test_workspace_suites_run_only_on_the_latest_ios_and_host_macos(self):
         installed = [runtime(version) for version in ("27.2", "18.6", "27.10", "27.9", "26.5")]
-        jobs = runner.test_cases(installed, "27.1", "workspace")
+        jobs = runner.test_cases(installed, "27.1", "workspace", latest_ios_major=27)
         self.assertEqual(len(jobs), 2)
         self.assertEqual([(job["platform"], job["version"]) for job in jobs if job["suite"] == "workspace"],
                          [("iOS", "27.10"), ("macOS", "27.1")])
@@ -77,7 +100,7 @@ class RuntimeSelectionTests(unittest.TestCase):
                          [])
 
     def test_latest_runner_with_one_ios_runtime_keeps_full_coverage(self):
-        jobs = runner.test_cases([runtime("27.0")], "27.0", "workspace")
+        jobs = runner.test_cases([runtime("27.0")], "27.0", "workspace", latest_ios_major=27)
         self.assertEqual([job["suite"] for job in jobs], ["workspace", "workspace"])
 
 
@@ -109,7 +132,7 @@ class RuntimeExecutionTests(unittest.TestCase):
                 fail(command)
             return subprocess.CompletedProcess(command, 0)
         with patch.object(runner.subprocess, "run", side_effect=run):
-            return runner.run_tests(self.runtimes, "27.0", self.root, suite)
+            return runner.run_tests(self.runtimes, "27.0", self.root, suite, latest_ios_major=27)
 
     def test_workspace_runs_latest_only_and_excludes_low_level_suite(self):
         self.assertEqual(self.execute("workspace"), 0)
