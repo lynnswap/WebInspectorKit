@@ -1161,7 +1161,7 @@ public actor WebInspectorProxy {
         }
     }
 
-    private nonisolated static func mapNativeAttachError(_ error: any Error) -> any Error {
+    nonisolated static func mapNativeAttachError(_ error: any Error) -> any Error {
         if let proxyError = error as? WebInspectorProxyError {
             return proxyError
         }
@@ -1169,18 +1169,7 @@ public actor WebInspectorProxy {
             return mapBootstrapTargetError(transportError)
         }
         if let symbolResolutionError = error as? NativeInspectorSymbolResolutionError {
-            switch symbolResolutionError {
-            case let .missingSymbols(functions):
-                let missingFunctions = functions.sorted().joined(separator: ", ")
-                if missingFunctions.isEmpty {
-                    return WebInspectorProxyError.unsupported([
-                        "Native Web Inspector symbols are unavailable."
-                    ])
-                }
-                return WebInspectorProxyError.unsupported([
-                    "Native Web Inspector symbols are unavailable: \(missingFunctions)"
-                ])
-            }
+            return WebInspectorProxyError.unsupported(symbolResolutionError.diagnostics)
         }
         return WebInspectorProxyError.attachFailed((error as NSError).localizedDescription)
     }

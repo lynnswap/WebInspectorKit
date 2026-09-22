@@ -22,6 +22,27 @@ with already-compiled clients.
 DocC now documents the UIKit API under `documentation/webinspectorkit/`.
 Update links that pointed into `documentation/webinspectorui/` accordingly.
 
+### Emit test events with a target handle
+
+`WebInspectorTestBackend.emit(_:target:)` now requires a `WebInspectorTarget`.
+Replace `target: target.id` with `target: target` for Network, DOM, CSS, Console,
+and Runtime events:
+
+```swift
+let runtime = try await WebInspectorProxyTestRuntime.start()
+let target = try await runtime.proxy.waitForCurrentPage()
+var events = target.dom.events.makeAsyncIterator()
+try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
+await runtime.backend.emit(.documentUpdated, target: target)
+let event = await events.next()
+await runtime.proxy.close()
+```
+
+Keep the target handle for the route being exercised. A target ID alone cannot
+distinguish routes that share an identity. Emitting before a subscription is
+registered or after it is cancelled is valid; an event with no recipient is
+not replayed later. Wait for subscribers explicitly when asserting delivery.
+
 ## v0.5.0
 
 These notes apply when upgrading from `v0.4.1` to `v0.5.0`.

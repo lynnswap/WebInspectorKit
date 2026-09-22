@@ -51,6 +51,42 @@ func webInspectorProxyTestingStreamsFinishForActiveAndLateCloseConsumers() async
 }
 
 @Test
+func webInspectorProxyTestingEmitsToExplicitTargetsWithoutSubscribers() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+
+    await runtime.backend.emit(.documentUpdated, target: target)
+    await runtime.backend.emit(.mediaQueryResultChanged, target: target)
+    await runtime.backend.emit(
+        .messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
+        target: target
+    )
+    await runtime.backend.emit(.executionContextsCleared(target: target.id), target: target)
+    await runtime.backend.emit(
+        .dataReceived(
+            id: WebInspectorProxyTestFixtures.networkRequestID("unobserved-request"),
+            dataLength: 1,
+            encodedDataLength: 1,
+            timestamp: 1
+        ),
+        target: target
+    )
+
+    var events = target.dom.events.makeAsyncIterator()
+    try await runtime.backend.waitForSubscribers(domain: "DOM", target: target, count: 1)
+    let nodeID = WebInspectorProxyTestFixtures.domNodeID("observed-node")
+    await runtime.backend.emit(.inspect(nodeID), target: target)
+    let event = try #require(await events.next())
+    guard case .inspect(nodeID) = event else {
+        Issue.record("Expected only the event emitted with an active subscription.")
+        return
+    }
+
+    await runtime.proxy.close()
+    #expect(await events.next() == nil)
+}
+
+@Test
 func webInspectorProxyNetworkEventsMulticastToConsumerSubscribers() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
