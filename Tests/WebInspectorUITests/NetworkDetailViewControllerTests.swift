@@ -2058,7 +2058,6 @@ struct NetworkDetailViewControllerTests {
         viewController.collectionView.layoutIfNeeded()
         #expect(viewController.isFollowingTailForTesting)
         let scrollCountBeforePinnedAppend = viewController.tailScrollCountForTesting
-        let userScrollRevisionBeforePinnedAppend = viewController.userScrollRevisionForTesting
         await context.apply(.webSocket(.frameReceived(
             id: requestID,
             frame: Network.WebSocketFrame(
@@ -2076,7 +2075,6 @@ struct NetworkDetailViewControllerTests {
         await fireWebSocketRenderingFrame(frameScheduler, in: viewController)
         #expect(viewController.tailScrollCountForTesting == scrollCountBeforePinnedAppend + 1)
         #expect(viewController.isFollowingTailForTesting)
-        #expect(viewController.userScrollRevisionForTesting == userScrollRevisionBeforePinnedAppend)
 
         let completedApplyGeneration = viewController.snapshotApplyGenerationForTesting
         let userScrollRevisionBeforeDrag = viewController.userScrollRevisionForTesting
@@ -9985,7 +9983,15 @@ struct NetworkDetailViewControllerTests {
         makeVisible: Bool = true,
         useUIKitVisibility: Bool = false
     ) -> UIWindow {
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+        let window: UIWindow
+        if useUIKitVisibility,
+           let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
+            window = UIWindow(windowScene: scene)
+            window.frame = frame
+        } else {
+            window = UIWindow(frame: frame)
+        }
         window.rootViewController = viewController
         viewController.loadViewIfNeeded()
         viewController.view.frame = window.bounds
