@@ -134,7 +134,7 @@ func replyPromiseCancellationAndFulfillmentRaceResumesExactlyOnce() async throws
     }
 }
 
-@Test
+@Test(.timeLimit(.minutes(1)))
 func replyPromiseAndPendingTaskReleaseAfterExplicitTerminal() async throws {
     let promiseRelease = AsyncStream<Void>.makeStream()
     let taskRelease = AsyncStream<Void>.makeStream()
