@@ -4,7 +4,7 @@ import UIKit
 import WebInspectorUIBase
 
 @MainActor
-package final class RegularTabContentViewController: UINavigationController {
+final class RegularTabContentViewController: UINavigationController {
     private let session: WebInspectorSession
     private let contentStore: PresentationContentStore
     private var segmentDisplayItemIDs: [WebInspectorTab.DisplayItem.ID] = []
@@ -29,7 +29,7 @@ package final class RegularTabContentViewController: UINavigationController {
         return control
     }()
 
-    package init(
+    init(
         session: WebInspectorSession,
         contentStore: PresentationContentStore = PresentationContentStore()
     ) {
@@ -53,7 +53,7 @@ package final class RegularTabContentViewController: UINavigationController {
         interfaceObservation?.cancel()
     }
 
-    override package func viewDidLoad() {
+    override func viewDidLoad() {
         super.viewDidLoad()
         applyBackgroundFromTraits()
         if #available(iOS 26.0, *) {
@@ -168,11 +168,11 @@ package final class RegularTabContentViewController: UINavigationController {
         return viewController
     }
 
-    package var segmentedControlForTesting: UISegmentedControl {
+    var segmentedControlForTesting: UISegmentedControl {
         segmentedControl
     }
 
-    package var interfaceObservationDeliveryForTesting: PortableObservationTracking.Token? {
+    var interfaceObservationDeliveryForTesting: PortableObservationTracking.Token? {
         interfaceObservation
     }
 }

@@ -5,6 +5,23 @@ when upgrading WebInspectorKit. Sections are grouped by release, newest first.
 
 ## Unreleased
 
+### UIKit declarations move into WebInspectorKit
+
+Continue importing `WebInspectorKit` and using `WebInspectorSession`,
+`WebInspectorViewController`, and `WebInspectorTab` as before. These types are
+now declared in the `WebInspectorKit` module; the `WebInspectorUI` module and
+its re-export have been removed.
+
+Replace direct `import WebInspectorUI` statements with `import WebInspectorKit`.
+Change module-qualified names such as
+`WebInspectorUI.WebInspectorViewController` to
+`WebInspectorKit.WebInspectorViewController`. Rebuild all clients: moving the
+declaration module changes Swift symbol identities and is not binary-compatible
+with already-compiled clients.
+
+DocC now documents the UIKit API under `documentation/webinspectorkit/`.
+Update links that pointed into `documentation/webinspectorui/` accordingly.
+
 ### Emit test events with a target handle
 
 `WebInspectorTestBackend.emit(_:target:)` now requires a `WebInspectorTarget`.

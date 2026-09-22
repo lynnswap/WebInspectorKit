@@ -697,7 +697,7 @@ public actor WebInspectorProxy {
         logger.debug(
             "Inspector.inspect resolving route=\(Self.logDescription(route), privacy: .public) objectID=\(objectID.rawValue, privacy: .public)"
         )
-        // Inspector.inspect is a page-target event. WebInspectorUI resolves it
+        // Inspector.inspect is a page-target event. WebInspectorKit resolves it
         // through the main page DOM agent, whose node namespace is unscoped.
         do {
             let nodeID: DOM.Node.ID = try await dispatchCommand(

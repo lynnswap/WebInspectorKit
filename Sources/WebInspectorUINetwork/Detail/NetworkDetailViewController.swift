@@ -80,10 +80,9 @@ package final class NetworkDetailViewController: UIViewController, ScrollableTab
     private var selectedRequestRenderObservation: PortableObservationTracking.Token?
     private let responseBodyFetchObservationBinding = NetworkResponseBodyFetchObservationBinding()
     private let scrollEdgeController = NetworkDetailScrollEdgeController()
-    private let makeBodyViewController: NetworkBodyViewControllerFactory
     private var isRenderingActive = false
     private var isBodyRenderingActive = false
-    private lazy var bodyViewController = makeBodyViewController(scrollEdgeController)
+    private lazy var bodyViewController = NetworkBodyViewController(scrollEdgeSink: scrollEdgeController)
     private lazy var securityViewController = NetworkSecurityViewController()
     private lazy var cookiesViewController = NetworkCookiesViewController()
     private let webSocketPreviewViewController: NetworkWebSocketPreviewViewController
@@ -158,13 +157,9 @@ package final class NetworkDetailViewController: UIViewController, ScrollableTab
     package init(
         model: NetworkPanelModel,
         initialMode: NetworkDetailViewController.Mode = .headers,
-        webSocketFrameScheduler: any NetworkFrameScheduling = NetworkDisplayLinkFrameScheduler(),
-        makeBodyViewController: @escaping NetworkBodyViewControllerFactory = { scrollEdgeSink in
-            UnavailableNetworkBodyPreviewViewController(scrollEdgeSink: scrollEdgeSink)
-        }
+        webSocketFrameScheduler: any NetworkFrameScheduling = NetworkDisplayLinkFrameScheduler()
     ) {
         self.model = model
-        self.makeBodyViewController = makeBodyViewController
         webSocketPreviewViewController = NetworkWebSocketPreviewViewController(
             frameScheduler: webSocketFrameScheduler
         )
@@ -1200,7 +1195,7 @@ extension NetworkDetailViewController {
         webSocketPreviewViewController
     }
 
-    var bodyViewControllerForTesting: NetworkBodyPreviewViewController {
+    var bodyViewControllerForTesting: NetworkBodyViewController {
         bodyViewController
     }
 

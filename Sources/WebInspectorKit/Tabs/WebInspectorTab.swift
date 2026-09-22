@@ -35,24 +35,24 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
 
     /// Optional tab image.
     public let image: UIImage?
-    package let content: Content
+    let content: Content
 
-    package enum BuiltIn: Hashable {
+    enum BuiltIn: Hashable {
         case dom
         case network
     }
 
     @MainActor
-    package struct CustomContent {
-        package let makeViewController: @MainActor (WebInspectorSession) -> UIViewController
+    struct CustomContent {
+        let makeViewController: @MainActor (WebInspectorSession) -> UIViewController
     }
 
-    package enum Content {
+    enum Content {
         case builtIn(BuiltIn)
         case custom(CustomContent)
     }
 
-    package var builtIn: BuiltIn? {
+    var builtIn: BuiltIn? {
         guard case let .builtIn(builtIn) = content else {
             return nil
         }

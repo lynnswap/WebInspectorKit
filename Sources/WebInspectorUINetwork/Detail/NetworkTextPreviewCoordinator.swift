@@ -3,19 +3,19 @@ import WebInspectorUIBase
 import Foundation
 import WebInspectorDataKit
 
-package enum NetworkTextPreviewPreparationAction {
+enum NetworkTextPreviewPreparationAction {
     case unavailable
     case active(text: String, syntaxKind: NetworkBody.SyntaxKind)
     case ready(text: String, syntaxKind: NetworkBody.SyntaxKind)
 }
 
-package enum NetworkTextPreviewResultAction {
+enum NetworkTextPreviewResultAction {
     case ignore
     case show(text: String, syntaxKind: NetworkBody.SyntaxKind)
 }
 
 @MainActor
-package final class NetworkTextPreviewCoordinator {
+final class NetworkTextPreviewCoordinator {
     private var generation = 0
     private var task: Task<Void, Never>?
     private var pendingInput: NetworkTextPreviewInput?
@@ -25,9 +25,9 @@ package final class NetworkTextPreviewCoordinator {
     private let preparationGateForTesting = NetworkTextPreviewPreparationGateForTesting()
 #endif
 
-    package init() {}
+    init() {}
 
-    package func preparePreview(
+    func preparePreview(
         for body: NetworkBody,
         completion: @escaping @MainActor (NetworkTextPreviewResultAction) -> Void
     ) -> NetworkTextPreviewPreparationAction {
@@ -54,40 +54,40 @@ package final class NetworkTextPreviewCoordinator {
         return .active(text: input.text, syntaxKind: input.syntaxKind)
     }
 
-    package func suspendPreparation() {
+    func suspendPreparation() {
         cancelPending()
     }
 
-    package func cancel() {
+    func cancel() {
         cancelPending()
         displayedInput = nil
         displayedOutput = nil
     }
 
 #if DEBUG
-    package var hasActivePreparationForTesting: Bool {
+    var hasActivePreparationForTesting: Bool {
         task != nil
     }
 
-    package var activePreparationBodyIDForTesting: ObjectIdentifier? {
+    var activePreparationBodyIDForTesting: ObjectIdentifier? {
         pendingInput?.bodyID
     }
 
-    package func waitUntilPreparationFinishedForTesting() async {
+    func waitUntilPreparationFinishedForTesting() async {
         while let task {
             await task.value
         }
     }
 
-    package func suspendNextPreparationForTesting() async {
+    func suspendNextPreparationForTesting() async {
         await preparationGateForTesting.suspendNextPreparation()
     }
 
-    package func waitForPreparationSuspensionForTesting() async {
+    func waitForPreparationSuspensionForTesting() async {
         await preparationGateForTesting.waitForSuspension()
     }
 
-    package func resumeSuspendedPreparationForTesting() async {
+    func resumeSuspendedPreparationForTesting() async {
         await preparationGateForTesting.resumeSuspendedPreparation()
     }
 #endif

@@ -1,11 +1,9 @@
-# WebInspectorUI
+# WebInspectorKit
 
-WebInspectorUI contains the internal UIKit implementation used by the public
-`WebInspectorKit` product.
-
-Use this target when maintaining the built-in inspector UI. App code should
-import `WebInspectorKit`; custom inspector UIs should use `WebInspectorDataKit`
-or `WebInspectorProxyKit` directly.
+WebInspectorKit declares the public UIKit inspector API and owns the root
+controllers, session integration, and custom tabs. App code imports
+`WebInspectorKit`; custom inspector UIs can use `WebInspectorDataKit` or
+`WebInspectorProxyKit` directly.
 
 This README is target orientation only. Generate DocC documentation from the
 package for symbol-level details.
@@ -22,8 +20,10 @@ package for symbol-level details.
   split presentation.
 - `Tabs`: Public tab API, layout-specific display item projection, content
   cache, and content factory.
-- `DOM`: Built-in DOM tab controllers and DOM-specific navigation items.
-- `Network`: Built-in Network tab containers, request list, and detail UI.
+- `WebInspectorUIDOM`: Built-in DOM content and DOM-specific navigation items.
+- `WebInspectorUINetwork`: Built-in Network containers, request list, detail UI,
+  and body previews, including syntax rendering.
+- `WebInspectorUIBase`: Shared UIKit support and localization resources.
 
 The visible UI is native UIKit/TextKit2. Compact width uses tab navigation;
 regular width uses split presentation.
