@@ -96,94 +96,98 @@ struct NativeInspectorSymbolResolverTests {
     }
 
     @Test
-    func fixtureImageResolvesCompleteAddressSetDespiteIncompatibleOverloads() throws {
+    func fixtureResolutionSuppliesValidatedAttachmentInputs() throws {
         let fixture = try nativeSymbolFixture()
         let resolution = try NativeInspectorSymbolResolver.resolveUsingFixture(fixture)
-
-        #expect(resolution.failureReason == nil)
-        #expect(resolution.addresses.isComplete)
-        #expect(resolution.isSupported)
-        #expect(resolution.source == "loaded-image")
-    }
-    @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason))
-    @MainActor
-    func resolveCurrentReturnsCompleteAddressSetOnSupportedPlatforms() throws {
-        let resolution = withWebKitLoaded {
-            NativeInspectorSymbolResolver.resolveCurrent()
+        let requirements = NativeInspectorSymbols.current().all.map {
+            $0.requirement(webKit: RuntimeImage(pathSuffixes: fixture.pathSuffixes),
+                           javaScriptCore: RuntimeImage(pathSuffixes: fixture.pathSuffixes))
         }
-
-        #expect(resolution.failureReason == nil)
-        #expect(resolution.addresses.isComplete)
-        #expect(resolution.isSupported)
+        let expected = try WebKitRuntime.resolveUncached(requirements, allowSharedCache: false).map { try $0.get() }
+        let native = resolution.objcSymbols
+        #expect([
+            native.connectFrontendAddress, native.disconnectFrontendAddress,
+            native.stringFromUTF8Address, native.stringImplToNSStringAddress,
+            native.derefStringImplAddress, native.dispatchMessageFromRemoteAddress,
+            native.debuggableVTableAddress,
+        ] == expected.map(\.address))
+        #expect(resolution.stringFromUTF8.address == UInt64(WebInspectorNativeSymbolFixtureWTFStringFromUTF8Address()))
+        #expect(resolution.stringFromUTF8.source == "loaded-image")
+        #expect(resolution.debuggableVTable.source == "loaded-image")
     }
     @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason))
     @MainActor
     func nativeSymbolResolutionTiming() throws {
         try withWebKitLoaded {
-            let cached = NativeInspectorSymbolResolver.resolveCurrent()
-            try #require(cached.isSupported)
+            let cached = try NativeInspectorSymbolResolver.resolveCurrent()
             var samples: [Double] = []
             for _ in 0..<5 {
                 let start = ProcessInfo.processInfo.systemUptime
-                let resolution = NativeInspectorSymbolResolver.resolveForTesting()
+                let resolution = try NativeInspectorSymbolResolver.resolveForTesting()
                 samples.append((ProcessInfo.processInfo.systemUptime - start) * 1_000)
-                #expect(resolution.addresses == cached.addresses)
+                #expect(resolution == cached)
             }
             let start = ProcessInfo.processInfo.systemUptime
             for _ in 0..<1_000 {
-                _ = NativeInspectorSymbolResolver.resolveCurrent()
+                _ = try NativeInspectorSymbolResolver.resolveCurrent()
             }
             let cachedMicroseconds = (ProcessInfo.processInfo.systemUptime - start) * 1_000
             print("SYMBOL_RESOLUTION_TIMING uncachedMedianMS=\(samples.sorted()[2]) cachedMeanUS=\(cachedMicroseconds)")
         }
     }
     @Test
-    func resolveForTestingReportsOnlyMissingSymbolState() throws {
+    func resolutionPreservesEachFailedRoleAndLookupReason() throws {
         let fixture = try nativeSymbolFixture()
-        let symbols = NativeInspectorSymbols.current()
-            .replacing(
-                stringFromUTF8: requiredSymbol(
-                    role: .stringFromUTF8,
-                    ownerImage: .javaScriptCore,
-                    functionName: "definitelyMissingFromUTF8Foo", parameterTypes: [],
-                    resolutionPolicy: .requiredTextSymbol
-                )
+        let current = NativeInspectorSymbols.current()
+        let symbols = current.replacing(
+            connectFrontend: NativeInspectorRequiredSymbol(
+                role: .connectFrontend, ownerImage: .webKit,
+                queries: current.connectFrontend.queries + current.disconnectFrontend.queries,
+                resolutionPolicy: .requiredTextSymbol
+            ),
+            stringFromUTF8: requiredSymbol(
+                role: .stringFromUTF8, ownerImage: .javaScriptCore,
+                functionName: "definitelyMissingFromUTF8Foo", parameterTypes: [],
+                resolutionPolicy: .requiredTextSymbol
+            ),
+            stringImplToNSString: NativeInspectorRequiredSymbol(
+                role: .stringImplToNSString, ownerImage: .javaScriptCore,
+                queries: current.stringImplToNSString.queries,
+                resolutionPolicy: .requiredDataSymbol
             )
-        let resolution = try NativeInspectorSymbolResolver.resolveUsingFixture(
-            fixture,
-            symbols: symbols
         )
-        let failureReason = resolution.failureReason
-
-        #expect(failureReason != nil)
-        #expect(resolution.isSupported == false)
-        #expect(resolution.addresses == .zero)
-        #expect(!resolution.missingFunctions.isEmpty)
-        #expect(!resolution.missingFunctions.contains("inspectorTargetAgentVTable"))
-        #expect(!resolution.missingFunctions.contains("targetAgentDidCreateFrontendAndBackend"))
-        #expect(!resolution.missingFunctions.contains("targetAgentWillDestroyFrontendAndBackend"))
-        if let diagnosticsSummary = resolution.diagnosticsSummary {
-            #expect(!diagnosticsSummary.contains("attachMode="))
-            #expect(!diagnosticsSummary.contains("rootMessaging"))
-            #expect(!diagnosticsSummary.contains("pageMessaging"))
-        }
-        if let failureReason {
-            #expect(failureReason.contains("phase="))
-            #expect(failureReason.contains("missing="))
-            #expect(!failureReason.contains("WebKit"))
-            #expect(!failureReason.contains("JavaScriptCore"))
-            #expect(!failureReason.contains("WTF"))
-            #expect(!failureReason.contains("definitelyMissingFromUTF8Foo"))
-            #expect(!failureReason.contains("/System/"))
+        do {
+            _ = try NativeInspectorSymbolResolver.resolveUsingFixture(fixture, symbols: symbols)
+            Issue.record("Failed requirements must not produce attachment inputs.")
+        } catch let error as NativeInspectorSymbolResolutionError {
+            #expect(error.failures.map(\.role) == [.connectFrontend, .stringFromUTF8, .stringImplToNSString])
+            #expect(error.failures.map(\.underlyingError.reason) == [.ambiguousSymbol, .symbolMissing, .invalidAddress])
+            #expect(error.diagnostics == [
+                "Native Web Inspector requirement connectFrontend failed: ambiguousSymbol.",
+                "Native Web Inspector requirement stringFromUTF8 failed: symbolMissing.",
+                "Native Web Inspector requirement stringImplToNSString failed: invalidAddress.",
+            ])
+            let descriptions = String(describing: error) + String(reflecting: error)
+            for privateDetail in ["__ZN", "WTF", "WebPageDebuggable", "definitelyMissingFromUTF8Foo"] + fixture.pathSuffixes {
+                #expect(!descriptions.contains(privateDetail))
+            }
         }
     }
     @Test
-    func fixtureResolutionSelectsUsableStringFromUTF8EntryPoint() throws {
+    func unavailableImageIsAssociatedWithItsRequirements() throws {
         let fixture = try nativeSymbolFixture()
-        let resolution = try NativeInspectorSymbolResolver.resolveUsingFixture(fixture)
-
-        #expect(resolution.isSupported)
-        #expect(resolution.stringFromUTF8Address == UInt64(WebInspectorNativeSymbolFixtureWTFStringFromUTF8Address()))
+        do {
+            _ = try NativeInspectorSymbolResolver.resolveForTesting(
+                imagePathSuffixes: fixture.pathSuffixes,
+                javaScriptCorePathSuffixes: ["/not-loaded.framework/not-loaded"],
+                allowSharedCacheFallback: false
+            )
+            Issue.record("An unavailable required image must prevent attachment.")
+        } catch let error as NativeInspectorSymbolResolutionError {
+            #expect(error.failures.map(\.role) == [.stringFromUTF8, .stringImplToNSString])
+            #expect(error.failures.map(\.underlyingError.reason) == [.imageUnavailable, .imageUnavailable])
+            #expect(!String(reflecting: error).contains("/not-loaded"))
+        }
     }
     @Test(arguments: [
         ("RN9Inspector15FrontendChannelEbb", true),
@@ -262,40 +266,13 @@ struct NativeInspectorSymbolResolverTests {
                 resolutionPolicy: .requiredTextSymbol
             )
         )
-        let resolution = try NativeInspectorSymbolResolver.resolveUsingFixture(fixture, symbols: symbols)
-
-        #expect(!resolution.isSupported)
-        #expect(resolution.missingFunctions == ["derefStringImpl"])
-    }
-    @Test
-    func diagnosticsDoNotExposeDecodedMangledSymbols() throws {
-        let fixture = try nativeSymbolFixture()
-        let symbols = NativeInspectorSymbols.current()
-            .replacing(
-                stringFromUTF8: requiredSymbol(
-                    role: .stringFromUTF8,
-                    ownerImage: .javaScriptCore,
-                    functionName: "definitelyMissingFromUTF8Foo", parameterTypes: [],
-                    resolutionPolicy: .requiredTextSymbol
-                )
-            )
-        let resolution = try NativeInspectorSymbolResolver.resolveUsingFixture(
-            fixture,
-            symbols: symbols
-        )
-        let diagnostics = [
-            resolution.failureReason,
-            resolution.failureKind,
-            resolution.phase,
-            resolution.source,
-            resolution.diagnosticsSummary,
-        ].compactMap { $0 }.joined(separator: " ")
-
-        #expect(!diagnostics.contains("__ZN"))
-        #expect(!diagnostics.contains("_ZN"))
-        #expect(!diagnostics.contains("WTF"))
-        #expect(!diagnostics.contains("DefinitelyWrong"))
-        #expect(!diagnostics.contains("definitelyMissingFromUTF8Foo"))
+        do {
+            _ = try NativeInspectorSymbolResolver.resolveUsingFixture(fixture, symbols: symbols)
+            Issue.record("The destroy entry point cannot replace deref.")
+        } catch let error as NativeInspectorSymbolResolutionError {
+            #expect(error.failures.map(\.role) == [.derefStringImpl])
+            #expect(error.failures.map(\.underlyingError.reason) == [.symbolMissing])
+        }
     }
 }
 
@@ -343,8 +320,8 @@ private extension NativeInspectorSymbolResolver {
         _ fixture: NativeSymbolFixture,
         allowSharedCacheFallback: Bool = false,
         symbols: NativeInspectorSymbols = NativeInspectorSymbols.current()
-    ) throws -> NativeInspectorSymbolResolution {
-        return resolveForTesting(
+    ) throws -> NativeInspectorResolvedSymbols {
+        return try resolveForTesting(
             imagePathSuffixes: fixture.pathSuffixes,
             javaScriptCorePathSuffixes: fixture.pathSuffixes,
             allowSharedCacheFallback: allowSharedCacheFallback,

@@ -205,8 +205,8 @@ func networkEventsAreSeparatedByTarget() async throws {
         return await iterator.next()
     }
 
-    try await runtime.backend.waitForSubscribers(domain: "Network", target: firstTarget.id, count: 1)
-    try await runtime.backend.waitForSubscribers(domain: "Network", target: secondTarget.id, count: 1)
+    try await runtime.backend.waitForSubscribers(domain: "Network", target: firstTarget, count: 1)
+    try await runtime.backend.waitForSubscribers(domain: "Network", target: secondTarget, count: 1)
 
     await runtime.backend.emit(
         .responseReceived(
@@ -215,7 +215,7 @@ func networkEventsAreSeparatedByTarget() async throws {
             resourceType: .document,
             timestamp: 1
         ),
-        target: firstTarget.id
+        target: firstTarget
     )
     await runtime.backend.emit(
         .responseReceived(
@@ -224,7 +224,7 @@ func networkEventsAreSeparatedByTarget() async throws {
             resourceType: .xhr,
             timestamp: 2
         ),
-        target: secondTarget.id
+        target: secondTarget
     )
 
     let firstEvent = try #require(try await value(of: firstEventTask))
