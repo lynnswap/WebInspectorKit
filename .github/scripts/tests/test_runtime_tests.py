@@ -1,8 +1,10 @@
 import importlib.util
 import contextlib
 import io
+import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -90,14 +92,26 @@ class RuntimeSelectionTests(unittest.TestCase):
         self.assertEqual([job["version"] for job in jobs if job["platform"] == "iOS"],
                          ["27.2", "28.0", "28.1"])
 
+    def test_release_validation_restores_all_supported_native_runtimes(self):
+        installed = [runtime(version) for version in (
+            "27.2", "18.3", "18.4", "18.6", "26.0.1", "26.1", "26.1.1", "26.5", "27.0",
+        )] + [runtime("27.1", available=False), runtime("27.0", platform="tvOS")]
+        jobs = runner.test_cases(runner.supported_runtimes(installed), "26.6.2", "native",
+                                 latest_ios_major=27, all_native_runtimes=True)
+        self.assertEqual([job["version"] for job in jobs if job["platform"] == "iOS"],
+                         ["18.4", "18.6", "26.1", "26.1.1", "26.5", "27.0", "27.2"])
+        self.assertEqual(jobs[-1], {"runtime": "", "version": "26.6.2", "platform": "macOS", "suite": "native"})
+
     def test_workspace_suites_run_only_on_the_latest_ios_and_host_macos(self):
         installed = [runtime(version) for version in ("27.2", "18.6", "27.10", "27.9", "26.5")]
-        jobs = runner.test_cases(installed, "27.1", "workspace", latest_ios_major=27)
-        self.assertEqual(len(jobs), 2)
-        self.assertEqual([(job["platform"], job["version"]) for job in jobs if job["suite"] == "workspace"],
-                         [("iOS", "27.10"), ("macOS", "27.1")])
-        self.assertEqual([job["version"] for job in jobs if job["suite"] == "native"],
-                         [])
+        for full_coverage in (False, True):
+            with self.subTest(all_native_runtimes=full_coverage):
+                jobs = runner.test_cases(installed, "27.1", "workspace", latest_ios_major=27,
+                                         all_native_runtimes=full_coverage)
+                self.assertEqual(len(jobs), 2)
+                self.assertEqual([(job["platform"], job["version"]) for job in jobs],
+                                 [("iOS", "27.10"), ("macOS", "27.1")])
+                self.assertTrue(all(job["suite"] == "workspace" for job in jobs))
 
     def test_latest_runner_with_one_ios_runtime_keeps_full_coverage(self):
         jobs = runner.test_cases([runtime("27.0")], "27.0", "workspace", latest_ios_major=27)
@@ -125,14 +139,15 @@ class RuntimeExecutionTests(unittest.TestCase):
         stack.enter_context(patch.dict(os.environ, GITHUB_STEP_SUMMARY=str(self.summary)))
         stack.enter_context(patch.object(runner, "simctl", side_effect=["first-device", "second-device"]))
 
-    def execute(self, suite, fail=None):
+    def execute(self, suite, fail=None, *, all_native_runtimes=False):
         def run(command, **options):
             self.commands.append((command, options))
             if fail:
                 fail(command)
             return subprocess.CompletedProcess(command, 0)
         with patch.object(runner.subprocess, "run", side_effect=run):
-            return runner.run_tests(self.runtimes, "27.0", self.root, suite, latest_ios_major=27)
+            return runner.run_tests(self.runtimes, "27.0", self.root, suite, latest_ios_major=27,
+                                    all_native_runtimes=all_native_runtimes)
 
     def test_workspace_runs_latest_only_and_excludes_low_level_suite(self):
         self.assertEqual(self.execute("workspace"), 0)
@@ -142,6 +157,32 @@ class RuntimeExecutionTests(unittest.TestCase):
         self.assertIn("-only-testing:WebInspectorConsumerContractTests", commands[1])
         self.assertNotIn("-only-testing:WebInspectorNativeBridgeTests", commands[1])
         self.assertNotIn("18.6", self.summary.read_text())
+
+    def test_release_validation_runs_older_minors_and_cleans_each_device(self):
+        older = runtime("18.4")
+        older["supportedDeviceTypes"] = [{"identifier": "phone", "productFamily": "iPhone"}]
+        self.runtimes.insert(0, older)
+        with patch.object(runner, "simctl", side_effect=["older-device", "first-device", "second-device"]):
+            self.assertEqual(self.execute("native", all_native_runtimes=True), 0)
+        commands = [command for command, _ in self.commands]
+        tests = [command for command in commands if "xcodebuild" in command]
+        self.assertEqual(len(tests), 4)
+        self.assertTrue(all("-only-testing:WebInspectorNativeBridgeTests" in command for command in tests))
+        for device in ("older-device", "first-device", "second-device"):
+            self.assertIn(["xcrun", "simctl", "delete", device], commands)
+        self.assertIn("| iOS 18.4 / native | Passed |", self.summary.read_text())
+        self.assertIn("| iOS 18.6 / native | Passed |", self.summary.read_text())
+
+    def test_command_line_passes_full_native_coverage_to_execution(self):
+        arguments = ["runtime-tests.py", str(self.root), "--suite", "native",
+                     "--latest-ios-major", "27", "--all-native-runtimes"]
+        with patch.object(sys, "argv", arguments), \
+                patch.object(runner, "simctl", return_value=json.dumps({"runtimes": self.runtimes})), \
+                patch.object(runner.subprocess, "check_output", return_value="27.0\n"), \
+                patch.object(runner, "run_tests", return_value=0) as execute:
+            self.assertEqual(runner.main(), 0)
+        execute.assert_called_once_with(self.runtimes, "27.0", self.root, "native", 27,
+                                        all_native_runtimes=True)
 
     def test_test_failure_continues_with_remaining_runtimes_and_cleans_devices(self):
         def fail(command):

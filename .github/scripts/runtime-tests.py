@@ -44,10 +44,10 @@ def native_test_runtimes(runtimes, latest_ios_major):
     return sorted(selected, key=lambda item: version_components(item["version"]))
 
 
-def test_cases(runtimes, macos_version, suite, latest_ios_major):
+def test_cases(runtimes, macos_version, suite, latest_ios_major, *, all_native_runtimes=False):
     if suite == "workspace":
         runtimes = [max(runtimes, key=lambda runtime: version_components(runtime["version"]))]
-    else:
+    elif not all_native_runtimes:
         runtimes = native_test_runtimes(runtimes, latest_ios_major)
     return [
         {"runtime": runtime["identifier"], "version": runtime["version"], "platform": "iOS",
@@ -86,9 +86,10 @@ def run_logged(command, path, **options):
             print(path.read_text(errors="replace"), flush=True)
 
 
-def run_tests(runtimes, macos_version, build_root, suite, latest_ios_major):
+def run_tests(runtimes, macos_version, build_root, suite, latest_ios_major, *, all_native_runtimes=False):
     results = []
-    for case in test_cases(runtimes, macos_version, suite, latest_ios_major):
+    for case in test_cases(runtimes, macos_version, suite, latest_ios_major,
+                           all_native_runtimes=all_native_runtimes):
         label = f"{case['platform']} {case['version']} / {suite}"
         print(f"::group::{label}", flush=True)
         diagnostics = build_root / "runtime-tests" / f"{case['platform']}-{case['version']}"
@@ -141,13 +142,16 @@ def main():
     parser.add_argument("--suite", choices=("native", "workspace"), required=True)
     parser.add_argument("--latest-ios-major", type=int, required=True,
                         help="Newest iOS major covered by CI, shared across all runner hosts")
+    parser.add_argument("--all-native-runtimes", action="store_true",
+                        help="Run Native release validation on every supported installed runtime")
     args = parser.parse_args()
 
     runtimes = supported_runtimes(json.loads(simctl("list", "runtimes", "--json"))["runtimes"])
     if not runtimes:
         raise ValueError("No available iOS runtime supported by CI is installed.")
     macos_version = subprocess.check_output(["sw_vers", "-productVersion"], text=True).strip()
-    return run_tests(runtimes, macos_version, args.build_root, args.suite, args.latest_ios_major)
+    return run_tests(runtimes, macos_version, args.build_root, args.suite, args.latest_ios_major,
+                     all_native_runtimes=args.all_native_runtimes)
 
 
 if __name__ == "__main__":

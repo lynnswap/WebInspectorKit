@@ -1,0 +1,13 @@
+name: Release Validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    uses: ./.github/workflows/ci.yml
+    with:
+      all_native_runtimes: true

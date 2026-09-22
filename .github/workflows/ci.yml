@@ -11,6 +11,12 @@ on:
       - reopened
       - ready_for_review
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      all_native_runtimes:
+        description: Run Native compatibility tests on every supported installed runtime.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -48,6 +54,7 @@ jobs:
       xcode_major: ${{ matrix.xcode_major }}
       allow_prerelease: ${{ matrix.allow_prerelease }}
       suite: native
+      all_native_runtimes: ${{ inputs.all_native_runtimes || false }}
 
   workspace-tests:
     name: Workspace tests on latest OS
