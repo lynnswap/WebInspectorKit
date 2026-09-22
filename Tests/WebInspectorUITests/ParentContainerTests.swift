@@ -467,8 +467,10 @@ struct ParentContainerTests {
         weak var releasedRoot = finalRoot
         finalRoot = nil
 
-        #expect(releasedRoot == nil)
-        #expect(await waitUntilDetachCount(1, in: session))
+        try await waitForTestCondition { releasedRoot == nil }
+        let retirement = try #require(session.abandonmentRetirementTaskForTesting)
+        await retirement.value
+        #expect(session.detachCountForTesting == 1)
     }
 
     @Test
@@ -499,7 +501,9 @@ struct ParentContainerTests {
         replacementRoot.loadViewIfNeeded()
         replacementRoot.beginAppearanceTransition(true, animated: false)
         replacementRoot.endAppearanceTransition()
-        await Task.yield()
+        try await waitForTestCondition { session.abandonmentRetirementTaskForTesting != nil }
+        let abandonment = try #require(session.abandonmentRetirementTaskForTesting)
+        await abandonment.value
         #expect(session.detachCountForTesting == 0)
 
         let replacementBaseline = replacementRoot.rootPresentationRetirementTaskCompletionCountForTesting
@@ -521,11 +525,13 @@ struct ParentContainerTests {
         root?.endAppearanceTransition()
 
         root?.finishRootPresentationLifecycleForTesting()
+        let scheduledRetirement = try #require(root?.rootPresentationRetirementTaskForTesting)
+        weak var releasedRoot = root
         root = nil
 
-        #expect(await waitUntilDetachCount(1, in: session))
-        await Task.yield()
-        await Task.yield()
+        await scheduledRetirement.value
+        try await waitForTestCondition { releasedRoot == nil }
+        await session.abandonmentRetirementTaskForTesting?.value
         #expect(session.detachCountForTesting == 1)
     }
 

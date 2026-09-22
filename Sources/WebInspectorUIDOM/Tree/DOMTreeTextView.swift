@@ -2648,6 +2648,10 @@ extension DOMTreeTextView {
         routeSelectionInvalidation(selectionRevision: selectionRevision)
     }
 
+    var pageHighlightTaskForTesting: Task<Void, Never>? {
+        pageHighlightTask
+    }
+
     func waitForPageHighlightTaskForTesting() async {
         await pageHighlightTask?.value
     }

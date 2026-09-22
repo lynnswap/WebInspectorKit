@@ -1,3 +1,4 @@
+import Testing
 import ObservationBridge
 import WebInspectorDataKit
 
@@ -108,5 +109,17 @@ final class UITestDeinitProbe {
         self.waiter = nil
         waiter.timeoutTask.cancel()
         waiter.continuation.resume(returning: result)
+    }
+}
+
+@MainActor
+func waitForTestCondition(
+    timeout: Duration = .seconds(1),
+    _ condition: @MainActor () -> Bool
+) async throws {
+    let deadline = ContinuousClock.now + timeout
+    while !condition() {
+        try #require(ContinuousClock.now < deadline, "Timed out waiting for the test condition.")
+        await Task.yield()
     }
 }

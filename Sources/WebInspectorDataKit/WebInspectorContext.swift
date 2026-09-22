@@ -67,6 +67,10 @@ private actor CSSOperationGate {
         acquiredTargetIDs.remove(targetID)
     }
 
+    func queuedOperationCount(for targetID: WebInspectorTarget.ID) -> Int {
+        waitersByTargetID[targetID]?.count ?? 0
+    }
+
     private func cancel(targetID: WebInspectorTarget.ID, waiterID: UInt64) {
         waitersByTargetID[targetID]?.removeValue(forKey: waiterID)?.continuation.resume(
             throwing: CancellationError()
@@ -5084,6 +5088,14 @@ extension WebInspectorContext {
                 message: String(describing: error)
             ), generation: generation)
         }
+    }
+
+    package func queuedCSSOperationCountForTesting(
+        for target: WebInspectorTarget,
+        isolation: isolated (any Actor) = #isolation
+    ) async -> Int {
+        requireOwner(isolation)
+        return await cssOperationGate.queuedOperationCount(for: target.id)
     }
 
     private func withExclusiveCSSOperation<Output>(

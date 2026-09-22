@@ -7901,7 +7901,7 @@ func cancellingCSSMutationDoesNotWaitForBlockedStyleRefresh() async throws {
             options: WebInspectorMutationOptions(undo: .disabled)
         )
     }
-    await Task.yield()
+    try await waitUntil { await context.queuedCSSOperationCountForTesting(for: target) == 1 }
     mutationTask.cancel()
     try await waitUntil { mutationFinished }
     await #expect(throws: CancellationError.self) {
@@ -8039,7 +8039,7 @@ func concurrentCSSMutationsSerializeAndRefreshBeforeRewriting() async throws {
             options: WebInspectorMutationOptions(undo: .disabled)
         )
     }
-    await Task.yield()
+    try await waitUntil { await context.queuedCSSOperationCountForTesting(for: target) == 1 }
     #expect(await runtime.backend.recordedCommands().filter {
         $0.domain == "CSS" && $0.method == "setStyleText"
     }.count == 1)
@@ -8983,7 +8983,8 @@ func removedAndReusedStyleSheetIDRejectsPriorMutationReply() async throws {
             options: WebInspectorMutationOptions(undo: .disabled)
         )
     }
-    await Task.yield()
+    let frameTarget = runtime.proxy.frameTarget(id: frameTargetID)
+    try await waitUntil { await context.queuedCSSOperationCountForTesting(for: frameTarget) == 1 }
     let queuedRuleTask = Task { @MainActor in
         try await context.css.setRuleSelector(
             ".updated",
@@ -8991,7 +8992,7 @@ func removedAndReusedStyleSheetIDRejectsPriorMutationReply() async throws {
             options: WebInspectorMutationOptions(undo: .disabled)
         )
     }
-    await Task.yield()
+    try await waitUntil { await context.queuedCSSOperationCountForTesting(for: frameTarget) == 2 }
 
     let removalBaseline = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(.styleSheetRemoved(styleSheetID), target: pageTarget)
@@ -9041,7 +9042,7 @@ func removedAndReusedStyleSheetIDRejectsPriorMutationReply() async throws {
 @Test
 func queuedRuleSelectorRejectsPositionalIDAfterStyleSheetReplacement() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (_, context) = try await startContext(runtime: runtime)
+    let (target, context) = try await startContext(runtime: runtime)
     let styleSheetID = CSS.StyleSheet.ID("queued-rule-sheet")
     let ruleProxyID = CSS.Rule.ID("queued-rule-sheet\u{1F}0")
     let ruleID = CSSStyleRule.ID(ruleProxyID)
@@ -9079,7 +9080,7 @@ func queuedRuleSelectorRejectsPositionalIDAfterStyleSheetReplacement() async thr
             options: WebInspectorMutationOptions(undo: .disabled)
         )
     }
-    await Task.yield()
+    try await waitUntil { await context.queuedCSSOperationCountForTesting(for: target) == 1 }
     await mutationGate.open()
 
     try await styleSheetTask.value
@@ -9186,7 +9187,7 @@ func queuedDeclarationRefreshesAfterStyleSheetReplacement() async throws {
             options: WebInspectorMutationOptions(undo: .disabled)
         )
     }
-    await Task.yield()
+    try await waitUntil { await context.queuedCSSOperationCountForTesting(for: target) == 1 }
     await mutationGate.open()
 
     try await styleSheetTask.value

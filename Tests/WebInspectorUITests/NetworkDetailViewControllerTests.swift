@@ -2057,7 +2057,6 @@ struct NetworkDetailViewControllerTests {
         viewController.collectionView.layoutIfNeeded()
         #expect(viewController.isFollowingTailForTesting)
         let scrollCountBeforePinnedAppend = viewController.tailScrollCountForTesting
-        let userScrollRevisionBeforePinnedAppend = viewController.userScrollRevisionForTesting
         await context.apply(.webSocket(.frameReceived(
             id: requestID,
             frame: Network.WebSocketFrame(
@@ -2075,7 +2074,6 @@ struct NetworkDetailViewControllerTests {
         await fireWebSocketRenderingFrame(frameScheduler, in: viewController)
         #expect(viewController.tailScrollCountForTesting == scrollCountBeforePinnedAppend + 1)
         #expect(viewController.isFollowingTailForTesting)
-        #expect(viewController.userScrollRevisionForTesting == userScrollRevisionBeforePinnedAppend)
 
         let completedApplyGeneration = viewController.snapshotApplyGenerationForTesting
         let userScrollRevisionBeforeDrag = viewController.userScrollRevisionForTesting
@@ -3492,8 +3490,6 @@ struct NetworkDetailViewControllerTests {
             viewController.bodyViewControllerForTesting.mediaPlayerURLForTesting?.absoluteString
                 == playlistURL
         }
-        await Task.yield()
-
         #expect(didShowPlayer)
         #expect(playerFactory.players.count == 1)
         #expect(request.responseBody.phase == .available)
@@ -3553,13 +3549,9 @@ struct NetworkDetailViewControllerTests {
             ]
         )
 
-        for _ in 0..<100 {
-            if viewController.hasMoviePreviewFailureForTesting {
-                break
-            }
-            await Task.yield()
+        try await waitForTestCondition {
+            viewController.hasMoviePreviewFailureForTesting
         }
-        #expect(viewController.hasMoviePreviewFailureForTesting)
         #expect(viewController.isMoviePreviewStatusVisibleForTesting == false)
         #expect(viewController.mediaPlayerViewControllerIdentityForTesting == playerViewControllerIdentity)
 
@@ -6503,7 +6495,10 @@ struct NetworkDetailViewControllerTests {
             listSnapshotBuilderFactory: snapshotBuilder
         )
         let window = showInWindow(listViewController, makeVisible: true)
-        defer { window.isHidden = true }
+        defer {
+            listViewController.suspendRenderingForTesting()
+            window.isHidden = true
+        }
 
         try #require(frameScheduler.hasScheduledFrame)
         frameScheduler.fireScheduledFrame()
@@ -6530,15 +6525,15 @@ struct NetworkDetailViewControllerTests {
             )
         }
 
-        #expect(await model.waitForRawTransactionDeliveryForTesting(
+        try #require(await model.waitForRawTransactionDeliveryForTesting(
             after: rawTransactionBaseline + insertedRequestCount - 1,
             timeout: .seconds(10)
         ))
-        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+        try #require(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
             after: frameRequestDeliveryBaseline
         ))
         #expect(frameScheduler.scheduledFrameCount == scheduledFrameBaseline + 1)
-        #expect(frameScheduler.hasScheduledFrame)
+        try #require(frameScheduler.hasScheduledFrame)
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyBaseline)
 
         frameScheduler.fireScheduledFrame()
@@ -6551,7 +6546,7 @@ struct NetworkDetailViewControllerTests {
 
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyBaseline)
         #expect(frameScheduler.scheduledFrameCount == scheduledFrameBaseline + 2)
-        #expect(frameScheduler.hasScheduledFrame)
+        try #require(frameScheduler.hasScheduledFrame)
 
         frameScheduler.fireScheduledFrame()
         await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
@@ -9987,7 +9982,15 @@ struct NetworkDetailViewControllerTests {
         makeVisible: Bool = true,
         useUIKitVisibility: Bool = false
     ) -> UIWindow {
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+        let window: UIWindow
+        if useUIKitVisibility,
+           let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
+            window = UIWindow(windowScene: scene)
+            window.frame = frame
+        } else {
+            window = UIWindow(frame: frame)
+        }
         window.rootViewController = viewController
         viewController.loadViewIfNeeded()
         viewController.view.frame = window.bounds

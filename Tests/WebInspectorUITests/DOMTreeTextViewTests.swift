@@ -450,7 +450,6 @@ struct DOMTreeTextViewTests {
         await view.waitForPageHighlightTaskForTesting()
         session.context.apply(DOM.Event.documentUpdated)
         #expect(await view.waitForObservedTreeRevisionForTesting(session.treeRevision))
-        await Task.yield()
         await view.waitForPageHighlightTaskForTesting()
 
         #expect(session.selectedNode == nil)
@@ -479,11 +478,10 @@ struct DOMTreeTextViewTests {
 
         view.routeCurrentSelectionInvalidationForTesting()
         view.routeCurrentSelectionInvalidationForTesting()
-        await Task.yield()
-
-        #expect(recorder.invocationCount == 1)
         await recorder.resolveInvocation(at: 0, as: .success)
         await view.waitForPageHighlightTaskForTesting()
+
+        #expect(recorder.invocationCount == 1)
         #expect(recorder.recordedOwners == [.selection])
     }
 
@@ -506,6 +504,7 @@ struct DOMTreeTextViewTests {
         view.primaryClickRowForTesting(containing: "<input disabled>")
         await recorder.waitForInvocationCount(1)
         let firstNodeID = try #require(session.selectedNode?.id)
+        let firstTask = try #require(view.pageHighlightTaskForTesting)
 
         view.primaryClickRowForTesting(containing: "<article")
         await recorder.waitForInvocationCount(2)
@@ -514,14 +513,13 @@ struct DOMTreeTextViewTests {
 
         // The cancelled A completion must not clear B's operation token and
         // allow a duplicate B invalidation to launch a third wire command.
-        await Task.yield()
+        await firstTask.value
         view.routeCurrentSelectionInvalidationForTesting()
-        await Task.yield()
-        #expect(recorder.invocationCount == 2)
-        #expect(recorder.recordedNodeIDs == [firstNodeID, secondNodeID])
-
         await recorder.resolveInvocation(at: 1, as: .success)
         await view.waitForPageHighlightTaskForTesting()
+
+        #expect(recorder.invocationCount == 2)
+        #expect(recorder.recordedNodeIDs == [firstNodeID, secondNodeID])
         #expect(recorder.recordedOwners == [.selection, .selection])
     }
 
@@ -544,10 +542,12 @@ struct DOMTreeTextViewTests {
         view.primaryClickRowForTesting(containing: "<input disabled>")
         await recorder.waitForInvocationCount(1)
         let nodeA = try #require(session.selectedNode?.id)
+        let firstTask = try #require(view.pageHighlightTaskForTesting)
 
         view.primaryClickRowForTesting(containing: "<article")
         await recorder.waitForInvocationCount(2)
         let nodeB = try #require(session.selectedNode?.id)
+        let secondTask = try #require(view.pageHighlightTaskForTesting)
 
         view.primaryClickRowForTesting(containing: "<input disabled>")
         await recorder.waitForInvocationCount(3)
@@ -557,6 +557,8 @@ struct DOMTreeTextViewTests {
         // owns A3's intent, even though A1 has the same semantic node ID.
         await recorder.resolveInvocation(at: 0, as: .success)
         await recorder.resolveInvocation(at: 1, as: .success)
+        await firstTask.value
+        await secondTask.value
         await recorder.resolveInvocation(at: 2, as: .failure)
         await view.waitForPageHighlightTaskForTesting()
 

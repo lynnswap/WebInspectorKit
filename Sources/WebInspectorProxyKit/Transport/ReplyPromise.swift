@@ -21,12 +21,16 @@ package final class ReplyPromise<Value: Sendable>: Sendable {
 
     package init() {}
 
-    package func value() async throws -> Value {
+    package func value(onWaiterRegisteredForTesting: (@Sendable () -> Void)? = nil) async throws -> Value {
         let storage = storage
         let waiterID = Self.registerWaiter(in: storage)
 
         return try await withTaskCancellationHandler {
-            try await Self.wait(storage, waiterID: waiterID)
+            try await Self.wait(
+                storage,
+                waiterID: waiterID,
+                onWaiterRegistered: onWaiterRegisteredForTesting
+            )
         } onCancel: {
             Self.cancelWaiter(waiterID, in: storage)
         }
@@ -58,10 +62,6 @@ package final class ReplyPromise<Value: Sendable>: Sendable {
         return true
     }
 
-    package func waiterCountForTesting() -> Int {
-        storage.state.withLock { $0.waiters.count }
-    }
-
     package func bookkeepingCountForTesting() -> Int {
         storage.state.withLock { $0.waiters.count + $0.registeringWaiterIDs.count }
     }
@@ -81,7 +81,8 @@ package final class ReplyPromise<Value: Sendable>: Sendable {
 
     private static func wait(
         _ storage: Storage,
-        waiterID: UInt64
+        waiterID: UInt64,
+        onWaiterRegistered: (@Sendable () -> Void)? = nil
     ) async throws -> Value {
         try await withCheckedThrowingContinuation { continuation in
             let action = storage.state.withLock { state -> RegistrationAction in
@@ -101,7 +102,7 @@ package final class ReplyPromise<Value: Sendable>: Sendable {
 
             switch action {
             case .wait:
-                break
+                onWaiterRegistered?()
             case let .resume(result):
                 continuation.resume(with: result)
             }
