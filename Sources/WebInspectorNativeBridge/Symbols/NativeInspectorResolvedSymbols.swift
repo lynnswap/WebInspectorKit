@@ -40,11 +40,7 @@ package struct NativeInspectorResolvedSymbols: Equatable, Sendable {
         )
     }
 
-    package static func resolveCurrent() throws -> NativeInspectorResolvedSymbols {
-        try NativeInspectorSymbolResolver.resolveCurrent()
-    }
-
-    package static func resolveCurrentDetached() async throws -> NativeInspectorResolvedSymbols {
-        try await Task.detached(priority: .userInitiated) { try resolveCurrent() }.value
+    package static func resolveCurrent() async throws -> NativeInspectorResolvedSymbols {
+        try await NativeInspectorSymbolResolver.resolveCurrent()
     }
 }

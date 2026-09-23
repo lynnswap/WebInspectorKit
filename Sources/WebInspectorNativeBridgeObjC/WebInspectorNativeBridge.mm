@@ -4,17 +4,13 @@
 
 #import <TargetConditionals.h>
 #import <WebKit/WebKit.h>
-#import <mach/mach.h>
-#import <sys/sysctl.h>
+#include <ABIBridge/Inspection.hpp>
 #import <os/log.h>
 #import <algorithm>
 #import <atomic>
 #import <memory>
 #import <objc/runtime.h>
 #import <vector>
-#if __has_include(<ptrauth.h>)
-#import <ptrauth.h>
-#endif
 
 #if TARGET_OS_IPHONE || TARGET_OS_OSX
 NSErrorDomain const WebInspectorNativeBridgeErrorDomain = @"WebInspectorNativeBridge.Transport";
@@ -130,106 +126,54 @@ static NSString *missingResolvedSymbolNames(WebInspectorNativeResolvedSymbols re
     return [names componentsJoinedByString:@","];
 }
 
-static BOOL safeReadWord(const void *address, uintptr_t *valueOut)
-{
-    if (!address || !valueOut)
-        return NO;
-
-    uintptr_t rawValue = 0;
-    vm_size_t bytesRead = 0;
-    kern_return_t result = vm_read_overwrite(
-        mach_task_self(),
-        reinterpret_cast<vm_address_t>(address),
-        sizeof(rawValue),
-        reinterpret_cast<vm_address_t>(&rawValue),
-        &bytesRead
-    );
-    if (result != KERN_SUCCESS || bytesRead != sizeof(rawValue)) {
-        *valueOut = 0;
-        return NO;
-    }
-
-    *valueOut = rawValue;
-    return YES;
-}
-
-static BOOL safeReadPointer(const void *address, void **valueOut)
-{
-    if (!address || !valueOut)
-        return NO;
-
-    uintptr_t rawValue = 0;
-    if (!safeReadWord(address, &rawValue)) {
-        *valueOut = nullptr;
-        return NO;
-    }
-
-    *valueOut = reinterpret_cast<void *>(rawValue);
-    return YES;
-}
-
 struct TargetResolution {
     void *target { nullptr };
     ptrdiff_t offset { invalidTargetOffset };
     size_t matches { 0 };
 };
 
-#if defined(__arm64__) && !__has_feature(ptrauth_calls)
-__attribute__((target("pauth"), noinline))
-static void *stripDataPointerAuthentication(void *pointer)
-{
-    // An arm64 client can inspect arm64e WebKit objects. ptrauth_strip is a
-    // no-op in that client, so strip the data PAC for this identity comparison.
-    __asm__("xpacd %0" : "+r"(pointer));
-    return pointer;
-}
-#endif
-
-static void *unsignedVTablePointer(void *pointer)
-{
-#if __has_feature(ptrauth_calls)
-    return ptrauth_strip(pointer, ptrauth_key_cxx_vtable_pointer);
-#elif defined(__arm64__)
-    static const bool supportsPointerAuthentication = [] {
-        int supported = 0;
-        size_t size = sizeof(supported);
-        return sysctlbyname("hw.optional.arm.FEAT_PAuth", &supported, &size, nullptr, 0) == 0 && supported;
-    }();
-    return supportsPointerAuthentication ? stripDataPointerAuthentication(pointer) : pointer;
-#else
-    return pointer;
-#endif
-}
-
-static void *targetAtOffset(void *page, size_t offset, uintptr_t vtableAddressPoint)
-{
-    void *target = nullptr;
-    void *vtable = nullptr;
-    if (!safeReadPointer(static_cast<uint8_t *>(page) + offset, &target) || !target
-        || !safeReadPointer(target, &vtable))
-        return nullptr;
-    vtable = unsignedVTablePointer(vtable);
-    return reinterpret_cast<uintptr_t>(vtable) == vtableAddressPoint ? target : nullptr;
-}
-
 static TargetResolution resolveTargetInPageProxy(void *page, size_t bytes, ptrdiff_t cachedOffset, uintptr_t vtableAddressPoint)
 {
     if (!page || bytes < sizeof(void *) || !vtableAddressPoint)
         return { };
-    if (cachedOffset >= 0 && static_cast<size_t>(cachedOffset) <= bytes - sizeof(void *)) {
-        if (void *target = targetAtOffset(page, cachedOffset, vtableAddressPoint))
-            return { target, cachedOffset, 1 };
+
+    abi_bridge::pointer_search_options options;
+#if defined(__arm64__)
+    options.normalization = abi_bridge::pointer_normalization::strip_data_signature;
+#endif
+    if (cachedOffset >= 0)
+        options.hint_offset = static_cast<size_t>(cachedOffset);
+
+    try {
+        const abi_bridge::memory_region region(reinterpret_cast<uintptr_t>(page), bytes);
+        // An attachment hint validates its existing target, not global uniqueness.
+        // If that slot no longer matches, inspect every slot before selecting a replacement.
+        if (options.hint_offset) {
+            options.policy = abi_bridge::pointer_search_policy::first;
+            auto hinted = abi_bridge::find_pointers(region, vtableAddressPoint, options);
+            if (!hinted.candidates.empty() && hinted.candidates.front().evidence.offset == *options.hint_offset) {
+                const auto candidate = hinted.candidates.front().evidence;
+                return { reinterpret_cast<void *>(candidate.addressForInspection), static_cast<ptrdiff_t>(candidate.offset), 1 };
+            }
+        }
+
+        options.policy = abi_bridge::pointer_search_policy::all;
+        auto result = abi_bridge::find_pointers(region, vtableAddressPoint, options);
+        if (result.distinct_count != 1)
+            return { nullptr, invalidTargetOffset, result.distinct_count };
+
+        // Page storage mixes pointers with integers and padding. An unreadable
+        // pointee is a noncandidate; unreadable source storage invalidates the scan.
+        // This selects one observed target, not a proof about unreadable pointees.
+        if (std::any_of(result.failures.begin(), result.failures.end(), [](const auto& failure) {
+            return failure.stage == ABIPointerSearchSlotRead;
+        }))
+            return { };
+        const auto candidate = result.candidates.front().evidence;
+        return { reinterpret_cast<void *>(candidate.addressForInspection), static_cast<ptrdiff_t>(candidate.offset), 1 };
+    } catch (const std::exception&) {
+        return { };
     }
-    TargetResolution result;
-    for (size_t offset = 0; offset <= bytes - sizeof(void *); offset += sizeof(void *)) {
-        void *candidate = targetAtOffset(page, offset, vtableAddressPoint);
-        if (!candidate || candidate == result.target)
-            continue;
-        if (result.matches)
-            return { nullptr, invalidTargetOffset, 2 };
-        result = { candidate, static_cast<ptrdiff_t>(offset), 1 };
-    }
-    return result;
 }
 
 static TargetResolution resolveTarget(WKRuntimePageStorage *storage, ptrdiff_t cachedOffset, uint64_t vtableSymbol)
@@ -238,7 +182,8 @@ static TargetResolution resolveTarget(WKRuntimePageStorage *storage, ptrdiff_t c
         return { };
     // WebPageDebuggable has a single nonvirtual inheritance chain. Its primary
     // Itanium vtable address point follows offset-to-top and typeinfo pointers.
-    return resolveTargetInPageProxy(storage.address, storage.byteCount, cachedOffset, vtableSymbol + 2 * sizeof(void *));
+    __attribute__((objc_precise_lifetime)) WKRuntimePageStorage *retainedStorage = storage;
+    return resolveTargetInPageProxy(retainedStorage.address, retainedStorage.byteCount, cachedOffset, vtableSymbol + 2 * sizeof(void *));
 }
 
 } // namespace WebInspectorNativeBridgePrivate
@@ -906,10 +851,11 @@ WebInspectorNativeTargetDiscoveryTestResult WebInspectorNativeRunTargetDiscovery
     };
     set(primaryOffset, &first);
     set(secondaryOffset, sameTarget ? &first : &second);
-    void *vtable = nullptr;
-    WebInspectorNativeBridgePrivate::safeReadPointer(&first, &vtable);
-    vtable = WebInspectorNativeBridgePrivate::unsignedVTablePointer(vtable);
-    auto result = WebInspectorNativeBridgePrivate::resolveTargetInPageProxy(page.data(), page.size(), cachedOffset, reinterpret_cast<uintptr_t>(vtable));
+    uintptr_t vtable = 0;
+    const auto read = ABIReadMemory(reinterpret_cast<uintptr_t>(&first), sizeof(vtable), &vtable);
+    if (read.status != ABIMemoryReadComplete)
+        return { NO, -1, 0 };
+    auto result = WebInspectorNativeBridgePrivate::resolveTargetInPageProxy(page.data(), page.size(), cachedOffset, vtable);
     return { !!result.target, result.offset, result.matches };
 }
 

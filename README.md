@@ -101,8 +101,7 @@ let inspector = WebInspectorViewController(
 `WebKitRuntime` is a separate product for native WebKit integrations. It provides
 asynchronous C++/linker symbol lookup, image and section validation, shared
 successful lookup caching, and scoped access to a `WKWebView`'s native page.
-It has no Inspector session or UI dependency. Objective-C++ consumers use
-`WebKitRuntimeObjC.h` from the same product.
+Symbol resolution and bounded memory reads use [ABIBridge](https://github.com/lynnswap/ABIBridge); the native Inspector adapter also uses its pointer discovery API. WebKit-specific object layouts and native call adapters remain in WebInspectorKit. It has no Inspector session or UI dependency. Objective-C++ consumers use `WebKitRuntimeObjC.h` from the same product for native page access.
 
 ```swift
 import WebKitRuntime

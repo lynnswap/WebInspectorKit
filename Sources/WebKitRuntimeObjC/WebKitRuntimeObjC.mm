@@ -1,31 +1,7 @@
 #import "WebKitRuntimeObjC.h"
 #import <objc/runtime.h>
 #import <malloc/malloc.h>
-#import <mach/mach.h>
-#include <cxxabi.h>
-#include <cstdlib>
 #include <memory>
-
-NSString *WKRuntimeDemangleCXXSymbol(const char *name)
-{
-    if (name[0] == '_' && name[1] == '_' && name[2] == 'Z')
-        ++name;
-    if (name[0] != '_' || name[1] != 'Z')
-        return nil;
-    std::unique_ptr<char, decltype(&std::free)> result(abi::__cxa_demangle(name, nullptr, nullptr, nullptr), &std::free);
-    return result ? [NSString stringWithUTF8String:result.get()] : nil;
-}
-
-NSData *WKRuntimeReadMemory(uintptr_t address, NSUInteger count)
-{
-    auto data = [NSMutableData dataWithLength:count];
-    if (!count)
-        return data;
-    vm_size_t read = 0;
-    auto result = vm_read_overwrite(mach_task_self(), address, count,
-        reinterpret_cast<vm_address_t>(data.mutableBytes), &read);
-    return result == KERN_SUCCESS && read == count ? data : nil;
-}
 
 static SEL selector(const uint8_t *bytes, size_t count)
 {

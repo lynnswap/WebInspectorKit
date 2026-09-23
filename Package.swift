@@ -56,8 +56,8 @@ let package = Package(
             exact: "0.16.5"
         ),
         .package(
-            url: "https://github.com/p-x9/MachOKit.git",
-            exact: "0.52.2"
+            url: "https://github.com/lynnswap/ABIBridge.git",
+            revision: "44d8af1debe5c30c0f395f7e6e3e79f987af18ad"
         ),
         .package(
             url: "https://github.com/swiftlang/swift-docc-plugin",
@@ -67,7 +67,7 @@ let package = Package(
     targets: [
         .target(
             name: "WebKitRuntime",
-            dependencies: ["WebKitRuntimeObjC", .product(name: "MachOKit", package: "MachOKit")],
+            dependencies: ["WebKitRuntimeObjC", .product(name: "ABIBridge", package: "ABIBridge")],
             swiftSettings: strictSwiftSettings
         ),
         .target(
@@ -113,7 +113,7 @@ let package = Package(
         ),
         .target(
             name: "WebInspectorNativeBridgeObjC",
-            dependencies: ["WebKitRuntimeObjC"],
+            dependencies: ["WebKitRuntimeObjC", .product(name: "ABIBridge", package: "ABIBridge")],
             publicHeadersPath: "include",
             linkerSettings: [
                 .linkedFramework("Foundation"),
