@@ -57,7 +57,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/lynnswap/ABIBridge.git",
-            revision: "44d8af1debe5c30c0f395f7e6e3e79f987af18ad"
+            exact: "0.1.0"
         ),
         .package(
             url: "https://github.com/swiftlang/swift-docc-plugin",
