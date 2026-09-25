@@ -24,7 +24,7 @@ struct NativeInspectorSymbolResolverTests {
         let view = WKWebView(frame: .zero)
         let symbols = try await NativeInspectorResolvedSymbols.resolveCurrent()
         for string in ["", "ASCII", "日本語 😀 e\u{301}", "before\0after", String(repeating: "🦋", count: 2_048)] {
-            #expect(WebInspectorNativeRoundTripStringForTesting(string, symbols.objcSymbols) == string)
+            #expect(unsafe symbols.withObjCSymbols { unsafe WebInspectorNativeRoundTripStringForTesting(string, $0) } == string)
         }
         withExtendedLifetime(view) { }
     }
@@ -95,6 +95,24 @@ struct NativeInspectorSymbolResolverTests {
         }
     }
 
+    @Test @MainActor
+    func attachmentRejectsNonFunctionHandles() async throws {
+        let fixture = try nativeSymbolFixture()
+        let symbols = try await NativeInspectorSymbolResolver.resolveUsingFixture(fixture)
+        let view = WKWebView(frame: .zero)
+        let bridge = WebInspectorNativeBridgeObjC.WebInspectorNativeBridge(webView: view)
+        do {
+            try unsafe symbols.withObjCSymbols { borrowed in
+                var invalid = unsafe borrowed
+                unsafe invalid.connectFrontend = borrowed.debuggableVTable
+                try unsafe bridge.attach(with: invalid)
+            }
+            Issue.record("A vtable handle must not become a callable entry point.")
+        } catch let error as WebInspectorNativeBridgeError {
+            #expect(error.code == .unsupported)
+        }
+    }
+
     @Test
     func fixtureResolutionSuppliesValidatedAttachmentInputs() async throws {
         let fixture = try nativeSymbolFixture()
@@ -104,13 +122,15 @@ struct NativeInspectorSymbolResolverTests {
                            javaScriptCore: RuntimeImage(pathSuffixes: fixture.pathSuffixes))
         }
         let expected = try await WebKitRuntime.resolveUncached(requirements).map { try $0.get() }
-        let native = resolution.objcSymbols
-        #expect([
-            native.connectFrontendAddress, native.disconnectFrontendAddress,
-            native.stringFromUTF8Address, native.stringImplToNSStringAddress,
-            native.derefStringImplAddress, native.dispatchMessageFromRemoteAddress,
-            native.debuggableVTableAddress,
-        ] == expected.map(\.address))
+        unsafe resolution.withObjCSymbols { native in
+            let handles = unsafe [native.connectFrontend, native.disconnectFrontend, native.stringFromUTF8,
+                                  native.stringImplToNSString, native.derefStringImpl,
+                                  native.dispatchMessageFromRemote, native.debuggableVTable]
+            let addresses = unsafe handles.map { handle in
+                unsafe UInt64(UInt(bitPattern: ABIResolvedSymbolAddress(handle!)))
+            }
+            #expect(addresses == expected.map(\.address))
+        }
         #expect(resolution.stringFromUTF8.address == UInt64(WebInspectorNativeSymbolFixtureWTFStringFromUTF8Address()))
         #expect(resolution.stringFromUTF8.source == "loaded-image")
         #expect(resolution.debuggableVTable.source == "loaded-image")

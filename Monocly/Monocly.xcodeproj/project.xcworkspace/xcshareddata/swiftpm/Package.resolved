@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ABIBridge.git",
       "state" : {
-        "revision" : "b3ea81b33851380ccb12cf247608c775ab0bd19e",
-        "version" : "0.1.1"
+        "revision" : "37115419c59c8cb9066f112b95196320509462fe",
+        "version" : "0.2.0"
       }
     },
     {

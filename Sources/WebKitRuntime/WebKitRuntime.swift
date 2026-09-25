@@ -57,9 +57,14 @@ public struct ResolvedRuntimeSymbol: Sendable, Equatable {
     public let sectionRange: Range<UInt64>
     /// The lookup source used for this address, useful for diagnostics.
     public let source: String
-    // The native adapter consumes numeric addresses. Keep the corresponding
-    // ABIBridge symbol and image alive for every copy of this public result.
+    // Numeric addresses and native call handles share this symbol's image lifetime.
     private let resolvedSymbol: ResolvedSymbol
+
+    /// Copies an owned native symbol reference. The native adapter must release
+    /// it with ABIReleaseResolvedSymbol after transferring or borrowing it.
+    @unsafe package func copyNativeHandle() -> OpaquePointer {
+        unsafe resolvedSymbol.copyNativeHandle()
+    }
 
     init(_ symbol: ResolvedSymbol, image: RuntimeImage) {
         resolvedSymbol = symbol

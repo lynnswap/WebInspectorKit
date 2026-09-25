@@ -2,6 +2,7 @@
 #import <Foundation/Foundation.h>
 #include <cstdint>
 #include <span>
+#include <ABIBridge/NativeInvocation.hpp>
 
 namespace WTF {
 
@@ -50,50 +51,45 @@ public:
 
 namespace WebInspectorNativeABI {
 
-using StringImplToNSStringFn = NSString *(*)(void *);
-using DerefStringImplFn = void (*)(void *);
-using DispatchMessageFromRemoteFn = void (*)(void *, WTF::String&&);
+using StringImplToNSString = abi_bridge::method<NSString *()>;
+using StringFromUTF8 = abi_bridge::function<WTF::String(std::span<const char8_t>)>;
+using DerefStringImpl = abi_bridge::method<void()>;
+using DispatchMessageFromRemote = abi_bridge::method<void(WTF::String&&)>;
 
-inline NSString *copyNSString(const WTF::String& string, uintptr_t stringImplToNSStringAddress)
+inline NSString *copyNSString(const WTF::String& string, const StringImplToNSString& copyString)
 {
     if (!string.impl())
         return @"";
-    if (!stringImplToNSStringAddress)
-        return @"";
-
-    auto *copyString = reinterpret_cast<StringImplToNSStringFn>(stringImplToNSStringAddress);
-    NSString *message = copyString(string.impl());
+    NSString *message = copyString.unsafe_invoke(string.impl());
     return [message copy] ?: @"";
 }
 
-inline WTF::String stringFromNSString(NSString *string, uintptr_t stringFromUTF8Address)
+inline WTF::String stringFromNSString(NSString *string, const StringFromUTF8& factory)
 {
     NSData *utf8Data = [string dataUsingEncoding:NSUTF8StringEncoding];
     auto *bytes = reinterpret_cast<const char8_t *>(utf8Data.bytes);
-    using Factory = WTF::String (*)(std::span<const char8_t>);
-    return reinterpret_cast<Factory>(stringFromUTF8Address)(std::span<const char8_t>(bytes, utf8Data.length));
+    return factory.unsafe_invoke(std::span<const char8_t>(bytes, utf8Data.length));
 }
 
-inline void derefConstructedString(const WTF::String& string, uintptr_t derefStringImplAddress)
+inline void derefConstructedString(const WTF::String& string, const DerefStringImpl& deref)
 {
     if (!string.impl())
         return;
 
-    auto *derefStringImpl = reinterpret_cast<DerefStringImplFn>(derefStringImplAddress);
-    derefStringImpl(string.impl());
+    deref.unsafe_invoke(string.impl());
 }
 
 class ConstructedString final {
 public:
-    ConstructedString(NSString *string, uintptr_t stringFromUTF8Address, uintptr_t derefStringImplAddress)
-        : m_string(stringFromNSString(string, stringFromUTF8Address))
-        , m_derefStringImplAddress(derefStringImplAddress)
+    ConstructedString(NSString *string, const StringFromUTF8& factory, const DerefStringImpl& deref)
+        : m_string(stringFromNSString(string, factory))
+        , m_deref(deref)
     {
     }
 
     ~ConstructedString()
     {
-        derefConstructedString(m_string, m_derefStringImplAddress);
+        derefConstructedString(m_string, m_deref);
     }
 
     ConstructedString(const ConstructedString&) = delete;
@@ -106,20 +102,19 @@ public:
 
 private:
     WTF::String m_string;
-    uintptr_t m_derefStringImplAddress { 0 };
+    DerefStringImpl m_deref;
 };
 
 inline void dispatchToRemoteTarget(
     void *target,
     WTF::String& string,
-    uintptr_t dispatchMessageFromRemoteAddress
+    const DispatchMessageFromRemote& dispatch
 )
 {
-    if (!target || !dispatchMessageFromRemoteAddress)
+    if (!target)
         return;
 
-    auto *dispatch = reinterpret_cast<DispatchMessageFromRemoteFn>(dispatchMessageFromRemoteAddress);
-    dispatch(target, static_cast<WTF::String&&>(string));
+    dispatch.unsafe_invoke(target, static_cast<WTF::String&&>(string));
 }
 
 } // namespace WebInspectorNativeABI

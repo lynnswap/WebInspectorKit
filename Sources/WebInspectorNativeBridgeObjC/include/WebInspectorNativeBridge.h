@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <TargetConditionals.h>
 #import <WebKit/WKWebView.h>
+#include <ABIBridge/Inspection.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -18,13 +19,15 @@ typedef void (^WebInspectorNativeFatalFailureHandler)(NSString *message);
 typedef void (^WebInspectorNativeWebContentProcessTerminationHandler)(void);
 
 typedef struct {
-    uint64_t connectFrontendAddress;
-    uint64_t disconnectFrontendAddress;
-    uint64_t stringFromUTF8Address;
-    uint64_t stringImplToNSStringAddress;
-    uint64_t derefStringImplAddress;
-    uint64_t dispatchMessageFromRemoteAddress;
-    uint64_t debuggableVTableAddress;
+    // Borrowed for the duration of attach or a test call. The implementation
+    // retains symbols needed by the connection independently of this struct.
+    ABIResolvedSymbol * _Nullable connectFrontend;
+    ABIResolvedSymbol * _Nullable disconnectFrontend;
+    ABIResolvedSymbol * _Nullable stringFromUTF8;
+    ABIResolvedSymbol * _Nullable stringImplToNSString;
+    ABIResolvedSymbol * _Nullable derefStringImpl;
+    ABIResolvedSymbol * _Nullable dispatchMessageFromRemote;
+    ABIResolvedSymbol * _Nullable debuggableVTable;
 } WebInspectorNativeResolvedSymbols;
 
 FOUNDATION_EXPORT NSString *WebInspectorNativeRoundTripStringForTesting(

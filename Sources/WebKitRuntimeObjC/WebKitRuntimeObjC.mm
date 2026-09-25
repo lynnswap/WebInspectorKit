@@ -14,6 +14,8 @@ static SEL selector(const uint8_t *bytes, size_t count)
 
 static void *pointerResult(id target, SEL selector)
 {
+    // These methods return WebKit C++ pointers/references with concrete record
+    // encodings, not id or void*. Keep this wrapper conversion in the WebKit shim.
     // WKObject inherits NSProxy, so NSObject reflection would invoke forwarding.
     Method method = class_getInstanceMethod(object_getClass(target), selector);
     if (!method)

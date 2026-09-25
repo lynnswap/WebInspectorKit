@@ -57,7 +57,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/lynnswap/ABIBridge.git",
-            exact: "0.1.1"
+            exact: "0.2.0"
         ),
         .package(
             url: "https://github.com/swiftlang/swift-docc-plugin",
@@ -107,7 +107,8 @@ let package = Package(
             name: "WebInspectorNativeBridge",
             dependencies: [
                 "WebInspectorNativeBridgeObjC",
-                "WebKitRuntime"
+                "WebKitRuntime",
+                .product(name: "ABIBridge", package: "ABIBridge")
             ],
             swiftSettings: strictSwiftSettings
         ),

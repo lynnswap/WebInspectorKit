@@ -33,7 +33,9 @@ package final class NativeInspectorBridge {
     }
 
     package func attach(with resolvedSymbols: NativeInspectorResolvedSymbols) throws {
-        try objcBridge.attach(with: resolvedSymbols.objcSymbols)
+        try unsafe resolvedSymbols.withObjCSymbols { symbols in
+            try unsafe objcBridge.attach(with: symbols)
+        }
     }
 
     package func sendJSONString(_ message: String) throws {

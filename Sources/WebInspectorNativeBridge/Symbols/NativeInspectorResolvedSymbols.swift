@@ -1,5 +1,6 @@
 import WebInspectorNativeBridgeObjC
 import WebKitRuntime
+import ABIBridgeCore
 
 package struct NativeInspectorSymbolResolutionError: Error, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
     struct Failure: Sendable {
@@ -28,16 +29,17 @@ package struct NativeInspectorResolvedSymbols: Equatable, Sendable {
     let dispatchMessageFromRemote: ResolvedRuntimeSymbol
     let debuggableVTable: ResolvedRuntimeSymbol
 
-    var objcSymbols: WebInspectorNativeResolvedSymbols {
-        WebInspectorNativeResolvedSymbols(
-            connectFrontendAddress: connectFrontend.address,
-            disconnectFrontendAddress: disconnectFrontend.address,
-            stringFromUTF8Address: stringFromUTF8.address,
-            stringImplToNSStringAddress: stringImplToNSString.address,
-            derefStringImplAddress: derefStringImpl.address,
-            dispatchMessageFromRemoteAddress: dispatchMessageFromRemote.address,
-            debuggableVTableAddress: debuggableVTable.address
+    @unsafe func withObjCSymbols<Result>(_ body: (WebInspectorNativeResolvedSymbols) throws -> Result) rethrows -> Result {
+        let handles = unsafe [connectFrontend, disconnectFrontend, stringFromUTF8, stringImplToNSString,
+                       derefStringImpl, dispatchMessageFromRemote, debuggableVTable]
+            .map { unsafe $0.copyNativeHandle() }
+        defer { unsafe handles.forEach { unsafe ABIReleaseResolvedSymbol($0) } }
+        let symbols = unsafe WebInspectorNativeResolvedSymbols(
+            connectFrontend: handles[0], disconnectFrontend: handles[1],
+            stringFromUTF8: handles[2], stringImplToNSString: handles[3],
+            derefStringImpl: handles[4], dispatchMessageFromRemote: handles[5], debuggableVTable: handles[6]
         )
+        return try unsafe body(symbols)
     }
 
     package static func resolveCurrent() async throws -> NativeInspectorResolvedSymbols {

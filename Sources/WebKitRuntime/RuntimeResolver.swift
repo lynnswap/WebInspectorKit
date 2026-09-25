@@ -65,14 +65,13 @@ actor RuntimeResolver {
             case .cxx(let name):
                 declaration = .init(name: name, language: .cxx, kind: kind)
             case .mangled(let name):
-                // The C frontend adds Mach-O's leading underscore. Itanium
-                // spellings accept either _Z or the Mach-O-prefixed __Z.
-                let linkerName: String
-                if name.hasPrefix("__Z") { linkerName = String(name.dropFirst()) }
-                else if name.hasPrefix("_Z") { linkerName = name }
-                else if name.hasPrefix("_") { linkerName = String(name.dropFirst()) }
-                else { continue }
-                declaration = .init(name: linkerName, language: .c, kind: kind)
+                if name.hasPrefix("__Z") {
+                    declaration = .init(machOName: name, language: .cxx, kind: kind)
+                } else if name.hasPrefix("_Z") {
+                    declaration = .init(linkerName: name, language: .cxx, kind: kind)
+                } else if name.hasPrefix("_") {
+                    declaration = .init(machOName: name, language: .c, kind: kind)
+                } else { continue }
             }
             do {
                 let resolved = try await runtime.resolve(declaration, in: image)
