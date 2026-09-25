@@ -1,4 +1,5 @@
 import ABIBridge
+import ABIBridgeCore
 import Foundation
 
 /// Adapts WebKit's ordered image/name alternatives to ABIBridge's resolver.
@@ -9,7 +10,8 @@ actor RuntimeResolver {
     private var cache: [RuntimeSymbol: ResolvedRuntimeSymbol] = [:]
 
     func resolve(_ symbols: [RuntimeSymbol]) async -> [Result<ResolvedRuntimeSymbol, RuntimeLookupError>] {
-        var images: [NativeImage]?
+        var paths: [String]?
+        var images: [String: NativeImage] = [:]
         var results: [Result<ResolvedRuntimeSymbol, RuntimeLookupError>] = []
         for symbol in symbols {
             if let cached = cache[symbol] {
@@ -17,8 +19,8 @@ actor RuntimeResolver {
                 continue
             }
             do {
-                if images == nil { images = try await runtime.images() }
-                let resolved = try await resolve(symbol, images: images!)
+                if paths == nil { paths = try Self.loadedImagePaths() }
+                let resolved = try await resolve(symbol, paths: paths!, images: &images)
                 cache[symbol] = resolved
                 results.append(.success(resolved))
             } catch {
@@ -28,16 +30,48 @@ actor RuntimeResolver {
         return results
     }
 
-    private func resolve(_ symbol: RuntimeSymbol, images: [NativeImage]) async throws -> ResolvedRuntimeSymbol {
+    private static func loadedImagePaths() throws -> [String] {
+        // A catalog snapshot owns descriptions only. Unrelated images must not
+        // acquire loader leases just to decide which image this request needs.
+        guard let list = unsafe ABICopyLoadedImages() else { throw RuntimeLookupError(.imageUnavailable) }
+        defer { unsafe ABIFreeImageList(list) }
+        return unsafe (0..<ABIImageListCount(list)).map { index in
+            let info = unsafe ABIImageListGet(list, index)
+            return unsafe String(cString: info.path)
+        }
+    }
+
+    private func resolve(
+        _ symbol: RuntimeSymbol, paths: [String], images: inout [String: NativeImage]
+    ) async throws -> ResolvedRuntimeSymbol {
         var failure = RuntimeLookupError(.imageUnavailable)
         for owner in symbol.images {
-            guard let image = images.first(where: { image in
-                owner.pathSuffixes.contains { image.path.hasSuffix($0) }
+            guard let path = paths.first(where: { path in
+                owner.pathSuffixes.contains { path.hasSuffix($0) }
             }) else {
                 failure = RuntimeLookupError(.imageUnavailable)
                 continue
             }
             do {
+                let image: NativeImage
+                if let cached = images[path] {
+                    image = cached
+                } else {
+                    // Framework scopes avoid filesystem normalization of every catalog path.
+                    let selector: ImageSelector
+                    if owner == .webKit {
+                        selector = .framework(named: "WebKit")
+                    } else if owner == .javaScriptCore {
+                        selector = .framework(named: "JavaScriptCore")
+                    } else {
+                        selector = .path(URL(fileURLWithPath: path))
+                    }
+                    guard let selected = try await runtime.images(matching: selector).first(where: { $0.path == path }) else {
+                        throw RuntimeLookupError(.imageUnavailable)
+                    }
+                    image = selected
+                    images[path] = selected
+                }
                 return try await resolve(symbol, in: image, owner: owner)
             } catch {
                 let error = Self.lookupError(error)
