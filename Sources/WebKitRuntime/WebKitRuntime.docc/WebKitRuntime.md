@@ -9,10 +9,7 @@ runtime foundation independently of Inspector sessions and UI. Swift consumers
 import `WebKitRuntime`; Objective-C++ consumers can include `WebKitRuntimeObjC.h`
 from the same product.
 
-Resolve only the symbols your operation requires. Lookup runs off MainActor,
-filters candidate names before demangling ordinary declarations, and shares
-successful results across consumers. A failed requirement does not invalidate
-other resolved symbols. Missing requirements can be retried after an image loads.
+Resolve only the symbols your operation requires. ABIBridge resolves declarations off MainActor and owns the loaded-image and shared-cache indexes. WebKitRuntime preserves ordered image/name alternatives and shares successful results across consumers. A failed requirement does not invalidate other resolved symbols. Missing requirements can be retried after an image loads.
 
 ```swift
 import WebKitRuntime
@@ -39,7 +36,7 @@ IPC message schema. Consumers own those contracts and must validate them before
 calling an address. Use exact mangled alternatives when a demangled declaration
 cannot distinguish ABI variants, such as deleting and nondeleting destructors.
 `sectionRange` bounds memory reads; it does not describe a symbol's object size.
-The owning image must remain loaded while its addresses are in use.
+Each resolved result retains its ABIBridge symbol and containing image. Keep the result alive while using its numeric address. Byte reads use ABIBridge's bounded current-process reader and report incomplete reads with the `.unreadableMemory` lookup-error reason.
 
 Page access runs on MainActor and retains both the WKWebView and native owner
 for a synchronous operation:

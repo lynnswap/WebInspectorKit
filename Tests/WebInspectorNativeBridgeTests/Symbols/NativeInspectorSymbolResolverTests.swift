@@ -22,9 +22,9 @@ struct NativeInspectorSymbolResolverTests {
     @MainActor
     func nativeStringsPreserveUTF8AndEmptyValues() async throws {
         let view = WKWebView(frame: .zero)
-        let symbols = try await NativeInspectorResolvedSymbols.resolveCurrentDetached()
+        let symbols = try await NativeInspectorResolvedSymbols.resolveCurrent()
         for string in ["", "ASCII", "日本語 😀 e\u{301}", "before\0after", String(repeating: "🦋", count: 2_048)] {
-            #expect(WebInspectorNativeRoundTripStringForTesting(string, symbols.objcSymbols) == string)
+            #expect(unsafe symbols.withObjCSymbols { unsafe WebInspectorNativeRoundTripStringForTesting(string, $0) } == string)
         }
         withExtendedLifetime(view) { }
     }
@@ -47,7 +47,7 @@ struct NativeInspectorSymbolResolverTests {
             continuation.finish()
         }
 
-        let symbols = try await NativeInspectorResolvedSymbols.resolveCurrentDetached()
+        let symbols = try await NativeInspectorResolvedSymbols.resolveCurrent()
         try bridge.attach(with: symbols)
         do {
             try bridge.sendJSONString("")
@@ -80,7 +80,7 @@ struct NativeInspectorSymbolResolverTests {
         webView.navigationDelegate = delegate
         webView.isInspectable = true
         let bridge = NativeInspectorBridge(webView: webView)
-        let symbols = try await NativeInspectorResolvedSymbols.resolveCurrentDetached()
+        let symbols = try await NativeInspectorResolvedSymbols.resolveCurrent()
         try bridge.attach(with: symbols)
         bridge.detach()
         #expect(webView.navigationDelegate === delegate)
@@ -95,48 +95,68 @@ struct NativeInspectorSymbolResolverTests {
         }
     }
 
-    @Test
-    func fixtureResolutionSuppliesValidatedAttachmentInputs() throws {
+    @Test @MainActor
+    func attachmentRejectsNonFunctionHandles() async throws {
         let fixture = try nativeSymbolFixture()
-        let resolution = try NativeInspectorSymbolResolver.resolveUsingFixture(fixture)
+        let symbols = try await NativeInspectorSymbolResolver.resolveUsingFixture(fixture)
+        let view = WKWebView(frame: .zero)
+        let bridge = WebInspectorNativeBridgeObjC.WebInspectorNativeBridge(webView: view)
+        do {
+            try unsafe symbols.withObjCSymbols { borrowed in
+                var invalid = unsafe borrowed
+                unsafe invalid.connectFrontend = borrowed.debuggableVTable
+                try unsafe bridge.attach(with: invalid)
+            }
+            Issue.record("A vtable handle must not become a callable entry point.")
+        } catch let error as WebInspectorNativeBridgeError {
+            #expect(error.code == .unsupported)
+        }
+    }
+
+    @Test
+    func fixtureResolutionSuppliesValidatedAttachmentInputs() async throws {
+        let fixture = try nativeSymbolFixture()
+        let resolution = try await NativeInspectorSymbolResolver.resolveUsingFixture(fixture)
         let requirements = NativeInspectorSymbols.current().all.map {
             $0.requirement(webKit: RuntimeImage(pathSuffixes: fixture.pathSuffixes),
                            javaScriptCore: RuntimeImage(pathSuffixes: fixture.pathSuffixes))
         }
-        let expected = try WebKitRuntime.resolveUncached(requirements, allowSharedCache: false).map { try $0.get() }
-        let native = resolution.objcSymbols
-        #expect([
-            native.connectFrontendAddress, native.disconnectFrontendAddress,
-            native.stringFromUTF8Address, native.stringImplToNSStringAddress,
-            native.derefStringImplAddress, native.dispatchMessageFromRemoteAddress,
-            native.debuggableVTableAddress,
-        ] == expected.map(\.address))
+        let expected = try await WebKitRuntime.resolveUncached(requirements).map { try $0.get() }
+        unsafe resolution.withObjCSymbols { native in
+            let handles = unsafe [native.connectFrontend, native.disconnectFrontend, native.stringFromUTF8,
+                                  native.stringImplToNSString, native.derefStringImpl,
+                                  native.dispatchMessageFromRemote, native.debuggableVTable]
+            let addresses = unsafe handles.map { handle in
+                unsafe UInt64(UInt(bitPattern: ABIResolvedSymbolAddress(handle!)))
+            }
+            #expect(addresses == expected.map(\.address))
+        }
         #expect(resolution.stringFromUTF8.address == UInt64(WebInspectorNativeSymbolFixtureWTFStringFromUTF8Address()))
         #expect(resolution.stringFromUTF8.source == "loaded-image")
         #expect(resolution.debuggableVTable.source == "loaded-image")
     }
     @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason))
     @MainActor
-    func nativeSymbolResolutionTiming() throws {
-        try withWebKitLoaded {
-            let cached = try NativeInspectorSymbolResolver.resolveCurrent()
+    func nativeSymbolResolutionTiming() async throws {
+        try await withWebKitLoaded {
+            let cached = try await NativeInspectorSymbolResolver.resolveCurrent()
             var samples: [Double] = []
             for _ in 0..<5 {
                 let start = ProcessInfo.processInfo.systemUptime
-                let resolution = try NativeInspectorSymbolResolver.resolveForTesting()
+                let resolution = try await NativeInspectorSymbolResolver.resolveForTesting()
                 samples.append((ProcessInfo.processInfo.systemUptime - start) * 1_000)
                 #expect(resolution == cached)
             }
             let start = ProcessInfo.processInfo.systemUptime
             for _ in 0..<1_000 {
-                _ = try NativeInspectorSymbolResolver.resolveCurrent()
+                _ = try await NativeInspectorSymbolResolver.resolveCurrent()
             }
             let cachedMicroseconds = (ProcessInfo.processInfo.systemUptime - start) * 1_000
             print("SYMBOL_RESOLUTION_TIMING uncachedMedianMS=\(samples.sorted()[2]) cachedMeanUS=\(cachedMicroseconds)")
         }
     }
     @Test
-    func resolutionPreservesEachFailedRoleAndLookupReason() throws {
+    func resolutionPreservesEachFailedRoleAndLookupReason() async throws {
         let fixture = try nativeSymbolFixture()
         let current = NativeInspectorSymbols.current()
         let symbols = current.replacing(
@@ -157,7 +177,7 @@ struct NativeInspectorSymbolResolverTests {
             )
         )
         do {
-            _ = try NativeInspectorSymbolResolver.resolveUsingFixture(fixture, symbols: symbols)
+            _ = try await NativeInspectorSymbolResolver.resolveUsingFixture(fixture, symbols: symbols)
             Issue.record("Failed requirements must not produce attachment inputs.")
         } catch let error as NativeInspectorSymbolResolutionError {
             #expect(error.failures.map(\.role) == [.connectFrontend, .stringFromUTF8, .stringImplToNSString])
@@ -174,13 +194,12 @@ struct NativeInspectorSymbolResolverTests {
         }
     }
     @Test
-    func unavailableImageIsAssociatedWithItsRequirements() throws {
+    func unavailableImageIsAssociatedWithItsRequirements() async throws {
         let fixture = try nativeSymbolFixture()
         do {
-            _ = try NativeInspectorSymbolResolver.resolveForTesting(
+            _ = try await NativeInspectorSymbolResolver.resolveForTesting(
                 imagePathSuffixes: fixture.pathSuffixes,
-                javaScriptCorePathSuffixes: ["/not-loaded.framework/not-loaded"],
-                allowSharedCacheFallback: false
+                javaScriptCorePathSuffixes: ["/not-loaded.framework/not-loaded"]
             )
             Issue.record("An unavailable required image must prevent attachment.")
         } catch let error as NativeInspectorSymbolResolutionError {
@@ -189,74 +208,42 @@ struct NativeInspectorSymbolResolverTests {
             #expect(!String(reflecting: error).contains("/not-loaded"))
         }
     }
-    @Test(arguments: [
-        ("RN9Inspector15FrontendChannelEbb", true),
-        ("RN9Inspector15FrontendChannelEb", false),
-        ("RN9Inspector15FrontendChannelEbbb", false),
-        ("RN9Inspector15FrontendChannelEbi", false),
-        ("bRN9Inspector15FrontendChannelEb", false),
-        ("PN9Inspector15FrontendChannelEbb", false),
-        ("RKN9Inspector15FrontendChannelEbb", false),
-    ])
-    func connectQueryMatchesParameterTypesOrderAndCount(_ parameters: String, _ expected: Bool) {
-        let symbol = NativeInspectorSymbols.current().connectFrontend
-        let name = "__ZN6WebKit17WebPageDebuggable7connectE" + parameters
+    @Test
+    func fixtureSelectsTheRequiredConnectAndStringOverloads() async throws {
+        let fixture = try nativeSymbolFixture()
+        let resolved = try await NativeInspectorSymbolResolver.resolveUsingFixture(fixture)
+        let image = RuntimeImage(pathSuffixes: fixture.pathSuffixes)
+        let oracle = try await WebKitRuntime.resolve([
+            .init(.mangled("_ZN6WebKit17WebPageDebuggable7connectERN9Inspector15FrontendChannelEbb"), in: image, kind: .function),
+            .init(.mangled("_ZN3WTF10StringImpl5derefEv"), in: image, kind: .function),
+            .init(.mangled("_ZTVN6WebKit17WebPageDebuggableE"), in: image, kind: .vtable),
+        ])
+        #expect(resolved.connectFrontend.address == oracle[0].address)
+        #expect(resolved.derefStringImpl.address == oracle[1].address)
+        #expect(resolved.debuggableVTable.address == oracle[2].address)
+        #expect(resolved.stringFromUTF8.address == UInt64(WebInspectorNativeSymbolFixtureWTFStringFromUTF8Address()))
+    }
 
-        #expect(symbol.matches(symbolName: name) == expected)
-        name.withCString { nameC in
-            let decodedName = unsafe RuntimeSymbolName.decode(nameC)
-            #expect(symbol.matches(decodedName: decodedName) == expected)
+    @Test
+    func signatureSpacingPreservesTypeBoundaries() async throws {
+        let image = RuntimeImage(pathSuffixes: try nativeSymbolFixture().pathSuffixes)
+        let symbols = try await WebKitRuntime.resolve([
+            .init(.cxx("WebKit :: WebPageDebuggable :: disconnect ( Inspector :: FrontendChannel & )"), in: image, kind: .function),
+            .init(.mangled("_ZN6WebKit17WebPageDebuggable10disconnectERN9Inspector15FrontendChannelE"), in: image, kind: .function),
+        ])
+        #expect(symbols[0] == symbols[1])
+        do {
+            _ = try await WebKitRuntime.resolve([
+                .init(.cxx("WebKit::WebPageDebuggable::disconnect(Inspector::FrontendChannelconst&)"), in: image, kind: .function),
+            ])
+            Issue.record("An incompatible type name unexpectedly resolved.")
+        } catch let error as RuntimeLookupError {
+            #expect(error.reason == .symbolMissing)
         }
     }
-    @Test(arguments: [
-        ("NSt3__14spanIKDuLm18446744073709551615EEE", true),
-        ("NSt3__14spanIKDuLm4EEE", false),
-        ("NSt3__14spanIKcLm18446744073709551615EEE", false),
-        ("NSt3__14spanIDuLm18446744073709551615EEE", false),
-        ("RKNSt3__14spanIKDuLm18446744073709551615EEE", false),
-        ("NSt3__14spanIKDuLm18446744073709551615EEEb", false),
-    ])
-    func stringFactoryQueryMatchesDynamicUTF8SpanByValue(_ parameters: String, _ expected: Bool) {
-        let symbol = NativeInspectorSymbols.current().stringFromUTF8
-        #expect(symbol.matches(symbolName: "__ZN3WTF6String8fromUTF8E" + parameters) == expected)
-    }
-    @Test(arguments: ["_", "__"])
-    func functionQueriesAcceptItaniumAndMachOSymbolPrefixes(_ prefix: String) {
-        let symbols = NativeInspectorSymbols.current()
-        #expect(symbols.derefStringImpl.matches(symbolName: prefix + "ZN3WTF10StringImpl5derefEv"))
-        #expect(symbols.stringImplToNSString.matches(symbolName: prefix + "ZN3WTF10StringImplcvP8NSStringEv"))
-    }
-    @Test(arguments: ["", "_", "__", "__Z", "_$s", "_ZN3WTF10StringImpl5derefE"])
-    func nonCallableNamesDoNotMatchFunctionQueries(_ name: String) {
-        let symbol = NativeInspectorSymbols.current().derefStringImpl
-        #expect(!symbol.matches(symbolName: name))
-        let decodedName = name.withCString { unsafe RuntimeSymbolName.decode($0) }
-        #expect(!symbol.matches(decodedName: decodedName))
-    }
-    @Test
-    func signatureSpacingDoesNotEraseTypeBoundaries() {
-        let compact = RuntimeSymbolName.cxxSignatureKey("Inspector::BackendDispatcher::dispatch(WTF::String const&)")
-        let spaced = RuntimeSymbolName.cxxSignatureKey("Inspector :: BackendDispatcher :: dispatch ( WTF :: String const & )")
-        let otherType = RuntimeSymbolName.cxxSignatureKey("Inspector::BackendDispatcher::dispatch(WTF::Stringconst&)")
-        #expect(compact == spaced)
-        #expect(compact != otherType)
-    }
-    @Test
-    func stringReleaseQuerySelectsDerefInsteadOfUnconditionalDestruction() {
-        let symbol = NativeInspectorSymbols.current().derefStringImpl
 
-        #expect(symbol.matches(symbolName: "__ZN3WTF10StringImpl5derefEv"))
-        #expect(!symbol.matches(symbolName: "__ZN3WTF10StringImpl7destroyEPS0_"))
-    }
     @Test
-    func targetIdentityQueryDistinguishesVTableFromOtherMetadata() {
-        let symbol = NativeInspectorSymbols.current().debuggableVTable
-        #expect(symbol.matches(symbolName: "__ZTVN6WebKit17WebPageDebuggableE"))
-        #expect(!symbol.matches(symbolName: "__ZTIN6WebKit17WebPageDebuggableE"))
-        #expect(!symbol.matches(symbolName: "__ZTVN6WebKit26WebPageInspectorControllerE"))
-    }
-    @Test
-    func missingDerefIsReportedWithoutUsingTheDestroyEntryPoint() throws {
+    func missingDerefIsReportedWithoutUsingTheDestroyEntryPoint() async throws {
         let fixture = try nativeSymbolFixture()
         let symbols = NativeInspectorSymbols.current().replacing(
             derefStringImpl: requiredSymbol(
@@ -267,21 +254,12 @@ struct NativeInspectorSymbolResolverTests {
             )
         )
         do {
-            _ = try NativeInspectorSymbolResolver.resolveUsingFixture(fixture, symbols: symbols)
+            _ = try await NativeInspectorSymbolResolver.resolveUsingFixture(fixture, symbols: symbols)
             Issue.record("The destroy entry point cannot replace deref.")
         } catch let error as NativeInspectorSymbolResolutionError {
             #expect(error.failures.map(\.role) == [.derefStringImpl])
             #expect(error.failures.map(\.underlyingError.reason) == [.symbolMissing])
         }
-    }
-}
-
-private extension NativeInspectorRequiredSymbol {
-    func matches(symbolName: String) -> Bool {
-        RuntimeMatcher(requirement(webKit: .webKit, javaScriptCore: .javaScriptCore)).matches(symbolName)
-    }
-    func matches(decodedName: RuntimeSymbolName.Decoded) -> Bool {
-        queries.contains { RuntimeSymbolName.cxxSignatureKey($0.declaration) == decodedName.cxxFunctionSignature }
     }
 }
 
@@ -318,13 +296,11 @@ private func nativeSymbolFixture() throws -> NativeSymbolFixture {
 private extension NativeInspectorSymbolResolver {
     static func resolveUsingFixture(
         _ fixture: NativeSymbolFixture,
-        allowSharedCacheFallback: Bool = false,
         symbols: NativeInspectorSymbols = NativeInspectorSymbols.current()
-    ) throws -> NativeInspectorResolvedSymbols {
-        return try resolveForTesting(
+    ) async throws -> NativeInspectorResolvedSymbols {
+        return try await resolveForTesting(
             imagePathSuffixes: fixture.pathSuffixes,
             javaScriptCorePathSuffixes: fixture.pathSuffixes,
-            allowSharedCacheFallback: allowSharedCacheFallback,
             symbols: symbols
         )
     }
@@ -370,11 +346,10 @@ private func requiredSymbol(
 }
 
 @MainActor
-private func withWebKitLoaded<T>(_ body: () throws -> T) rethrows -> T {
+private func withWebKitLoaded<T>(_ body: @MainActor () async throws -> T) async rethrows -> T {
     let webView = WKWebView(frame: .zero)
-    return try withExtendedLifetime(webView) {
-        try body()
-    }
+    defer { withExtendedLifetime(webView) { } }
+    return try await body()
 }
 
 #endif

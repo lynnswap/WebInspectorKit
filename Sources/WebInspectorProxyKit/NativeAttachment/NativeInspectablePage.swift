@@ -45,7 +45,7 @@ package enum NativeInspectorConnectionFactory {
         fatalFailureHandler: @escaping @Sendable (String) -> Void = { _ in }
     ) async throws -> NativeInspectorConnection {
         let protocolProfile = try WebInspectorProtocolProfile.currentWebKit()
-        let resolvedSymbols = try await NativeInspectorBackendFactory.resolvedSymbolsDetached()
+        let resolvedSymbols = try await NativeInspectorBackendFactory.resolvedSymbols()
         return try await attach(
             to: webView,
             resolvedSymbols: resolvedSymbols,

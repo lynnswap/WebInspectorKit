@@ -1,3 +1,4 @@
+import ABIBridge
 import Foundation
 import WebKit
 import WebKitRuntimeObjC
@@ -44,7 +45,9 @@ public struct RuntimeLookupError: Error, Sendable, CustomStringConvertible, Cust
     init(_ reason: Reason, requestIndex: Int? = nil) { self.reason = reason; self.requestIndex = requestIndex }
 }
 
-/// A symbol in the current process. Resolution validates identity and storage, not its C++ calling convention.
+/// A symbol retaining its containing image in the current process.
+/// Keep the result alive while using its numeric address. Resolution validates
+/// identity and storage, not its C++ calling convention.
 public struct ResolvedRuntimeSymbol: Sendable, Equatable {
     public let address: UInt64
     let imageHeaderAddress: UInt
@@ -54,6 +57,30 @@ public struct ResolvedRuntimeSymbol: Sendable, Equatable {
     public let sectionRange: Range<UInt64>
     /// The lookup source used for this address, useful for diagnostics.
     public let source: String
+    // Numeric addresses and native call handles share this symbol's image lifetime.
+    private let resolvedSymbol: ResolvedSymbol
+
+    /// Copies an owned native symbol reference. The native adapter must release
+    /// it with ABIReleaseResolvedSymbol after transferring or borrowing it.
+    @unsafe package func copyNativeHandle() -> OpaquePointer {
+        unsafe resolvedSymbol.copyNativeHandle()
+    }
+
+    init(_ symbol: ResolvedSymbol, image: RuntimeImage) {
+        resolvedSymbol = symbol
+        address = unsafe symbol.withUnsafeAddress { UInt64(UInt(bitPattern: $0)) }
+        imageHeaderAddress = UInt(symbol.image.identity.headerAddress)
+        imageUUID = symbol.image.identity.uuid
+        self.image = image
+        sectionRange = symbol.sectionRange
+        source = symbol.source == .image ? "loaded-image" : "shared-cache"
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.address == rhs.address && lhs.imageHeaderAddress == rhs.imageHeaderAddress &&
+        lhs.imageUUID == rhs.imageUUID && lhs.image == rhs.image &&
+        lhs.sectionRange == rhs.sectionRange && lhs.source == rhs.source
+    }
 
     /// Copies bytes starting at the symbol, bounded by its containing section.
     /// Consumers remain responsible for interpreting native layouts and object boundaries.
@@ -61,10 +88,10 @@ public struct ResolvedRuntimeSymbol: Sendable, Equatable {
         guard count >= 0, sectionRange.contains(address), UInt64(count) <= sectionRange.upperBound - address else {
             throw RuntimeLookupError(.invalidAddress)
         }
-        guard let data = WKRuntimeReadMemory(UInt(address), UInt(count)) else {
-            throw RuntimeLookupError(.unreadableMemory)
-        }
-        return data
+        let region = try NativeMemoryRegion(address: UInt(address), byteCount: count, retaining: resolvedSymbol)
+        let result = region.read()
+        guard result.isComplete else { throw RuntimeLookupError(.unreadableMemory) }
+        return Data(result.bytes)
     }
 }
 
@@ -74,9 +101,7 @@ public enum WebKitRuntime {
     /// A failed requirement throws with its input index; other resolved requirements remain cached.
     /// This operation does not attach an Inspector frontend or validate consumer-specific ABI layouts.
     public static func resolve(_ symbols: [RuntimeSymbol]) async throws -> [ResolvedRuntimeSymbol] {
-        let results = await Task.detached(priority: .userInitiated) {
-            RuntimeResolver.resolveCached(symbols)
-        }.value
+        let results = await RuntimeResolver.shared.resolve(symbols)
         return try results.enumerated().map { index, result in
             switch result {
             case .success(let symbol): return symbol
@@ -98,13 +123,11 @@ public enum WebKitRuntime {
         return try withExtendedLifetime(storage as AnyObject) { try unsafe body(address, count) }
     }
 
-    package static func resolveUncached(_ symbols: [RuntimeSymbol], allowSharedCache: Bool) -> [Swift.Result<ResolvedRuntimeSymbol, RuntimeLookupError>] {
-        let results = RuntimeResolver.resolve(Array(Set(symbols)), allowSharedCache: allowSharedCache)
-        return symbols.map { results[$0] ?? .failure(RuntimeLookupError(.symbolMissing)) }
+    package static func resolveResults(_ symbols: [RuntimeSymbol]) async -> [Swift.Result<ResolvedRuntimeSymbol, RuntimeLookupError>] {
+        await RuntimeResolver.shared.resolve(symbols)
     }
 
-    // Retains the existing synchronous Inspector API without exposing blocking discovery to new consumers.
-    package static func resolveSynchronously(_ symbols: [RuntimeSymbol]) -> [Swift.Result<ResolvedRuntimeSymbol, RuntimeLookupError>] {
-        RuntimeResolver.resolveCached(symbols)
+    package static func resolveUncached(_ symbols: [RuntimeSymbol]) async -> [Swift.Result<ResolvedRuntimeSymbol, RuntimeLookupError>] {
+        await RuntimeResolver().resolve(symbols)
     }
 }

@@ -19,12 +19,7 @@ package enum NativeInspectorBackendFactory {
         )
     }
 
-    package static func resolvedSymbols() throws -> NativeInspectorResolvedSymbols {
-        try NativeInspectorResolvedSymbols.resolveCurrent()
-    }
-
-    @MainActor
-    package static func resolvedSymbolsDetached() async throws -> NativeInspectorResolvedSymbols {
-        try await NativeInspectorResolvedSymbols.resolveCurrentDetached()
+    package static func resolvedSymbols() async throws -> NativeInspectorResolvedSymbols {
+        try await NativeInspectorResolvedSymbols.resolveCurrent()
     }
 }

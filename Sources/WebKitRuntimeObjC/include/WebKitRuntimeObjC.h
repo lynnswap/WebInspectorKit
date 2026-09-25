@@ -13,6 +13,4 @@ NS_ASSUME_NONNULL_BEGIN
 + (instancetype)new NS_UNAVAILABLE;
 @end
 
-FOUNDATION_EXPORT NSString * _Nullable WKRuntimeDemangleCXXSymbol(const char *name);
-FOUNDATION_EXPORT NSData * _Nullable WKRuntimeReadMemory(uintptr_t address, NSUInteger count);
 NS_ASSUME_NONNULL_END

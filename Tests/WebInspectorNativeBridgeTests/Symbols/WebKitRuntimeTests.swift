@@ -14,27 +14,41 @@ struct WebKitRuntimeTests {
         return RuntimeImage(pathSuffixes: [unsafe String(cString: path)])
     }
     @Test(arguments: [
-        (" WTF :: StringImpl :: deref ( ) ", "__ZN3WTF10StringImpl5derefEv"),
-        ("vtable  for WebKit :: WebPageDebuggable", "__ZTVN6WebKit17WebPageDebuggableE"),
-        ("(anonymous namespace)::foo()", "_ZN12_GLOBAL__N_13fooEv"),
-        ("(anonymous namespace)::value", "_ZN12_GLOBAL__N_15valueE"),
-        ("Foo :: operator int ( ) const", "_ZNK3FoocviEv"),
-        ("std::terminate()", "_ZSt9terminatev"),
-        ("operator delete(void*)", "_ZdlPv"),
-        ("Foo::operator int() const", "_ZNK3FoocviEv"),
+        (" WTF :: StringImpl :: deref ( ) ", "_ZN3WTF10StringImpl5derefEv", RuntimeSymbol.Kind.function),
+        ("WTF::StringImpl::operator NSString*()", "__ZN3WTF10StringImplcvP8NSStringEv", .function),
+        ("vtable  for WebKit :: WebPageDebuggable", "__ZTVN6WebKit17WebPageDebuggableE", .vtable),
     ])
-    func standardSubstitutionsAndConversionOperatorsMatch(_ declaration: String, _ name: String) {
-        let symbol = RuntimeSymbol(.cxx(declaration), in: .webKit, kind: .function)
-        #expect(RuntimeMatcher(symbol).matches(name))
+    func declarationsAndExactNamesResolveTheSameFixture(
+        _ declaration: String, _ name: String, _ kind: RuntimeSymbol.Kind
+    ) async throws {
+        let image = try fixture()
+        let symbols = try await WebKitRuntime.resolve([
+            RuntimeSymbol(.cxx(declaration), in: image, kind: kind),
+            RuntimeSymbol(.mangled(name), in: image, kind: kind),
+        ])
+        #expect(symbols[0] == symbols[1])
     }
+
     @Test
-    func exactLinkerNamesPreserveSignificantUnderscores() {
-        let c = RuntimeMatcher(RuntimeSymbol(.mangled("_function"), in: .webKit, kind: .function))
-        #expect(c.matches("_function"))
-        #expect(!c.matches("__function"))
-        let cpp = RuntimeMatcher(RuntimeSymbol(.mangled("_ZdlPv"), in: .webKit, kind: .function))
-        #expect(cpp.matches("__ZdlPv"))
+    func exactLinkerNamesPreserveSignificantUnderscores() async throws {
+        let image = try fixture()
+        let good = RuntimeSymbol(.mangled("_WebInspectorNativeSymbolFixtureAnchor"), in: image, kind: .function)
+        #expect(try await WebKitRuntime.resolve([good]).count == 1)
+        for name in ["__WebInspectorNativeSymbolFixtureAnchor", "WebInspectorNativeSymbolFixtureAnchor"] {
+            do {
+                _ = try await WebKitRuntime.resolve([.init(.mangled(name), in: image, kind: .function)])
+                Issue.record("A different linker name unexpectedly resolved.")
+            } catch let error as RuntimeLookupError {
+                #expect(error.reason == .symbolMissing)
+            }
+        }
+        let cpp = try await WebKitRuntime.resolve([
+            .init(.mangled("_ZN3WTF10StringImpl5derefEv"), in: image, kind: .function),
+            .init(.mangled("__ZN3WTF10StringImpl5derefEv"), in: image, kind: .function),
+        ])
+        #expect(cpp[0] == cpp[1])
     }
+
     @Test
     func resolvesIndependentConsumersAndDoesNotPoisonCacheOnFailure() async throws {
         let image = try fixture()

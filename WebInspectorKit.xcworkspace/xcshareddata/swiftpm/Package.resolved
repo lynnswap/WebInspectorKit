@@ -1,6 +1,15 @@
 {
-  "originHash" : "4c562e20f6475b9b84752d119b2c57ddd8d96e7370c651040b3aec8874c86dbe",
+  "originHash" : "6bb3bf7958b1f902a2d6831f782cdcdc3fc1e74b22945a9c7eb706c045f60740",
   "pins" : [
+    {
+      "identity" : "abibridge",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/lynnswap/ABIBridge.git",
+      "state" : {
+        "revision" : "37115419c59c8cb9066f112b95196320509462fe",
+        "version" : "0.2.0"
+      }
+    },
     {
       "identity" : "machokit",
       "kind" : "remoteSourceControl",
@@ -98,6 +107,15 @@
       "state" : {
         "revision" : "eccf765a9d90b82db55cacd260490d2fcae000fb",
         "version" : "0.3.0"
+      }
+    },
+    {
+      "identity" : "swift-objc-dump",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/p-x9/swift-objc-dump.git",
+      "state" : {
+        "revision" : "bc906fbfb9bf6e39ea4338288049b2372291e11b",
+        "version" : "0.9.0"
       }
     },
     {
@@ -215,6 +233,15 @@
       "state" : {
         "revision" : "ac9832598a2e9603c84ed8ba5cb1f98f66e888f4",
         "version" : "0.7.0"
+      }
+    },
+    {
+      "identity" : "zdlibffi",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/faimin/ZDLibffi.git",
+      "state" : {
+        "revision" : "835d4297f3a58b5cab1920794b2e20c07018a992",
+        "version" : "0.380.0"
       }
     }
   ],

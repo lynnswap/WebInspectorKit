@@ -20,6 +20,14 @@ struct WebInspectorNativeBridgeTests {
     }
 
     @Test
+    func matchingCachedOffsetKeepsItsTargetAndStaleSlotsRescan() {
+        let cached = WebInspectorNativeRunTargetDiscoveryForTesting(0x1000, 0x580, 0x580, 0x600, false)
+        #expect(cached.found.boolValue && cached.offset == 0x580 && cached.matches == 1)
+        let stale = WebInspectorNativeRunTargetDiscoveryForTesting(0x1000, 0x580, 0x400, 0x600, false)
+        #expect(!stale.found.boolValue && stale.matches == 2)
+    }
+
+    @Test
     func differentTargetsAreAmbiguousButAliasesAreNot() {
         let different = WebInspectorNativeRunTargetDiscoveryForTesting(0x1000, -1, 0x580, 0x600, false)
         #expect(!different.found.boolValue)

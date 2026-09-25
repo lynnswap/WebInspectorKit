@@ -4,25 +4,41 @@
 
 #import <TargetConditionals.h>
 #import <WebKit/WebKit.h>
-#import <mach/mach.h>
-#import <sys/sysctl.h>
+#include <ABIBridge/Inspection.hpp>
+#include <ABIBridge/ObjectiveCInvocation.hpp>
+#include <optional>
 #import <os/log.h>
 #import <algorithm>
 #import <atomic>
 #import <memory>
 #import <objc/runtime.h>
 #import <vector>
-#if __has_include(<ptrauth.h>)
-#import <ptrauth.h>
-#endif
 
 #if TARGET_OS_IPHONE || TARGET_OS_OSX
 NSErrorDomain const WebInspectorNativeBridgeErrorDomain = @"WebInspectorNativeBridge.Transport";
 
 namespace WebInspectorNativeBridgePrivate {
 
-using ConnectFrontendFn = void (*)(void *, Inspector::FrontendChannel&, bool, bool);
-using DisconnectFrontendFn = void (*)(void *, Inspector::FrontendChannel&);
+struct ResolvedCalls {
+    abi_bridge::method<void(Inspector::FrontendChannel&, bool, bool)> connect;
+    abi_bridge::method<void(Inspector::FrontendChannel&)> disconnect;
+    WebInspectorNativeABI::StringFromUTF8 stringFromUTF8;
+    WebInspectorNativeABI::StringImplToNSString copyNSString;
+    WebInspectorNativeABI::DerefStringImpl derefStringImpl;
+    WebInspectorNativeABI::DispatchMessageFromRemote dispatch;
+    abi_bridge::resolved_symbol vtable;
+
+    explicit ResolvedCalls(WebInspectorNativeResolvedSymbols symbols)
+        : connect(abi_bridge::resolved_symbol::retain(symbols.connectFrontend))
+        , disconnect(abi_bridge::resolved_symbol::retain(symbols.disconnectFrontend))
+        , stringFromUTF8(abi_bridge::resolved_symbol::retain(symbols.stringFromUTF8))
+        , copyNSString(abi_bridge::resolved_symbol::retain(symbols.stringImplToNSString))
+        , derefStringImpl(abi_bridge::resolved_symbol::retain(symbols.derefStringImpl))
+        , dispatch(abi_bridge::resolved_symbol::retain(symbols.dispatchMessageFromRemote))
+        , vtable(abi_bridge::resolved_symbol::retain(symbols.debuggableVTable)) { }
+
+    uintptr_t vtableAddress() const { return reinterpret_cast<uintptr_t>(vtable.unsafe_address()); }
+};
 
 static constexpr ptrdiff_t invalidTargetOffset = -1;
 static std::atomic<ptrdiff_t> cachedTargetOffset { invalidTargetOffset };
@@ -51,31 +67,23 @@ static SEL selectorFromXORBytes(const uint8_t *encodedBytes, size_t length)
 
 static id objectResult(id target, SEL selector)
 {
-    if (![target respondsToSelector:selector])
+    if (!target) return nil;
+    try {
+        return abi_bridge::objc_method<id()>(target, selector).unsafe_invoke();
+    } catch (const abi_bridge::resolution_error&) {
         return nil;
-
-    typedef id (*Getter)(id, SEL);
-    IMP implementation = [target methodForSelector:selector];
-    if (implementation == NULL)
-        return nil;
-
-    Getter function = (Getter)implementation;
-    return function(target, selector);
+    }
 }
 
 static BOOL invokeVoid(id target, SEL selector)
 {
-    if (![target respondsToSelector:selector])
+    if (!target) return NO;
+    try {
+        abi_bridge::objc_method<void()>(target, selector).unsafe_invoke();
+        return YES;
+    } catch (const abi_bridge::resolution_error&) {
         return NO;
-
-    typedef void (*Invoker)(id, SEL);
-    IMP implementation = [target methodForSelector:selector];
-    if (implementation == NULL)
-        return NO;
-
-    Invoker function = (Invoker)implementation;
-    function(target, selector);
-    return YES;
+    }
 }
 
 static NSError *makeError(WebInspectorNativeBridgeError code, NSString *description, NSString *details = nil)
@@ -86,86 +94,35 @@ static NSError *makeError(WebInspectorNativeBridgeError code, NSString *descript
     return [NSError errorWithDomain:WebInspectorNativeBridgeErrorDomain code:code userInfo:userInfo];
 }
 
-static WebInspectorNativeResolvedSymbols emptyResolvedSymbols()
-{
-    return {
-        .connectFrontendAddress = 0,
-        .disconnectFrontendAddress = 0,
-        .stringFromUTF8Address = 0,
-        .stringImplToNSStringAddress = 0,
-        .derefStringImplAddress = 0,
-        .dispatchMessageFromRemoteAddress = 0,
-        .debuggableVTableAddress = 0,
-    };
-}
-
 static BOOL resolvedSymbolsAreComplete(WebInspectorNativeResolvedSymbols resolvedSymbols)
 {
-    return resolvedSymbols.connectFrontendAddress
-        && resolvedSymbols.disconnectFrontendAddress
-        && resolvedSymbols.stringFromUTF8Address
-        && resolvedSymbols.stringImplToNSStringAddress
-        && resolvedSymbols.derefStringImplAddress
-        && resolvedSymbols.dispatchMessageFromRemoteAddress
-        && resolvedSymbols.debuggableVTableAddress;
+    return resolvedSymbols.connectFrontend
+        && resolvedSymbols.disconnectFrontend
+        && resolvedSymbols.stringFromUTF8
+        && resolvedSymbols.stringImplToNSString
+        && resolvedSymbols.derefStringImpl
+        && resolvedSymbols.dispatchMessageFromRemote
+        && resolvedSymbols.debuggableVTable;
 }
 
 static NSString *missingResolvedSymbolNames(WebInspectorNativeResolvedSymbols resolvedSymbols)
 {
     NSMutableArray<NSString *> *names = [NSMutableArray array];
-    if (!resolvedSymbols.connectFrontendAddress)
+    if (!resolvedSymbols.connectFrontend)
         [names addObject:@"connectFrontend"];
-    if (!resolvedSymbols.disconnectFrontendAddress)
+    if (!resolvedSymbols.disconnectFrontend)
         [names addObject:@"disconnectFrontend"];
-    if (!resolvedSymbols.stringFromUTF8Address)
+    if (!resolvedSymbols.stringFromUTF8)
         [names addObject:@"stringFromUTF8"];
-    if (!resolvedSymbols.stringImplToNSStringAddress)
+    if (!resolvedSymbols.stringImplToNSString)
         [names addObject:@"stringImplToNSString"];
-    if (!resolvedSymbols.derefStringImplAddress)
+    if (!resolvedSymbols.derefStringImpl)
         [names addObject:@"derefStringImpl"];
-    if (!resolvedSymbols.dispatchMessageFromRemoteAddress)
+    if (!resolvedSymbols.dispatchMessageFromRemote)
         [names addObject:@"dispatchMessageFromRemote"];
-    if (!resolvedSymbols.debuggableVTableAddress)
+    if (!resolvedSymbols.debuggableVTable)
         [names addObject:@"debuggableVTable"];
     return [names componentsJoinedByString:@","];
-}
-
-static BOOL safeReadWord(const void *address, uintptr_t *valueOut)
-{
-    if (!address || !valueOut)
-        return NO;
-
-    uintptr_t rawValue = 0;
-    vm_size_t bytesRead = 0;
-    kern_return_t result = vm_read_overwrite(
-        mach_task_self(),
-        reinterpret_cast<vm_address_t>(address),
-        sizeof(rawValue),
-        reinterpret_cast<vm_address_t>(&rawValue),
-        &bytesRead
-    );
-    if (result != KERN_SUCCESS || bytesRead != sizeof(rawValue)) {
-        *valueOut = 0;
-        return NO;
-    }
-
-    *valueOut = rawValue;
-    return YES;
-}
-
-static BOOL safeReadPointer(const void *address, void **valueOut)
-{
-    if (!address || !valueOut)
-        return NO;
-
-    uintptr_t rawValue = 0;
-    if (!safeReadWord(address, &rawValue)) {
-        *valueOut = nullptr;
-        return NO;
-    }
-
-    *valueOut = reinterpret_cast<void *>(rawValue);
-    return YES;
 }
 
 struct TargetResolution {
@@ -174,62 +131,42 @@ struct TargetResolution {
     size_t matches { 0 };
 };
 
-#if defined(__arm64__) && !__has_feature(ptrauth_calls)
-__attribute__((target("pauth"), noinline))
-static void *stripDataPointerAuthentication(void *pointer)
-{
-    // An arm64 client can inspect arm64e WebKit objects. ptrauth_strip is a
-    // no-op in that client, so strip the data PAC for this identity comparison.
-    __asm__("xpacd %0" : "+r"(pointer));
-    return pointer;
-}
-#endif
-
-static void *unsignedVTablePointer(void *pointer)
-{
-#if __has_feature(ptrauth_calls)
-    return ptrauth_strip(pointer, ptrauth_key_cxx_vtable_pointer);
-#elif defined(__arm64__)
-    static const bool supportsPointerAuthentication = [] {
-        int supported = 0;
-        size_t size = sizeof(supported);
-        return sysctlbyname("hw.optional.arm.FEAT_PAuth", &supported, &size, nullptr, 0) == 0 && supported;
-    }();
-    return supportsPointerAuthentication ? stripDataPointerAuthentication(pointer) : pointer;
-#else
-    return pointer;
-#endif
-}
-
-static void *targetAtOffset(void *page, size_t offset, uintptr_t vtableAddressPoint)
-{
-    void *target = nullptr;
-    void *vtable = nullptr;
-    if (!safeReadPointer(static_cast<uint8_t *>(page) + offset, &target) || !target
-        || !safeReadPointer(target, &vtable))
-        return nullptr;
-    vtable = unsignedVTablePointer(vtable);
-    return reinterpret_cast<uintptr_t>(vtable) == vtableAddressPoint ? target : nullptr;
-}
-
 static TargetResolution resolveTargetInPageProxy(void *page, size_t bytes, ptrdiff_t cachedOffset, uintptr_t vtableAddressPoint)
 {
     if (!page || bytes < sizeof(void *) || !vtableAddressPoint)
         return { };
-    if (cachedOffset >= 0 && static_cast<size_t>(cachedOffset) <= bytes - sizeof(void *)) {
-        if (void *target = targetAtOffset(page, cachedOffset, vtableAddressPoint))
-            return { target, cachedOffset, 1 };
+
+    try {
+        const abi_bridge::memory_region region(reinterpret_cast<uintptr_t>(page), bytes);
+        // Revalidate just the cached slot; search only after that slot misses.
+        if (cachedOffset >= 0 && static_cast<size_t>(cachedOffset) <= bytes - sizeof(void *)) {
+            try {
+                auto hinted = abi_bridge::inspect_pointer(region, cachedOffset, vtableAddressPoint);
+                if (hinted) {
+                    const auto candidate = hinted->evidence;
+                    return { reinterpret_cast<void *>(candidate.addressForInspection), static_cast<ptrdiff_t>(candidate.offset), 1 };
+                }
+            } catch (const abi_bridge::pointer_read_error&) {
+                // A stale unreadable target can be replaced elsewhere in the page.
+            }
+        }
+
+        auto result = abi_bridge::find_pointers(region, vtableAddressPoint);
+        if (result.distinct_count != 1)
+            return { nullptr, invalidTargetOffset, result.distinct_count };
+
+        // Page storage mixes pointers with integers and padding. An unreadable
+        // pointee is a noncandidate; unreadable source storage invalidates the scan.
+        // This selects one observed target, not a proof about unreadable pointees.
+        if (std::any_of(result.failures.begin(), result.failures.end(), [](const auto& failure) {
+            return failure.stage == ABIPointerSearchSlotRead;
+        }))
+            return { };
+        const auto candidate = result.candidates.front().evidence;
+        return { reinterpret_cast<void *>(candidate.addressForInspection), static_cast<ptrdiff_t>(candidate.offset), 1 };
+    } catch (const std::exception&) {
+        return { };
     }
-    TargetResolution result;
-    for (size_t offset = 0; offset <= bytes - sizeof(void *); offset += sizeof(void *)) {
-        void *candidate = targetAtOffset(page, offset, vtableAddressPoint);
-        if (!candidate || candidate == result.target)
-            continue;
-        if (result.matches)
-            return { nullptr, invalidTargetOffset, 2 };
-        result = { candidate, static_cast<ptrdiff_t>(offset), 1 };
-    }
-    return result;
 }
 
 static TargetResolution resolveTarget(WKRuntimePageStorage *storage, ptrdiff_t cachedOffset, uint64_t vtableSymbol)
@@ -238,7 +175,8 @@ static TargetResolution resolveTarget(WKRuntimePageStorage *storage, ptrdiff_t c
         return { };
     // WebPageDebuggable has a single nonvirtual inheritance chain. Its primary
     // Itanium vtable address point follows offset-to-top and typeinfo pointers.
-    return resolveTargetInPageProxy(storage.address, storage.byteCount, cachedOffset, vtableSymbol + 2 * sizeof(void *));
+    __attribute__((objc_precise_lifetime)) WKRuntimePageStorage *retainedStorage = storage;
+    return resolveTargetInPageProxy(retainedStorage.address, retainedStorage.byteCount, cachedOffset, vtableSymbol + 2 * sizeof(void *));
 }
 
 } // namespace WebInspectorNativeBridgePrivate
@@ -274,9 +212,9 @@ static uint8_t navigationDelegateObservationContext;
 
 class WebInspectorNativeFrontendChannel final : public Inspector::FrontendChannel {
 public:
-    WebInspectorNativeFrontendChannel(WebInspectorNativeBridge *owner, uint64_t stringImplToNSStringAddress)
+    WebInspectorNativeFrontendChannel(WebInspectorNativeBridge *owner, const WebInspectorNativeABI::StringImplToNSString& copyNSString)
         : m_owner(owner)
-        , m_stringImplToNSStringAddress(stringImplToNSStringAddress)
+        , m_copyNSString(copyNSString)
     {
     }
 
@@ -295,7 +233,7 @@ public:
 
     void sendMessageToFrontend(const WTF::String& message) override
     {
-        NSString *messageString = WebInspectorNativeABI::copyNSString(message, m_stringImplToNSStringAddress);
+        NSString *messageString = WebInspectorNativeABI::copyNSString(message, m_copyNSString);
         __weak WebInspectorNativeBridge *owner = m_owner;
         dispatch_async(dispatch_get_main_queue(), ^{
             [owner handleFrontendMessageString:messageString];
@@ -304,7 +242,7 @@ public:
 
 private:
     __weak WebInspectorNativeBridge *m_owner;
-    uint64_t m_stringImplToNSStringAddress { 0 };
+    WebInspectorNativeABI::StringImplToNSString m_copyNSString;
 };
 
 @implementation WebInspectorNativeNavigationDelegateProxy {
@@ -560,8 +498,7 @@ private:
     id _inspector;
     void *_target;
     ptrdiff_t _targetOffset;
-    uint64_t _disconnectFrontendAddress;
-    WebInspectorNativeResolvedSymbols _resolvedSymbols;
+    std::optional<WebInspectorNativeBridgePrivate::ResolvedCalls> _calls;
     std::unique_ptr<WebInspectorNativeFrontendChannel> _frontendChannel;
     WebInspectorNativeNavigationDelegateProxy *_navigationDelegateProxy;
     BOOL _frontendAttached;
@@ -576,7 +513,6 @@ private:
 
     _webView = webView;
     _targetOffset = WebInspectorNativeBridgePrivate::invalidTargetOffset;
-    _resolvedSymbols = WebInspectorNativeBridgePrivate::emptyResolvedSymbols();
     return self;
 }
 
@@ -587,7 +523,7 @@ private:
 
 - (BOOL)attachedTargetIsStillValid
 {
-    if (!_target)
+    if (!_target || !_calls)
         return NO;
 
     __attribute__((objc_precise_lifetime)) WKWebView *webView = self.webView;
@@ -595,7 +531,7 @@ private:
         return NO;
 
     auto storage = [WKRuntimePageStorage storageForWebView:webView];
-    auto resolution = WebInspectorNativeBridgePrivate::resolveTarget(storage, _targetOffset, _resolvedSymbols.debuggableVTableAddress);
+    auto resolution = WebInspectorNativeBridgePrivate::resolveTarget(storage, _targetOffset, _calls->vtableAddress());
     return resolution.target == _target;
 }
 
@@ -603,8 +539,7 @@ private:
 {
     _frontendAttached = NO;
     _frontendChannel.reset();
-    _disconnectFrontendAddress = 0;
-    _resolvedSymbols = WebInspectorNativeBridgePrivate::emptyResolvedSymbols();
+    _calls.reset();
     _inspector = nil;
     _target = nullptr;
     _targetOffset = WebInspectorNativeBridgePrivate::invalidTargetOffset;
@@ -614,14 +549,11 @@ private:
 {
     __attribute__((objc_precise_lifetime)) WKWebView *retainedView = self.webView;
     BOOL canDisconnectFrontend = NO;
-    if (_frontendAttached && _frontendChannel && _target && _disconnectFrontendAddress)
+    if (_frontendAttached && _frontendChannel && _target && _calls)
         canDisconnectFrontend = [self attachedTargetIsStillValid];
 
     if (canDisconnectFrontend) {
-        auto *disconnectFrontend = reinterpret_cast<WebInspectorNativeBridgePrivate::DisconnectFrontendFn>(
-            static_cast<uintptr_t>(_disconnectFrontendAddress)
-        );
-        disconnectFrontend(_target, *_frontendChannel);
+        _calls->disconnect.unsafe_invoke(_target, *_frontendChannel);
     }
 
     _frontendAttached = NO;
@@ -631,19 +563,16 @@ private:
 - (BOOL)connectFrontendToCurrentWebProcess
 {
     __attribute__((objc_precise_lifetime)) WKWebView *retainedView = self.webView;
-    if (!WebInspectorNativeBridgePrivate::resolvedSymbolsAreComplete(_resolvedSymbols)
+    if (!_calls
         || !_target
         || ![self attachedTargetIsStillValid])
         return NO;
 
     _frontendChannel = std::make_unique<WebInspectorNativeFrontendChannel>(
         self,
-        _resolvedSymbols.stringImplToNSStringAddress
+        _calls->copyNSString
     );
-    auto *connectFrontend = reinterpret_cast<WebInspectorNativeBridgePrivate::ConnectFrontendFn>(
-        static_cast<uintptr_t>(_resolvedSymbols.connectFrontendAddress)
-    );
-    connectFrontend(_target, *_frontendChannel, false, false);
+    _calls->connect.unsafe_invoke(_target, *_frontendChannel, false, false);
     _frontendAttached = YES;
     return YES;
 }
@@ -716,8 +645,15 @@ private:
         return NO;
     }
 
-    _disconnectFrontendAddress = resolvedSymbols.disconnectFrontendAddress;
-    _resolvedSymbols = resolvedSymbols;
+    try {
+        _calls.emplace(resolvedSymbols);
+    } catch (const abi_bridge::resolution_error&) {
+        NSError *transportError = WebInspectorNativeBridgePrivate::makeError(
+            WebInspectorNativeBridgeErrorUnsupported, @"Required runtime functions were invalid.");
+        if (error) *error = transportError;
+        [self reportFatalFailure:transportError.localizedDescription];
+        return NO;
+    }
 
     // Original: _inspector
     static const uint8_t encodedInspectorSelectorName[] = { 0xF8, 0xCE, 0xC9, 0xD4, 0xD7, 0xC2, 0xC4, 0xD3, 0xC8, 0xD5 };
@@ -731,7 +667,7 @@ private:
     if (preferredCachedOffset == WebInspectorNativeBridgePrivate::invalidTargetOffset)
         preferredCachedOffset = WebInspectorNativeBridgePrivate::cachedTargetOffset.load();
 
-    auto resolution = WebInspectorNativeBridgePrivate::resolveTarget(storage, preferredCachedOffset, resolvedSymbols.debuggableVTableAddress);
+    auto resolution = WebInspectorNativeBridgePrivate::resolveTarget(storage, preferredCachedOffset, _calls->vtableAddress());
     _target = resolution.target;
     _targetOffset = resolution.offset;
     if (_targetOffset != WebInspectorNativeBridgePrivate::invalidTargetOffset)
@@ -744,7 +680,7 @@ private:
 #endif
 
     SEL connectSelector = @selector(connect);
-    if ((requiresInspectorConnection && (!_inspector || ![_inspector respondsToSelector:connectSelector])) || !_target) {
+    if ((requiresInspectorConnection && !_inspector) || !_target) {
         NSError *transportError = WebInspectorNativeBridgePrivate::makeError(
             WebInspectorNativeBridgeErrorAttachFailed,
             @"The inspected page's native target was unavailable.");
@@ -759,7 +695,12 @@ private:
     // Transport-only attach should not create the local Web Inspector frontend on macOS.
     // Doing so spawns an extra frontend/WebContent path and destabilizes sandboxed hosts.
 #else
-    WebInspectorNativeBridgePrivate::invokeVoid(_inspector, connectSelector);
+    if (!WebInspectorNativeBridgePrivate::invokeVoid(_inspector, connectSelector)) {
+        if (error) *error = WebInspectorNativeBridgePrivate::makeError(
+            WebInspectorNativeBridgeErrorAttachFailed, @"The native inspector connection was unavailable.");
+        [self detach];
+        return NO;
+    }
 #endif
 
     if (![self connectFrontendToCurrentWebProcess]) {
@@ -784,7 +725,7 @@ private:
 - (BOOL)sendJSONString:(NSString *)message error:(NSError * _Nullable __autoreleasing *)error
 {
     __attribute__((objc_precise_lifetime)) WKWebView *retainedView = self.webView;
-    if (!WebInspectorNativeBridgePrivate::resolvedSymbolsAreComplete(_resolvedSymbols)) {
+    if (!_calls) {
         [self invalidateAttachmentState];
         if (error) {
             *error = WebInspectorNativeBridgePrivate::makeError(
@@ -828,13 +769,13 @@ private:
 
     WebInspectorNativeABI::ConstructedString payloadString(
         message,
-        _resolvedSymbols.stringFromUTF8Address,
-        _resolvedSymbols.derefStringImplAddress
+        _calls->stringFromUTF8,
+        _calls->derefStringImpl
     );
     WebInspectorNativeABI::dispatchToRemoteTarget(
         _target,
         payloadString.get(),
-        _resolvedSymbols.dispatchMessageFromRemoteAddress
+        _calls->dispatch
     );
     return YES;
 }
@@ -906,17 +847,19 @@ WebInspectorNativeTargetDiscoveryTestResult WebInspectorNativeRunTargetDiscovery
     };
     set(primaryOffset, &first);
     set(secondaryOffset, sameTarget ? &first : &second);
-    void *vtable = nullptr;
-    WebInspectorNativeBridgePrivate::safeReadPointer(&first, &vtable);
-    vtable = WebInspectorNativeBridgePrivate::unsignedVTablePointer(vtable);
-    auto result = WebInspectorNativeBridgePrivate::resolveTargetInPageProxy(page.data(), page.size(), cachedOffset, reinterpret_cast<uintptr_t>(vtable));
+    uintptr_t vtable = 0;
+    const auto read = ABIReadMemory(reinterpret_cast<uintptr_t>(&first), sizeof(vtable), &vtable);
+    if (read.status != ABIMemoryReadComplete)
+        return { NO, -1, 0 };
+    auto result = WebInspectorNativeBridgePrivate::resolveTargetInPageProxy(page.data(), page.size(), cachedOffset, vtable);
     return { !!result.target, result.offset, result.matches };
 }
 
 NSString *WebInspectorNativeRoundTripStringForTesting(NSString *string, WebInspectorNativeResolvedSymbols symbols)
 {
-    WebInspectorNativeABI::ConstructedString value(string, symbols.stringFromUTF8Address, symbols.derefStringImplAddress);
-    return WebInspectorNativeABI::copyNSString(value.get(), symbols.stringImplToNSStringAddress);
+    const WebInspectorNativeBridgePrivate::ResolvedCalls calls(symbols);
+    WebInspectorNativeABI::ConstructedString value(string, calls.stringFromUTF8, calls.derefStringImpl);
+    return WebInspectorNativeABI::copyNSString(value.get(), calls.copyNSString);
 }
 
 void WebInspectorNativeDeliverFrontendMessageForTesting(
