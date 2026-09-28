@@ -1,0 +1,73 @@
+name: Release
+
+run-name: Release draft ${{ inputs.release_id }} at ${{ inputs.target_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: Draft ID supplied by Scripts/release.py start
+        required: true
+        type: string
+      target_sha:
+        description: Approved full commit SHA
+        required: true
+        type: string
+      content_digest:
+        description: Approved draft fingerprint supplied by Scripts/release.py start
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.release_id }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Check release inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require main and a full target SHA
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          test "$WORKFLOW_REF" = refs/heads/main
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+  validate:
+    name: Validate release target
+    needs: prepare
+    uses: ./.github/workflows/ci.yml
+    with:
+      revision: ${{ inputs.target_sha }}
+      all_native_runtimes: true
+
+  publish:
+    name: Publish verified draft
+    needs: [prepare, validate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Publication credentials must only execute the dispatching main revision.
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Recheck and publish
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          CONTENT_DIGEST: ${{ inputs.content_digest }}
+        run: |
+          python3 Scripts/release.py publish \
+            --repo "$RELEASE_REPOSITORY" --release-id "$RELEASE_ID" \
+            --target "$TARGET_SHA" --digest "$CONTENT_DIGEST"

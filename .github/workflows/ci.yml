@@ -13,6 +13,10 @@ on:
   workflow_dispatch:
   workflow_call:
     inputs:
+      revision:
+        description: Exact release commit to validate; other events use their triggering revision.
+        type: string
+        default: ''
       all_native_runtimes:
         description: Run Native compatibility tests on every supported installed runtime.
         type: boolean
@@ -22,7 +26,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ inputs.revision && github.run_id || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -31,6 +35,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Exercise the automation that will publish, including for older targets.
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
       - run: python3 -m unittest discover -s .github/scripts/tests -p 'test_*.py'
 
   native-tests:
@@ -47,6 +55,7 @@ jobs:
             allow_prerelease: true
     uses: ./.github/workflows/workspace-tests.yml
     with:
+      revision: ${{ inputs.revision || github.sha }}
       runner: ${{ matrix.runner }}
       xcode_major: ${{ matrix.xcode_major }}
       allow_prerelease: ${{ matrix.allow_prerelease }}
@@ -57,6 +66,7 @@ jobs:
     name: Workspace tests on latest OS
     uses: ./.github/workflows/workspace-tests.yml
     with:
+      revision: ${{ inputs.revision || github.sha }}
       runner: xcode-27
       xcode_major: '27'
       allow_prerelease: true
