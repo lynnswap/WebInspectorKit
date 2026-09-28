@@ -1251,6 +1251,23 @@ func documentUpdatedDuringAttachRestartsDOMBootstrap() async throws {
 
 @MainActor
 @Test
+func transportBackedStartupContinuesAfterResourceTreeFailureWithoutTimeouts() async throws {
+    let (_, _, context) = try await startTransportBackedContext(
+        targetID: ProtocolTarget.ID("page-resource-tree-unavailable"),
+        documentID: "resource-tree-unavailable-root"
+    )
+
+    #expect(context.state == .attached)
+    #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("resource-tree-unavailable-root")))
+    #expect(context.networkResourceTreeError == .commandFailed(
+        domain: "Page",
+        method: "Page.getResourceTree",
+        message: "Resource tree unavailable in this fixture."
+    ))
+}
+
+@MainActor
+@Test
 func consecutiveDocumentUpdatesReloadLatestDocumentWithinSingleLoad() async throws {
     let targetID = ProtocolTarget.ID("page-reload")
     let (backend, transport, context) = try await startTransportBackedContext(
@@ -2750,7 +2767,7 @@ func startupRefetchesDocumentWhenMainFrameNavigatesBeforeAttach() async throws {
 @Test
 func transportBackedStartupCapturesRuntimeAndConsoleReplayBeforeEnableReplies() async throws {
     let backend = FakeTransportBackend()
-    let transport = TransportSession(backend: backend, responseTimeout: .milliseconds(750))
+    let transport = TransportSession(backend: backend)
     await installTransportPageTarget(in: transport, targetID: ProtocolTarget.ID("page-main"))
     let proxy = try await WebInspectorProxy(transport: transport)
     let target = try await proxy.waitForCurrentPage()
@@ -2785,6 +2802,8 @@ func transportBackedStartupCapturesRuntimeAndConsoleReplayBeforeEnableReplies() 
         messageID: try transportMessageID(networkEnable.message),
         result: "{}"
     )
+
+    try await replyTransportResourceTreeUnavailable(backend, transport: transport)
 
     let getDocument = try await waitForTransportTargetMessage(backend, method: "DOM.getDocument")
     await receiveTransportTargetReply(
@@ -3285,6 +3304,13 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
         result: "{}"
     )
 
+    try await replyTransportResourceTreeUnavailable(
+        backend,
+        transport: transport,
+        after: startupMessageCount,
+        timeout: .seconds(30)
+    )
+
     let getDocument = try await waitForTransportTargetMessage(
         backend,
         method: "DOM.getDocument",
@@ -3509,6 +3535,13 @@ func currentPageProcessTerminationInterruptsPickerAndRetargetsWithoutClearingNet
         targetID: networkEnable.targetIdentifier,
         messageID: try transportMessageID(networkEnable.message),
         result: "{}"
+    )
+
+    try await replyTransportResourceTreeUnavailable(
+        backend,
+        transport: transport,
+        after: startupMessageCount,
+        timeout: .seconds(30)
     )
 
     let getDocument = try await waitForTransportTargetMessage(
@@ -3841,6 +3874,12 @@ func domUndoRedoCommandsFailAfterCurrentPageRetarget() async throws {
         targetID: networkEnable.targetIdentifier,
         messageID: try transportMessageID(networkEnable.message),
         result: "{}"
+    )
+
+    try await replyTransportResourceTreeUnavailable(
+        backend,
+        transport: transport,
+        after: startupMessageCount
     )
 
     let getDocument = try await waitForTransportTargetMessage(
@@ -14610,8 +14649,7 @@ private func startTransportBackedContext(
     let backend = FakeTransportBackend()
     let transport = TransportSession(
         backend: backend,
-        protocolProfile: protocolProfile,
-        responseTimeout: .milliseconds(750)
+        protocolProfile: protocolProfile
     )
     await installTransportPageTarget(in: transport, targetID: targetID)
     let proxy = try await WebInspectorProxy(transport: transport)
@@ -14638,6 +14676,8 @@ private func startTransportBackedContext(
         result: "{}"
     )
 
+    try await replyTransportResourceTreeUnavailable(backend, transport: transport)
+
     let getDocument = try await waitForTransportTargetMessage(backend, method: "DOM.getDocument")
     #expect(getDocument.targetIdentifier == targetID)
     await receiveTransportTargetReply(
@@ -14660,6 +14700,27 @@ private func startTransportBackedContext(
     await startupTask.value
     #expect(context.state == .attached)
     return (backend, transport, context)
+}
+
+// DOM and live-Network fixtures do not seed restored requests. Reply explicitly
+// so startup and retargeting do not depend on a transport timeout to proceed.
+private func replyTransportResourceTreeUnavailable(
+    _ backend: FakeTransportBackend,
+    transport: TransportSession,
+    after count: Int = 0,
+    timeout: Duration = .seconds(1)
+) async throws {
+    let request = try await waitForTransportTargetMessage(
+        backend,
+        method: "Page.getResourceTree",
+        after: count,
+        timeout: timeout
+    )
+    let messageID = try transportMessageID(request.message)
+    await transport.receiveRootMessage(transportTargetDispatchMessage(
+        targetID: request.targetIdentifier,
+        message: #"{"id":\#(messageID),"error":{"code":-32000,"message":"Resource tree unavailable in this fixture."}}"#
+    ))
 }
 
 @discardableResult
