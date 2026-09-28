@@ -3,6 +3,10 @@ name: Runtime Tests
 on:
   workflow_call:
     inputs:
+      revision:
+        description: Exact commit to build and test.
+        required: true
+        type: string
       runner:
         required: true
         type: string
@@ -45,6 +49,9 @@ jobs:
       SPM_CACHE_DIR: ${{ github.workspace }}/.ci/spm-cache
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.revision }}
+          persist-credentials: false
       - name: Resolve Xcode
         id: toolchain
         run: ruby .github/scripts/resolve-xcode.rb
