@@ -1,13 +1,13 @@
 {
-  "originHash" : "c714fdf7bcb1aa686e58900b16ae600f92abb9a2931dc90563cb66735fa2828a",
+  "originHash" : "d7030c86bd74b4ad309e7ac1f2b7afb9e415dce06047e246c1f8235670a69ed9",
   "pins" : [
     {
       "identity" : "abibridge",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ABIBridge.git",
       "state" : {
-        "revision" : "c990f75c853eabfbecccdcc00ef3b74a880fb030",
-        "version" : "0.4.0"
+        "revision" : "ae4fbce8dd579509e89780c826967c9674d1d3cb",
+        "version" : "0.8.0"
       }
     },
     {
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/p-x9/MachOKit.git",
       "state" : {
-        "revision" : "ff82e37c37b17e3508e150f8a03adae8a6cc4a3e",
-        "version" : "0.53.0"
+        "revision" : "659d8d5adfba8f11b4a0e05c3b3c8aa59f017492",
+        "version" : "0.54.1"
       }
     },
     {
@@ -33,8 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ObservationBridge.git",
       "state" : {
-        "revision" : "e78ba90b122fdf86f3cb654b4478f257dfb6e453",
-        "version" : "0.13.0"
+        "revision" : "00cf555fd77267b6dcca71203023d777800c444d",
+        "version" : "0.14.0"
       }
     },
     {
@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ScrollableTabBar.git",
       "state" : {
-        "revision" : "6f5d8cbf8f55e172c1c6e6d73e9620951f4b0b54",
-        "version" : "0.1.3"
+        "revision" : "d46ceecb253fc8215b28b96ce9e9dcfddaa2ddc0",
+        "version" : "0.2.0"
       }
     },
     {
@@ -132,8 +132,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/SyntaxEditorUI.git",
       "state" : {
-        "revision" : "67961c13883faad2b55fb73ee3eff05b444a9f35",
-        "version" : "0.16.5"
+        "revision" : "093da14de36d57d2fd06728d787bfa83840090bd",
+        "version" : "0.17.0"
       }
     },
     {
@@ -143,6 +143,15 @@
       "state" : {
         "revision" : "da6fe9beb4f7f67beb75914ca8e0d48ae48d6406",
         "version" : "0.25.10"
+      }
+    },
+    {
+      "identity" : "tree-sitter-asm",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/RubixDev/tree-sitter-asm",
+      "state" : {
+        "revision" : "5bb5b03e3c1ce5853b5282b9fba060f7c7bbf11e",
+        "version" : "0.24.0"
       }
     },
     {
@@ -222,8 +231,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/UIHostingMenu.git",
       "state" : {
-        "revision" : "c146f00d47fa3bfaa919780aa3c42c3d32a90f0c",
-        "version" : "0.3.0"
+        "revision" : "f2dba1e935ee779f7109de2482426d5881920723",
+        "version" : "0.5.1"
       }
     },
     {

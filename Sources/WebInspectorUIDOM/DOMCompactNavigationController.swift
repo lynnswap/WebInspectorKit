@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
 import WebInspectorDataKit
+import SwiftUI
 import UIKit
 
 @MainActor
@@ -99,13 +100,13 @@ extension DOMCompactNavigationController {
 }
 #endif
 
-#Preview("DOM Compact Tree") {
+#Preview("DOM Compact Tree", traits: .modifier(DOMPreviewPreparation())) {
     DOMCompactNavigationController(
         rootViewController: DOMTreeViewController(context: DOMPreviewFixtures.makeWebInspectorContext())
     )
 }
 
-#Preview("DOM Compact Element") {
+#Preview("DOM Compact Element", traits: .modifier(DOMPreviewPreparation())) {
     DOMCompactNavigationController(
         rootViewController: DOMElementViewController(context: DOMPreviewFixtures.makeWebInspectorContext())
     )

@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
 import WebInspectorDataKit
+import SwiftUI
 import UIKit
 
 @MainActor
@@ -144,7 +145,7 @@ extension DOMTreeViewController {
 }
 #endif
 
-#Preview("DOM Tree") {
+#Preview("DOM Tree", traits: .modifier(DOMPreviewPreparation())) {
     DOMTreeViewControllerPreview.makeViewController()
 }
 

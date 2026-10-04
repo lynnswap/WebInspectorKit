@@ -11,6 +11,9 @@ import WebInspectorProxyKitTesting
 
 @Suite
 struct NetworkPanelModelTests {
+    init() async throws {
+        try await PortableObservationTracking.prepare()
+    }
 
 @Test
 @MainActor

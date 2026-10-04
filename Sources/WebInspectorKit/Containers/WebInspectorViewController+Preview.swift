@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import SwiftUI
 import UIKit
 import WebInspectorUIBase
 import WebInspectorUIDOM
@@ -13,7 +14,17 @@ enum WebInspectorViewControllerPreviewFixtures {
     }
 }
 
-#Preview("WebInspectorViewController") {
+private struct InspectorPreviewPreparation: PreviewModifier {
+    static func makeSharedContext() async throws {
+        try await WebInspectorSession.prepare()
+    }
+
+    func body(content: Content, context: Void) -> some View {
+        content
+    }
+}
+
+#Preview("WebInspectorViewController", traits: .modifier(InspectorPreviewPreparation())) {
     WebInspectorViewController(session: WebInspectorViewControllerPreviewFixtures.makeSession())
 }
 #endif

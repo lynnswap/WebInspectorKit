@@ -1,6 +1,25 @@
 import WebInspectorDataKit
 import WebInspectorUIBase
 
+#if canImport(UIKit)
+import ObservationBridge
+import SwiftUI
+import SyntaxEditorUI
+import UIHostingMenu
+
+struct NetworkPreviewPreparation: PreviewModifier {
+    static func makeSharedContext() async throws {
+        try await PortableObservationTracking.prepare()
+        try await SyntaxEditorModel.prepare()
+        try await UIHostingMenuRuntime.prepare()
+    }
+
+    func body(content: Content, context: Void) -> some View {
+        content
+    }
+}
+#endif
+
 @MainActor
 package enum NetworkPreviewFixtures {
     package enum Mode {

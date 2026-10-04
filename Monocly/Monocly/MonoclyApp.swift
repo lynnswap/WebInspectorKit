@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import UIKit
+import WebInspectorKit
 
 struct BrowserInspectorSceneDestructionRequester {
     let destroySceneSession: @MainActor (_ sceneSession: UISceneSession) -> Void
@@ -249,6 +250,7 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
     private(set) var rootViewController: BrowserRootViewController?
     private var closingRootTransitionTasks: [UUID: Task<Void, Never>] = [:]
     private var preservedRootViewController: BrowserRootViewController?
+    private var preparationTask: Task<Void, Never>?
 
     func scene(
         _ scene: UIScene,
@@ -258,7 +260,27 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
         guard let windowScene = scene as? UIWindowScene else {
             return
         }
-        connect(windowScene: windowScene)
+        preparationTask?.cancel()
+        preparationTask = Task { @MainActor [weak self] in
+            do {
+                try await WebInspectorSession.prepare()
+                try Task.checkCancellation()
+                self?.connect(windowScene: windowScene)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard let self, !Task.isCancelled else { return }
+                var configuration = UIContentUnavailableConfiguration.empty()
+                configuration.text = "Unable to Start Monocly"
+                configuration.secondaryText = error.localizedDescription
+                let controller = UIViewController()
+                controller.contentUnavailableConfiguration = configuration
+                let window = UIWindow(windowScene: windowScene)
+                window.rootViewController = controller
+                self.window = window
+                window.makeKeyAndVisible()
+            }
+        }
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
@@ -328,6 +350,8 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
     }
 
     func disconnect(windowScene: UIWindowScene) {
+        preparationTask?.cancel()
+        preparationTask = nil
         if let rootViewController {
             rootViewController.browserWindow.preserveSession(immediate: true)
             if BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorSession) {

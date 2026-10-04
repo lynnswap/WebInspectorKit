@@ -69,7 +69,7 @@ static id objectResult(id target, SEL selector)
 {
     if (!target) return nil;
     try {
-        return abi_bridge::objc_method<id()>(target, selector).unsafe_invoke();
+        return abi_bridge::objc_implementation<id()>(target, selector).unsafe_invoke(target);
     } catch (const abi_bridge::resolution_error&) {
         return nil;
     }
@@ -79,7 +79,7 @@ static BOOL invokeVoid(id target, SEL selector)
 {
     if (!target) return NO;
     try {
-        abi_bridge::objc_method<void()>(target, selector).unsafe_invoke();
+        abi_bridge::objc_implementation<void()>(target, selector).unsafe_invoke(target);
         return YES;
     } catch (const abi_bridge::resolution_error&) {
         return NO;

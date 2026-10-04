@@ -3,6 +3,7 @@ import ScrollableTabBar
 import WebInspectorUIBase
 import WebInspectorDataKit
 import ObservationBridge
+import SwiftUI
 import UIKit
 
 @MainActor
@@ -1219,7 +1220,7 @@ extension NetworkDetailViewController {
         modeControl
     }
 
-    var detailModeSelectedModeForTesting: NetworkDetailViewController.Mode {
+    var detailModeSelectedModeForTesting: NetworkDetailViewController.Mode? {
         modeControl.selectedID
     }
 
@@ -1280,7 +1281,7 @@ extension NetworkDetailViewController {
 }
 #endif
 
-#Preview("Network Detail") {
+#Preview("Network Detail", traits: .modifier(NetworkPreviewPreparation())) {
     UINavigationController(
         rootViewController: NetworkDetailViewController(
             model: NetworkPreviewFixtures.makePanelModel(mode: .detail)
@@ -1288,7 +1289,7 @@ extension NetworkDetailViewController {
     )
 }
 
-#Preview("Network Detail Preview Response Only Short") {
+#Preview("Network Detail Preview Response Only Short", traits: .modifier(NetworkPreviewPreparation())) {
     UINavigationController(
         rootViewController: NetworkDetailViewController(
             model: NetworkPreviewFixtures.makePanelModel(mode: .detailResponseOnlyShort),
@@ -1297,7 +1298,7 @@ extension NetworkDetailViewController {
     )
 }
 
-#Preview("Network Detail Preview Request and Response Short") {
+#Preview("Network Detail Preview Request and Response Short", traits: .modifier(NetworkPreviewPreparation())) {
     UINavigationController(
         rootViewController: NetworkDetailViewController(
             model: NetworkPreviewFixtures.makePanelModel(mode: .detailRequestAndResponseShort),
@@ -1306,7 +1307,7 @@ extension NetworkDetailViewController {
     )
 }
 
-#Preview("Network Detail Preview Response Only Long") {
+#Preview("Network Detail Preview Response Only Long", traits: .modifier(NetworkPreviewPreparation())) {
     UINavigationController(
         rootViewController: NetworkDetailViewController(
             model: NetworkPreviewFixtures.makePanelModel(mode: .detailResponseOnlyLong),
@@ -1315,7 +1316,7 @@ extension NetworkDetailViewController {
     )
 }
 
-#Preview("Network Detail Preview Request and Response Long") {
+#Preview("Network Detail Preview Request and Response Long", traits: .modifier(NetworkPreviewPreparation())) {
     UINavigationController(
         rootViewController: NetworkDetailViewController(
             model: NetworkPreviewFixtures.makePanelModel(mode: .detailRequestAndResponseLong),

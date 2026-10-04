@@ -5,7 +5,8 @@ import WebInspectorKit
 
 @MainActor
 @Test
-func publicUIKitModuleSupportsAttachAndDetachForConsumers() {
+func publicUIKitModuleSupportsAttachAndDetachForConsumers() async throws {
+    try await WebInspectorSession.prepare()
     let session = WebInspectorKit.WebInspectorSession()
     let inspector = WebInspectorKit.WebInspectorViewController(session: session)
 

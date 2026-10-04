@@ -1,6 +1,9 @@
 #if canImport(UIKit)
 import Observation
+import ObservationBridge
 import OSLog
+import SyntaxEditorUI
+import UIHostingMenu
 import UIKit
 import WebKit
 import WebInspectorDataKit
@@ -15,9 +18,22 @@ private let webInspectorSessionLifecycleLogger = Logger(
 ///
 /// A session owns attachment lifecycle, the current DataKit context, tab
 /// selection state, and page-derived presentation preferences.
+/// Await ``prepare()`` during app setup before creating inspector views.
 @MainActor
 @Observable
 public final class WebInspectorSession {
+    /// Prepares observation, hosted menus, and syntax previews for the inspector UI.
+    ///
+    /// Await this during asynchronous app setup before constructing inspector
+    /// views. Repeated and concurrent calls share each dependency's preparation
+    /// across the process. This does not attach to a web view.
+    /// - Throws: A dependency preparation failure or cancellation.
+    public static func prepare() async throws {
+        try await PortableObservationTracking.prepare()
+        try await SyntaxEditorModel.prepare()
+        try await UIHostingMenuRuntime.prepare()
+    }
+
     private struct RootPresentationRetirement {
         let attachmentGeneration: UInt64
         var detachesSession: Bool

@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import Testing
 import UIKit
+import WebInspectorKit
 
 @MainActor
 @Suite(.serialized, UIKitAnimationsDisabled())
@@ -13,6 +14,7 @@ private struct UIKitAnimationsDisabled: SuiteTrait, TestTrait, TestScoping {
         testCase: Test.Case?,
         performing function: () async throws -> Void
     ) async throws {
+        try await WebInspectorSession.prepare()
         let wereAnimationsEnabled = UIView.areAnimationsEnabled
         UIView.setAnimationsEnabled(false)
         defer {

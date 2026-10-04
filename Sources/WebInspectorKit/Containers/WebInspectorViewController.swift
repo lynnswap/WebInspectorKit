@@ -114,6 +114,8 @@ private final class WebInspectorPresentationHostWindowObserverView: UIView {
 /// UI. The controller adapts between compact tab presentation and regular split
 /// presentation.
 ///
+/// Await ``WebInspectorSession/prepare()`` during app setup before creating the UI.
+///
 /// Example:
 ///
 /// ```swift

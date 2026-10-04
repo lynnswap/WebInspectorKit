@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
 import WebInspectorDataKit
+import SwiftUI
 import UIKit
 
 @MainActor
@@ -138,7 +139,7 @@ extension DOMSplitViewController {
 }
 #endif
 
-#Preview("DOM Split") {
+#Preview("DOM Split", traits: .modifier(DOMPreviewPreparation())) {
     DOMSplitViewControllerPreview.makeViewController()
 }
 
