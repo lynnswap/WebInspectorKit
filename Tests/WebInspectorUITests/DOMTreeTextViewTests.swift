@@ -12,6 +12,10 @@ import WebInspectorTestSupport
 @MainActor
 @Suite(.serialized)
 struct DOMTreeTextViewTests {
+    init() async throws {
+        try await WebInspectorSession.prepare()
+    }
+
     @Test
     func rendersDOMMarkupFromDataKitContext() async throws {
         let view = await makeTreeView()

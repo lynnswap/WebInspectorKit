@@ -3,6 +3,7 @@ import WebInspectorUIBase
 import WebInspectorDataKit
 import ObservationBridge
 import UIHostingMenu
+import SwiftUI
 import UIKit
 
 @MainActor
@@ -1118,7 +1119,7 @@ extension NetworkListViewController {
 }
 #endif
 
-#Preview("Network List") {
+#Preview("Network List", traits: .modifier(NetworkPreviewPreparation())) {
     UINavigationController(
         rootViewController: NetworkListViewController(
             model: NetworkPreviewFixtures.makePanelModel(mode: .root)
@@ -1126,7 +1127,7 @@ extension NetworkListViewController {
     )
 }
 
-#Preview("Network List Long Title") {
+#Preview("Network List Long Title", traits: .modifier(NetworkPreviewPreparation())) {
     UINavigationController(
         rootViewController: NetworkListViewController(
             model: NetworkPreviewFixtures.makePanelModel(mode: .rootLongTitle)

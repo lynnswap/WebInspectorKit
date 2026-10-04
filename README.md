@@ -41,6 +41,16 @@ UIKit Web Inspector for `WKWebView`.
 
 ### UIKit
 
+Prepare the shared UI runtimes during asynchronous app setup before constructing
+inspector views:
+
+```swift
+try await WebInspectorSession.prepare()
+```
+
+Await completion and handle preparation failures in your app's startup flow.
+Repeated calls reuse preparation across the process. Then create the inspector:
+
 ```swift
 import UIKit
 import WebKit

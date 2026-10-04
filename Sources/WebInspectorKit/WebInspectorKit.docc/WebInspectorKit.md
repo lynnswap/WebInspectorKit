@@ -8,7 +8,18 @@ Import `WebInspectorKit` to present the built-in UIKit inspector or add custom
 UIKit tabs. The module declares the public UI entry points and provides the DOM
 and Network panels, including request and response body previews.
 
-Create a ``WebInspectorViewController``, attach it to a `WKWebView`, and present
+Await ``WebInspectorSession/prepare()`` during asynchronous app setup before
+constructing inspector views:
+
+```swift
+try await WebInspectorSession.prepare()
+```
+
+Preparation initializes the observation, hosted menu, and syntax preview
+runtimes. Repeated calls share preparation across the process. Handle failures
+in your app's startup flow.
+
+Then create a ``WebInspectorViewController``, attach it to a `WKWebView`, and present
 it from your app UI:
 
 ```swift
@@ -59,6 +70,7 @@ WebInspectorDataKit instead.
 
 - ``WebInspectorViewController``
 - ``WebInspectorSession``
+- ``WebInspectorSession/prepare()``
 
 ### Configuring Tabs
 

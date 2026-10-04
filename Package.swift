@@ -41,23 +41,23 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/lynnswap/ObservationBridge.git",
-            exact: "0.13.0"
+            exact: "0.14.0"
         ),
         .package(
             url: "https://github.com/lynnswap/ScrollableTabBar.git",
-            exact: "0.1.3"
+            exact: "0.2.0"
         ),
         .package(
             url: "https://github.com/lynnswap/UIHostingMenu.git",
-            exact: "0.3.0"
+            exact: "0.5.1"
         ),
         .package(
             url: "https://github.com/lynnswap/SyntaxEditorUI.git",
-            exact: "0.16.5"
+            exact: "0.17.0"
         ),
         .package(
             url: "https://github.com/lynnswap/ABIBridge.git",
-            exact: "0.4.0"
+            exact: "0.8.0"
         ),
         .package(
             url: "https://github.com/swiftlang/swift-docc-plugin",
@@ -166,7 +166,9 @@ let package = Package(
                 "WebInspectorUIBase",
                 "WebInspectorUIDOM",
                 "WebInspectorUINetwork",
-                .product(name: "ObservationBridge", package: "ObservationBridge")
+                .product(name: "ObservationBridge", package: "ObservationBridge"),
+                .product(name: "UIHostingMenu", package: "UIHostingMenu", condition: .when(platforms: [.iOS])),
+                .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))
             ],
             exclude: [
                 "README.md"

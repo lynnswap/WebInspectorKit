@@ -9,6 +9,10 @@ import WebInspectorKit
 @Suite(.serialized)
 @MainActor
 struct MonoclyLifecycleTests {
+    init() async throws {
+        try await WebInspectorSession.prepare()
+    }
+
     @Test
     func legacySceneStateRecoveryRemovesSwiftUISavedState() throws {
         try withCleanState { context in

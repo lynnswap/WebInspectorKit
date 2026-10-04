@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import WebInspectorUIBase
+import SwiftUI
 import UIKit
 
 @MainActor
@@ -93,7 +94,7 @@ private final class NetworkListColumnNavigationController: UINavigationControlle
     }
 }
 
-#Preview("Network Split") {
+#Preview("Network Split", traits: .modifier(NetworkPreviewPreparation())) {
     let model = NetworkPreviewFixtures.makePanelModel(mode: .detail)
     NetworkCompactNavigationController(
         model: model,
@@ -106,7 +107,7 @@ private final class NetworkListColumnNavigationController: UINavigationControlle
     )
 }
 
-#Preview("Network Split Log Preview") {
+#Preview("Network Split Log Preview", traits: .modifier(NetworkPreviewPreparation())) {
     makeNetworkSplitPreviewController(
         initialMode: .preview,
         selectedDisplayName: "log"

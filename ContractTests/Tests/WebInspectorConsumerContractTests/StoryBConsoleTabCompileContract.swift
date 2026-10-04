@@ -5,7 +5,8 @@ import WebInspectorKit
 
 @MainActor
 @Test
-func customUIKitTabFactoryReceivesWebInspectorSession() {
+func customUIKitTabFactoryReceivesWebInspectorSession() async throws {
+    try await WebInspectorSession.prepare()
     let consoleTab = WebInspectorTab(
         id: "contract_console",
         title: "Console",

@@ -5,6 +5,21 @@ when upgrading WebInspectorKit. Sections are grouped by release, newest first.
 
 ## Unreleased
 
+### Prepare the UIKit runtimes before creating inspector views
+
+Await the shared observation, hosted menu, and syntax preview runtimes during
+asynchronous app setup:
+
+```swift
+try await WebInspectorSession.prepare()
+```
+
+Handle preparation errors before constructing the inspector UI. Repeated calls
+reuse the dependencies' preparation across the process. The inspector's
+initializers remain synchronous after preparation. DataKit, ProxyKit, and
+WebKitRuntime consumers that do not use the built-in UIKit UI do not need this
+UI preparation step.
+
 ### UIKit declarations move into WebInspectorKit
 
 Continue importing `WebInspectorKit` and using `WebInspectorSession`,

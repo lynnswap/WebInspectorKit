@@ -2,6 +2,23 @@ import WebInspectorUIBase
 import WebInspectorDataKit
 import WebInspectorProxyKit
 
+#if canImport(UIKit)
+import ObservationBridge
+import SwiftUI
+import UIHostingMenu
+
+struct DOMPreviewPreparation: PreviewModifier {
+    static func makeSharedContext() async throws {
+        try await PortableObservationTracking.prepare()
+        try await UIHostingMenuRuntime.prepare()
+    }
+
+    func body(content: Content, context: Void) -> some View {
+        content
+    }
+}
+#endif
+
 @MainActor
 package enum DOMPreviewFixtures {
     package static func makeWebInspectorContext(

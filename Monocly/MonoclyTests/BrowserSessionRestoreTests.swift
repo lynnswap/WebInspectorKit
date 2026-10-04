@@ -10,6 +10,10 @@ import WebInspectorKit
 @Suite(.serialized)
 @MainActor
 struct BrowserSessionRestoreTests {
+    init() async throws {
+        try await WebInspectorSession.prepare()
+    }
+
     @Test
     func sessionStoreSavesAndLoadsMultipleTabsAndStateBlobs() throws {
         try withTemporarySessionStore { sessionStore, _ in

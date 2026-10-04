@@ -2,9 +2,10 @@
 import WebInspectorUIBase
 import WebInspectorDataKit
 import WebInspectorProxyKit
+import SwiftUI
 import UIKit
 
-#Preview("DOM Element") {
+#Preview("DOM Element", traits: .modifier(DOMPreviewPreparation())) {
     DOMElementViewControllerPreview.makeViewController()
 }
 
