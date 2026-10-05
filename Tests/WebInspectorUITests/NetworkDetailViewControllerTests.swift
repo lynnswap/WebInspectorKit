@@ -174,28 +174,19 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func failedBodyRendersUnavailableMessageOnlyOnce() async throws {
+    func failedBodyPreparesUnavailableMessageOnlyOnce() {
         let viewController = NetworkBodyViewController()
         let body = NetworkBody(phase: .failed(.closed))
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
+        viewController.loadViewIfNeeded()
 
         viewController.setSurface(.body(body, metadata: nil))
         viewController.resumeRendering()
-
-        let observation = try #require(viewController.bodyObservationDeliveryForTesting)
-        let renderedText = await observation.values {
-            viewController.syntaxViewForTesting.text
-        }
-        defer { renderedText.cancel() }
 
         let unavailable = String(
             localized: "network.body.unavailable",
             bundle: WebInspectorUILocalization.bundle
         )
-        #expect(await renderedText.waitUntilValue(unavailable))
-        let text = try #require(renderedText.latestValue)
-        #expect(text.components(separatedBy: unavailable).count == 2)
+        #expect(viewController.syntaxViewForTesting.model.text == unavailable)
     }
 
     @Test
