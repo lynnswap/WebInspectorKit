@@ -41,23 +41,23 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/lynnswap/ObservationBridge.git",
-            exact: "0.14.0"
+            exact: "0.14.1"
         ),
         .package(
             url: "https://github.com/lynnswap/ScrollableTabBar.git",
-            exact: "0.2.0"
+            exact: "0.2.1"
         ),
         .package(
             url: "https://github.com/lynnswap/UIHostingMenu.git",
-            exact: "0.5.1"
+            exact: "0.5.2"
         ),
         .package(
             url: "https://github.com/lynnswap/SyntaxEditorUI.git",
-            exact: "0.17.0"
+            exact: "0.17.1"
         ),
         .package(
             url: "https://github.com/lynnswap/ABIBridge.git",
-            exact: "0.8.0"
+            exact: "0.8.1"
         ),
         .package(
             url: "https://github.com/swiftlang/swift-docc-plugin",
