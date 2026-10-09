@@ -11,16 +11,21 @@ final class BrowserViewportWebView: WKWebView {
 
     override func didMoveToSuperview() {
         super.didMoveToSuperview()
-        viewportCoordinator?.webViewHierarchyDidChange()
+        viewportCoordinator?.update()
     }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        viewportCoordinator?.webViewHierarchyDidChange()
+        viewportCoordinator?.update()
     }
 
     override func safeAreaInsetsDidChange() {
         super.safeAreaInsetsDidChange()
-        viewportCoordinator?.webViewSafeAreaInsetsDidChange()
+        viewportCoordinator?.update()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        viewportCoordinator?.update()
     }
 }

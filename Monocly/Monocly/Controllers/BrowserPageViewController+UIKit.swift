@@ -144,8 +144,7 @@ final class BrowserPageViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        viewportCoordinator?.webViewHierarchyDidChange()
-        viewportCoordinator?.hostViewDidAppear()
+        viewportCoordinator?.update()
         refreshChromeControls()
         browserWindow.loadInitialRequestIfNeeded()
         maybeAutoPresentInspectorIfNeeded()
@@ -186,7 +185,7 @@ final class BrowserPageViewController: UIViewController {
 
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
-        viewportCoordinator?.webViewSafeAreaInsetsDidChange()
+        viewportCoordinator?.update()
     }
 
     @objc
@@ -245,14 +244,9 @@ final class BrowserPageViewController: UIViewController {
         view.insertSubview(webView, at: 0)
         NSLayoutConstraint.activate(hostedWebViewConstraints)
 
-        let viewportCoordinator = BrowserViewportCoordinator(webView: webView)
-        viewportCoordinator.hostViewController = self
+        let viewportCoordinator = BrowserViewportCoordinator(webView: webView, hostViewController: self)
         self.viewportCoordinator = viewportCoordinator
         (webView as? BrowserViewportWebView)?.viewportCoordinator = viewportCoordinator
-        viewportCoordinator.webViewHierarchyDidChange()
-        if view.window != nil {
-            viewportCoordinator.hostViewDidAppear()
-        }
         onSelectedWebViewInstalled?(webView)
     }
 
@@ -503,7 +497,7 @@ final class BrowserPageViewController: UIViewController {
             navigationController?.setToolbarHidden(true, animated: false)
         }
 
-        viewportCoordinator?.updateViewport()
+        viewportCoordinator?.update()
     }
 
     private func resolvedChromePlacement() -> ChromePlacement {
