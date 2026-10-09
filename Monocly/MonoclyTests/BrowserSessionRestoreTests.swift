@@ -6,6 +6,7 @@ import Testing
 import UIKit
 import WebKit
 import WebInspectorKit
+import WKViewportCoordinator
 
 @Suite(.serialized)
 @MainActor
@@ -1140,6 +1141,40 @@ struct BrowserSessionRestoreTests {
         #expect(pageViewController.hostedWebViewForTesting === fixture.secondWebView)
         #expect(fixture.browserWindow.tabs[0].webView === fixture.firstWebView)
         #expect(fixture.browserWindow.tabs[1].webView === fixture.secondWebView)
+    }
+
+    @Test
+    func returningToTabRecreatesViewportCoordinatorForRetainedWebView() async throws {
+        let fixture = try makeAttachmentLifecycleFixture()
+        let firstWebView = try #require(fixture.firstWebView as? BrowserViewportWebView)
+        let secondWebView = try #require(fixture.secondWebView as? BrowserViewportWebView)
+        let pageViewController = BrowserPageViewController(
+            browserWindow: fixture.browserWindow,
+            inspectorSession: WebInspectorSession(),
+            launchConfiguration: .xcodeTestOrPreview(),
+            progressHideScheduler: ManualDelayScheduler()
+        )
+        let installedWebViews = WebViewIdentitySignal()
+        pageViewController.onSelectedWebViewInstalled = installedWebViews.record
+        pageViewController.loadViewIfNeeded()
+        await installedWebViews.wait(for: firstWebView)
+        let firstCoordinator = try #require(firstWebView.viewportCoordinator)
+        #expect(firstCoordinator.hostViewController === pageViewController)
+
+        fixture.browserWindow.selectTab(id: fixture.secondTabID)
+        await installedWebViews.wait(for: secondWebView)
+        #expect(firstWebView.viewportCoordinator == nil)
+        #expect(secondWebView.viewportCoordinator?.hostViewController === pageViewController)
+
+        let reinstalledWebViews = WebViewIdentitySignal()
+        pageViewController.onSelectedWebViewInstalled = reinstalledWebViews.record
+        fixture.browserWindow.selectTab(id: fixture.browserWindow.tabs[0].id)
+        await reinstalledWebViews.wait(for: firstWebView)
+        let reinstalledCoordinator = try #require(firstWebView.viewportCoordinator)
+        #expect(reinstalledCoordinator !== firstCoordinator)
+        #expect(reinstalledCoordinator.hostViewController === pageViewController)
+        #expect(secondWebView.viewportCoordinator == nil)
+        #expect(pageViewController.hostedWebViewForTesting === firstWebView)
     }
 
     @Test
