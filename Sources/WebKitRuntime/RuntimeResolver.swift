@@ -66,7 +66,7 @@ actor RuntimeResolver {
                     } else {
                         selector = .path(URL(fileURLWithPath: path))
                     }
-                    guard let selected = try await runtime.images(matching: selector).first(where: { $0.path == path }) else {
+                    guard let selected = try await runtime.resolveImages(matching: selector).first(where: { $0.path == path }) else {
                         throw RuntimeLookupError(.imageUnavailable)
                     }
                     image = selected

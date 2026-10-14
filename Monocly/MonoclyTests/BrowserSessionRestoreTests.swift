@@ -792,11 +792,10 @@ struct BrowserSessionRestoreTests {
             )
             let tab = try #require(store.selectedTab)
 
-            await Task.yield()
+            await tab.waitUntilTitleObservationApplied()
             tab.pageTitle = "Observed Title"
-            await Task.yield()
 
-            #expect(scheduler.hasScheduledDelay)
+            #expect(await waitUntil { scheduler.hasScheduledDelay })
 
             scheduler.fire()
 
