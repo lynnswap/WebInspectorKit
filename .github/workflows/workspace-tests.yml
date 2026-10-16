@@ -10,6 +10,10 @@ on:
       runner:
         required: true
         type: string
+      platform:
+        description: Platform to build and test, iOS or macOS.
+        required: true
+        type: string
       xcode_major:
         required: true
         type: string
@@ -34,8 +38,8 @@ permissions:
   contents: read
 
 jobs:
-  plan:
-    name: Select test runtimes
+  build:
+    name: Build ${{ inputs.suite }} suites for ${{ inputs.platform }}
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 10
     outputs:
@@ -44,40 +48,9 @@ jobs:
       XCODE_MAJOR: ${{ inputs.xcode_major }}
       XCODE_ALLOW_PRERELEASE: ${{ inputs.allow_prerelease }}
       TEST_SUITE: ${{ inputs.suite }}
+      TEST_PLATFORM: ${{ inputs.platform }}
       LATEST_IOS_MAJOR: ${{ inputs.latest_ios_major }}
       ALL_NATIVE_RUNTIMES: ${{ inputs.all_native_runtimes }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ github.workflow_sha }}
-          persist-credentials: false
-      - name: Resolve Xcode
-        run: ruby .github/scripts/resolve-xcode.rb
-      - name: Select installed runtimes
-        id: cases
-        run: |
-          coverage_args=()
-          if [[ "$ALL_NATIVE_RUNTIMES" == "true" ]]; then
-            coverage_args+=(--all-native-runtimes)
-          fi
-          cases=$(python3 .github/scripts/runtime-tests.py "$RUNNER_TEMP" \
-            --suite "$TEST_SUITE" --latest-ios-major "$LATEST_IOS_MAJOR" \
-            --list-cases "${coverage_args[@]}")
-          echo "cases=$cases" >> "$GITHUB_OUTPUT"
-
-  build:
-    name: Build ${{ inputs.suite }} suites for ${{ matrix.platform }}
-    runs-on: ${{ inputs.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [iOS, macOS]
-    timeout-minutes: 10
-    env:
-      XCODE_MAJOR: ${{ inputs.xcode_major }}
-      XCODE_ALLOW_PRERELEASE: ${{ inputs.allow_prerelease }}
-      TEST_SUITE: ${{ inputs.suite }}
-      TEST_PLATFORM: ${{ matrix.platform }}
       SPM_CACHE_DIR: ${{ github.workspace }}/.ci/spm-cache
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -99,7 +72,7 @@ jobs:
           path: |
             ${{ env.SPM_CACHE_DIR }}
             ~/Library/Caches/org.swift.swiftpm
-          key: spm-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.cache-id }}-${{ inputs.suite }}-${{ matrix.platform }}-${{ hashFiles('Package.resolved', 'ContractTests/Package.resolved', 'Monocly/**/Package.resolved', 'WebInspectorKit.xcworkspace/**/Package.resolved') }}
+          key: spm-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.cache-id }}-${{ inputs.suite }}-${{ inputs.platform }}-${{ hashFiles('Package.resolved', 'ContractTests/Package.resolved', 'Monocly/**/Package.resolved', 'WebInspectorKit.xcworkspace/**/Package.resolved') }}
       - name: Build for testing
         run: |
           set -e -o pipefail
@@ -126,18 +99,29 @@ jobs:
             | tee "$RUNNER_TEMP/prepare-$TEST_PLATFORM.log"
           COPYFILE_DISABLE=1 tar -czf "$RUNNER_TEMP/products-$TEST_PLATFORM.tar.gz" \
             -C "$derived_data/Build" Products
+      - name: Select installed runtimes
+        id: cases
+        run: |
+          coverage_args=()
+          if [[ "$ALL_NATIVE_RUNTIMES" == "true" ]]; then
+            coverage_args+=(--all-native-runtimes)
+          fi
+          cases=$(python3 .ci/automation/.github/scripts/runtime-tests.py "$RUNNER_TEMP" \
+            --suite "$TEST_SUITE" --latest-ios-major "$LATEST_IOS_MAJOR" \
+            --platform "$TEST_PLATFORM" --list-cases "${coverage_args[@]}")
+          echo "cases=$cases" >> "$GITHUB_OUTPUT"
       - name: Upload test products
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: products-${{ inputs.suite }}-${{ inputs.runner }}-${{ matrix.platform }}
-          path: ${{ runner.temp }}/products-${{ matrix.platform }}.tar.gz
+          name: products-${{ inputs.suite }}-${{ inputs.runner }}-${{ inputs.platform }}
+          path: ${{ runner.temp }}/products-${{ inputs.platform }}.tar.gz
           compression-level: 0
           if-no-files-found: error
       - name: Upload build diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: diagnostics-build-${{ inputs.suite }}-${{ inputs.runner }}-${{ matrix.platform }}
+          name: diagnostics-build-${{ inputs.suite }}-${{ inputs.runner }}-${{ inputs.platform }}
           path: |
             ${{ runner.temp }}/build-*.log
             ${{ runner.temp }}/prepare-*.log
@@ -146,12 +130,12 @@ jobs:
 
   test:
     name: Test ${{ inputs.suite }} suites on ${{ matrix.case.platform }} ${{ matrix.case.version }}
-    needs: [plan, build]
+    needs: build
     runs-on: ${{ inputs.runner }}
     strategy:
       fail-fast: false
       matrix:
-        case: ${{ fromJSON(needs.plan.outputs.cases) }}
+        case: ${{ fromJSON(needs.build.outputs.cases) }}
     timeout-minutes: 10
     env:
       XCODE_MAJOR: ${{ inputs.xcode_major }}
