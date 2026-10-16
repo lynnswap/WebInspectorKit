@@ -194,7 +194,7 @@ class RuntimeExecutionTests(unittest.TestCase):
         stack.enter_context(patch.object(runner, "simctl", side_effect=["first-device", "second-device"]))
 
     def execute(self, suite, fail=None, *, all_native_runtimes=False, platform=None,
-                reuse_simulators=False, runtime_identifier=None, build=False):
+                reuse_simulators=False, runtime_identifier=None):
         def run(command, **options):
             self.commands.append((command, options))
             if fail:
@@ -203,8 +203,7 @@ class RuntimeExecutionTests(unittest.TestCase):
         with patch.object(runner.subprocess, "run", side_effect=run):
             return runner.run_tests(self.runtimes, "27.0", self.root, suite, latest_ios_major=27,
                                     all_native_runtimes=all_native_runtimes, platform=platform,
-                                    reuse_simulators=reuse_simulators, runtime_identifier=runtime_identifier,
-                                    build=build)
+                                    reuse_simulators=reuse_simulators, runtime_identifier=runtime_identifier)
 
     def test_workspace_runs_latest_only_and_excludes_low_level_suite(self):
         self.assertEqual(self.execute("workspace"), 0)
@@ -234,7 +233,7 @@ class RuntimeExecutionTests(unittest.TestCase):
         identifier = self.runtimes[0]["identifier"]
         arguments = ["runtime-tests.py", str(self.root), "--suite", "native",
                      "--latest-ios-major", "27", "--all-native-runtimes", "--platform", "iOS",
-                     "--runtime", identifier, "--build"]
+                     "--runtime", identifier]
         with patch.object(sys, "argv", arguments), \
                 patch.object(runner, "simctl", return_value=json.dumps({"runtimes": self.runtimes})), \
                 patch.object(runner.subprocess, "check_output", return_value="27.0\n"), \
@@ -242,7 +241,7 @@ class RuntimeExecutionTests(unittest.TestCase):
             self.assertEqual(runner.main(), 0)
         execute.assert_called_once_with(self.runtimes, "27.0", self.root, "native", 27,
                                         all_native_runtimes=True, platform="iOS", reuse_simulators=False,
-                                        runtime_identifier=identifier, build=True)
+                                        runtime_identifier=identifier)
 
     def test_list_cases_prints_full_release_coverage_without_running_tests(self):
         older = runtime("18.4")
@@ -287,71 +286,7 @@ class RuntimeExecutionTests(unittest.TestCase):
         simctl.assert_not_called()
         execute.assert_called_once_with([], "27.0", self.root, "native", 27,
                                         all_native_runtimes=False, platform="macOS", reuse_simulators=True,
-                                        runtime_identifier=None, build=False)
-
-    def test_ios_boot_overlaps_build_and_tests_wait_until_build_and_boot_complete(self):
-        def during_build(command, **options):
-            if "build-for-testing" in command:
-                commands = [command for command, _ in self.commands]
-                self.assertIn(["xcrun", "simctl", "boot", "first-device"], commands)
-                self.assertFalse(any("bootstatus" in command for command in commands))
-                self.assertFalse(any("test-without-building" in command for command in commands))
-        self.assertEqual(self.execute("workspace", during_build, platform="iOS", build=True), 0)
-        commands = [command for command, _ in self.commands]
-        build = next(command for command in commands if "build-for-testing" in command)
-        prepare = next(command for command in commands if str(command[1]).endswith("prepare-xctestrun.py"))
-        boot_wait = ["xcrun", "simctl", "bootstatus", "first-device", "-b"]
-        tests = next(command for command in commands if "test-without-building" in command)
-        self.assertLess(commands.index(build), commands.index(prepare))
-        self.assertLess(commands.index(prepare), commands.index(boot_wait))
-        self.assertLess(commands.index(boot_wait), commands.index(tests))
-        self.assertIn("-quiet", build)
-        self.assertEqual(build[build.index("-scheme") + 1], "WebInspectorKitTests")
-        self.assertEqual(build[build.index("-destination") + 1], "generic/platform=iOS Simulator")
-        self.assertTrue((self.root / "build-iOS.log").exists())
-        self.assertTrue((self.root / "prepare-iOS.log").exists())
-
-    def test_build_failure_deletes_created_device_without_starting_tests(self):
-        def fail(command, **options):
-            if "build-for-testing" in command:
-                self.assertEqual(command[command.index("-scheme") + 1], "WebInspectorNativeBridgeTests")
-                raise subprocess.CalledProcessError(65, command)
-        self.assertEqual(self.execute("native", fail, platform="iOS", build=True,
-                                      runtime_identifier=self.runtimes[0]["identifier"]), 1)
-        commands = [command for command, _ in self.commands]
-        self.assertIn(["xcrun", "simctl", "delete", "first-device"], commands)
-        self.assertFalse(any("test-without-building" in command for command in commands))
-        self.assertFalse(any("bootstatus" in command for command in commands))
-        self.assertIn("| iOS 18.6 / native | Failed |", self.summary.read_text())
-
-    def test_build_failure_shuts_down_borrowed_device_without_starting_tests(self):
-        installed = self.runtimes[-1]
-        device = {"udid": "borrowed", "state": "Shutdown", "isAvailable": True,
-                  "deviceTypeIdentifier": "phone"}
-        before = json.dumps({"devices": {installed["identifier"]: [device]}})
-        after = json.dumps({"devices": {installed["identifier"]: [dict(device, state="Booting")]}})
-        def fail(command, **options):
-            if "build-for-testing" in command:
-                raise subprocess.CalledProcessError(65, command)
-        with patch.object(runner, "simctl", side_effect=[before, after]):
-            self.assertEqual(self.execute("workspace", fail, platform="iOS", reuse_simulators=True,
-                                          build=True), 1)
-        commands = [command for command, _ in self.commands]
-        self.assertIn(["xcrun", "simctl", "shutdown", "borrowed"], commands)
-        self.assertFalse(any("delete" in command for command in commands))
-        self.assertFalse(any("test-without-building" in command for command in commands))
-
-    def test_macos_build_does_not_access_simulators(self):
-        with patch.object(runner, "simctl") as simctl, \
-                patch.dict(os.environ, SPM_CACHE_DIR=str(self.root / "packages")):
-            self.assertEqual(self.execute("workspace", platform="macOS", build=True), 0)
-        simctl.assert_not_called()
-        commands = [command for command, _ in self.commands]
-        build = next(command for command in commands if "build-for-testing" in command)
-        self.assertEqual(build[build.index("-scheme") + 1], "WebInspectorKit")
-        self.assertEqual(build[build.index("-destination") + 1], "platform=macOS,arch=arm64")
-        self.assertEqual(build[build.index("-clonedSourcePackagesDirPath") + 1], str(self.root / "packages"))
-        self.assertTrue(any("test-without-building" in command for command in commands))
+                                        runtime_identifier=None)
 
     def test_reused_device_is_shut_down_without_being_deleted(self):
         device = {"udid": "borrowed", "state": "Shutdown", "isAvailable": True,

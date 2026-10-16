@@ -5,7 +5,6 @@ import argparse
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 
@@ -104,28 +103,8 @@ def run_logged(command, path, **options):
             print(path.read_text(errors="replace"), flush=True)
 
 
-def build_for_testing(build_root, suite, platform):
-    derived_data = build_root / f"build-{platform}"
-    destination = "generic/platform=iOS Simulator" if platform == "iOS" else "platform=macOS,arch=arm64"
-    scheme = "WebInspectorKitTests" if platform == "iOS" else "WebInspectorKit"
-    if suite == "native":
-        scheme = "WebInspectorNativeBridgeTests"
-    run_logged([
-        "xcodebuild", "-quiet", "build-for-testing",
-        "-workspace", "WebInspectorKit.xcworkspace", "-scheme", scheme,
-        "-destination", destination,
-        "-clonedSourcePackagesDirPath", os.environ.get("SPM_CACHE_DIR", str(build_root / "spm-cache")),
-        "-disableAutomaticPackageResolution", "-derivedDataPath", str(derived_data),
-        "-enableCodeCoverage", "NO", "ARCHS=arm64", "ONLY_ACTIVE_ARCH=YES",
-    ], build_root / f"build-{platform}.log")
-    run_logged([
-        sys.executable, str(Path(__file__).resolve().with_name("prepare-xctestrun.py")),
-        str(derived_data / "Build/Products"),
-    ], build_root / f"prepare-{platform}.log")
-
-
 def run_tests(runtimes, macos_version, build_root, suite, latest_ios_major, *, all_native_runtimes=False,
-              platform=None, reuse_simulators=False, runtime_identifier=None, build=False):
+              platform=None, reuse_simulators=False, runtime_identifier=None):
     results = []
     for case in test_cases(runtimes, macos_version, suite, latest_ios_major,
                            all_native_runtimes=all_native_runtimes, platform=platform,
@@ -148,11 +127,6 @@ def run_tests(runtimes, macos_version, build_root, suite, latest_ios_major, *, a
                     udid = create_device(runtime)
                     created_device = True
                 destination = f"platform=iOS Simulator,id={udid}"
-                if build:
-                    run_logged(["xcrun", "simctl", "boot", udid], diagnostics / "boot-start.log", timeout=60)
-            if build:
-                build_for_testing(build_root, suite, case["platform"])
-            if udid:
                 # Fresh devices can spend more than three minutes in data migration on hosted runners.
                 # Keep a separate startup bound so a stuck Simulator cannot consume the whole job.
                 run_logged(["xcrun", "simctl", "bootstatus", udid, "-b"], diagnostics / "boot.log", timeout=600)
@@ -210,8 +184,6 @@ def main():
     parser.add_argument("--list-cases", action="store_true",
                         help="Print the selected runtime/platform cases as JSON without running tests")
     parser.add_argument("--runtime", help="Test only the selected iOS runtime with this exact identifier")
-    parser.add_argument("--build", action="store_true",
-                        help="Build the selected platform while its Simulator starts, then run tests")
     args = parser.parse_args()
 
     runtimes = []
@@ -227,7 +199,7 @@ def main():
         return 0
     return run_tests(runtimes, macos_version, args.build_root, args.suite, args.latest_ios_major,
                      all_native_runtimes=args.all_native_runtimes, platform=args.platform,
-                     reuse_simulators=args.reuse_simulators, runtime_identifier=args.runtime, build=args.build)
+                     reuse_simulators=args.reuse_simulators, runtime_identifier=args.runtime)
 
 
 if __name__ == "__main__":
