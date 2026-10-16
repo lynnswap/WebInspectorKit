@@ -14,7 +14,7 @@ struct DOMElementStyleSnapshotCoordinatorTests {
     private let modelContext = WebInspectorContext.preview(isolation: MainActor.shared)
 
     @Test
-    func coordinatorRequestsNonAnimatedDiffForInitialLoadedSelection() throws {
+    func coordinatorBuildsSnapshotForInitialLoadedSelection() throws {
         let coordinator = DOMElementStyleSnapshotCoordinator()
         let nodeStyles = makeStyles()
         load(nodeStyles, with: makeFlatMatchedStyles())
@@ -22,7 +22,6 @@ struct DOMElementStyleSnapshotCoordinatorTests {
 
         let update = coordinator.updateSelectedNodeStyles(nodeStyles)
 
-        #expect(update.applyMode == .diff(animated: false))
         #expect(update.placeholderMode == .none)
         let snapshot = try loadedSnapshot(from: update)
         #expect(snapshot.sectionIdentifiers == coordinator.visibleSectionIDs)
@@ -93,7 +92,6 @@ struct DOMElementStyleSnapshotCoordinatorTests {
         let loadingUpdate = coordinator.updateSelectedNodeStyles(inputStyles)
 
         #expect(inputStyles.phase == .loading)
-        #expect(loadingUpdate.applyMode == .diff(animated: false))
         #expect(try #require(loadingUpdate.snapshot).itemIdentifiers.isEmpty)
         #expect(loadingUpdate.placeholderMode == .loading)
         #expect(coordinator.visibleSectionIDs.isEmpty)
@@ -109,7 +107,6 @@ struct DOMElementStyleSnapshotCoordinatorTests {
         )
         let loadedUpdate = coordinator.updateSelectedNodeStyles(inputStyles)
 
-        #expect(loadedUpdate.applyMode == .diff(animated: false))
         #expect(loadedUpdate.placeholderMode == .none)
     }
 
@@ -137,7 +134,7 @@ struct DOMElementStyleSnapshotCoordinatorTests {
     }
 
     @Test
-    func coordinatorAnimatesSameSelectionStructuralStyleChange() throws {
+    func coordinatorUpdatesSnapshotForSameSelectionStructuralStyleChange() throws {
         let coordinator = DOMElementStyleSnapshotCoordinator()
         let nodeStyles = makeStyles()
         load(nodeStyles, with: makeFlatMatchedStyles())
@@ -147,7 +144,6 @@ struct DOMElementStyleSnapshotCoordinatorTests {
         load(nodeStyles, with: makeVariablesMatchedStyles())
         let update = coordinator.updateSelectedNodeStyles(nodeStyles)
 
-        #expect(update.applyMode == .diff(animated: true))
         let snapshot = try loadedSnapshot(from: update)
         #expect(snapshot.sectionIdentifiers.count == 2)
         #expect(containsVisibleProperty(named: "color", in: snapshot, coordinator: coordinator))
@@ -173,7 +169,6 @@ struct DOMElementStyleSnapshotCoordinatorTests {
         )
         let update = coordinator.updateSelectedNodeStyles(nodeStyles)
 
-        #expect(update.applyMode == .diff(animated: false))
         #expect(update.placeholderMode == .none)
         let snapshot = try loadedSnapshot(from: update)
         #expect(snapshot.sectionIdentifiers == initialSnapshot.sectionIdentifiers)
@@ -207,7 +202,6 @@ struct DOMElementStyleSnapshotCoordinatorTests {
         nodeStyles.markNeedsRefresh()
         let update = coordinator.updateSelectedNodeStyles(nodeStyles)
 
-        #expect(update.applyMode == .diff(animated: false))
         let snapshot = try loadedSnapshot(from: update)
         #expect(snapshot.sectionIdentifiers == initialSnapshot.sectionIdentifiers)
         #expect(snapshot.itemIdentifiers == initialSnapshot.itemIdentifiers)
@@ -273,7 +267,7 @@ struct DOMElementStyleSnapshotCoordinatorTests {
     }
 
     @Test
-    func coordinatorRevealsHiddenUnusedVariablesWithAnimatedSnapshot() throws {
+    func coordinatorRevealsHiddenUnusedVariables() throws {
         let coordinator = DOMElementStyleSnapshotCoordinator()
         let nodeStyles = makeStyles()
         load(nodeStyles, with: makeVariablesMatchedStyles())
@@ -288,7 +282,6 @@ struct DOMElementStyleSnapshotCoordinatorTests {
         )
         let revealedUpdate = try #require(coordinator.revealHiddenUnusedVariables(in: inheritedSection.id))
 
-        #expect(revealedUpdate.applyMode == .diff(animated: true))
         let revealedSnapshot = try loadedSnapshot(from: revealedUpdate)
         #expect(revealedSnapshot.itemIdentifiers.containsHiddenUnusedVariables(count: 1) == false)
         #expect(containsVisibleProperty(named: "--unused-a", in: revealedSnapshot, coordinator: coordinator))
@@ -317,7 +310,6 @@ struct DOMElementStyleSnapshotCoordinatorTests {
         let refreshedUpdate = coordinator.updateSelectedNodeStyles(nodeStyles)
         let refreshedSnapshot = try loadedSnapshot(from: refreshedUpdate)
 
-        #expect(refreshedUpdate.applyMode == .diff(animated: true))
         #expect(coordinator.section(for: oldInheritedSection.id) == nil)
         #expect(refreshedSnapshot.sectionIdentifiers == coordinator.visibleSectionIDs)
         #expect(refreshedSnapshot.itemIdentifiers.containsHiddenUnusedVariables(count: 1))

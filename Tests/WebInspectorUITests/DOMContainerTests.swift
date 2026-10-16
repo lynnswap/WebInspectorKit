@@ -170,7 +170,6 @@ struct DOMContainerTests {
         // existing cells (the legacy build re-rendered in place with no
         // snapshot apply at all).
         #expect(viewController.styleSnapshotApplyCountForTesting == applyCountBeforeUpdate + 1)
-        #expect(viewController.lastSnapshotApplyModeForTesting == .diff(animated: false))
     }
 
     @Test
@@ -238,7 +237,7 @@ struct DOMContainerTests {
     }
 
     @Test
-    func elementViewControllerRequestsAnimatedDifferencesForSameSelectionStructuralStyleChange() async throws {
+    func elementViewControllerRendersSameSelectionStructuralStyleChanges() async throws {
         let context = makeElementContext()
         _ = try selectElement(named: "body", in: context)
         applyBodyStyles(to: context)
@@ -265,11 +264,10 @@ struct DOMContainerTests {
         }
 
         #expect(didRenderUpdatedSections)
-        #expect(viewController.lastSnapshotApplyModeForTesting == .diff(animated: true))
     }
 
     @Test
-    func elementViewControllerDoesNotRequestAnimatedDifferencesWhenSwitchingToCachedSelectionStyles() async throws {
+    func elementViewControllerReloadsCachedSelectionStyles() async throws {
         let context = makeElementContext()
         let input = try selectElement(named: "input", in: context)
         applyBodyStyles(
@@ -374,7 +372,6 @@ struct DOMContainerTests {
 
         #expect(didRenderInputRows)
         #expect(viewController.collectionView.isHidden == false)
-        #expect(viewController.lastSnapshotApplyModeForTesting == .diff(animated: false))
     }
 
     @Test
@@ -533,7 +530,7 @@ struct DOMContainerTests {
     }
 
     @Test
-    func elementViewControllerCollapsesUnusedInheritedCSSVariablesAndAnimatesReveal() async throws {
+    func elementViewControllerCollapsesAndRevealsUnusedInheritedCSSVariables() async throws {
         let context = makeElementContext()
         _ = try selectElement(named: "body", in: context)
         applyInheritedVariableStyles(to: context)
@@ -560,7 +557,6 @@ struct DOMContainerTests {
         #expect(collapsedDeclarations.contains("--unused-b: blue;") == false)
         #expect(revealCell.isRevealButtonEnabledForTesting)
 
-        let applyModesBeforeReveal = viewController.styleSnapshotApplyModesForTesting
         revealCell.tapRevealForTesting()
         #expect(revealCell.isRevealButtonEnabledForTesting == false)
 
@@ -573,10 +569,6 @@ struct DOMContainerTests {
         }
 
         #expect(didRevealUnusedVariables)
-        let revealApplyModes = Array(
-            viewController.styleSnapshotApplyModesForTesting.dropFirst(applyModesBeforeReveal.count)
-        )
-        #expect(revealApplyModes == [.diff(animated: true)])
     }
 
     @Test

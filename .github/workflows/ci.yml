@@ -11,6 +11,11 @@ on:
       - reopened
       - ready_for_review
   workflow_dispatch:
+    inputs:
+      all_native_runtimes:
+        description: Run Native compatibility tests on every supported installed runtime.
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       revision:
@@ -42,7 +47,7 @@ jobs:
       - run: python3 -m unittest discover -s .github/scripts/tests -p 'test_*.py'
 
   native-tests:
-    name: Low-level compatibility on ${{ matrix.runner }}
+    name: Low-level compatibility on ${{ matrix.runner }} / ${{ matrix.platform }}
     strategy:
       fail-fast: false
       matrix:
@@ -50,24 +55,41 @@ jobs:
           - runner: macos-26
             xcode_major: '26'
             allow_prerelease: false
+            platform: iOS
+          - runner: macos-26
+            xcode_major: '26'
+            allow_prerelease: false
+            platform: macOS
           - runner: xcode-27
             xcode_major: '27'
             allow_prerelease: true
+            platform: iOS
+          - runner: xcode-27
+            xcode_major: '27'
+            allow_prerelease: true
+            platform: macOS
     uses: ./.github/workflows/workspace-tests.yml
     with:
       revision: ${{ inputs.revision || github.sha }}
       runner: ${{ matrix.runner }}
       xcode_major: ${{ matrix.xcode_major }}
       allow_prerelease: ${{ matrix.allow_prerelease }}
+      platform: ${{ matrix.platform }}
       suite: native
       all_native_runtimes: ${{ inputs.all_native_runtimes || false }}
 
   workspace-tests:
-    name: Workspace tests on latest OS
+    name: Workspace tests on latest OS / ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [iOS, macOS]
     uses: ./.github/workflows/workspace-tests.yml
     with:
       revision: ${{ inputs.revision || github.sha }}
       runner: xcode-27
       xcode_major: '27'
-      allow_prerelease: true
+      # The full suite uses the released SDK; Native jobs also exercise the beta SDK.
+      allow_prerelease: false
+      platform: ${{ matrix.platform }}
       suite: workspace
