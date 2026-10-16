@@ -11,6 +11,11 @@ on:
       - reopened
       - ready_for_review
   workflow_dispatch:
+    inputs:
+      all_native_runtimes:
+        description: Run Native compatibility tests on every supported installed runtime.
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       revision:

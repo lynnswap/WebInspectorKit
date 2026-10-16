@@ -34,16 +34,52 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Build and test ${{ inputs.suite }} suites
+  plan:
+    name: Select test runtimes
     runs-on: ${{ inputs.runner }}
-    # Native coverage runs runtimes sequentially, each with a ten-minute boot budget.
-    # Use the hosted-runner ceiling; individual boot/test stalls remain bounded.
-    timeout-minutes: ${{ inputs.suite == 'native' && 360 || 45 }}
+    timeout-minutes: 10
+    outputs:
+      cases: ${{ steps.cases.outputs.cases }}
     env:
       XCODE_MAJOR: ${{ inputs.xcode_major }}
       XCODE_ALLOW_PRERELEASE: ${{ inputs.allow_prerelease }}
       TEST_SUITE: ${{ inputs.suite }}
+      LATEST_IOS_MAJOR: ${{ inputs.latest_ios_major }}
+      ALL_NATIVE_RUNTIMES: ${{ inputs.all_native_runtimes }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Resolve Xcode
+        run: ruby .github/scripts/resolve-xcode.rb
+      - name: Select installed runtimes
+        id: cases
+        run: |
+          coverage_args=()
+          if [[ "$ALL_NATIVE_RUNTIMES" == "true" ]]; then
+            coverage_args+=(--all-native-runtimes)
+          fi
+          cases=$(python3 .github/scripts/runtime-tests.py "$RUNNER_TEMP" \
+            --suite "$TEST_SUITE" --latest-ios-major "$LATEST_IOS_MAJOR" \
+            --list-cases "${coverage_args[@]}")
+          echo "cases=$cases" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Build and test ${{ inputs.suite }} suites on ${{ matrix.case.platform }} ${{ matrix.case.version }}
+    needs: plan
+    runs-on: ${{ inputs.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        case: ${{ fromJSON(needs.plan.outputs.cases) }}
+    timeout-minutes: 10
+    env:
+      XCODE_MAJOR: ${{ inputs.xcode_major }}
+      XCODE_ALLOW_PRERELEASE: ${{ inputs.allow_prerelease }}
+      TEST_SUITE: ${{ inputs.suite }}
+      TEST_PLATFORM: ${{ matrix.case.platform }}
+      TEST_RUNTIME: ${{ matrix.case.runtime }}
       LATEST_IOS_MAJOR: ${{ inputs.latest_ios_major }}
       ALL_NATIVE_RUNTIMES: ${{ inputs.all_native_runtimes }}
       SPM_CACHE_DIR: ${{ github.workspace }}/.ci/spm-cache
@@ -52,56 +88,64 @@ jobs:
         with:
           ref: ${{ inputs.revision }}
           persist-credentials: false
+      - name: Check out CI automation
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Release targets can predate the runner arguments used by this workflow.
+          ref: ${{ github.workflow_sha }}
+          path: .ci/automation
+          persist-credentials: false
       - name: Resolve Xcode
         id: toolchain
-        run: ruby .github/scripts/resolve-xcode.rb
+        run: ruby .ci/automation/.github/scripts/resolve-xcode.rb
       - name: Restore Swift package cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ${{ env.SPM_CACHE_DIR }}
             ~/Library/Caches/org.swift.swiftpm
-          key: spm-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.cache-id }}-${{ inputs.suite }}-${{ hashFiles('**/Package.resolved') }}
-      - name: Build each platform once
+          key: spm-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.cache-id }}-${{ inputs.suite }}-${{ matrix.case.platform }}-${{ hashFiles('Package.resolved', 'ContractTests/Package.resolved', 'Monocly/**/Package.resolved', 'WebInspectorKit.xcworkspace/**/Package.resolved') }}
+      - name: Build for testing
         run: |
           set -e -o pipefail
-          for platform in iOS macOS; do
-            if [[ "$platform" == iOS ]]; then
-              destination='generic/platform=iOS Simulator'
-              scheme=WebInspectorKitTests
-            else
-              destination='platform=macOS,arch=arm64'
-              scheme=WebInspectorKit
-            fi
-            workspace=WebInspectorKit.xcworkspace
-            if [[ "$TEST_SUITE" == native ]]; then
-              scheme=WebInspectorNativeBridgeTests
-            fi
-            derived_data="$RUNNER_TEMP/build-$platform"
-            xcodebuild build-for-testing \
-              -workspace "$workspace" -scheme "$scheme" \
-              -destination "$destination" \
-              -clonedSourcePackagesDirPath "$SPM_CACHE_DIR" \
-              -disableAutomaticPackageResolution \
-              -derivedDataPath "$derived_data" \
-              -enableCodeCoverage NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
-              | tee "$RUNNER_TEMP/build-$platform.log"
-            python3 .github/scripts/prepare-xctestrun.py "$derived_data/Build/Products"
-          done
-      - name: Test selected runtimes sequentially
+          if [[ "$TEST_PLATFORM" == iOS ]]; then
+            destination='generic/platform=iOS Simulator'
+            scheme=WebInspectorKitTests
+          else
+            destination='platform=macOS,arch=arm64'
+            scheme=WebInspectorKit
+          fi
+          if [[ "$TEST_SUITE" == native ]]; then
+            scheme=WebInspectorNativeBridgeTests
+          fi
+          derived_data="$RUNNER_TEMP/build-$TEST_PLATFORM"
+          xcodebuild build-for-testing \
+            -workspace WebInspectorKit.xcworkspace -scheme "$scheme" \
+            -destination "$destination" \
+            -clonedSourcePackagesDirPath "$SPM_CACHE_DIR" \
+            -disableAutomaticPackageResolution \
+            -derivedDataPath "$derived_data" \
+            -enableCodeCoverage NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+            | tee "$RUNNER_TEMP/build-$TEST_PLATFORM.log"
+          python3 .ci/automation/.github/scripts/prepare-xctestrun.py "$derived_data/Build/Products"
+      - name: Test selected runtime
         run: |
           coverage_args=()
           if [[ "$ALL_NATIVE_RUNTIMES" == "true" ]]; then
             coverage_args+=(--all-native-runtimes)
           fi
-          python3 .github/scripts/runtime-tests.py "$RUNNER_TEMP" \
+          if [[ "$TEST_PLATFORM" == "iOS" ]]; then
+            coverage_args+=(--runtime "$TEST_RUNTIME")
+          fi
+          python3 .ci/automation/.github/scripts/runtime-tests.py "$RUNNER_TEMP" \
             --suite "$TEST_SUITE" --latest-ios-major "$LATEST_IOS_MAJOR" \
+            --platform "$TEST_PLATFORM" --reuse-simulators \
             "${coverage_args[@]}"
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: diagnostics-${{ inputs.suite }}-${{ inputs.runner }}
+          name: diagnostics-${{ inputs.suite }}-${{ inputs.runner }}-${{ matrix.case.platform }}-${{ matrix.case.version }}
           path: |
             ${{ runner.temp }}/build-*.log
             ${{ runner.temp }}/runtime-tests
