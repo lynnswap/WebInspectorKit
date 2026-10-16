@@ -155,21 +155,17 @@ class RuntimeSelectionTests(unittest.TestCase):
         self.assertEqual(runner.test_cases([], "27.1", "workspace", 27, platform="macOS"),
                          [{"runtime": "", "version": "27.1", "platform": "macOS", "suite": "workspace"}])
 
-    def test_exact_runtime_filter_preserves_the_native_coverage_policy(self):
-        installed = [runtime(version) for version in ("18.4", "18.6", "27.0")]
-        for suite, full_coverage, identifier in (
-            ("native", False, installed[0]["identifier"]),
-            ("workspace", True, installed[1]["identifier"]),
-            ("native", True, runtime("27.1")["identifier"]),
+    def test_exact_runtime_keeps_the_planned_destination_when_worker_has_newer_releases(self):
+        for suite, planned_versions, added_version in (
+            ("workspace", ["27.0"], "27.1"),
+            ("native", ["18.4", "27.0"], "18.6"),
         ):
-            with self.subTest(suite=suite, all_native_runtimes=full_coverage, identifier=identifier):
-                with self.assertRaisesRegex(ValueError, "No selected iOS runtime matches"):
-                    runner.test_cases(installed, "27.1", suite, 27, platform="iOS",
-                                      all_native_runtimes=full_coverage, runtime_identifier=identifier)
-        selected = runner.test_cases(installed, "27.1", "native", 27, platform="iOS",
-                                     all_native_runtimes=True, runtime_identifier=installed[0]["identifier"])
-        self.assertEqual(selected, [{"runtime": installed[0]["identifier"], "version": "18.4",
-                                     "platform": "iOS", "suite": "native"}])
+            with self.subTest(suite=suite):
+                installed = [runtime(version) for version in planned_versions]
+                planned = runner.test_cases(installed, "27.0", suite, 27, platform="iOS")[0]
+                selected = runner.test_cases([*installed, runtime(added_version)], "27.0", suite, 27,
+                                             platform="iOS", runtime_identifier=planned["runtime"])
+                self.assertEqual(selected, [planned])
 
 
 class RuntimeExecutionTests(unittest.TestCase):

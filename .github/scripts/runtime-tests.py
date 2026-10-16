@@ -48,9 +48,9 @@ def test_cases(runtimes, macos_version, suite, latest_ios_major, *, all_native_r
                platform=None, runtime_identifier=None):
     if platform == "macOS":
         runtimes = []
-    elif suite == "workspace":
+    elif runtime_identifier is None and suite == "workspace":
         runtimes = [max(runtimes, key=lambda runtime: version_components(runtime["version"]))]
-    elif not all_native_runtimes:
+    elif runtime_identifier is None and not all_native_runtimes:
         runtimes = native_test_runtimes(runtimes, latest_ios_major)
     cases = [
         {"runtime": runtime["identifier"], "version": runtime["version"], "platform": "iOS",
