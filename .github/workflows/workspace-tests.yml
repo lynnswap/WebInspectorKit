@@ -105,30 +105,7 @@ jobs:
             ${{ env.SPM_CACHE_DIR }}
             ~/Library/Caches/org.swift.swiftpm
           key: spm-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.cache-id }}-${{ inputs.suite }}-${{ matrix.case.platform }}-${{ hashFiles('Package.resolved', 'ContractTests/Package.resolved', 'Monocly/**/Package.resolved', 'WebInspectorKit.xcworkspace/**/Package.resolved') }}
-      - name: Build for testing
-        run: |
-          set -e -o pipefail
-          if [[ "$TEST_PLATFORM" == iOS ]]; then
-            destination='generic/platform=iOS Simulator'
-            scheme=WebInspectorKitTests
-          else
-            destination='platform=macOS,arch=arm64'
-            scheme=WebInspectorKit
-          fi
-          if [[ "$TEST_SUITE" == native ]]; then
-            scheme=WebInspectorNativeBridgeTests
-          fi
-          derived_data="$RUNNER_TEMP/build-$TEST_PLATFORM"
-          xcodebuild build-for-testing \
-            -workspace WebInspectorKit.xcworkspace -scheme "$scheme" \
-            -destination "$destination" \
-            -clonedSourcePackagesDirPath "$SPM_CACHE_DIR" \
-            -disableAutomaticPackageResolution \
-            -derivedDataPath "$derived_data" \
-            -enableCodeCoverage NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
-            | tee "$RUNNER_TEMP/build-$TEST_PLATFORM.log"
-          python3 .ci/automation/.github/scripts/prepare-xctestrun.py "$derived_data/Build/Products"
-      - name: Test selected runtime
+      - name: Build and test selected runtime
         run: |
           coverage_args=()
           if [[ "$ALL_NATIVE_RUNTIMES" == "true" ]]; then
@@ -139,7 +116,7 @@ jobs:
           fi
           python3 .ci/automation/.github/scripts/runtime-tests.py "$RUNNER_TEMP" \
             --suite "$TEST_SUITE" --latest-ios-major "$LATEST_IOS_MAJOR" \
-            --platform "$TEST_PLATFORM" --reuse-simulators \
+            --platform "$TEST_PLATFORM" --reuse-simulators --build \
             "${coverage_args[@]}"
       - name: Upload diagnostics
         if: always()
@@ -148,5 +125,7 @@ jobs:
           name: diagnostics-${{ inputs.suite }}-${{ inputs.runner }}-${{ matrix.case.platform }}-${{ matrix.case.version }}
           path: |
             ${{ runner.temp }}/build-*.log
+            ${{ runner.temp }}/prepare-*.log
+            ${{ runner.temp }}/build-*/Build/Products/*.xctestrun
             ${{ runner.temp }}/runtime-tests
           if-no-files-found: ignore
