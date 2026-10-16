@@ -413,7 +413,7 @@ class RuntimeExecutionTests(unittest.TestCase):
     def test_boot_timeout_cleans_device_and_does_not_block_later_tests(self):
         def fail(command, **options):
             if command == ["xcrun", "simctl", "bootstatus", "first-device", "-b"]:
-                self.assertLessEqual(options["timeout"], 600)
+                self.assertLessEqual(options["timeout"], 300)
                 raise subprocess.TimeoutExpired(command, options["timeout"])
         self.assertEqual(self.execute("native", fail), 1)
         commands = [command for command, _ in self.commands]

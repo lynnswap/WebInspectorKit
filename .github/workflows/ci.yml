@@ -89,6 +89,7 @@ jobs:
       revision: ${{ inputs.revision || github.sha }}
       runner: xcode-27
       xcode_major: '27'
-      allow_prerelease: true
+      # The full suite uses the released SDK; Native jobs also exercise the beta SDK.
+      allow_prerelease: false
       platform: ${{ matrix.platform }}
       suite: workspace
