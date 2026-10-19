@@ -44,6 +44,8 @@ jobs:
       TEST_SUITE: ${{ inputs.suite }}
       LATEST_IOS_MAJOR: ${{ inputs.latest_ios_major }}
       ALL_NATIVE_RUNTIMES: ${{ inputs.all_native_runtimes }}
+      SPM_CACHE_DIR: ${{ github.workspace }}/.ci/spm-cache
+      COMPILATION_CACHE_DIR: ${{ github.workspace }}/.ci/compilation-cache
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -59,6 +61,27 @@ jobs:
       - name: Resolve Xcode
         id: toolchain
         run: ruby .ci/automation/.github/scripts/resolve-xcode.rb
+      - name: Resolve package cache key
+        id: package-cache-key
+        run: python3 .ci/automation/.github/scripts/package-cache-key.py
+      - name: Restore Swift package cache
+        id: spm-cache
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ env.SPM_CACHE_DIR }}
+            ~/Library/Caches/org.swift.swiftpm
+          key: spm-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.cache-id }}-${{ inputs.suite }}-${{ steps.package-cache-key.outputs.lockfiles }}
+      - name: Restore compiler cache
+        id: compiler-cache
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.COMPILATION_CACHE_DIR }}
+          key: compile-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.cache-id }}-${{ inputs.suite }}-${{ inputs.revision }}
+          restore-keys: |
+            compile-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.cache-id }}-${{ inputs.suite }}-
       - name: Start the first iOS simulator
         id: prepare-simulator
         continue-on-error: true
@@ -83,10 +106,12 @@ jobs:
           xcodebuild build-for-testing \
             -workspace WebInspectorKit.xcworkspace -scheme "$scheme" \
             -destination 'generic/platform=iOS Simulator' \
-            -clonedSourcePackagesDirPath "$RUNNER_TEMP/SourcePackages" \
+            -clonedSourcePackagesDirPath "$SPM_CACHE_DIR" \
             -disableAutomaticPackageResolution \
             -derivedDataPath "$derived_data" \
             -enableCodeCoverage NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+            COMPILATION_CACHE_ENABLE_CACHING=YES \
+            COMPILATION_CACHE_CAS_PATH="$COMPILATION_CACHE_DIR" \
             | tee "$RUNNER_TEMP/build-iOS.log"
           python3 .ci/automation/.github/scripts/prepare-xctestrun.py "$derived_data/Build/Products" \
             | tee "$RUNNER_TEMP/prepare-iOS.log"
@@ -104,13 +129,31 @@ jobs:
           xcodebuild build-for-testing \
             -workspace WebInspectorKit.xcworkspace -scheme "$scheme" \
             -destination 'platform=macOS,arch=arm64' \
-            -clonedSourcePackagesDirPath "$RUNNER_TEMP/SourcePackages" \
+            -clonedSourcePackagesDirPath "$SPM_CACHE_DIR" \
             -disableAutomaticPackageResolution \
             -derivedDataPath "$derived_data" \
             -enableCodeCoverage NO ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
+            COMPILATION_CACHE_ENABLE_CACHING=YES \
+            COMPILATION_CACHE_CAS_PATH="$COMPILATION_CACHE_DIR" \
             | tee "$RUNNER_TEMP/build-macOS.log"
           python3 .ci/automation/.github/scripts/prepare-xctestrun.py "$derived_data/Build/Products" \
             | tee "$RUNNER_TEMP/prepare-macOS.log"
+      - name: Save Swift package cache
+        if: ${{ !cancelled() && steps.spm-cache.outputs.cache-hit != 'true' && (steps.build-ios.outcome == 'success' || steps.build-macos.outcome == 'success') }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ env.SPM_CACHE_DIR }}
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ steps.spm-cache.outputs.cache-primary-key }}
+      - name: Save compiler cache
+        if: ${{ !cancelled() && steps.compiler-cache.outputs.cache-hit != 'true' && (steps.build-ios.outcome == 'success' || steps.build-macos.outcome == 'success') }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.COMPILATION_CACHE_DIR }}
+          key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
       - name: Test iOS runtimes
         id: test-ios
         if: ${{ !cancelled() && steps.build-ios.outcome == 'success' }}
