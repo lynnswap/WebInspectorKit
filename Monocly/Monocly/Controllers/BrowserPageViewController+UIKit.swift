@@ -85,6 +85,9 @@ final class BrowserPageViewController: UIViewController {
     private var isInspectorPresenting = false
     private var currentChromePlacement: ChromePlacement?
     var onSelectedWebViewInstalled: ((WKWebView) -> Void)?
+    #if DEBUG
+    var onSelectedTabBindingCompletedForTesting: (() -> Void)?
+    #endif
 
     init(
         browserWindow: BrowserWindow,
@@ -160,9 +163,10 @@ final class BrowserPageViewController: UIViewController {
         }
     }
 
-    private func scheduleSelectedTabBinding(_ tab: BrowserTab?) {
+    @discardableResult
+    private func scheduleSelectedTabBinding(_ tab: BrowserTab?) -> Task<Void, Never> {
         let tabID = tab?.id
-        Task { @MainActor [weak self, tab] in
+        return Task { @MainActor [weak self, tab] in
             guard let self else {
                 return
             }
@@ -518,6 +522,9 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private func bindSelectedTab(_ tab: BrowserTab?) {
+        #if DEBUG
+        defer { onSelectedTabBindingCompletedForTesting?() }
+        #endif
         if hasBoundSelectedTab, observedTab === tab {
             return
         }
@@ -708,6 +715,18 @@ final class BrowserPageViewController: UIViewController {
 
 #if DEBUG
 extension BrowserPageViewController {
+    func rebindSelectedTabForTesting() async {
+        await scheduleSelectedTabBinding(browserWindow.selectedTab).value
+    }
+
+    var selectedTabObservationDeliveryForTesting: PortableObservationTracking.Token? {
+        selectedTabObservation
+    }
+
+    var inspectorPresentationObservationDeliveryForTesting: PortableObservationTracking.Token? {
+        inspectorPresentationObservation
+    }
+
     var selectedTabObservationIsActiveForTesting: Bool {
         selectedTabObservation != nil
     }

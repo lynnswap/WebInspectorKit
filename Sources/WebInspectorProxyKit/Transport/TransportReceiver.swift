@@ -27,6 +27,10 @@ package final class TransportReceiver: Sendable {
         var drainWaiters: [DrainWaiter] = []
         var isClosed = false
         var closeWaiters: [CheckedContinuation<Void, Never>] = []
+        #if DEBUG
+        var nextCloseWaiterRegistrationID: UInt64 = 0
+        var closeWaiterRegistrationWaiters: [UInt64: ReplyPromise<Void>] = [:]
+        #endif
     }
 
     private enum DrainStep: Sendable {
@@ -131,25 +135,70 @@ package final class TransportReceiver: Sendable {
             let readyWaiters = state.withLock { state in
                 let drainWaiters = Self.seal(&state)
                 guard state.isDraining else {
-                    return (
-                        close: [continuation],
-                        drain: drainWaiters
-                    )
+                    #if DEBUG
+                    Self.resolveCloseWaiterRegistrations(&state, result: .failure(CancellationError()))
+                    #endif
+                    return (close: [continuation], drain: drainWaiters)
                 }
                 state.closeWaiters.append(continuation)
-                return (
-                    close: [] as [CheckedContinuation<Void, Never>],
-                    drain: drainWaiters
-                )
+                #if DEBUG
+                Self.resolveCloseWaiterRegistrations(&state, result: .success(()))
+                #endif
+                return (close: [] as [CheckedContinuation<Void, Never>], drain: drainWaiters)
             }
             Self.resume(readyWaiters.close)
             Self.resumeDrainWaiters(readyWaiters.drain)
         }
     }
 
-    package func closeWaiterCountForTesting() -> Int {
-        state.withLock { $0.closeWaiters.count }
+    #if DEBUG
+    private enum RegistrationWaitError: Error {
+        case timedOut
     }
+
+    package func waitForCloseWaiterForTesting() async throws {
+        let promise = ReplyPromise<Void>()
+        let waiterID = state.withLock { state -> UInt64? in
+            if state.closeWaiters.isEmpty == false {
+                promise.fulfill(.success(()))
+                return nil
+            }
+            if state.isClosed {
+                promise.fulfill(.failure(CancellationError()))
+                return nil
+            }
+            let id = state.nextCloseWaiterRegistrationID
+            state.nextCloseWaiterRegistrationID &+= 1
+            state.closeWaiterRegistrationWaiters[id] = promise
+            return id
+        }
+        defer {
+            if let waiterID {
+                state.withLock { $0.closeWaiterRegistrationWaiters[waiterID] = nil }
+            }
+        }
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { try await promise.value() }
+            group.addTask {
+                try await Task.sleep(for: .seconds(1))
+                throw RegistrationWaitError.timedOut
+            }
+            defer { group.cancelAll() }
+            _ = try await group.next()
+        }
+    }
+
+    private static func resolveCloseWaiterRegistrations(
+        _ state: inout State,
+        result: Result<Void, any Error>
+    ) {
+        let waiters = Array(state.closeWaiterRegistrationWaiters.values)
+        state.closeWaiterRegistrationWaiters.removeAll()
+        for waiter in waiters {
+            waiter.fulfill(result)
+        }
+    }
+    #endif
 
     private func drain(generation: UInt64) async {
         while true {

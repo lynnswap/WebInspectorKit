@@ -4,6 +4,7 @@ import RuntimeConsumerNative
 import Testing
 import WebKit
 import WebKitRuntime
+import WebKitScreenTimeWorkaround
 
 struct WebKitRuntimeContractTests {
     @Test
@@ -28,6 +29,9 @@ struct WebKitRuntimeContractTests {
 
     @Test @MainActor
     func swiftAndObjectiveCConsumersSharePageAccess() throws {
+        if #available(iOS 26.1, macOS 26.1, *) {
+            try ScreenTimeWorkaround.install()
+        }
         let view = WKWebView(frame: .zero)
         let swiftSize = try unsafe WebKitRuntime.withUnsafePage(of: view) { _, size in size }
         #expect(swiftSize > 0)

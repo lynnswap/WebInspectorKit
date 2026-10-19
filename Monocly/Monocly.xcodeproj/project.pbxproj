@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		ABA354002EDFF28300489A00 /* WebInspectorKit in Frameworks */ = {isa = PBXBuildFile; productRef = ABA353FF2EDFF28300489A00 /* WebInspectorKit */; };
 		F0A100012F00000100000001 /* WKViewportCoordinator in Frameworks */ = {isa = PBXBuildFile; platformFilter = ios; productRef = F0A100022F00000100000001 /* WKViewportCoordinator */; };
+		F0A100012F00000200000001 /* WebKitScreenTimeWorkaround in Frameworks */ = {isa = PBXBuildFile; productRef = F0A100022F00000200000001 /* WebKitScreenTimeWorkaround */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -59,6 +60,7 @@
 			files = (
 				ABA354002EDFF28300489A00 /* WebInspectorKit in Frameworks */,
 				F0A100012F00000100000001 /* WKViewportCoordinator in Frameworks */,
+				F0A100012F00000200000001 /* WebKitScreenTimeWorkaround in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +114,7 @@
 			packageProductDependencies = (
 				ABA353FF2EDFF28300489A00 /* WebInspectorKit */,
 				F0A100022F00000100000001 /* WKViewportCoordinator */,
+				F0A100022F00000200000001 /* WebKitScreenTimeWorkaround */,
 			);
 			productName = Monocly;
 			productReference = ABA353C82EDFF1EC00489A00 /* Monocly.app */;
@@ -171,6 +174,7 @@
 			packageReferences = (
 				ABA353FE2EDFF28300489A00 /* XCLocalSwiftPackageReference ".." */,
 				F0A100032F00000100000001 /* XCRemoteSwiftPackageReference "WKViewportCoordinator" */,
+				F0A100032F00000200000001 /* XCRemoteSwiftPackageReference "WebKitScreenTimeWorkaround" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = ABA353C92EDFF1EC00489A00 /* Products */;
@@ -574,6 +578,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		F0A100032F00000200000001 /* XCRemoteSwiftPackageReference "WebKitScreenTimeWorkaround" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/lynnswap/WebKitScreenTimeWorkaround.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.3.0;
+			};
+		};
 		F0A100032F00000100000001 /* XCRemoteSwiftPackageReference "WKViewportCoordinator" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/lynnswap/WKViewportCoordinator.git";
@@ -585,6 +597,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		F0A100022F00000200000001 /* WebKitScreenTimeWorkaround */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F0A100032F00000200000001 /* XCRemoteSwiftPackageReference "WebKitScreenTimeWorkaround" */;
+			productName = WebKitScreenTimeWorkaround;
+		};
 		ABA353FF2EDFF28300489A00 /* WebInspectorKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = ABA353FE2EDFF28300489A00 /* XCLocalSwiftPackageReference ".." */;

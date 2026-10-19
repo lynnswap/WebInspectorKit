@@ -1,5 +1,5 @@
 {
-  "originHash" : "522b3ce8ed488404c7c4e6447d9a1c842e515296e68ac6f51b54f9e6a0157738",
+  "originHash" : "f423be51856b6ae12eabbc5c8c46dd71b512192bcb0690811f56f67166908f50",
   "pins" : [
     {
       "identity" : "abibridge",
@@ -233,6 +233,15 @@
       "state" : {
         "revision" : "276f452011ff392bb4711a3eee4e91e9c7c617b7",
         "version" : "0.5.6"
+      }
+    },
+    {
+      "identity" : "webkitscreentimeworkaround",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/lynnswap/WebKitScreenTimeWorkaround.git",
+      "state" : {
+        "revision" : "c7abc1846b6bba2635f043870d6dac3344990086",
+        "version" : "0.3.0"
       }
     },
     {

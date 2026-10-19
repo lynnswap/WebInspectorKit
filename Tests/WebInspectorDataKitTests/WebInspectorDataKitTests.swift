@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import ObservationBridge
 import Testing
 @testable import WebInspectorDataKit
 import WebInspectorProxyKit
@@ -23,7 +24,7 @@ func domEventsPopulateRootAndPreserveChildIdentity() async throws {
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.rootNode != nil }
+    try await waitUntil(in: context) { context.rootNode != nil }
 
     await runtime.backend.emit(
         .setChildNodes(parent: documentID, nodes: [
@@ -78,7 +79,7 @@ func domEventsPopulateRootAndPreserveChildIdentity() async throws {
         .childNodeRemoved(parent: documentID, node: childID),
         target: target
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         guard let root = context.rootNode, case let .loaded(children) = root.children else {
             return false
         }
@@ -273,7 +274,7 @@ func domCommandsDispatchThroughDataKitContext() async throws {
 
     await enqueueCSSStyleReplies(on: runtime.backend)
     await runtime.backend.emit(.inspect(childID), target: target)
-    try await waitUntil { context.selectedNode === child }
+    try await waitUntil(in: context) { context.selectedNode === child }
     try await waitUntil { child.elementStyles?.phase == .loaded }
     #expect(context.isElementPickerEnabled == false)
 
@@ -354,7 +355,7 @@ func elementPickerInspectBeforeEnableContinuationCannotReactivatePicker() async 
     )
 
     await runtime.backend.emit(.inspect(documentID), target: target)
-    try await waitUntil { context.selectedNode?.id == DOMNode.ID(documentID) }
+    try await waitUntil(in: context) { context.selectedNode?.id == DOMNode.ID(documentID) }
     #expect(context.isElementPickerEnabled == false)
 
     await enableGate.open()
@@ -443,7 +444,7 @@ func rapidElementPickerTogglesFlipPendingIntent() async throws {
     let disableTask = Task { @MainActor in
         try await context.toggleElementPickerEnabled()
     }
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.elementPickerDesiredStateForTesting?.id != firstDesiredStateID
             && context.elementPickerDesiredStateForTesting?.isEnabled == false
     }
@@ -484,7 +485,7 @@ func rapidElementPickerEnableDisableEnableAppliesOnlyLatestIntent() async throws
     let disableTask = Task { @MainActor in
         try await context.toggleElementPickerEnabled()
     }
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.elementPickerDesiredStateForTesting?.id != firstDesiredStateID
             && context.elementPickerDesiredStateForTesting?.isEnabled == false
     }
@@ -493,7 +494,7 @@ func rapidElementPickerEnableDisableEnableAppliesOnlyLatestIntent() async throws
     let latestEnableTask = Task { @MainActor in
         try await context.toggleElementPickerEnabled()
     }
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.elementPickerDesiredStateForTesting?.id != disableDesiredStateID
             && context.elementPickerDesiredStateForTesting?.isEnabled == true
     }
@@ -536,7 +537,7 @@ func cancellingLatestPickerIntentRestoresEarlierPendingIntent() async throws {
     let disableTask = Task { @MainActor in
         try await context.toggleElementPickerEnabled()
     }
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.elementPickerDesiredStateForTesting?.id != firstDesiredStateID
             && context.elementPickerDesiredStateForTesting?.isEnabled == false
     }
@@ -545,7 +546,7 @@ func cancellingLatestPickerIntentRestoresEarlierPendingIntent() async throws {
     let cancelledEnableTask = Task { @MainActor in
         try await context.toggleElementPickerEnabled()
     }
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.elementPickerDesiredStateForTesting?.id != disableDesiredStateID
             && context.elementPickerDesiredStateForTesting?.isEnabled == true
     }
@@ -590,7 +591,7 @@ func cancellingSupersededPickerCallerDoesNotCancelLatestSameIntent() async throw
     let latestEnableTask = Task { @MainActor in
         try await context.setElementPickerEnabled(true)
     }
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.elementPickerDesiredStateForTesting?.id != firstDesiredStateID
             && context.elementPickerDesiredStateForTesting?.isEnabled == true
     }
@@ -643,7 +644,7 @@ func coalescedElementPickerCallersShareFailureWithoutRetry() async throws {
     let latestEnableTask = Task { @MainActor in
         try await context.setElementPickerEnabled(true)
     }
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.elementPickerDesiredStateForTesting?.id != firstDesiredStateID
             && context.elementPickerDesiredStateForTesting?.isEnabled == true
     }
@@ -852,7 +853,7 @@ func elementPickerEnableReplyFromPreviousDocumentCannotApply() async throws {
         )),
         target: target
     )
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(newDocumentID) }
+    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(newDocumentID) }
 
     await enableGate.open()
     await #expect(
@@ -923,7 +924,7 @@ func failedStalePickerCleanupDoesNotReactivateReplacementDocument() async throws
         )),
         target: target
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.rootNode?.id == DOMNode.ID(replacementDocumentID)
     }
 
@@ -960,7 +961,7 @@ func domMutationsAndUndoRedoUseOwningFrameTarget() async throws {
         ]),
         target: target
     )
-    try await waitUntil { context.node(for: DOMNode.ID(scopedNodeID)) != nil }
+    try await waitUntil(in: context) { context.node(for: DOMNode.ID(scopedNodeID)) != nil }
 
     await runtime.backend.enqueue((), for: "DOM", method: "setAttributeValue")
     await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
@@ -1014,7 +1015,7 @@ func domDeleteRejectsCrossTargetSelectionBeforeRemovingNodes() async throws {
         ]),
         target: target
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.node(for: DOMNode.ID(pageNodeID)) != nil
             && context.node(for: DOMNode.ID(scopedFrameNodeID)) != nil
     }
@@ -1054,7 +1055,7 @@ func domInspectSelectsKnownNodeAndLoadsStyles() async throws {
     await enqueueCSSStyleReplies(on: runtime.backend)
     await runtime.backend.emit(.inspect(elementID), target: target)
 
-    try await waitUntil { context.selectedNode === element }
+    try await waitUntil(in: context) { context.selectedNode === element }
     let styles = try #require(element.elementStyles)
     try await waitUntil { styles.phase == .loaded }
     #expect(styles.sections.map(\.title) == [".card"])
@@ -1079,7 +1080,7 @@ func domInspectWaitsForRequestNodePathBeforeSelectingUnresolvedNode() async thro
         ]),
         target: target
     )
-    try await waitUntil { context.node(for: DOMNode.ID(staleID)) != nil }
+    try await waitUntil(in: context) { context.node(for: DOMNode.ID(staleID)) != nil }
 
     await enqueueCSSStyleReplies(on: runtime.backend)
     await runtime.backend.emit(.inspect(elementID), target: target)
@@ -1092,7 +1093,7 @@ func domInspectWaitsForRequestNodePathBeforeSelectingUnresolvedNode() async thro
         target: target
     )
 
-    try await waitUntil { context.selectedNode?.id == DOMNode.ID(elementID) }
+    try await waitUntil(in: context) { context.selectedNode?.id == DOMNode.ID(elementID) }
     #expect(context.state == .attached)
     #expect(await runtime.backend.recordedCommands().contains(
         RecordedCommand(domain: "DOM", method: "requestChildNodes")
@@ -1121,16 +1122,13 @@ func domInspectBeforeDocumentArrivesWaitsForRequestNodePathAfterRootApplies() as
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil {
-        await runtime.backend.recordedCommands()
-            .contains(RecordedCommand(domain: "DOM", method: "getDocument"))
-    }
+    _ = try await runtime.backend.waitForRecordedCommandsForTesting(domain: "DOM", method: "getDocument", count: 1)
 
     await runtime.backend.emit(.inspect(elementID), target: target)
     await enqueueCSSStyleReplies(on: runtime.backend)
     await gate.open()
 
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(documentID) }
+    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(documentID) }
     #expect(context.selectedNode == nil)
 
     await runtime.backend.emit(
@@ -1140,7 +1138,7 @@ func domInspectBeforeDocumentArrivesWaitsForRequestNodePathAfterRootApplies() as
         target: target
     )
 
-    try await waitUntil { context.selectedNode?.id == DOMNode.ID(elementID) }
+    try await waitUntil(in: context) { context.selectedNode?.id == DOMNode.ID(elementID) }
     let selected = try #require(context.selectedNode)
     let styles = try #require(selected.elementStyles)
     try await waitUntil { styles.phase == .loaded }
@@ -1203,7 +1201,7 @@ func domBootstrapAppliesMutationPrefixAfterDocumentSnapshot() async throws {
     )
     await gate.open()
 
-    try await waitUntil { context.state == .attached }
+    try await waitUntil(in: context) { context.state == .attached }
     let body = try #require(context.node(for: DOMNode.ID(bodyID)))
     #expect(body.attributes["data-before-reply"] == "preserved")
 }
@@ -1240,7 +1238,7 @@ func documentUpdatedDuringAttachRestartsDOMBootstrap() async throws {
     await runtime.backend.emit(.documentUpdated, target: target)
     await gate.open()
 
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.state == .attached
             && context.rootNode?.id == DOMNode.ID(currentDocumentID)
     }
@@ -1317,7 +1315,7 @@ func consecutiveDocumentUpdatesReloadLatestDocumentWithinSingleLoad() async thro
         messageID: try transportMessageID(currentReload.message),
         result: transportDocumentResult(nodeID: "current-root")
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.rootNode?.id == DOMNode.ID(DOM.Node.ID("current-root"))
     }
 
@@ -1495,7 +1493,7 @@ func currentPageCommitBeforePageEnableAcquiresCommittedPageLease() async throws 
     )
     await pageEnableGate.open()
 
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.state == .attached
             && context.rootNode?.id == DOMNode.ID(DOM.Node.ID("committed-root"))
     }
@@ -1534,7 +1532,7 @@ func unresolvedInspectorInspectDoesNotBlockOrderedModelEvents() async throws {
         )),
         target: target
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.executionContexts.map(\.id) == [RuntimeContext.ID(executionContextID)]
     }
     await gate.open()
@@ -1578,7 +1576,7 @@ func supersededOrderedPumpCannotAdvanceWatermarkAfterReentrantApply() async thro
             }
         )
     }
-    try await waitUntil { suspensionProbe.started() }
+    try await suspensionProbe.waitUntilStarted()
 
     await enqueueDomainDisableReplies(on: runtime.backend)
     await context.stop()
@@ -1605,16 +1603,14 @@ func supersededOrderedFeedSubscriptionReleasesItsProducer() async throws {
             }
         )
     }
-    try await waitUntil { suspensionProbe.started() }
+    try await suspensionProbe.waitUntilStarted()
 
     await enqueueDomainDisableReplies(on: runtime.backend)
     await context.stop()
     await gate.open()
     await subscribeTask.value
 
-    try await waitUntil {
-        await runtime.backend.activeOrderedEventSubscriberCount(for: target) == 0
-    }
+    try await runtime.backend.waitForNoOrderedEventSubscribers(for: target)
     #expect(context.state == .detached)
 }
 
@@ -1644,7 +1640,7 @@ func currentPageCommitOnSameProtocolAgentRetainsRequiredDomainLeases() async thr
         target: target
     )
 
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.rootNode?.id == DOMNode.ID(DOM.Node.ID("same-agent-root"))
     }
     await emitOriginatedNetworkRequest(
@@ -1690,7 +1686,7 @@ func currentPageCommitInitializesNewAgentWithoutReenablingPage() async throws {
         )),
         target: target
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.rootNode?.id == DOMNode.ID(DOM.Node.ID("new-agent-root"))
     }
 
@@ -1779,7 +1775,7 @@ func documentUpdatedDuringCurrentPageRetargetUsesTheRetargetDocumentLoad() async
     )
     await getDocumentGate.open()
 
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.rootNode?.id == DOMNode.ID(currentDocumentID)
             && context.rootNode?.attributes["data-buffered"] == "preserved"
     }
@@ -1826,7 +1822,7 @@ func committedTargetRequiredNetworkEnableFailureFailsContext() async throws {
         target: target
     )
 
-    try await waitUntil {
+    try await waitUntil(in: context) {
         if case .failed = context.state {
             return true
         }
@@ -1876,7 +1872,7 @@ func frameNavigationAndRuntimeContextApplyInSourceOrder() async throws {
         target: target
     )
 
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.executionContexts.map(\.id) == [RuntimeContext.ID(executionContextID)]
     }
     #expect(context.state == .attached)
@@ -1953,7 +1949,7 @@ func explicitSelectionSupersedesPendingDOMInspectResolution() async throws {
 
     await enqueueCSSStyleReplies(on: runtime.backend)
     context.select(manualSelection)
-    try await waitUntil { context.selectedNode === manualSelection }
+    try await waitUntil(in: context) { context.selectedNode === manualSelection }
 
     await runtime.backend.emit(
         .setChildNodes(parent: document.id.proxyID, nodes: [
@@ -1962,7 +1958,7 @@ func explicitSelectionSupersedesPendingDOMInspectResolution() async throws {
         ]),
         target: target
     )
-    try await waitUntil { context.node(for: DOMNode.ID(inspectedID)) != nil }
+    try await waitUntil(in: context) { context.node(for: DOMNode.ID(inspectedID)) != nil }
 
     #expect(context.selectedNode === manualSelection)
     #expect(await runtime.backend.recordedCommands().contains(
@@ -1988,7 +1984,7 @@ func domMutationEventForUnmaterializedNodeIsSkipped() async throws {
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.rootNode != nil }
+    try await waitUntil(in: context) { context.rootNode != nil }
 
     await runtime.backend.emit(
         .attributeModified(DOM.Node.ID("unmaterialized"), name: "class", value: "x"),
@@ -2017,7 +2013,7 @@ func startupEnablesTrackedDomainsBeforeInitialDocumentSnapshot() async throws {
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.state == .attached }
+    try await waitUntil(in: context) { context.state == .attached }
 
     let commands = await runtime.backend.recordedCommands()
     #expect(commands.prefix(startupCommands.count) == startupCommands[...])
@@ -2040,7 +2036,7 @@ func networkEnableFailureFailsStartupBeforeDocumentFetch() async throws {
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil {
+    try await waitUntil(in: context) {
         guard case .failed = context.state else {
             return false
         }
@@ -2094,7 +2090,7 @@ func consoleEnableFailureFailsStartupBeforeAttachingDocument() async throws {
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil {
+    try await waitUntil(in: context) {
         guard case .failed = context.state else {
             return false
         }
@@ -2143,7 +2139,7 @@ func runtimeEnableFailureFailsStartupBeforeConsoleNetworkAndDocumentFetch() asyn
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil {
+    try await waitUntil(in: context) {
         guard case .failed = context.state else {
             return false
         }
@@ -2183,7 +2179,7 @@ func closeAfterAttachedDisablesEnabledDomains() async throws {
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.state == .attached }
+    try await waitUntil(in: context) { context.state == .attached }
 
     await container.close()
 
@@ -2217,7 +2213,7 @@ func closeAfterAttachedClearsAttachmentBackedModels() async throws {
     networkResults = context.network.fetchedResults()
     consoleResults = context.console.fetchedResults()
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.state == .attached }
+    try await waitUntil(in: context) { context.state == .attached }
 
     await runtime.backend.emit(
         .requestWillBeSent(
@@ -2251,7 +2247,7 @@ func closeAfterAttachedClearsAttachmentBackedModels() async throws {
         .executionContextCreated(Runtime.ExecutionContext(id: runtimeContextID, name: "Main", kind: .normal)),
         target: target
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         networkResults.items.count == 1
             && networkResults.items.first?.security == requestSecurity
             && consoleResults.items.count == 1
@@ -2293,7 +2289,7 @@ func closeRecordsNetworkDisableFailureAndDetachesContext() async throws {
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.state == .attached }
+    try await waitUntil(in: context) { context.state == .attached }
 
     await container.close()
 
@@ -2318,7 +2314,7 @@ func restartDisablesPreviousDomainTrackingBeforeReenable() async throws {
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("document-1")) }
+    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("document-1")) }
 
     await enqueueDomainDisableReplies(on: runtime.backend)
     await enqueueStartupReplies(
@@ -2328,7 +2324,7 @@ func restartDisablesPreviousDomainTrackingBeforeReenable() async throws {
 
     context.start()
 
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("document-2")) }
+    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("document-2")) }
 
     let commands = await runtime.backend.recordedCommands()
     #expect(commands == startupCommands + shutdownCommands + startupCommands)
@@ -2347,15 +2343,13 @@ func restartWaitsForPreviousStartupCleanupBeforeReenable() async throws {
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == [
+    try await waitForRecordedCommands(on: runtime.backend, expected: [
             RecordedCommand(domain: "Inspector", method: "enable"),
             RecordedCommand(domain: "Inspector", method: "initialized"),
             RecordedCommand(domain: "Page", method: "enable"),
             RecordedCommand(domain: "Runtime", method: "enable"),
             RecordedCommand(domain: "Network", method: "enable"),
-        ]
-    }
+        ])
 
     await enqueueDomainDisableReplies(on: runtime.backend)
     await enqueueStartupReplies(
@@ -2366,7 +2360,7 @@ func restartWaitsForPreviousStartupCleanupBeforeReenable() async throws {
     context.start()
 
     await enableGate.open()
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
+    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
 
     let commands = await runtime.backend.recordedCommands()
     #expect(commands == Array(startupCommands.prefix(5)) + [
@@ -2654,25 +2648,23 @@ func runtimeEnableReplayIsCapturedBeforeCommandReturns() async throws {
 
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == [
+    try await waitForRecordedCommands(on: runtime.backend, expected: [
             RecordedCommand(domain: "Inspector", method: "enable"),
             RecordedCommand(domain: "Inspector", method: "initialized"),
             RecordedCommand(domain: "Page", method: "enable"),
             RecordedCommand(domain: "Runtime", method: "enable")
-        ]
-    }
+        ])
 
     await runtime.backend.emit(
         .executionContextCreated(Runtime.ExecutionContext(id: contextID, name: "Main", kind: .normal)),
         target: target
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.executionContexts.first?.id == RuntimeContext.ID(contextID)
     }
 
     await enableGate.open()
-    try await waitUntil { context.state == .attached }
+    try await waitUntil(in: context) { context.state == .attached }
     #expect(context.selectedContext?.id == RuntimeContext.ID(contextID))
 }
 
@@ -2689,9 +2681,7 @@ func consoleEnableReplayIsCapturedBeforeCommandReturns() async throws {
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     let results: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == startupCommands
-    }
+    try await waitForRecordedCommands(on: runtime.backend, expected: startupCommands)
 
     await runtime.backend.emit(
         .messageAdded(Console.Message(
@@ -2704,7 +2694,7 @@ func consoleEnableReplayIsCapturedBeforeCommandReturns() async throws {
     try await waitUntil { results.items.map(\.text) == ["replayed"] }
 
     await enableGate.open()
-    try await waitUntil { context.state == .attached }
+    try await waitUntil(in: context) { context.state == .attached }
     #expect(results.items.map(\.text) == ["replayed"])
 }
 
@@ -2737,9 +2727,7 @@ func startupRefetchesDocumentWhenMainFrameNavigatesBeforeAttach() async throws {
 
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == startupCommands
-    }
+    try await waitForRecordedCommands(on: runtime.backend, expected: startupCommands)
 
     await runtime.backend.emit(
         .frameNavigated(WebInspectorPageFrameLifecycle(
@@ -2755,7 +2743,7 @@ func startupRefetchesDocumentWhenMainFrameNavigatesBeforeAttach() async throws {
     )
     await consoleGate.open()
 
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(freshDocumentID) }
+    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(freshDocumentID) }
     #expect(context.state == .attached)
     #expect(context.node(for: DOMNode.ID(staleDocumentID)) == nil)
     #expect(await runtime.backend.recordedCommands() == startupCommands + [
@@ -2785,7 +2773,7 @@ func transportBackedStartupCapturesRuntimeAndConsoleReplayBeforeEnableReplies() 
         method: "Runtime.executionContextCreated",
         params: #"{"context":{"id":11,"name":"Main","frameId":"main-frame","type":"normal"}}"#
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.executionContexts.first?.id == RuntimeContext.ID(Runtime.ExecutionContext.ID("11"))
     }
     await receiveTransportTargetReply(
@@ -2828,7 +2816,7 @@ func transportBackedStartupCapturesRuntimeAndConsoleReplayBeforeEnableReplies() 
         result: "{}"
     )
 
-    try await waitUntil { context.state == .attached }
+    try await waitUntil(in: context) { context.state == .attached }
     #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("1")))
     #expect(context.selectedContext?.id == RuntimeContext.ID(Runtime.ExecutionContext.ID("11")))
     #expect(consoleResults.items.map(\.text) == ["replayed"])
@@ -2890,7 +2878,7 @@ func transportBackedInspectorInspectMaterializesSelectionAndRestoresPersistentHi
         result: #"{"nodeId":42}"#
     )
 
-    try await waitUntil { context.selectedNode?.id == DOMNode.ID(inspectedID) }
+    try await waitUntil(in: context) { context.selectedNode?.id == DOMNode.ID(inspectedID) }
     #expect(context.isElementPickerEnabled == false)
 
     let persistentHighlight = try await waitForTransportTargetMessage(
@@ -2962,7 +2950,7 @@ func transportBackedInspectorInspectMaterializesSelectionAndRestoresPersistentHi
         result: #"{"computedStyle":[]}"#
     )
 
-    try await waitUntil { context.selectedNode?.elementStyles?.phase == .loaded }
+    try await waitUntil(in: context) { context.selectedNode?.elementStyles?.phase == .loaded }
 }
 
 @MainActor
@@ -3015,7 +3003,7 @@ func transportBackedFrameNavigationClearsSelectionPresentationHighlight() async 
         messageID: try transportMessageID(requestNode.message),
         result: #"{"nodeId":42}"#
     )
-    try await waitUntil { context.selectedNode?.id == DOMNode.ID(inspectedID) }
+    try await waitUntil(in: context) { context.selectedNode?.id == DOMNode.ID(inspectedID) }
 
     let highlightTask = Task { @MainActor in
         let selectedNode = try #require(context.selectedNode)
@@ -3068,7 +3056,7 @@ func transportBackedFrameNavigationClearsSelectionPresentationHighlight() async 
         result: transportDocumentResult(nodeID: "2")
     )
 
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("2")) }
+    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("2")) }
     #expect(context.selectedNode == nil)
 }
 
@@ -3100,7 +3088,7 @@ func transportBackedFrameRuntimeAndConsoleEventsKeepTargetScope() async throws {
         method: "Runtime.executionContextCreated",
         params: #"{"context":{"id":7,"name":"Frame","frameId":"frame-7.42","type":"normal"}}"#
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.executionContexts.contains { $0.id == RuntimeContext.ID(scopedContextID) }
     }
     let frameContext = try #require(context.executionContexts.first { $0.id == RuntimeContext.ID(scopedContextID) })
@@ -3343,7 +3331,7 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
         result: "{}"
     )
 
-    try await waitUntil { context.rootNode?.id == newRootID }
+    try await waitUntil(in: context) { context.rootNode?.id == newRootID }
     try await waitUntil {
         domUpdates.updates.contains { update in
             guard case let .snapshot(snapshot, .pageChanged) = update else {
@@ -3429,7 +3417,7 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
         method: "DOM.attributeModified",
         params: #"{"nodeId":"new-root","name":"data-probe","value":"new"}"#
     )
-    try await waitUntil { context.rootNode?.attributes["data-probe"] == "new" }
+    try await waitUntil(in: context) { context.rootNode?.attributes["data-probe"] == "new" }
     try await waitUntil {
         domUpdates.updates.last == .delta(.nodeChanged(nodeID: newRootID))
     }
@@ -3572,7 +3560,7 @@ func currentPageProcessTerminationInterruptsPickerAndRetargetsWithoutClearingNet
         result: "{}"
     )
 
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.rootNode?.id == DOMNode.ID(DOM.Node.ID("reattached-root"))
     }
     #expect(context.state == .attached)
@@ -3623,7 +3611,7 @@ func startBeginsFreshNetworkAttachmentEpoch() async throws {
     context.start()
 
     try await waitUntil { networkResults.items.isEmpty }
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.rootNode?.id == DOMNode.ID(DOM.Node.ID("fresh-after-restart"))
             && context.state == .attached
     }
@@ -3666,7 +3654,7 @@ func networkNavigationVisitIdentityDoesNotRepeatAcrossRestart() async throws {
     )
     context.start()
     try await waitUntil { networkResults.items.isEmpty }
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restart-identity-root"))
             && context.state == .attached
     }
@@ -3717,7 +3705,7 @@ func sharedContainerContextsInitializeCommittedTargetWithoutReenablingPage() asy
     let contextA = container.mainContext
     let contextB = WebInspectorContext(container, isolation: MainActor.shared)
     contextB.start()
-    try await waitUntil(timeout: .seconds(5)) {
+    try await waitUntil(in: contextA, contextB, timeout: .seconds(5)) {
         contextA.state == .attached && contextB.state == .attached
     }
     let preSwapMessageCount = await backend.sentTargetMessages().count
@@ -3733,7 +3721,7 @@ func sharedContainerContextsInitializeCommittedTargetWithoutReenablingPage() asy
     )
 
     let newRootID = DOMNode.ID(DOM.Node.ID("new-shared-root"))
-    try await waitUntil(timeout: .seconds(5)) {
+    try await waitUntil(in: contextA, contextB, timeout: .seconds(5)) {
         contextA.state == .attached && contextB.state == .attached
             && contextA.rootNode?.id == newRootID
             && contextB.rootNode?.id == newRootID
@@ -3776,21 +3764,21 @@ func currentPageDestroyWithoutReplacementRegressesToAttachingAndRecovers() async
     defer { autoReplier.cancel() }
 
     let context = container.mainContext
-    try await waitUntil(timeout: .seconds(5)) { context.state == .attached }
+    try await waitUntil(in: context, timeout: .seconds(5)) { context.state == .attached }
     #expect(context.rootNode != nil)
 
     await transport.receiveRootMessage(
         #"{"method":"Target.targetDestroyed","params":{"targetId":"page-doomed"}}"#
     )
 
-    try await waitUntil(timeout: .seconds(5)) {
+    try await waitUntil(in: context, timeout: .seconds(5)) {
         context.state == .attaching && context.rootNode == nil
     }
 
     await installTransportPageTarget(in: transport, targetID: rebornTargetID, frameID: "reborn-frame")
 
     let rebornRootID = DOMNode.ID(DOM.Node.ID("reborn-root"))
-    try await waitUntil(timeout: .seconds(5)) {
+    try await waitUntil(in: context, timeout: .seconds(5)) {
         context.state == .attached && context.rootNode?.id == rebornRootID
     }
 }
@@ -3804,25 +3792,20 @@ func startCancelsInFlightCurrentPageRetargetBeforeRestarting() async throws {
         documentID: "restart-old-root"
     )
     let cancellationProbe = CancellationProbe()
+    let cancellationGate = WebInspectorCancellationAwareTestGate()
     context.installCurrentPageRetargetTaskForTesting(Task {
         cancellationProbe.markStarted()
         await withTaskCancellationHandler {
-            while Task.isCancelled == false {
-                try? await Task.sleep(for: .milliseconds(10))
-            }
+            await cancellationGate.wait()
             cancellationProbe.markCancelled()
         } onCancel: {
             cancellationProbe.markCancelled()
         }
     })
-    try await waitUntil(timeout: .seconds(5)) {
-        cancellationProbe.started()
-    }
+    try await cancellationProbe.waitUntilStarted()
 
     context.start()
-    try await waitUntil(timeout: .seconds(5)) {
-        cancellationProbe.cancelled()
-    }
+    try await cancellationProbe.waitUntilCancelled()
 }
 
 @MainActor
@@ -3907,7 +3890,7 @@ func domUndoRedoCommandsFailAfterCurrentPageRetarget() async throws {
         result: "{}"
     )
 
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("undo-new-root")) }
+    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("undo-new-root")) }
     await #expect(throws: WebInspectorProxyError.disconnected("DOM undo/redo target is no longer current.")) {
         try await undoCommands.undo()
     }
@@ -3938,7 +3921,7 @@ func mainFrameNavigatedReloadsDOMAndClearsRuntimeContexts() async throws {
         method: "Runtime.executionContextCreated",
         params: #"{"context":{"id":21,"name":"Main","frameId":"main-frame","type":"normal"}}"#
     )
-    try await waitUntil { context.executionContexts.map(\.id) == [RuntimeContext.ID(Runtime.ExecutionContext.ID("21"))] }
+    try await waitUntil(in: context) { context.executionContexts.map(\.id) == [RuntimeContext.ID(Runtime.ExecutionContext.ID("21"))] }
 
     await transport.receiveRootMessage(
         #"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","loaderId":"loader-2","name":"Main","url":"https://example.test/next","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
@@ -3958,7 +3941,7 @@ func mainFrameNavigatedReloadsDOMAndClearsRuntimeContexts() async throws {
         result: transportDocumentResult(nodeID: "navigated-root")
     )
 
-    try await waitUntil { context.rootNode?.id == navigatedRootID }
+    try await waitUntil(in: context) { context.rootNode?.id == navigatedRootID }
     #expect(context.executionContexts.isEmpty)
     await receiveTransportTargetEvent(
         transport,
@@ -4889,7 +4872,7 @@ func networkTargetCommitCommitsPendingNavigationVisit() async throws {
         )),
         target: target
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.rootNode?.id == DOMNode.ID(DOM.Node.ID("page-b-root"))
             && context.state == .attached
     }
@@ -4928,7 +4911,7 @@ func networkTargetCommitCommitsPendingNavigationVisit() async throws {
         )),
         target: target
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.rootNode?.id == DOMNode.ID(DOM.Node.ID("page-a-return-root"))
             && context.state == .attached
     }
@@ -4962,7 +4945,7 @@ func restartClearsRuntimeContextsBeforeEnableReplay() async throws {
         .executionContextCreated(Runtime.ExecutionContext(id: staleID, name: "Stale", kind: .normal)),
         target: target
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.executionContexts.first?.id == RuntimeContext.ID(staleID)
     }
 
@@ -4974,14 +4957,12 @@ func restartClearsRuntimeContextsBeforeEnableReplay() async throws {
     )
 
     context.start()
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == startupCommands + shutdownCommands + [
+    try await waitForRecordedCommands(on: runtime.backend, expected: startupCommands + shutdownCommands + [
             RecordedCommand(domain: "Inspector", method: "enable"),
             RecordedCommand(domain: "Inspector", method: "initialized"),
             RecordedCommand(domain: "Page", method: "enable"),
             RecordedCommand(domain: "Runtime", method: "enable"),
-        ]
-    }
+        ])
     #expect(context.executionContexts.isEmpty)
     #expect(context.selectedContext == nil)
 
@@ -4989,12 +4970,12 @@ func restartClearsRuntimeContextsBeforeEnableReplay() async throws {
         .executionContextCreated(Runtime.ExecutionContext(id: replayID, name: "Replayed", kind: .normal)),
         target: target
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.executionContexts.map(\.id) == [RuntimeContext.ID(replayID)]
     }
 
     await enableGate.open()
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
+    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
     #expect(context.selectedContext?.id == RuntimeContext.ID(replayID))
 }
 
@@ -5024,9 +5005,7 @@ func restartClearsConsoleMessagesBeforeConsoleReplay() async throws {
     )
 
     context.start()
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == startupCommands + shutdownCommands + startupCommands
-    }
+    try await waitForRecordedCommands(on: runtime.backend, expected: startupCommands + shutdownCommands + startupCommands)
     #expect(results.items.isEmpty)
 
     await runtime.backend.emit(
@@ -5040,7 +5019,7 @@ func restartClearsConsoleMessagesBeforeConsoleReplay() async throws {
     try await waitUntil { results.items.map(\.text) == ["old"] }
 
     await enableGate.open()
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
+    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
     #expect(results.items.count == 1)
 }
 
@@ -5069,7 +5048,7 @@ func documentUpdatedReloadsRootDocument() async throws {
 
     await runtime.backend.emit(.documentUpdated, target: target)
 
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.rootNode?.id == DOMNode.ID(replacementID)
     }
     try await waitUntil {
@@ -5127,7 +5106,7 @@ func childInsertIntoKnownEmptyParentMaterializesFirstChild() async throws {
         target: target
     )
 
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.node(for: DOMNode.ID(insertedID)) != nil
     }
     guard case let .loaded(children) = document.children else {
@@ -5267,7 +5246,7 @@ func domTreeControllerPrunesRetainedChildDescendantsOnReplacement() async throws
     )
 
     try await recorder.waitForUpdateCount(3)
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.node(for: DOMNode.ID(removedSpanID)) == nil
             && context.node(for: DOMNode.ID(removedEmID)) == nil
     }
@@ -5472,14 +5451,14 @@ func domTreeControllerPublishesOnlyDeltasForSameDocumentMutations() async throws
         .attributeModified(elementID, name: "class", value: "selected"),
         target: target
     )
-    try await waitUntil { context.node(for: DOMNode.ID(elementID))?.attributes["class"] == "selected" }
+    try await waitUntil(in: context) { context.node(for: DOMNode.ID(elementID))?.attributes["class"] == "selected" }
     try await recorder.waitForUpdateCount(3)
 
     await runtime.backend.emit(
         .childNodeCountUpdated(elementID, count: 1),
         target: target
     )
-    try await waitUntil { context.node(for: DOMNode.ID(elementID))?.childNodeCount == 1 }
+    try await waitUntil(in: context) { context.node(for: DOMNode.ID(elementID))?.childNodeCount == 1 }
     try await recorder.waitForUpdateCount(4)
 
     await runtime.backend.emit(
@@ -5494,7 +5473,7 @@ func domTreeControllerPublishesOnlyDeltasForSameDocumentMutations() async throws
         .characterDataModified(textID, value: "new"),
         target: target
     )
-    try await waitUntil { context.node(for: DOMNode.ID(textID))?.nodeValue == "new" }
+    try await waitUntil(in: context) { context.node(for: DOMNode.ID(textID))?.nodeValue == "new" }
     try await recorder.waitForUpdateCount(6)
 
     await runtime.backend.emit(
@@ -5688,7 +5667,7 @@ func domTreeControllerPublishesSelectionDeltasWithoutOwningExpansion() async thr
         target: target
     )
 
-    try await waitUntil { context.node(for: DOMNode.ID(childID)) != nil }
+    try await waitUntil(in: context) { context.node(for: DOMNode.ID(childID)) != nil }
     let parent = try #require(context.node(for: DOMNode.ID(parentID)))
     let child = try #require(context.node(for: DOMNode.ID(childID)))
     let controller = try await context.treeController()
@@ -5764,7 +5743,7 @@ func setChildNodesReplacementPublishesSelectionClearingForRemovedDescendant() as
         ]),
         target: target
     )
-    try await waitUntil { context.node(for: DOMNode.ID(selectedID)) != nil }
+    try await waitUntil(in: context) { context.node(for: DOMNode.ID(selectedID)) != nil }
 
     let selected = try #require(context.node(for: DOMNode.ID(selectedID)))
     let controller = try await context.treeController()
@@ -5784,7 +5763,7 @@ func setChildNodesReplacementPublishesSelectionClearingForRemovedDescendant() as
         target: target
     )
 
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.selectedNode == nil
             && context.node(for: DOMNode.ID(selectedID)) == nil
             && context.node(for: DOMNode.ID(replacementID)) != nil
@@ -6339,7 +6318,7 @@ func startResetsConfiguredNetworkQueryState() async throws {
 
     context.start()
 
-    try await waitUntil {
+    try await waitUntil(in: context) {
         networkResults.items.isEmpty && context.state == .attached
     }
 
@@ -7135,7 +7114,7 @@ func failedStyleLeasePreservesPageLifecycleUntilContextStops() async throws {
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(initialDocument.id) }
+    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(initialDocument.id) }
 
     await runtime.backend.emit(
         .setChildNodes(parent: initialDocument.id, nodes: [
@@ -7181,7 +7160,7 @@ func failedStyleLeasePreservesPageLifecycleUntilContextStops() async throws {
         )),
         target: target
     )
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(navigatedDocument.id) }
+    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(navigatedDocument.id) }
 
     await enqueueDomainDisableReplies(on: runtime.backend)
     await context.stop()
@@ -7209,7 +7188,7 @@ func changingSelectionDuringStyleLeaseAcquisitionEnablesDomainsOnce() async thro
         ]),
         target: target
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.node(for: DOMNode.ID(firstID)) != nil
             && context.node(for: DOMNode.ID(secondID)) != nil
     }
@@ -7319,7 +7298,7 @@ func restartingContextReacquiresSelectedStyleLease() async throws {
         document: DOM.Node(id: DOM.Node.ID("document-2"), nodeType: 9, nodeName: "#document")
     )
     context.start()
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("document-2")) }
+    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("document-2")) }
 
     try await selectStyledChild(id: DOM.Node.ID("styled-node-2"))
 
@@ -7398,7 +7377,7 @@ func destroyingFrameDiscardsOnlyFrameCSSLease() async throws {
         ]),
         target: target
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.node(for: DOMNode.ID(pageElementID)) != nil
             && context.node(for: DOMNode.ID(frameElementID)) != nil
     }
@@ -7636,11 +7615,7 @@ func cssInvalidationDuringStyleFetchIsNotOverwrittenByStaleResult() async throws
 
     context.select(element)
     let styles = try #require(element.elementStyles)
-    try await waitUntil {
-        await runtime.backend.recordedCommands().contains(
-            RecordedCommand(domain: "CSS", method: "getComputedStyleForNode")
-        )
-    }
+    _ = try await runtime.backend.waitForRecordedCommandsForTesting(domain: "CSS", method: "getComputedStyleForNode", count: 1)
 
     await runtime.backend.emit(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
     try await waitUntil { styles.phase == .needsRefresh }
@@ -7856,7 +7831,7 @@ func changingSelectionCancelsCSSLoadWithoutLeavingPriorResourceLoading() async t
         ]),
         target: target
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.node(for: DOMNode.ID(firstID)) != nil
             && context.node(for: DOMNode.ID(secondID)) != nil
     }
@@ -7929,10 +7904,10 @@ func cancellingCSSMutationDoesNotWaitForBlockedStyleRefresh() async throws {
         count: 2
     )
 
-    var mutationFinished = false
+    let mutationCompletion = ResponseBodyFetchCompletionProbe()
     let mutationTask = Task { @MainActor in
         defer {
-            mutationFinished = true
+            mutationCompletion.finish()
         }
         try await context.css.setProperty(
             paddingID,
@@ -7940,9 +7915,9 @@ func cancellingCSSMutationDoesNotWaitForBlockedStyleRefresh() async throws {
             options: WebInspectorMutationOptions(undo: .disabled)
         )
     }
-    try await waitUntil { await context.queuedCSSOperationCountForTesting(for: target) == 1 }
+    try await context.waitForQueuedCSSOperationCountForTesting(1, for: target)
     mutationTask.cancel()
-    try await waitUntil { mutationFinished }
+    try await waitUntil { mutationCompletion.isFinished }
     await #expect(throws: CancellationError.self) {
         try await mutationTask.value
     }
@@ -8078,7 +8053,7 @@ func concurrentCSSMutationsSerializeAndRefreshBeforeRewriting() async throws {
             options: WebInspectorMutationOptions(undo: .disabled)
         )
     }
-    try await waitUntil { await context.queuedCSSOperationCountForTesting(for: target) == 1 }
+    try await context.waitForQueuedCSSOperationCountForTesting(1, for: target)
     #expect(await runtime.backend.recordedCommands().filter {
         $0.domain == "CSS" && $0.method == "setStyleText"
     }.count == 1)
@@ -8300,9 +8275,7 @@ func styleSheetChangedWhileHydrationActiveTriggersImmediateRefetch() async throw
     await enqueueCSSStyleReplies(on: runtime.backend)
     await runtime.backend.emit(.styleSheetChanged(CSS.StyleSheet.ID("sheet-1")), target: target)
 
-    try await waitUntil {
-        await matchedStylesCommandCount(on: runtime.backend) == 2
-    }
+    _ = try await runtime.backend.waitForRecordedCommandsForTesting(domain: "CSS", method: "getMatchedStylesForNode", count: 2)
     try await waitUntil { styles.phase == .loaded }
 }
 
@@ -8399,9 +8372,7 @@ func requestSetCSSPropertyTogglesDeclarationAndRefreshesStyles() async throws {
     await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
     #expect(context.css.requestSetProperty(propertyID, enabled: false))
 
-    try await waitUntil {
-        await matchedStylesCommandCount(on: runtime.backend) == 2
-    }
+    _ = try await runtime.backend.waitForRecordedCommandsForTesting(domain: "CSS", method: "getMatchedStylesForNode", count: 2)
     try await waitUntil { styles.phase == .loaded }
 
     let commands = await runtime.backend.recordedCommands()
@@ -8661,7 +8632,7 @@ func lateCSSPropertyReplyDoesNotApplyToReplacementDocument() async throws {
         method: "getDocument"
     )
     context.apply(DOM.Event.documentUpdated)
-    try await waitUntil { context.rootNode?.id == DOMNode.ID(replacementDocumentID) }
+    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(replacementDocumentID) }
     await mutationGate.open()
 
     await #expect(throws: WebInspectorProxyError.disconnected("CSS mutation no longer belongs to the current document.")) {
@@ -9023,7 +8994,7 @@ func removedAndReusedStyleSheetIDRejectsPriorMutationReply() async throws {
         )
     }
     let frameTarget = runtime.proxy.frameTarget(id: frameTargetID)
-    try await waitUntil { await context.queuedCSSOperationCountForTesting(for: frameTarget) == 1 }
+    try await context.waitForQueuedCSSOperationCountForTesting(1, for: frameTarget)
     let queuedRuleTask = Task { @MainActor in
         try await context.css.setRuleSelector(
             ".updated",
@@ -9031,7 +9002,7 @@ func removedAndReusedStyleSheetIDRejectsPriorMutationReply() async throws {
             options: WebInspectorMutationOptions(undo: .disabled)
         )
     }
-    try await waitUntil { await context.queuedCSSOperationCountForTesting(for: frameTarget) == 2 }
+    try await context.waitForQueuedCSSOperationCountForTesting(2, for: frameTarget)
 
     let removalBaseline = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(.styleSheetRemoved(styleSheetID), target: pageTarget)
@@ -9119,7 +9090,7 @@ func queuedRuleSelectorRejectsPositionalIDAfterStyleSheetReplacement() async thr
             options: WebInspectorMutationOptions(undo: .disabled)
         )
     }
-    try await waitUntil { await context.queuedCSSOperationCountForTesting(for: target) == 1 }
+    try await context.waitForQueuedCSSOperationCountForTesting(1, for: target)
     await mutationGate.open()
 
     try await styleSheetTask.value
@@ -9226,7 +9197,7 @@ func queuedDeclarationRefreshesAfterStyleSheetReplacement() async throws {
             options: WebInspectorMutationOptions(undo: .disabled)
         )
     }
-    try await waitUntil { await context.queuedCSSOperationCountForTesting(for: target) == 1 }
+    try await context.waitForQueuedCSSOperationCountForTesting(1, for: target)
     await mutationGate.open()
 
     try await styleSheetTask.value
@@ -9258,7 +9229,7 @@ func removingLoadedChildPurgesDescendantsFromIdentityMap() async throws {
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.rootNode != nil }
+    try await waitUntil(in: context) { context.rootNode != nil }
 
     await runtime.backend.emit(
         .setChildNodes(parent: documentID, nodes: [
@@ -9281,7 +9252,7 @@ func removingLoadedChildPurgesDescendantsFromIdentityMap() async throws {
         target: target
     )
 
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.node(for: DOMNode.ID(grandchildID)) != nil
     }
 
@@ -9290,7 +9261,7 @@ func removingLoadedChildPurgesDescendantsFromIdentityMap() async throws {
         target: target
     )
 
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.node(for: DOMNode.ID(childID)) == nil
             && context.node(for: DOMNode.ID(grandchildID)) == nil
     }
@@ -9314,7 +9285,7 @@ func setChildNodesPreservesReparentedDescendantIdentity() async throws {
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.rootNode != nil }
+    try await waitUntil(in: context) { context.rootNode != nil }
 
     await runtime.backend.emit(
         .setChildNodes(parent: documentID, nodes: [
@@ -9331,7 +9302,7 @@ func setChildNodesPreservesReparentedDescendantIdentity() async throws {
         target: target
     )
 
-    try await waitUntil { context.node(for: DOMNode.ID(movedChildID)) != nil }
+    try await waitUntil(in: context) { context.node(for: DOMNode.ID(movedChildID)) != nil }
     let movedChild = try #require(context.node(for: DOMNode.ID(movedChildID)))
 
     await runtime.backend.emit(
@@ -9349,7 +9320,7 @@ func setChildNodesPreservesReparentedDescendantIdentity() async throws {
         target: target
     )
 
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.node(for: DOMNode.ID(oldParentID)) == nil
             && context.node(for: DOMNode.ID(newParentID)) != nil
     }
@@ -9374,7 +9345,7 @@ func setChildNodesPrunesOmittedDescendantsWhenReusingChildNode() async throws {
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.rootNode != nil }
+    try await waitUntil(in: context) { context.rootNode != nil }
 
     await runtime.backend.emit(
         .setChildNodes(parent: documentID, nodes: [
@@ -9392,7 +9363,7 @@ func setChildNodesPrunesOmittedDescendantsWhenReusingChildNode() async throws {
         target: target
     )
 
-    try await waitUntil { context.node(for: DOMNode.ID(removedEmID)) != nil }
+    try await waitUntil(in: context) { context.node(for: DOMNode.ID(removedEmID)) != nil }
     let child = try #require(context.node(for: DOMNode.ID(childID)))
 
     await runtime.backend.emit(
@@ -9402,7 +9373,7 @@ func setChildNodesPrunesOmittedDescendantsWhenReusingChildNode() async throws {
         target: target
     )
 
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.node(for: DOMNode.ID(removedSpanID)) == nil
             && context.node(for: DOMNode.ID(removedEmID)) == nil
     }
@@ -9426,7 +9397,7 @@ func setChildNodesPreservesLoadedDescendantsForShallowRefresh() async throws {
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.rootNode != nil }
+    try await waitUntil(in: context) { context.rootNode != nil }
 
     await runtime.backend.emit(
         .setChildNodes(parent: documentID, nodes: [
@@ -9443,7 +9414,7 @@ func setChildNodesPreservesLoadedDescendantsForShallowRefresh() async throws {
         target: target
     )
 
-    try await waitUntil { context.node(for: DOMNode.ID(grandchildID)) != nil }
+    try await waitUntil(in: context) { context.node(for: DOMNode.ID(grandchildID)) != nil }
     let grandchild = try #require(context.node(for: DOMNode.ID(grandchildID)))
 
     await runtime.backend.emit(
@@ -9453,7 +9424,7 @@ func setChildNodesPreservesLoadedDescendantsForShallowRefresh() async throws {
         target: target
     )
 
-    try await waitUntil {
+    try await waitUntil(in: context) {
         guard let child = context.node(for: DOMNode.ID(childID)),
               case let .loaded(children) = child.children else {
             return false
@@ -9480,10 +9451,7 @@ func closeDuringStartupKeepsContextDetached() async throws {
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     let startupTask = try #require(context.startupTaskForTesting())
-    try await waitUntil {
-        await runtime.backend.recordedCommands()
-            .contains(RecordedCommand(domain: "DOM", method: "getDocument"))
-    }
+    _ = try await runtime.backend.waitForRecordedCommandsForTesting(domain: "DOM", method: "getDocument", count: 1)
 
     await container.close()
     #expect(context.state == .detached)
@@ -9519,14 +9487,12 @@ func stopDuringStartupReleasesLateRuntimeAcquire() async throws {
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == [
+    try await waitForRecordedCommands(on: runtime.backend, expected: [
             RecordedCommand(domain: "Inspector", method: "enable"),
             RecordedCommand(domain: "Inspector", method: "initialized"),
             RecordedCommand(domain: "Page", method: "enable"),
             RecordedCommand(domain: "Runtime", method: "enable"),
-        ]
-    }
+        ])
 
     await runtime.backend.enqueue((), for: "Page", method: "disable")
     await runtime.backend.enqueue((), for: "Inspector", method: "disable")
@@ -9535,8 +9501,7 @@ func stopDuringStartupReleasesLateRuntimeAcquire() async throws {
 
     await runtime.backend.enqueue((), for: "Runtime", method: "disable")
     await gate.open()
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == [
+    try await waitForRecordedCommands(on: runtime.backend, expected: [
             RecordedCommand(domain: "Inspector", method: "enable"),
             RecordedCommand(domain: "Inspector", method: "initialized"),
             RecordedCommand(domain: "Page", method: "enable"),
@@ -9544,8 +9509,7 @@ func stopDuringStartupReleasesLateRuntimeAcquire() async throws {
             RecordedCommand(domain: "Page", method: "disable"),
             RecordedCommand(domain: "Inspector", method: "disable"),
             RecordedCommand(domain: "Runtime", method: "disable"),
-        ]
-    }
+        ])
     #expect(context.state == .detached)
 }
 
@@ -9563,11 +9527,9 @@ func domainEnablementReleaseDuringPendingEnableDisablesAfterEnableCompletes() as
         try await registry.acquire(.runtime, on: target)
     }
 
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == [
+    try await waitForRecordedCommands(on: runtime.backend, expected: [
             RecordedCommand(domain: "Runtime", method: "enable")
-        ]
-    }
+        ])
 
     let releaseTask = Task {
         await registry.release(.runtime, on: target)
@@ -9747,12 +9709,10 @@ func domainEnablementAcquireWaitsForFinalReleaseDisable() async throws {
     let releaseTask = Task {
         await registry.release(.runtime, on: target)
     }
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == [
+    try await waitForRecordedCommands(on: runtime.backend, expected: [
             RecordedCommand(domain: "Runtime", method: "enable"),
             RecordedCommand(domain: "Runtime", method: "disable"),
-        ]
-    }
+        ])
 
     let acquireWaitBaseline = await registry.acquireWaitingForDisableSequenceForTesting
     let acquireTask = Task {
@@ -9791,11 +9751,9 @@ func domainEnablementAcquireWaitsForPendingReleaseDisable() async throws {
     let firstAcquireTask = Task {
         try await registry.acquire(.runtime, on: target)
     }
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == [
+    try await waitForRecordedCommands(on: runtime.backend, expected: [
             RecordedCommand(domain: "Runtime", method: "enable")
-        ]
-    }
+        ])
 
     let releaseTask = Task {
         await registry.release(.runtime, on: target)
@@ -9809,12 +9767,10 @@ func domainEnablementAcquireWaitsForPendingReleaseDisable() async throws {
     await runtime.backend.enqueue((), for: "Runtime", method: "enable")
     await runtime.backend.enqueue((), for: "Runtime", method: "disable")
     await enableGate.open()
-    try await waitUntil {
-        await runtime.backend.recordedCommands() == [
+    try await waitForRecordedCommands(on: runtime.backend, expected: [
             RecordedCommand(domain: "Runtime", method: "enable"),
             RecordedCommand(domain: "Runtime", method: "disable"),
-        ]
-    }
+        ])
     #expect(await runtime.backend.recordedCommands() == [
         RecordedCommand(domain: "Runtime", method: "enable"),
         RecordedCommand(domain: "Runtime", method: "disable"),
@@ -11848,7 +11804,7 @@ func legacyWebSocketFramesProjectionPublishesTimelineChangesThroughObservation()
         timestamp: 4,
         chronologySequence: 1
     )
-    try await waitUntil { observation.hasChanged }
+    try #require(observation.hasChanged)
 
     #expect(webSocket.frames == [
         WebSocketState.Frame(
@@ -12221,7 +12177,7 @@ func staleResponseBodyFetchCompletionCannotMutateNewerRevision(
     let gate = WebInspectorTestGate()
 
     await emitFinishedRequest(id: requestID, target: target, backend: runtime.backend)
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.registeredRequest(for: NetworkRequest.ID(requestID))?.state == .finished
     }
     let request = try #require(context.registeredRequest(for: NetworkRequest.ID(requestID)))
@@ -12231,11 +12187,7 @@ func staleResponseBodyFetchCompletionCannotMutateNewerRevision(
     let fetchTask = Task {
         await request.fetchResponseBody()
     }
-    try await waitUntil {
-        await runtime.backend.recordedCommands().contains(
-            RecordedCommand(domain: "Network", method: "getResponseBody")
-        )
-    }
+    _ = try await runtime.backend.waitForRecordedCommandsForTesting(domain: "Network", method: "getResponseBody", count: 1)
 
     await runtime.backend.emit(
         .responseReceived(
@@ -12407,7 +12359,7 @@ func concurrentResponseBodyCallersShareCompletionAcrossCallerCancellation() asyn
     let gate = WebInspectorTestGate()
 
     await emitFinishedRequest(id: requestID, target: target, backend: runtime.backend)
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.registeredRequest(for: NetworkRequest.ID(requestID))?.state == .finished
     }
     let request = try #require(context.registeredRequest(for: NetworkRequest.ID(requestID)))
@@ -12430,15 +12382,11 @@ func concurrentResponseBodyCallersShareCompletionAcrossCallerCancellation() asyn
     let second = Task { @MainActor in
         await request.fetchResponseBody()
     }
-    try await waitUntil {
-        body.responseFetchWaiterCountForTesting == 2
-    }
+    try await waitForResponseBodyWaiters(in: body, count: 2)
 
     first.cancel()
     await first.value
-    try await waitUntil {
-        body.responseFetchWaiterCountForTesting == 1
-    }
+    try #require(body.responseFetchWaiterCountForTesting == 1)
     #expect(body.phase == .fetching)
     #expect(await runtime.backend.recordedCommands().filter {
         $0 == RecordedCommand(domain: "Network", method: "getResponseBody")
@@ -12462,7 +12410,7 @@ func responseReplacementResolvesEveryJoinedResponseBodyWaiter() async throws {
     let gate = WebInspectorTestGate()
 
     await emitFinishedRequest(id: requestID, target: target, backend: runtime.backend)
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.registeredRequest(for: NetworkRequest.ID(requestID))?.state == .finished
     }
     let request = try #require(context.registeredRequest(for: NetworkRequest.ID(requestID)))
@@ -12488,9 +12436,7 @@ func responseReplacementResolvesEveryJoinedResponseBodyWaiter() async throws {
         await request.fetchResponseBody()
         secondProbe.finish()
     }
-    try await waitUntil {
-        body.responseFetchWaiterCountForTesting == 2
-    }
+    try await waitForResponseBodyWaiters(in: body, count: 2)
 
     await runtime.backend.emit(
         .responseReceived(
@@ -12538,7 +12484,7 @@ func clearingNetworkResolvesEveryJoinedResponseBodyWaiter() async throws {
     let gate = WebInspectorTestGate()
 
     await emitFinishedRequest(id: requestID, target: target, backend: runtime.backend)
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.registeredRequest(for: NetworkRequest.ID(requestID))?.state == .finished
     }
     let request = try #require(context.registeredRequest(for: NetworkRequest.ID(requestID)))
@@ -12564,9 +12510,7 @@ func clearingNetworkResolvesEveryJoinedResponseBodyWaiter() async throws {
         await request.fetchResponseBody()
         secondProbe.finish()
     }
-    try await waitUntil {
-        body.responseFetchWaiterCountForTesting == 2
-    }
+    try await waitForResponseBodyWaiters(in: body, count: 2)
 
     context.clearNetworkRequests()
     #expect(context.registeredRequest(for: NetworkRequest.ID(requestID)) == nil)
@@ -12603,7 +12547,7 @@ func fetchResponseBodyRejectsLateCompletionAfterNetworkClear() async throws {
     let gate = WebInspectorTestGate()
 
     await emitFinishedRequest(id: requestID, target: target, backend: runtime.backend)
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.registeredRequest(for: NetworkRequest.ID(requestID))?.state == .finished
     }
     let request = try #require(context.registeredRequest(for: NetworkRequest.ID(requestID)))
@@ -12613,9 +12557,7 @@ func fetchResponseBodyRejectsLateCompletionAfterNetworkClear() async throws {
     let fetchTask = Task {
         await request.fetchResponseBody()
     }
-    try await waitUntil {
-        await runtime.backend.recordedCommands().contains(RecordedCommand(domain: "Network", method: "getResponseBody"))
-    }
+    _ = try await runtime.backend.waitForRecordedCommandsForTesting(domain: "Network", method: "getResponseBody", count: 1)
 
     context.clearNetworkRequests()
     #expect(context.registeredRequest(for: NetworkRequest.ID(requestID)) == nil)
@@ -12938,7 +12880,7 @@ func evaluateRegistersRuntimeObjectInSelectedContext() async throws {
         )),
         target: target
     )
-    try await waitUntil { context.executionContexts.count == 1 }
+    try await waitUntil(in: context) { context.executionContexts.count == 1 }
     let runtimeContext = try #require(context.executionContexts.first)
     context.selectContext(runtimeContext)
 
@@ -13048,7 +12990,7 @@ func staleRuntimeObjectThrowsWithoutFailingContext() async throws {
         )),
         target: target
     )
-    try await waitUntil { context.executionContexts.count == 1 }
+    try await waitUntil(in: context) { context.executionContexts.count == 1 }
 
     await runtime.backend.enqueue(
         Runtime.EvaluationResult(
@@ -13060,7 +13002,7 @@ func staleRuntimeObjectThrowsWithoutFailingContext() async throws {
     let evaluation = try await context.evaluate("window")
 
     await runtime.backend.emit(.executionContextsCleared(target: target.id), target: target)
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.executionContexts.isEmpty && context.selectedContext == nil
     }
     #expect(evaluation.object.canRequestProperties == false)
@@ -13091,7 +13033,7 @@ func lateEvaluateReplyDoesNotRegisterObjectAfterContextDestruction() async throw
         )),
         target: target
     )
-    try await waitUntil { context.executionContexts.count == 1 }
+    try await waitUntil(in: context) { context.executionContexts.count == 1 }
     let runtimeContext = try #require(context.executionContexts.first)
 
     await runtime.backend.hold(domain: "Runtime", method: "evaluate", gate: evaluationGate)
@@ -13119,7 +13061,7 @@ func lateEvaluateReplyDoesNotRegisterObjectAfterContextDestruction() async throw
     _ = await runtime.backend.waitForRecordedCommands(domain: "Runtime", method: "evaluate", count: 1)
 
     await runtime.backend.emit(.executionContextDestroyed(contextID), target: target)
-    try await waitUntil { context.executionContexts.isEmpty }
+    try await waitUntil(in: context) { context.executionContexts.isEmpty }
     await evaluationGate.open()
 
     await evaluationTask.value
@@ -13314,7 +13256,7 @@ func childFrameNavigationAndDetachClearOnlyChildRuntimeAuthority() async throws 
         )),
         target: target
     )
-    try await waitUntil { context.executionContexts.count == 2 }
+    try await waitUntil(in: context) { context.executionContexts.count == 2 }
     let childContext = try #require(context.executionContexts.first {
         $0.id == RuntimeContext.ID(childContextID)
     })
@@ -13387,7 +13329,7 @@ func childFrameNavigationAndDetachClearOnlyChildRuntimeAuthority() async throws 
         )),
         target: target
     )
-    try await waitUntil { context.executionContexts.count == 2 }
+    try await waitUntil(in: context) { context.executionContexts.count == 2 }
     let detachBaseline = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(.frameDetached(frameID: childFrameID), target: target)
     #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: detachBaseline))
@@ -13684,7 +13626,7 @@ func runtimeEventsPopulateContextsAndFallbackSelection() async throws {
         )),
         target: target
     )
-    try await waitUntil { context.executionContexts.count == 1 }
+    try await waitUntil(in: context) { context.executionContexts.count == 1 }
     let mainContext = try #require(context.executionContexts.first)
     #expect(context.selectedContext === mainContext)
     #expect(mainContext.name == "Main")
@@ -13709,7 +13651,7 @@ func runtimeEventsPopulateContextsAndFallbackSelection() async throws {
         )),
         target: target
     )
-    try await waitUntil { context.executionContexts.count == 2 }
+    try await waitUntil(in: context) { context.executionContexts.count == 2 }
     let utilityContext = try #require(context.executionContexts.first { $0.id == RuntimeContext.ID(utilityID) })
     #expect(context.selectedContext === mainContext)
 
@@ -13720,7 +13662,7 @@ func runtimeEventsPopulateContextsAndFallbackSelection() async throws {
         .executionContextDestroyed(utilityID),
         target: target
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.executionContexts.count == 1 && context.selectedContext === mainContext
     }
     #expect(context.executionContexts.first === mainContext)
@@ -13729,7 +13671,7 @@ func runtimeEventsPopulateContextsAndFallbackSelection() async throws {
         .executionContextsCleared(target: target.id),
         target: target
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.executionContexts.isEmpty && context.selectedContext == nil
     }
 }
@@ -14105,7 +14047,7 @@ func resourceTreeMergesEventsReceivedWhileSnapshotIsInFlight() async throws {
         initiator: .init(kind: "script"), resourceType: .stylesheet, redirectResponse: nil, timestamp: 1
     ), target: target)
     await gate.open()
-    try await waitUntil { context.state == .attached }
+    try await waitUntil(in: context) { context.state == .attached }
     let requests = context.network.fetchedResults().items
     #expect(requests.count == 5)
     let live = try #require(context.registeredRequest(forProxyID: id))
@@ -14127,7 +14069,7 @@ func resourceTreeDoesNotUndoUserClearWhileLookupIsInFlight() async throws {
     _ = await runtime.backend.waitForRecordedCommands(domain: "Page", method: "getResourceTree", count: 1)
     context.clearNetworkRequests()
     await gate.open()
-    try await waitUntil { context.state == .attached }
+    try await waitUntil(in: context) { context.state == .attached }
     #expect(context.network.fetchedResults().items.isEmpty)
 }
 
@@ -14163,7 +14105,7 @@ func resourceTreeRefetchesWhenChildFrameDetachesDuringLookup() async throws {
     _ = await runtime.backend.waitForRecordedCommands(domain: "Page", method: "getResourceTree", count: 1)
     await runtime.backend.emit(.frameDetached(frameID: FrameID("child-frame")), target: target)
     await gate.open()
-    try await waitUntil { context.state == .attached }
+    try await waitUntil(in: context) { context.state == .attached }
     #expect(context.network.fetchedResults().items.map(\.url) == ["https://example.test/new"])
     #expect(await runtime.backend.recordedCommands().filter { $0.method == "getResourceTree" }.count == 2)
 }
@@ -14231,7 +14173,7 @@ func resourceTreeBackForwardVisitDoesNotDeduplicateAgainstHistoricalRequests() a
             newTarget: .init(id: .currentPage, kind: .page, frameID: FrameID("main-frame"), isProvisional: false, pageBindingID: rootID))))
         context.apply(.frameNavigated(.init(id: FrameID("main-frame"), parentID: nil, pageBindingID: rootID,
             loaderID: tree.frame.loaderId, name: nil, url: tree.frame.url, securityOrigin: nil, mimeType: "text/html")))
-        try await waitUntil { context.rootNode?.id == DOMNode.ID(DOM.Node.ID(rootID)) }
+        try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(DOM.Node.ID(rootID)) }
         #expect(context.networkResourceTreeError == nil)
     }
     let otherPage = try JSONDecoder().decode(Page.ResourceTree.self, from: Data(#"{"frame":{"id":"main-frame","loaderId":"other-loader","url":"https://example.test/other","mimeType":"text/html"},"resources":[]}"#.utf8))
@@ -14306,7 +14248,7 @@ private func startContext(
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil { context.state == .attached }
+    try await waitUntil(in: context) { context.state == .attached }
     return (target, context)
 }
 
@@ -14583,7 +14525,7 @@ private func loadEditableCSSFixture(
         ]),
         target: target
     )
-    try await waitUntil { context.node(for: DOMNode.ID(elementID)) != nil }
+    try await waitUntil(in: context) { context.node(for: DOMNode.ID(elementID)) != nil }
     let element = try #require(context.node(for: DOMNode.ID(elementID)))
 
     await enqueueCSSStyleReplies(on: runtime.backend)
@@ -14592,6 +14534,29 @@ private func loadEditableCSSFixture(
     try await waitUntil { styles.phase == .loaded }
     let propertyID = try #require(styles.sections.first?.style.properties.first?.id)
     return EditableCSSFixture(styles: styles, propertyID: propertyID)
+}
+
+private func waitForRecordedCommands(
+    on backend: WebInspectorTestBackend,
+    expected: [RecordedCommand]
+) async throws {
+    let deadline = ContinuousClock.now + .seconds(1)
+    var counts: [String: [String: Int]] = [:]
+    for command in expected {
+        counts[command.domain, default: [:]][command.method, default: 0] += 1
+    }
+    for (domain, methods) in counts {
+        for (method, count) in methods {
+            _ = try await backend.waitForRecordedCommandsForTesting(
+                domain: domain,
+                method: method,
+                count: count,
+                timeout: ContinuousClock.now.duration(to: deadline)
+            )
+        }
+    }
+    let commands = await backend.recordedCommands()
+    try #require(commands == expected)
 }
 
 private func matchedStylesCommandCount(on backend: WebInspectorTestBackend) async -> Int {
@@ -14893,35 +14858,38 @@ private func waitForTransportTargetMessageReplyingToInterleavedGetDocuments(
     repliedGetDocumentMessageIDs: Set<UInt64>,
     timeout: Duration = .seconds(1)
 ) async throws -> SentTargetMessage {
-    let clock = ContinuousClock()
-    let deadline = clock.now + timeout
-    var repliedGetDocumentMessageIDs = repliedGetDocumentMessageIDs
-
-    while true {
-        let sentMessages = await backend.sentTargetMessages()
-        for sentMessage in sentMessages.dropFirst(count) where sentMessage.targetIdentifier == targetID {
-            let method = try transportTargetMessageMethod(sentMessage.message)
-            if method == expectedMethod {
-                return sentMessage
+    try await withThrowingTaskGroup(of: SentTargetMessage.self) { group in
+        group.addTask {
+            var nextMessageIndex = count
+            var repliedGetDocumentMessageIDs = repliedGetDocumentMessageIDs
+            while true {
+                let sentMessage = try await backend.waitForTargetMessage(after: nextMessageIndex)
+                nextMessageIndex += 1
+                guard sentMessage.targetIdentifier == targetID else {
+                    continue
+                }
+                let method = try transportTargetMessageMethod(sentMessage.message)
+                if method == expectedMethod {
+                    return sentMessage
+                }
+                guard method == "DOM.getDocument" else {
+                    continue
+                }
+                let messageID = try transportMessageID(sentMessage.message)
+                guard repliedGetDocumentMessageIDs.insert(messageID).inserted else {
+                    continue
+                }
+                await receiveTransportTargetReply(
+                    transport,
+                    targetID: sentMessage.targetIdentifier,
+                    messageID: messageID,
+                    result: transportDocumentResult(nodeID: documentNodeID)
+                )
             }
-            guard method == "DOM.getDocument" else {
-                continue
-            }
-
-            let messageID = try transportMessageID(sentMessage.message)
-            guard repliedGetDocumentMessageIDs.insert(messageID).inserted else {
-                continue
-            }
-            await receiveTransportTargetReply(
-                transport,
-                targetID: sentMessage.targetIdentifier,
-                messageID: messageID,
-                result: transportDocumentResult(nodeID: documentNodeID)
-            )
         }
-
-        if clock.now >= deadline {
-            let sentMethods = try sentMessages.enumerated().map { index, message in
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            let sentMethods = try await backend.sentTargetMessages().enumerated().map { index, message in
                 "#\(index):\(try transportTargetMessageMethod(message.message))@\(message.targetIdentifier.rawValue)"
             }.joined(separator: ", ")
             throw TimedOut(
@@ -14929,8 +14897,11 @@ private func waitForTransportTargetMessageReplyingToInterleavedGetDocuments(
                     + "Sent target messages: [\(sentMethods)]"
             )
         }
-
-        await Task.yield()
+        defer { group.cancelAll() }
+        guard let message = try await group.next() else {
+            throw TimedOut()
+        }
+        return message
     }
 }
 
@@ -15149,7 +15120,7 @@ private func emitTopLevelTargetCommit(
         )),
         target: target
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.rootNode?.id == DOMNode.ID(DOM.Node.ID(documentID))
             && context.state == .attached
     }
@@ -15180,7 +15151,7 @@ private func emitTopLevelFrameCommit(
         )),
         target: target
     )
-    try await waitUntil {
+    try await waitUntil(in: context) {
         context.rootNode?.id == DOMNode.ID(DOM.Node.ID(documentID))
     }
 }
@@ -15247,10 +15218,11 @@ private func transportMessageObject(_ message: String) throws -> [String: Any] {
 }
 
 @MainActor
+@Observable
 private final class DOMTreeUpdateRecorder {
     private(set) var updates: [DOMTreeUpdate] = []
 
-    private var task: Task<Void, Never>?
+    @ObservationIgnored private var task: Task<Void, Never>?
     private var hasStarted = false
 
     init(stream: AsyncStream<DOMTreeUpdate>) {
@@ -15281,10 +15253,11 @@ private final class DOMTreeUpdateRecorder {
 }
 
 @MainActor
+@Observable
 private final class DOMTreeRevealRequestRecorder {
     private(set) var requests: [DOMTreeRevealRequest] = []
 
-    private var task: Task<Void, Never>?
+    @ObservationIgnored private var task: Task<Void, Never>?
     private var hasStarted = false
 
     init(stream: AsyncStream<DOMTreeRevealRequest>) {
@@ -15315,10 +15288,11 @@ private final class DOMTreeRevealRequestRecorder {
 }
 
 @MainActor
+@Observable
 private final class FetchedResultsTransactionRecorder<Model: WebInspectorPersistentModel> {
     private(set) var transactions: [WebInspectorFetchedResultsTransaction<Model>] = []
 
-    private var task: Task<Void, Never>?
+    @ObservationIgnored private var task: Task<Void, Never>?
     private var hasStarted = false
 
     init(stream: AsyncStream<WebInspectorFetchedResultsTransaction<Model>>) {
@@ -15349,10 +15323,11 @@ private final class FetchedResultsTransactionRecorder<Model: WebInspectorPersist
 }
 
 @MainActor
+@Observable
 private final class FetchedResultsTransactionCounter<Model: WebInspectorPersistentModel> {
     private(set) var transactionCount = 0
 
-    private var task: Task<Void, Never>?
+    @ObservationIgnored private var task: Task<Void, Never>?
     private var hasStarted = false
 
     init(stream: AsyncStream<WebInspectorFetchedResultsTransaction<Model>>) {
@@ -15389,7 +15364,7 @@ private final class FetchedResultsTransactionCounter<Model: WebInspectorPersiste
 
 @MainActor
 private func waitForChild(in context: WebInspectorContext) async throws -> DOMNode {
-    try await waitUntil {
+    try await waitUntil(in: context) {
         guard let root = context.rootNode else {
             return false
         }
@@ -15417,6 +15392,7 @@ private struct TimedOut: Error, CustomStringConvertible {
 }
 
 @MainActor
+@Observable
 private final class ResponseBodyFetchCompletionProbe {
     private(set) var isFinished = false
 
@@ -15425,41 +15401,24 @@ private final class ResponseBodyFetchCompletionProbe {
     }
 }
 
-private final class CancellationProbe: @unchecked Sendable {
-    private let lock = NSLock()
-    private var hasStarted = false
-    private var isCancelled = false
+private final class CancellationProbe: Sendable {
+    private let startedSignal = ReplyPromise<Void>()
+    private let cancelledSignal = ReplyPromise<Void>()
 
     func markStarted() {
-        lock.lock()
-        defer {
-            lock.unlock()
-        }
-        hasStarted = true
+        startedSignal.fulfill(.success(()))
     }
 
     func markCancelled() {
-        lock.lock()
-        defer {
-            lock.unlock()
-        }
-        isCancelled = true
+        cancelledSignal.fulfill(.success(()))
     }
 
-    func started() -> Bool {
-        lock.lock()
-        defer {
-            lock.unlock()
-        }
-        return hasStarted
+    func waitUntilStarted() async throws {
+        try await startedSignal.value()
     }
 
-    func cancelled() -> Bool {
-        lock.lock()
-        defer {
-            lock.unlock()
-        }
-        return isCancelled
+    func waitUntilCancelled() async throws {
+        try await cancelledSignal.value()
     }
 }
 
@@ -15481,31 +15440,75 @@ private final class SynchronousObservationProbe: @unchecked Sendable {
 }
 
 @MainActor
-private func waitUntil(
-    timeout: Duration = .seconds(1),
-    condition: @escaping @MainActor @Sendable () -> Bool
-) async throws {
-    let clock = ContinuousClock()
-    let deadline = clock.now + timeout
-    while condition() == false {
-        if clock.now >= deadline {
-            throw TimedOut()
-        }
-        await Task.yield()
-    }
+@Observable
+private final class ContextChangeRevision {
+    var value = 0
 }
 
 @MainActor
 private func waitUntil(
+    in contexts: WebInspectorContext...,
     timeout: Duration = .seconds(1),
-    condition: @escaping @MainActor @Sendable () async -> Bool
+    condition: @escaping @MainActor @Sendable () -> Bool
 ) async throws {
-    let clock = ContinuousClock()
-    let deadline = clock.now + timeout
-    while await condition() == false {
-        if clock.now >= deadline {
-            throw TimedOut()
-        }
-        await Task.yield()
+    if condition() {
+        return
     }
+    let revision = ContextChangeRevision()
+    let contextTasks = contexts.map { context in
+        let changes = context.stateChangeStreamForTesting()
+        return Task { @MainActor in
+            for await _ in changes {
+                revision.value += 1
+            }
+        }
+    }
+    defer { contextTasks.forEach { $0.cancel() } }
+
+    let observation = withPortableContinuousObservation { _ in
+        _ = revision.value
+        for context in contexts {
+            _ = context.networkRequestsCollectionState.registrations
+        }
+        _ = condition()
+    }
+    defer { observation.cancel() }
+    let values = await observation.values { condition() }
+    defer { values.cancel() }
+    guard await values.waitUntil(timeout: timeout, { $0 }) != nil else {
+        throw TimedOut()
+    }
+}
+
+@MainActor
+private func waitForResponseBodyWaiters(in body: NetworkBody, count: Int) async throws {
+    try Task.checkCancellation()
+    let (registrations, continuation) = AsyncStream<Bool>.makeStream()
+    body.responseFetchWaiterDidRegisterForTesting = { continuation.yield(true) }
+    let timeoutTask = Task {
+        do {
+            try await Task.sleep(for: .seconds(1))
+        } catch {
+            return
+        }
+        continuation.yield(false)
+    }
+    defer {
+        timeoutTask.cancel()
+        body.responseFetchWaiterDidRegisterForTesting = nil
+        continuation.finish()
+    }
+    if body.responseFetchWaiterCountForTesting >= count {
+        return
+    }
+    for await didRegister in registrations {
+        guard didRegister else {
+            throw TimedOut("Timed out waiting for response body waiter registration.")
+        }
+        if body.responseFetchWaiterCountForTesting >= count {
+            return
+        }
+    }
+    try Task.checkCancellation()
+    throw TimedOut("Response body waiter registration ended before the expected count.")
 }

@@ -21,7 +21,7 @@ struct NativeInspectorSymbolResolverTests {
     @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason))
     @MainActor
     func nativeStringsPreserveUTF8AndEmptyValues() async throws {
-        let view = WKWebView(frame: .zero)
+        let view = try makeNativeTestWebView()
         let symbols = try await NativeInspectorResolvedSymbols.resolveCurrent()
         for string in ["", "ASCII", "日本語 😀 e\u{301}", "before\0after", String(repeating: "🦋", count: 2_048)] {
             #expect(unsafe symbols.withObjCSymbols { unsafe WebInspectorNativeRoundTripStringForTesting(string, $0) } == string)
@@ -31,7 +31,7 @@ struct NativeInspectorSymbolResolverTests {
     @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason), .timeLimit(.minutes(1)))
     @MainActor
     func nativeFrontendExchangesProtocolMessages() async throws {
-        let webView = WKWebView(frame: .zero)
+        let webView = try makeNativeTestWebView()
         webView.isInspectable = true
         let bridge = NativeInspectorBridge(webView: webView)
         let (messages, continuation) = AsyncThrowingStream<String, any Error>.makeStream()
@@ -75,7 +75,7 @@ struct NativeInspectorSymbolResolverTests {
     @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason))
     @MainActor
     func detachedNativeAttachmentRejectsCommandsAndRestoresDelegate() async throws {
-        let webView = WKWebView(frame: .zero)
+        let webView = try makeNativeTestWebView()
         let delegate = NativeSmokeNavigationDelegate()
         webView.navigationDelegate = delegate
         webView.isInspectable = true
@@ -99,7 +99,7 @@ struct NativeInspectorSymbolResolverTests {
     func attachmentRejectsNonFunctionHandles() async throws {
         let fixture = try nativeSymbolFixture()
         let symbols = try await NativeInspectorSymbolResolver.resolveUsingFixture(fixture)
-        let view = WKWebView(frame: .zero)
+        let view = try makeNativeTestWebView()
         let bridge = WebInspectorNativeBridgeObjC.WebInspectorNativeBridge(webView: view)
         do {
             try unsafe symbols.withObjCSymbols { borrowed in
@@ -346,8 +346,8 @@ private func requiredSymbol(
 }
 
 @MainActor
-private func withWebKitLoaded<T>(_ body: @MainActor () async throws -> T) async rethrows -> T {
-    let webView = WKWebView(frame: .zero)
+private func withWebKitLoaded<T>(_ body: @MainActor () async throws -> T) async throws -> T {
+    let webView = try makeNativeTestWebView()
     defer { withExtendedLifetime(webView) { } }
     return try await body()
 }

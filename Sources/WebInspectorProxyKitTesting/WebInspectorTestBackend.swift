@@ -105,10 +105,15 @@ private struct SubscriberWaiterRegistrationWaiter: Sendable {
 }
 
 private struct RecordedCommandWaiter: Sendable {
+    enum Completion: Sendable {
+        case uninterrupted(CheckedContinuation<[RecordedCommand], Never>)
+        case cancellable(ReplyPromise<[RecordedCommand]>)
+    }
+
     var domain: String
     var method: String
     var count: Int
-    var continuation: CheckedContinuation<[RecordedCommand], Never>
+    var completion: Completion
 }
 
 private struct CompletedCommandWaiter: Sendable {
@@ -139,6 +144,7 @@ public enum WebInspectorTestBackendError: Error, Equatable, Sendable {
 /// Use `waitForSubscribers(domain:target:count:)` before emitting when a test
 /// needs to assert delivery.
 public actor WebInspectorTestBackend {
+    private var orderedSubscriberTerminationWaiters: [OrderedEventSubscriptionKey: [ReplyPromise<Void>]] = [:]
     private var enqueuedReplies: [CommandKey: [QueuedReply]]
     private var commands: [RecordedCommand]
     private var completedCommands: [RecordedCommand]
@@ -264,9 +270,66 @@ public actor WebInspectorTestBackend {
                     domain: domain,
                     method: method,
                     count: count,
-                    continuation: continuation
+                    completion: .uninterrupted(continuation)
                 ))
             }
+        }
+    }
+
+    private enum RecordedCommandWaitError: Error {
+        case timedOut
+    }
+
+    package func waitForRecordedCommandsForTesting(
+        domain: String,
+        method: String,
+        count: Int,
+        timeout: Duration = .seconds(1),
+        onWaiterRegistered: (@Sendable () -> Void)? = nil
+    ) async throws -> [RecordedCommand] {
+        try Task.checkCancellation()
+        let matches = recordedCommands(domain: domain, method: method)
+        guard matches.count < count else {
+            return matches
+        }
+        let promise = ReplyPromise<[RecordedCommand]>()
+        recordedCommandWaiters.append(RecordedCommandWaiter(
+            domain: domain,
+            method: method,
+            count: count,
+            completion: .cancellable(promise)
+        ))
+        defer {
+            recordedCommandWaiters.removeAll { waiter in
+                guard case let .cancellable(waiterPromise) = waiter.completion else {
+                    return false
+                }
+                return waiterPromise === promise
+            }
+        }
+        onWaiterRegistered?()
+        let result = try await withThrowingTaskGroup(of: [RecordedCommand].self) { group in
+            group.addTask { try await promise.value() }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw RecordedCommandWaitError.timedOut
+            }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else {
+                throw CancellationError()
+            }
+            return result
+        }
+        try Task.checkCancellation()
+        return result
+    }
+
+    package func cancellableRecordedCommandWaiterCountForTesting() -> Int {
+        recordedCommandWaiters.count { waiter in
+            if case .cancellable = waiter.completion {
+                return true
+            }
+            return false
         }
     }
 
@@ -325,6 +388,19 @@ public actor WebInspectorTestBackend {
             route: target.route,
             targetID: target.id
         )]?.count ?? 0
+    }
+
+    package func waitForNoOrderedEventSubscribers(for target: WebInspectorTarget) async throws {
+        let key = OrderedEventSubscriptionKey(route: target.route, targetID: target.id)
+        guard orderedEventContinuations[key]?.isEmpty == false else {
+            return
+        }
+        let promise = ReplyPromise<Void>()
+        orderedSubscriberTerminationWaiters[key, default: []].append(promise)
+        defer {
+            orderedSubscriberTerminationWaiters[key]?.removeAll { $0 === promise }
+        }
+        try await promise.value()
     }
 
     package func eventSubscriptionBookkeepingCountForTesting() -> Int {
@@ -472,6 +548,10 @@ public actor WebInspectorTestBackend {
         }
         if orderedEventContinuations[key]?.isEmpty == true {
             orderedEventContinuations.removeValue(forKey: key)
+            let waiters = orderedSubscriberTerminationWaiters.removeValue(forKey: key) ?? []
+            for waiter in waiters {
+                waiter.fulfill(.success(()))
+            }
         }
     }
 
@@ -583,7 +663,12 @@ public actor WebInspectorTestBackend {
         for waiter in recordedCommandWaiters {
             let matches = recordedCommands(domain: waiter.domain, method: waiter.method)
             if matches.count >= waiter.count {
-                waiter.continuation.resume(returning: matches)
+                switch waiter.completion {
+                case let .uninterrupted(continuation):
+                    continuation.resume(returning: matches)
+                case let .cancellable(promise):
+                    promise.fulfill(.success(matches))
+                }
             } else {
                 unresolved.append(waiter)
             }
@@ -693,6 +778,11 @@ extension WebInspectorTestBackend: WebInspectorProxyBackend {
         eventContinuations.removeAll()
         let orderedContinuations = orderedEventContinuations.values.flatMap { Array($0.values) }
         orderedEventContinuations.removeAll()
+        let orderedTerminationWaiters = orderedSubscriberTerminationWaiters.values.flatMap { $0 }
+        orderedSubscriberTerminationWaiters.removeAll()
+        for waiter in orderedTerminationWaiters {
+            waiter.fulfill(.success(()))
+        }
         cancelledEventSubscriptionIDs.removeAll()
         let waiters = subscriberWaiters
         subscriberWaiters.removeAll()

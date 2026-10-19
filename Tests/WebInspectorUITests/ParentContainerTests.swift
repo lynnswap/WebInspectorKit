@@ -21,36 +21,6 @@ struct ParentContainerTests {
         case retirementCompleted
     }
 
-    private actor PickerShutdownRaceRecorder {
-        private var result: PickerShutdownRaceResult?
-        private var waiters: [CheckedContinuation<PickerShutdownRaceResult, Never>] = []
-
-        func record(_ result: PickerShutdownRaceResult) {
-            guard self.result == nil else {
-                return
-            }
-            self.result = result
-            let currentWaiters = waiters
-            waiters.removeAll()
-            for waiter in currentWaiters {
-                waiter.resume(returning: result)
-            }
-        }
-
-        func waitForResult() async -> PickerShutdownRaceResult {
-            if let result {
-                return result
-            }
-            return await withCheckedContinuation { continuation in
-                if let result {
-                    continuation.resume(returning: result)
-                } else {
-                    waiters.append(continuation)
-                }
-            }
-        }
-    }
-
     @Test
     func sessionAndViewControllerUseDOMAndNetworkTabsByDefault() {
         let session = WebInspectorSession()
@@ -464,10 +434,13 @@ struct ParentContainerTests {
         )
         #expect(session.detachCountForTesting == 0)
 
+        let deinitProbe = UITestDeinitProbe()
+        finalRoot?.setDeinitHandlerForTesting { deinitProbe.signalDeinit() }
         weak var releasedRoot = finalRoot
         finalRoot = nil
 
-        try await waitForTestCondition { releasedRoot == nil }
+        #expect(await deinitProbe.wait())
+        #expect(releasedRoot == nil)
         let retirement = try #require(session.abandonmentRetirementTaskForTesting)
         await retirement.value
         #expect(session.detachCountForTesting == 1)
@@ -495,13 +468,15 @@ struct ParentContainerTests {
         )
         #expect(session.detachCountForTesting == 0)
 
+        let deinitProbe = UITestDeinitProbe()
+        finalRoot?.setDeinitHandlerForTesting { deinitProbe.signalDeinit() }
         finalRoot = nil
         let replacementRoot = WebInspectorViewController(session: session)
         replacementRoot.automaticallyDetachesOnDismiss = false
         replacementRoot.loadViewIfNeeded()
         replacementRoot.beginAppearanceTransition(true, animated: false)
         replacementRoot.endAppearanceTransition()
-        try await waitForTestCondition { session.abandonmentRetirementTaskForTesting != nil }
+        #expect(await deinitProbe.wait())
         let abandonment = try #require(session.abandonmentRetirementTaskForTesting)
         await abandonment.value
         #expect(session.detachCountForTesting == 0)
@@ -526,11 +501,14 @@ struct ParentContainerTests {
 
         root?.finishRootPresentationLifecycleForTesting()
         let scheduledRetirement = try #require(root?.rootPresentationRetirementTaskForTesting)
+        let deinitProbe = UITestDeinitProbe()
+        root?.setDeinitHandlerForTesting { deinitProbe.signalDeinit() }
         weak var releasedRoot = root
         root = nil
 
         await scheduledRetirement.value
-        try await waitForTestCondition { releasedRoot == nil }
+        #expect(await deinitProbe.wait())
+        #expect(releasedRoot == nil)
         await session.abandonmentRetirementTaskForTesting?.value
         #expect(session.detachCountForTesting == 1)
     }
@@ -1108,28 +1086,22 @@ struct ParentContainerTests {
         )
         let enableDesiredStateID = try #require(context.elementPickerDesiredStateForTesting?.id)
 
-        let raceRecorder = PickerShutdownRaceRecorder()
+        let raceResultPromise = ReplyPromise<PickerShutdownRaceResult>()
+        context.elementPickerDesiredStateDidChangeForTesting = { id, isEnabled in
+            if id != enableDesiredStateID, !isEnabled {
+                raceResultPromise.fulfill(.success(.shutdownIntentRegistered))
+            }
+        }
+        defer { context.elementPickerDesiredStateDidChangeForTesting = nil }
         let retirementTask = Task { @MainActor in
             await fixture.session.retireRootPresentation(detach: false)
-            await raceRecorder.record(.retirementCompleted)
+            raceResultPromise.fulfill(.success(.retirementCompleted))
         }
-        let desiredStateObservationTask = Task { @MainActor in
-            while context.elementPickerDesiredStateForTesting?.id == enableDesiredStateID
-                || context.elementPickerDesiredStateForTesting?.isEnabled != false {
-                guard Task.isCancelled == false else {
-                    return
-                }
-                await Task.yield()
-            }
-            await raceRecorder.record(.shutdownIntentRegistered)
-        }
-        let raceResult = await raceRecorder.waitForResult()
+        let raceResult = try await raceResultPromise.value()
         await enableGate.open()
-        desiredStateObservationTask.cancel()
 
         try await enableTask.value
         await retirementTask.value
-        await desiredStateObservationTask.value
 
         #expect(raceResult == .shutdownIntentRegistered)
         let pickerCommands = await fixture.runtime.backend.recordedCommands().filter {

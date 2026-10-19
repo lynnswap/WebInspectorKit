@@ -40,6 +40,10 @@ let package = Package(
     ],
     dependencies: [
         .package(
+            url: "https://github.com/lynnswap/WebKitScreenTimeWorkaround.git",
+            exact: "0.3.0"
+        ),
+        .package(
             url: "https://github.com/lynnswap/ObservationBridge.git",
             exact: "0.15.2"
         ),
@@ -190,7 +194,10 @@ let package = Package(
         ),
         .testTarget(
             name: "WebInspectorNativeBridgeTests",
-            dependencies: ["WebInspectorNativeBridge", "WebInspectorNativeSymbolFixtures", "WebKitRuntime"],
+            dependencies: [
+                "WebInspectorNativeBridge", "WebInspectorNativeSymbolFixtures", "WebKitRuntime",
+                .product(name: "WebKitScreenTimeWorkaround", package: "WebKitScreenTimeWorkaround")
+            ],
             path: "Tests/WebInspectorNativeBridgeTests",
             swiftSettings: strictSwiftSettings
         ),
@@ -210,7 +217,8 @@ let package = Package(
                 "WebInspectorDataKit",
                 "WebInspectorProxyKitTesting",
                 "WebInspectorProxyKit",
-                "WebInspectorTestSupport"
+                "WebInspectorTestSupport",
+                .product(name: "ObservationBridge", package: "ObservationBridge")
             ],
             path: "Tests/WebInspectorDataKitTests",
             swiftSettings: strictSwiftSettings
@@ -226,6 +234,7 @@ let package = Package(
                 "WebInspectorUINetwork",
                 "WebInspectorKit",
                 "WebInspectorTestSupport",
+                .product(name: "WebKitScreenTimeWorkaround", package: "WebKitScreenTimeWorkaround"),
                 .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))
             ],
             path: "Tests/WebInspectorUITests",

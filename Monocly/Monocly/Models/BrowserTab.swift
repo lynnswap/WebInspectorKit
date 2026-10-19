@@ -43,8 +43,9 @@ let logger = Logger(
     @ObservationIgnored private var restoredInteractionState: Data?
     @ObservationIgnored var isRestoringInteractionStateNavigation = false
     @ObservationIgnored private var canSaveWebViewInteractionState = true
-    @ObservationIgnored private var titleObservationAppliedCount = 0
-    @ObservationIgnored private var titleObservationWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    #if DEBUG
+    private(set) var titleObservationAppliedCountForTesting = 0
+    #endif
     @ObservationIgnored static var didInstallSameDocumentNavigationDelegateMethod = false
 
     var isShowingProgress: Bool {
@@ -217,15 +218,6 @@ let logger = Logger(
         )
     }
 
-    func waitUntilTitleObservationApplied(atLeast count: Int = 1) async {
-        guard titleObservationAppliedCount < count else {
-            return
-        }
-        await withCheckedContinuation { continuation in
-            titleObservationWaiters.append((count, continuation))
-        }
-    }
-
     private func setObservers() {
         cancellables.removeAll()
 
@@ -359,16 +351,9 @@ let logger = Logger(
     }
 
     private func noteTitleObservationApplied() {
-        titleObservationAppliedCount += 1
-        var remainingWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
-        for (count, continuation) in titleObservationWaiters {
-            if titleObservationAppliedCount >= count {
-                continuation.resume()
-            } else {
-                remainingWaiters.append((count, continuation))
-            }
-        }
-        titleObservationWaiters = remainingWaiters
+        #if DEBUG
+        titleObservationAppliedCountForTesting += 1
+        #endif
     }
 
     private func configureRefreshControl() {

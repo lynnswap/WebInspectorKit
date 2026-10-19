@@ -1,6 +1,7 @@
 #if os(iOS) || os(macOS)
 import Testing
 import WebKit
+import WebKitScreenTimeWorkaround
 import WebInspectorNativeBridgeObjC
 @testable import WebInspectorNativeBridge
 
@@ -46,7 +47,7 @@ struct WebInspectorNativeBridgeTests {
     @MainActor
     @Test
     func sendWithoutAttachmentReturnsTypedInvalidationOnEveryAttempt() throws {
-        let webView = WKWebView(frame: .zero)
+        let webView = try makeNativeTestWebView()
         let bridge = NativeInspectorBridge(webView: webView)
         for _ in 0..<2 {
             do {
@@ -61,8 +62,8 @@ struct WebInspectorNativeBridgeTests {
 
     @MainActor
     @Test
-    func rawFrontendMessageIsDeliveredOnceWithoutTargetDemux() {
-        let bridge = NativeInspectorBridge(webView: WKWebView(frame: .zero))
+    func rawFrontendMessageIsDeliveredOnceWithoutTargetDemux() throws {
+        let bridge = NativeInspectorBridge(webView: try makeNativeTestWebView())
         var deliveredMessages: [String] = []
         bridge.messageHandler = { message in
             deliveredMessages.append(message)
@@ -73,5 +74,13 @@ struct WebInspectorNativeBridgeTests {
 
         #expect(deliveredMessages == [rawMessage])
     }
+}
+
+@MainActor
+func makeNativeTestWebView() throws -> WKWebView {
+    if #available(iOS 26.1, macOS 26.1, *) {
+        try ScreenTimeWorkaround.install()
+    }
+    return WKWebView(frame: .zero)
 }
 #endif

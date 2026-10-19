@@ -2,6 +2,7 @@
 import Testing
 import UIKit
 import WebInspectorKit
+import WebKitScreenTimeWorkaround
 
 @MainActor
 @Suite(.serialized, UIKitAnimationsDisabled())
@@ -14,6 +15,9 @@ private struct UIKitAnimationsDisabled: SuiteTrait, TestTrait, TestScoping {
         testCase: Test.Case?,
         performing function: () async throws -> Void
     ) async throws {
+        if #available(iOS 26.1, *) {
+            try ScreenTimeWorkaround.install()
+        }
         try await WebInspectorSession.prepare()
         let wereAnimationsEnabled = UIView.areAnimationsEnabled
         UIView.setAnimationsEnabled(false)

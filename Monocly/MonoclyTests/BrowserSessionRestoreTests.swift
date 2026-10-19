@@ -1,4 +1,6 @@
 import Foundation
+import Observation
+import ObservationBridge
 import Testing
 @testable import Monocly
 
@@ -7,11 +9,15 @@ import UIKit
 import WebKit
 import WebInspectorKit
 import WKViewportCoordinator
+import WebKitScreenTimeWorkaround
 
 @Suite(.serialized)
 @MainActor
 struct BrowserSessionRestoreTests {
     init() async throws {
+        if #available(iOS 26.1, *) {
+            try ScreenTimeWorkaround.install()
+        }
         try await WebInspectorSession.prepare()
     }
 
@@ -742,7 +748,7 @@ struct BrowserSessionRestoreTests {
 
             store.load(url: navigatedURL)
 
-            #expect(await waitUntil { scheduler.hasScheduledDelay })
+            try await scheduler.waitUntilScheduled()
             #expect(sessionStore.load() == nil)
 
             scheduler.fire()
@@ -768,7 +774,7 @@ struct BrowserSessionRestoreTests {
             )
 
             store.load(url: navigatedURL)
-            #expect(await waitUntil { scheduler.hasScheduledDelay })
+            try await scheduler.waitUntilScheduled()
 
             store.preserveSession(immediate: true)
 
@@ -792,10 +798,10 @@ struct BrowserSessionRestoreTests {
             )
             let tab = try #require(store.selectedTab)
 
-            await tab.waitUntilTitleObservationApplied()
+            try await requireTestEvent { tab.titleObservationAppliedCountForTesting >= 1 }
             tab.pageTitle = "Observed Title"
 
-            #expect(await waitUntil { scheduler.hasScheduledDelay })
+            try await scheduler.waitUntilScheduled()
 
             scheduler.fire()
 
@@ -830,7 +836,7 @@ struct BrowserSessionRestoreTests {
         )
         let tab = try #require(store.tabs.first)
 
-        await tab.waitUntilTitleObservationApplied()
+        try await requireTestEvent { tab.titleObservationAppliedCountForTesting >= 1 }
 
         #expect(store.tabs[0].snapshot().title == "Restored Title")
         #expect(store.displayTitle == "Restored Title")
@@ -888,9 +894,9 @@ struct BrowserSessionRestoreTests {
         }
 
         store.selectTab(id: secondID)
-        await selectedWebViewInstalled.wait(for: secondWebView)
+        try await selectedWebViewInstalled.wait(for: secondWebView)
         await rootViewController.waitForInspectorSessionTransitions()
-        await inspectorSessionAttached.wait(for: secondWebView)
+        try await inspectorSessionAttached.wait(for: secondWebView)
     }
 
     @Test
@@ -911,11 +917,13 @@ struct BrowserSessionRestoreTests {
             progressHideScheduler: scheduler
         )
 
+        let bindingCompleted = TestEventSignal()
+        pageViewController.onSelectedTabBindingCompletedForTesting = bindingCompleted.record
+        defer { pageViewController.onSelectedTabBindingCompletedForTesting = nil }
         pageViewController.loadViewIfNeeded()
         let tab = try #require(store.selectedTab)
-        #expect(await waitUntil {
-            pageViewController.selectedTabObservationIsActiveForTesting
-        })
+        try await bindingCompleted.wait(for: 1)
+        try await requireTestEvent { tab.titleObservationAppliedCountForTesting >= 1 }
 
         tab.pageTitle = "Native Title"
         tab.canGoBack = true
@@ -924,7 +932,7 @@ struct BrowserSessionRestoreTests {
         tab.estimatedProgress = 0.42
         tab.underPageBackgroundColor = .systemPink
 
-        #expect(await waitUntil {
+        try #require(await waitForSelectedTabRendering(in: pageViewController) {
             pageViewController.navigationItem.title == "Native Title"
         })
 
@@ -980,8 +988,13 @@ struct BrowserSessionRestoreTests {
             progressHideScheduler: ManualDelayScheduler()
         )
 
+        let bindingCompleted = TestEventSignal()
+        pageViewController.onSelectedTabBindingCompletedForTesting = bindingCompleted.record
+        defer { pageViewController.onSelectedTabBindingCompletedForTesting = nil }
         pageViewController.loadViewIfNeeded()
         let tab = try #require(store.selectedTab)
+        try await bindingCompleted.wait(for: 1)
+        try await requireTestEvent { tab.titleObservationAppliedCountForTesting >= 1 }
         let backButtonItem = pageViewController.backButtonItemForTesting
         let forwardButtonItem = pageViewController.forwardButtonItemForTesting
         let inspectorButtonItem = pageViewController.inspectorButtonItemForTesting
@@ -989,7 +1002,11 @@ struct BrowserSessionRestoreTests {
         tab.pageTitle = "Updated Title"
         tab.isLoading = true
         tab.estimatedProgress = 0.75
-        await Task.yield()
+        try #require(await waitForSelectedTabRendering(in: pageViewController) {
+            pageViewController.navigationItem.title == "Updated Title"
+                && pageViewController.progressViewForTesting.isHidden == false
+                && abs(pageViewController.progressViewForTesting.progress - Float(0.75)) < 0.001
+        })
 
         #expect(pageViewController.backButtonItemForTesting === backButtonItem)
         #expect(pageViewController.forwardButtonItemForTesting === forwardButtonItem)
@@ -1029,7 +1046,7 @@ struct BrowserSessionRestoreTests {
         }
         pageViewController.loadViewIfNeeded()
         window.layoutIfNeeded()
-        #expect(await waitUntil {
+        try #require(await waitForInspectorPresentationRendering(in: pageViewController) {
             pageViewController.inspectorPresentationObservationIsActiveForTesting
         })
         let inspectorButtonItem = pageViewController.inspectorButtonItemForTesting
@@ -1038,14 +1055,14 @@ struct BrowserSessionRestoreTests {
         #expect(pageViewController.openInspectorAsSheetForTesting())
         let sheetController = try #require(pageViewController.presentedInspectorSheetForTesting)
         #expect(sheetController.automaticallyDetachesOnDismiss == false)
-        #expect(await waitUntil {
+        try #require(await waitForInspectorPresentationRendering(in: pageViewController) {
             inspectorButtonItem.isEnabled == false
         })
 
         let presentationController = try #require(sheetController.presentationController)
         presentationController.delegate?.presentationControllerDidDismiss?(presentationController)
 
-        #expect(await waitUntil {
+        try #require(await waitForInspectorPresentationRendering(in: pageViewController) {
             pageViewController.presentedInspectorSheetForTesting == nil
                 && inspectorButtonItem.isEnabled
         })
@@ -1122,16 +1139,19 @@ struct BrowserSessionRestoreTests {
             progressHideScheduler: ManualDelayScheduler()
         )
         var installedWebViewIDs: [ObjectIdentifier] = []
+        let bindingCompleted = TestEventSignal()
+        pageViewController.onSelectedTabBindingCompletedForTesting = bindingCompleted.record
+        defer { pageViewController.onSelectedTabBindingCompletedForTesting = nil }
         pageViewController.onSelectedWebViewInstalled = { webView in
             installedWebViewIDs.append(ObjectIdentifier(webView))
         }
 
         pageViewController.loadViewIfNeeded()
-        await Task.yield()
+        try await bindingCompleted.wait(for: 1)
         fixture.browserWindow.selectTab(id: fixture.secondTabID)
-        await Task.yield()
+        try await bindingCompleted.wait(for: 2)
         fixture.browserWindow.selectTab(id: fixture.secondTabID)
-        await Task.yield()
+        await pageViewController.rebindSelectedTabForTesting()
 
         #expect(installedWebViewIDs == [
             ObjectIdentifier(fixture.firstWebView),
@@ -1156,19 +1176,19 @@ struct BrowserSessionRestoreTests {
         let installedWebViews = WebViewIdentitySignal()
         pageViewController.onSelectedWebViewInstalled = installedWebViews.record
         pageViewController.loadViewIfNeeded()
-        await installedWebViews.wait(for: firstWebView)
+        try await installedWebViews.wait(for: firstWebView)
         let firstCoordinator = try #require(firstWebView.viewportCoordinator)
         #expect(firstCoordinator.hostViewController === pageViewController)
 
         fixture.browserWindow.selectTab(id: fixture.secondTabID)
-        await installedWebViews.wait(for: secondWebView)
+        try await installedWebViews.wait(for: secondWebView)
         #expect(firstWebView.viewportCoordinator == nil)
         #expect(secondWebView.viewportCoordinator?.hostViewController === pageViewController)
 
         let reinstalledWebViews = WebViewIdentitySignal()
         pageViewController.onSelectedWebViewInstalled = reinstalledWebViews.record
         fixture.browserWindow.selectTab(id: fixture.browserWindow.tabs[0].id)
-        await reinstalledWebViews.wait(for: firstWebView)
+        try await reinstalledWebViews.wait(for: firstWebView)
         let reinstalledCoordinator = try #require(firstWebView.viewportCoordinator)
         #expect(reinstalledCoordinator !== firstCoordinator)
         #expect(reinstalledCoordinator.hostViewController === pageViewController)
@@ -1180,6 +1200,7 @@ struct BrowserSessionRestoreTests {
     func attachmentLifecycleAttachesLatestWebViewAfterInFlightSelectionChange() async throws {
         let fixture = try makeAttachmentLifecycleFixture()
         let actions = ControlledInspectorAttachmentActions()
+        defer { actions.releaseAttach(result: .failure(CancellationError())) }
         let lifecycle = BrowserInspectorSessionAttachmentLifecycle(
             browserWindow: fixture.browserWindow,
             inspectorSession: WebInspectorSession(),
@@ -1188,12 +1209,12 @@ struct BrowserSessionRestoreTests {
         )
 
         lifecycle.request(.attached)
-        await actions.waitUntilAttachStarted(count: 1)
+        try await actions.waitUntilAttachStarted(count: 1)
 
         fixture.browserWindow.selectTab(id: fixture.secondTabID)
         lifecycle.selectedWebViewDidChange(to: fixture.secondWebView)
         actions.releaseAttach()
-        await actions.waitUntilAttachStarted(count: 2)
+        try await actions.waitUntilAttachStarted(count: 2)
         actions.releaseAttach()
         await lifecycle.waitForTransitions()
 
@@ -1209,6 +1230,7 @@ struct BrowserSessionRestoreTests {
     func attachmentLifecycleDetachesBeforeReplacingAttachedWebView() async throws {
         let fixture = try makeAttachmentLifecycleFixture()
         let actions = ControlledInspectorAttachmentActions()
+        defer { actions.releaseAttach(result: .failure(CancellationError())) }
         let lifecycle = BrowserInspectorSessionAttachmentLifecycle(
             browserWindow: fixture.browserWindow,
             inspectorSession: WebInspectorSession(),
@@ -1219,7 +1241,7 @@ struct BrowserSessionRestoreTests {
 
         fixture.browserWindow.selectTab(id: fixture.secondTabID)
         lifecycle.selectedWebViewDidChange(to: fixture.secondWebView)
-        await actions.waitUntilAttachStarted(count: 1)
+        try await actions.waitUntilAttachStarted(count: 1)
         actions.releaseAttach()
         await lifecycle.waitForTransitions()
 
@@ -1233,6 +1255,7 @@ struct BrowserSessionRestoreTests {
     func attachmentLifecycleFinalizesByDetachingAfterInFlightAttachCompletes() async throws {
         let fixture = try makeAttachmentLifecycleFixture()
         let actions = ControlledInspectorAttachmentActions()
+        defer { actions.releaseAttach(result: .failure(CancellationError())) }
         let lifecycle = BrowserInspectorSessionAttachmentLifecycle(
             browserWindow: fixture.browserWindow,
             inspectorSession: WebInspectorSession(),
@@ -1241,11 +1264,11 @@ struct BrowserSessionRestoreTests {
         )
 
         lifecycle.request(.attached)
-        await actions.waitUntilAttachStarted(count: 1)
+        try await actions.waitUntilAttachStarted(count: 1)
         #expect(lifecycle.finalize())
 
         actions.releaseAttach()
-        await actions.waitUntilDetachCount(1)
+        try await actions.waitUntilDetachCount(1)
         await lifecycle.waitForTransitions()
         lifecycle.request(.attached)
 
@@ -1257,6 +1280,7 @@ struct BrowserSessionRestoreTests {
     func attachmentLifecycleDoesNotAutomaticallyRetryFailedAttach() async throws {
         let fixture = try makeAttachmentLifecycleFixture()
         let actions = ControlledInspectorAttachmentActions()
+        defer { actions.releaseAttach(result: .failure(CancellationError())) }
         let lifecycle = BrowserInspectorSessionAttachmentLifecycle(
             browserWindow: fixture.browserWindow,
             inspectorSession: WebInspectorSession(),
@@ -1265,7 +1289,7 @@ struct BrowserSessionRestoreTests {
         )
 
         lifecycle.request(.attached)
-        await actions.waitUntilAttachStarted(count: 1)
+        try await actions.waitUntilAttachStarted(count: 1)
         actions.releaseAttach(result: .failure(NSError(domain: "BrowserSessionRestoreTests", code: 1)))
         await lifecycle.waitForTransitions()
 
@@ -1273,7 +1297,7 @@ struct BrowserSessionRestoreTests {
         #expect(actions.detachCount == 0)
 
         lifecycle.request(.attached)
-        await actions.waitUntilAttachStarted(count: 2)
+        try await actions.waitUntilAttachStarted(count: 2)
         actions.releaseAttach()
         await lifecycle.waitForTransitions()
 
@@ -1285,6 +1309,7 @@ struct BrowserSessionRestoreTests {
     func inFlightAttachmentDoesNotRetainLifecycleOwner() async throws {
         let fixture = try makeAttachmentLifecycleFixture()
         let actions = ControlledInspectorAttachmentActions()
+        defer { actions.releaseAttach(result: .failure(CancellationError())) }
         var lifecycle: BrowserInspectorSessionAttachmentLifecycle? = BrowserInspectorSessionAttachmentLifecycle(
             browserWindow: fixture.browserWindow,
             inspectorSession: WebInspectorSession(),
@@ -1294,20 +1319,21 @@ struct BrowserSessionRestoreTests {
         weak var retainedLifecycle = lifecycle
 
         lifecycle?.request(.attached)
-        await actions.waitUntilAttachStarted(count: 1)
+        try await actions.waitUntilAttachStarted(count: 1)
 
         lifecycle = nil
 
         #expect(retainedLifecycle == nil)
 
         actions.releaseAttach()
-        await actions.waitUntilAttachCompleted(count: 1)
+        try await actions.waitUntilAttachCompleted(count: 1)
     }
 
     @Test
     func lateAttachmentCompletionDoesNotStartPendingReattachmentAfterLifecycleRelease() async throws {
         let fixture = try makeAttachmentLifecycleFixture()
         let actions = ControlledInspectorAttachmentActions()
+        defer { actions.releaseAttach(result: .failure(CancellationError())) }
         var lifecycle: BrowserInspectorSessionAttachmentLifecycle? = BrowserInspectorSessionAttachmentLifecycle(
             browserWindow: fixture.browserWindow,
             inspectorSession: WebInspectorSession(),
@@ -1317,7 +1343,7 @@ struct BrowserSessionRestoreTests {
         weak var retainedLifecycle = lifecycle
 
         lifecycle?.request(.attached)
-        await actions.waitUntilAttachStarted(count: 1)
+        try await actions.waitUntilAttachStarted(count: 1)
         fixture.browserWindow.selectTab(id: fixture.secondTabID)
         lifecycle?.selectedWebViewDidChange(to: fixture.secondWebView)
 
@@ -1325,7 +1351,7 @@ struct BrowserSessionRestoreTests {
         #expect(retainedLifecycle == nil)
 
         actions.releaseAttach()
-        await actions.waitUntilAttachCompleted(count: 1)
+        try await actions.waitUntilAttachCompleted(count: 1)
 
         #expect(actions.attachedWebViews == [fixture.firstWebView])
         #expect(actions.detachCount == 0)
@@ -1335,6 +1361,7 @@ struct BrowserSessionRestoreTests {
     func cancellingInFlightAttachmentRejectsLateCompletionAndPendingReattachment() async throws {
         let fixture = try makeAttachmentLifecycleFixture()
         let actions = ControlledInspectorAttachmentActions()
+        defer { actions.releaseAttach(result: .failure(CancellationError())) }
         let lifecycle = BrowserInspectorSessionAttachmentLifecycle(
             browserWindow: fixture.browserWindow,
             inspectorSession: WebInspectorSession(),
@@ -1343,13 +1370,13 @@ struct BrowserSessionRestoreTests {
         )
 
         lifecycle.request(.attached)
-        await actions.waitUntilAttachStarted(count: 1)
+        try await actions.waitUntilAttachStarted(count: 1)
         fixture.browserWindow.selectTab(id: fixture.secondTabID)
         lifecycle.selectedWebViewDidChange(to: fixture.secondWebView)
 
         lifecycle.cancel()
         actions.releaseAttach()
-        await actions.waitUntilAttachCompleted(count: 1)
+        try await actions.waitUntilAttachCompleted(count: 1)
         lifecycle.request(.attached)
 
         #expect(actions.attachedWebViews == [fixture.firstWebView])
@@ -1497,18 +1524,28 @@ struct BrowserSessionRestoreTests {
         )
     }
 
-    private func waitUntil(
-        timeoutNanoseconds: UInt64 = 1_000_000_000,
-        condition: @escaping @MainActor () -> Bool
+    private func waitForSelectedTabRendering(
+        in viewController: BrowserPageViewController,
+        _ condition: @escaping @MainActor @Sendable () -> Bool
     ) async -> Bool {
-        let deadline = ContinuousClock.now + .nanoseconds(Int(timeoutNanoseconds))
-        while ContinuousClock.now < deadline {
-            if condition() {
-                return true
-            }
-            try? await Task.sleep(nanoseconds: 10_000_000)
+        guard let delivery = viewController.selectedTabObservationDeliveryForTesting else {
+            return false
         }
-        return condition()
+        let values = await delivery.values(condition)
+        defer { values.cancel() }
+        return await values.waitUntilValue(true)
+    }
+
+    private func waitForInspectorPresentationRendering(
+        in viewController: BrowserPageViewController,
+        _ condition: @escaping @MainActor @Sendable () -> Bool
+    ) async -> Bool {
+        guard let delivery = viewController.inspectorPresentationObservationDeliveryForTesting else {
+            return false
+        }
+        let values = await delivery.values(condition)
+        defer { values.cancel() }
+        return await values.waitUntilValue(true)
     }
 
     private struct JavaScriptDialogFixture {
@@ -1611,6 +1648,7 @@ struct BrowserSessionRestoreTests {
     @MainActor
     private final class ManualDelayScheduler: MainActorDelayScheduling {
         private var operation: (@Sendable @MainActor () -> Void)?
+        private let scheduled = TestEventSignal()
 
         var hasScheduledDelay: Bool {
             operation != nil
@@ -1622,10 +1660,19 @@ struct BrowserSessionRestoreTests {
 
         func schedule(after duration: Duration, operation: @escaping @Sendable @MainActor () -> Void) {
             self.operation = operation
+            scheduled.record()
         }
 
         func schedule(nanoseconds: UInt64, operation: @escaping @Sendable @MainActor () -> Void) {
             self.operation = operation
+            scheduled.record()
+        }
+
+        func waitUntilScheduled() async throws {
+            guard hasScheduledDelay == false else {
+                return
+            }
+            try await scheduled.wait(for: scheduled.count + 1)
         }
 
         func fire() {
@@ -1636,27 +1683,31 @@ struct BrowserSessionRestoreTests {
     }
 
     @MainActor
-    private final class WebViewIdentitySignal {
-        private var seenWebViewIDs: Set<ObjectIdentifier> = []
-        private var waitersByWebViewID: [ObjectIdentifier: [CheckedContinuation<Void, Never>]] = [:]
+    @Observable
+    fileprivate final class TestEventSignal {
+        private(set) var count = 0
 
-        func record(_ webView: WKWebView) {
-            let webViewID = ObjectIdentifier(webView)
-            seenWebViewIDs.insert(webViewID)
-            let waiters = waitersByWebViewID.removeValue(forKey: webViewID) ?? []
-            for waiter in waiters {
-                waiter.resume()
-            }
+        func record() {
+            count += 1
         }
 
-        func wait(for webView: WKWebView) async {
+        func wait(for expectedCount: Int) async throws {
+            try await requireTestEvent { self.count >= expectedCount }
+        }
+    }
+
+    @MainActor
+    @Observable
+    fileprivate final class WebViewIdentitySignal {
+        private var seenWebViewIDs: Set<ObjectIdentifier> = []
+
+        func record(_ webView: WKWebView) {
+            seenWebViewIDs.insert(ObjectIdentifier(webView))
+        }
+
+        func wait(for webView: WKWebView) async throws {
             let webViewID = ObjectIdentifier(webView)
-            guard seenWebViewIDs.contains(webViewID) == false else {
-                return
-            }
-            await withCheckedContinuation { continuation in
-                waitersByWebViewID[webViewID, default: []].append(continuation)
-            }
+            try await requireTestEvent { self.seenWebViewIDs.contains(webViewID) }
         }
     }
 
@@ -1716,7 +1767,8 @@ struct BrowserSessionRestoreTests {
     }
 
     @MainActor
-    private final class ControlledInspectorAttachmentActions {
+    @Observable
+    fileprivate final class ControlledInspectorAttachmentActions {
         enum Event: Equatable {
             case attach(ObjectIdentifier)
             case detach
@@ -1728,19 +1780,14 @@ struct BrowserSessionRestoreTests {
         private(set) var events: [Event] = []
         private var attachContinuation: CheckedContinuation<Void, Never>?
         private var attachResult: Result<Void, any Error> = .success(())
-        private var attachStartedWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
-        private var attachCompletedWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
-        private var detachWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
 
         func attach(_ webView: WKWebView) async throws {
             attachedWebViews.append(webView)
             events.append(.attach(ObjectIdentifier(webView)))
-            resumeAttachStartedWaiters()
             await withCheckedContinuation { continuation in
                 attachContinuation = continuation
             }
             attachCompletionCount += 1
-            resumeAttachCompletedWaiters()
             let result = attachResult
             attachResult = .success(())
             try result.get()
@@ -1749,34 +1796,18 @@ struct BrowserSessionRestoreTests {
         func detach() async {
             detachCount += 1
             events.append(.detach)
-            resumeDetachWaiters()
         }
 
-        func waitUntilAttachStarted(count: Int) async {
-            guard attachedWebViews.count < count else {
-                return
-            }
-            await withCheckedContinuation { continuation in
-                attachStartedWaiters.append((count, continuation))
-            }
+        func waitUntilAttachStarted(count: Int) async throws {
+            try await requireTestEvent { self.attachedWebViews.count >= count }
         }
 
-        func waitUntilAttachCompleted(count: Int) async {
-            guard attachCompletionCount < count else {
-                return
-            }
-            await withCheckedContinuation { continuation in
-                attachCompletedWaiters.append((count, continuation))
-            }
+        func waitUntilAttachCompleted(count: Int) async throws {
+            try await requireTestEvent { self.attachCompletionCount >= count }
         }
 
-        func waitUntilDetachCount(_ count: Int) async {
-            guard detachCount < count else {
-                return
-            }
-            await withCheckedContinuation { continuation in
-                detachWaiters.append((count, continuation))
-            }
+        func waitUntilDetachCount(_ count: Int) async throws {
+            try await requireTestEvent { self.detachCount >= count }
         }
 
         func releaseAttach(result: Result<Void, any Error> = .success(())) {
@@ -1785,30 +1816,26 @@ struct BrowserSessionRestoreTests {
             attachContinuation = nil
             continuation?.resume()
         }
+    }
+}
 
-        private func resumeAttachStartedWaiters() {
-            let readyWaiters = attachStartedWaiters.filter { attachedWebViews.count >= $0.0 }
-            attachStartedWaiters.removeAll { attachedWebViews.count >= $0.0 }
-            for waiter in readyWaiters {
-                waiter.1.resume()
-            }
-        }
-
-        private func resumeAttachCompletedWaiters() {
-            let readyWaiters = attachCompletedWaiters.filter { attachCompletionCount >= $0.0 }
-            attachCompletedWaiters.removeAll { attachCompletionCount >= $0.0 }
-            for waiter in readyWaiters {
-                waiter.1.resume()
-            }
-        }
-
-        private func resumeDetachWaiters() {
-            let readyWaiters = detachWaiters.filter { detachCount >= $0.0 }
-            detachWaiters.removeAll { detachCount >= $0.0 }
-            for waiter in readyWaiters {
-                waiter.1.resume()
-            }
-        }
+@MainActor
+private func requireTestEvent(
+    _ condition: @escaping @MainActor @Sendable () -> Bool
+) async throws {
+    try Task.checkCancellation()
+    let observation = withPortableContinuousObservation { _ in
+        _ = condition()
+    }
+    defer { observation.cancel() }
+    let values = await observation.values(condition)
+    defer { values.cancel() }
+    try await withTaskCancellationHandler {
+        let didObserveEvent = await values.waitUntilValue(true)
+        try Task.checkCancellation()
+        try #require(didObserveEvent)
+    } onCancel: {
+        values.cancel()
     }
 }
 #endif
