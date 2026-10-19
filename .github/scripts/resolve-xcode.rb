@@ -34,9 +34,5 @@ abort("Unable to read Xcode version") unless $?.success?
 File.open(ENV.fetch("GITHUB_ENV"), "a") do |env|
   env.puts "DEVELOPER_DIR=#{developer_dir}"
 end
-cache_id = version_output.tr("\n ", "--").gsub(/[^[:alnum:]._-]/, "")
-File.open(ENV.fetch("GITHUB_OUTPUT"), "a") do |output|
-  output.puts "cache-id=#{cache_id}"
-end
 puts "Resolved Xcode: #{selected}"
 puts version_output
