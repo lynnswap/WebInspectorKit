@@ -155,19 +155,6 @@ class RuntimeSelectionTests(unittest.TestCase):
         self.assertEqual(runner.test_cases([], "27.1", "workspace", 27, platform="macOS"),
                          [{"runtime": "", "version": "27.1", "platform": "macOS", "suite": "workspace"}])
 
-    def test_exact_runtime_keeps_the_planned_destination_when_worker_has_newer_releases(self):
-        for suite, planned_versions, added_version in (
-            ("workspace", ["27.0"], "27.1"),
-            ("native", ["18.4", "27.0"], "18.6"),
-        ):
-            with self.subTest(suite=suite):
-                installed = [runtime(version) for version in planned_versions]
-                planned = runner.test_cases(installed, "27.0", suite, 27, platform="iOS")[0]
-                selected = runner.test_cases([*installed, runtime(added_version)], "27.0", suite, 27,
-                                             platform="iOS", runtime_identifier=planned["runtime"])
-                self.assertEqual(selected, [planned])
-
-
 class RuntimeExecutionTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
@@ -190,7 +177,7 @@ class RuntimeExecutionTests(unittest.TestCase):
         stack.enter_context(patch.object(runner, "simctl", side_effect=["first-device", "second-device"]))
 
     def execute(self, suite, fail=None, *, all_native_runtimes=False, platform=None,
-                reuse_simulators=False, runtime_identifier=None, only_testing=(), skip_testing=()):
+                reuse_simulators=False):
         def run(command, **options):
             self.commands.append((command, options))
             if fail:
@@ -199,8 +186,7 @@ class RuntimeExecutionTests(unittest.TestCase):
         with patch.object(runner.subprocess, "run", side_effect=run):
             return runner.run_tests(self.runtimes, "27.0", self.root, suite, latest_ios_major=27,
                                     all_native_runtimes=all_native_runtimes, platform=platform,
-                                    reuse_simulators=reuse_simulators, runtime_identifier=runtime_identifier,
-                                    only_testing=only_testing, skip_testing=skip_testing)
+                                    reuse_simulators=reuse_simulators)
 
     def test_workspace_runs_latest_only_and_excludes_low_level_suite(self):
         self.assertEqual(self.execute("workspace"), 0)
@@ -210,20 +196,6 @@ class RuntimeExecutionTests(unittest.TestCase):
         self.assertIn("-only-testing:WebInspectorConsumerContractTests", commands[1])
         self.assertNotIn("-only-testing:WebInspectorNativeBridgeTests", commands[1])
         self.assertNotIn("18.6", self.summary.read_text())
-
-    def test_workspace_group_selection_preserves_the_native_exclusion(self):
-        for only_testing, skip_testing in (
-            (("WebInspectorUITests",), ()),
-            ((), ("WebInspectorUITests",)),
-        ):
-            with self.subTest(only_testing=only_testing, skip_testing=skip_testing):
-                self.assertEqual(self.execute("workspace", platform="iOS", only_testing=only_testing,
-                                              skip_testing=skip_testing), 0)
-                command = [command for command, _ in self.commands if "xcodebuild" in command][-1]
-                self.assertIn("-skip-testing:WebInspectorNativeBridgeTests", command)
-                self.assertEqual([arg for arg in command if arg.startswith("-only-testing:")],
-                                 [f"-only-testing:{identifier}" for identifier in only_testing])
-                self.assertEqual("-skip-testing:WebInspectorUITests" in command, bool(skip_testing))
 
     def test_release_validation_runs_older_minors_and_cleans_each_device(self):
         older = runtime("18.4")
@@ -240,65 +212,16 @@ class RuntimeExecutionTests(unittest.TestCase):
         self.assertIn("| iOS 18.4 / native | Passed |", self.summary.read_text())
         self.assertIn("| iOS 18.6 / native | Passed |", self.summary.read_text())
 
-    def test_command_line_passes_runtime_and_full_native_coverage_to_execution(self):
-        identifier = self.runtimes[0]["identifier"]
+    def test_command_line_passes_platform_and_full_native_coverage_to_execution(self):
         arguments = ["runtime-tests.py", str(self.root), "--suite", "native",
-                     "--latest-ios-major", "27", "--all-native-runtimes", "--platform", "iOS",
-                     "--runtime", identifier]
+                     "--latest-ios-major", "27", "--all-native-runtimes", "--platform", "iOS"]
         with patch.object(sys, "argv", arguments), \
                 patch.object(runner, "simctl", return_value=json.dumps({"runtimes": self.runtimes})), \
                 patch.object(runner.subprocess, "check_output", return_value="27.0\n"), \
                 patch.object(runner, "run_tests", return_value=0) as execute:
             self.assertEqual(runner.main(), 0)
         execute.assert_called_once_with(self.runtimes, "27.0", self.root, "native", 27,
-                                        all_native_runtimes=True, platform="iOS", reuse_simulators=False,
-                                        runtime_identifier=identifier, only_testing=[], skip_testing=[])
-
-    def test_command_line_preserves_repeated_test_selection_arguments(self):
-        arguments = ["runtime-tests.py", str(self.root), "--suite", "workspace",
-                     "--latest-ios-major", "27", "--platform", "iOS",
-                     "--only-testing", "WebInspectorUITests", "--only-testing", "MonoclyTests",
-                     "--skip-testing", "WebInspectorDataKitTests", "--skip-testing", "WebInspectorProxyKitTests"]
-        with patch.object(sys, "argv", arguments), \
-                patch.object(runner, "simctl", return_value=json.dumps({"runtimes": self.runtimes})), \
-                patch.object(runner.subprocess, "check_output", return_value="27.0\n"), \
-                patch.object(runner, "run_tests", return_value=0) as execute:
-            self.assertEqual(runner.main(), 0)
-        self.assertEqual(execute.call_args.kwargs["only_testing"], ["WebInspectorUITests", "MonoclyTests"])
-        self.assertEqual(execute.call_args.kwargs["skip_testing"],
-                         ["WebInspectorDataKitTests", "WebInspectorProxyKitTests"])
-
-    def test_list_cases_prints_full_release_coverage_without_running_tests(self):
-        older = runtime("18.4")
-        installed = [older, *self.runtimes, runtime("26.0"), runtime("27.1", available=False)]
-        arguments = ["runtime-tests.py", str(self.root), "--suite", "native",
-                     "--latest-ios-major", "27", "--all-native-runtimes", "--list-cases"]
-        with patch.object(sys, "argv", arguments), \
-                patch.object(runner, "simctl", return_value=json.dumps({"runtimes": installed})), \
-                patch.object(runner.subprocess, "check_output", return_value="27.0\n"), \
-                patch.object(runner, "run_tests") as execute:
-            self.assertEqual(runner.main(), 0)
-        execute.assert_not_called()
-        cases = json.loads(self.output.getvalue())
-        self.assertEqual([(case["platform"], case["version"]) for case in cases],
-                         [("iOS", "18.4"), ("iOS", "18.6"), ("iOS", "27.0"), ("macOS", "27.0")])
-        self.assertEqual([case["runtime"] for case in cases[:-1]],
-                         [older["identifier"], *[item["identifier"] for item in self.runtimes]])
-        self.assertFalse(self.summary.exists())
-
-    def test_runtime_filter_executes_only_the_requested_destination(self):
-        self.assertEqual(self.execute("native", platform="iOS",
-                                      runtime_identifier=self.runtimes[0]["identifier"]), 0)
-        tests = [command for command, _ in self.commands if "xcodebuild" in command]
-        self.assertEqual(len(tests), 1)
-        self.assertIn("platform=iOS Simulator,id=first-device", tests[0])
-        self.assertIn("| iOS 18.6 / native | Passed |", self.summary.read_text())
-        self.assertNotIn("27.0", self.summary.read_text())
-
-    def test_missing_runtime_fails_before_booting_or_testing(self):
-        with self.assertRaisesRegex(ValueError, "No selected iOS runtime matches"):
-            self.execute("native", platform="iOS", runtime_identifier=runtime("27.1")["identifier"])
-        self.assertEqual(self.commands, [])
+                                        all_native_runtimes=True, platform="iOS", reuse_simulators=False)
 
     def test_macos_command_line_does_not_require_or_access_simulators(self):
         arguments = ["runtime-tests.py", str(self.root), "--suite", "native",
@@ -310,8 +233,7 @@ class RuntimeExecutionTests(unittest.TestCase):
             self.assertEqual(runner.main(), 0)
         simctl.assert_not_called()
         execute.assert_called_once_with([], "27.0", self.root, "native", 27,
-                                        all_native_runtimes=False, platform="macOS", reuse_simulators=True,
-                                        runtime_identifier=None, only_testing=[], skip_testing=[])
+                                        all_native_runtimes=False, platform="macOS", reuse_simulators=True)
 
     def test_reused_device_is_shut_down_without_being_deleted(self):
         device = {"udid": "borrowed", "state": "Shutdown", "isAvailable": True,
