@@ -9,7 +9,7 @@ runtime foundation independently of Inspector sessions and UI. Swift consumers
 import `WebKitRuntime`; Objective-C++ consumers can include `WebKitRuntimeObjC.h`
 from the same product.
 
-Resolve only the symbols your operation requires. ABIBridge resolves declarations off MainActor and owns the loaded-image and shared-cache indexes. WebKitRuntime preserves ordered image/name alternatives and shares successful results across consumers. A failed requirement does not invalidate other resolved symbols. Missing requirements can be retried after an image loads.
+Resolve only the symbols your operation requires. WebKitRuntime passes uncached requirements to one ABIBridge batch, which resolves declarations off MainActor and owns the loaded-image and shared-cache indexes. Successful results are shared across consumers. A failed requirement does not invalidate other resolved symbols. Missing requirements can be retried after an image loads.
 
 ```swift
 import WebKitRuntime
@@ -27,6 +27,25 @@ This declaration is an example of a feature-specific requirement, not an entry
 point guaranteed to exist on every OS. Catch `RuntimeLookupError` and disable
 only the dependent operation when discovery is unavailable. `requestIndex`
 identifies the failed batch requirement; error descriptions omit decoded names.
+
+`RuntimeSymbol.names` contains aliases that must resolve to the same address and
+image. Images are searched in order without loading missing libraries. Use
+`fallbacks:` for independent names to try only after all aliases are absent from
+every image:
+
+```swift
+let operation = RuntimeSymbol(
+    .mangled("_ZN3WTF10StringImpl5derefEv"),
+    fallbacks: [.cxx("WTF::StringImpl::deref()")],
+    in: .webKit,
+    kind: .function
+)
+let symbols = try await WebKitRuntime.resolve([operation])
+```
+
+Each fallback searches all supplied images before the next fallback is tried.
+The first matching candidate wins. Ambiguity, invalid storage, and unavailable
+image state stop lookup; another alias or fallback cannot hide those failures.
 
 ## Native ABI and ownership
 

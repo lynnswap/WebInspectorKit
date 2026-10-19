@@ -18,6 +18,12 @@ struct WebKitRuntimeContractTests {
         let symbols = try await WebKitRuntime.resolve([query])
         #expect(symbols[0].address == UInt64(address))
         #expect(try symbols[0].readBytes(count: 4).count == 4)
+        let renamed = RuntimeSymbol(
+            .mangled("_RuntimeConsumerMissingSpelling"),
+            fallbacks: [.mangled("_RuntimeConsumerAnchorAddress")],
+            in: image, kind: .function
+        )
+        #expect(try await WebKitRuntime.resolve([renamed]) == symbols)
     }
 
     @Test @MainActor
