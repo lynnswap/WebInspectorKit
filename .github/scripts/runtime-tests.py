@@ -45,12 +45,12 @@ def native_test_runtimes(runtimes, latest_ios_major):
 
 
 def test_cases(runtimes, macos_version, suite, latest_ios_major, *, all_native_runtimes=False,
-               platform=None, runtime_identifier=None):
+               platform=None):
     if platform == "macOS":
         runtimes = []
-    elif runtime_identifier is None and suite == "workspace":
+    elif suite == "workspace":
         runtimes = [max(runtimes, key=lambda runtime: version_components(runtime["version"]))]
-    elif runtime_identifier is None and not all_native_runtimes:
+    elif not all_native_runtimes:
         runtimes = native_test_runtimes(runtimes, latest_ios_major)
     cases = [
         {"runtime": runtime["identifier"], "version": runtime["version"], "platform": "iOS",
@@ -59,10 +59,6 @@ def test_cases(runtimes, macos_version, suite, latest_ios_major, *, all_native_r
     ]
     if platform != "iOS":
         cases.append({"runtime": "", "version": macos_version, "platform": "macOS", "suite": suite})
-    if runtime_identifier is not None:
-        cases = [case for case in cases if case["runtime"] == runtime_identifier]
-        if not cases:
-            raise ValueError(f"No selected iOS runtime matches {runtime_identifier}.")
     return cases
 
 
@@ -104,12 +100,10 @@ def run_logged(command, path, **options):
 
 
 def run_tests(runtimes, macos_version, build_root, suite, latest_ios_major, *, all_native_runtimes=False,
-              platform=None, reuse_simulators=False, runtime_identifier=None,
-              only_testing=(), skip_testing=()):
+              platform=None, reuse_simulators=False):
     results = []
     for case in test_cases(runtimes, macos_version, suite, latest_ios_major,
-                           all_native_runtimes=all_native_runtimes, platform=platform,
-                           runtime_identifier=runtime_identifier):
+                           all_native_runtimes=all_native_runtimes, platform=platform):
         label = f"{case['platform']} {case['version']} / {suite}"
         print(f"::group::{label}", flush=True)
         diagnostics = build_root / "runtime-tests" / f"{case['platform']}-{case['version']}"
@@ -128,7 +122,7 @@ def run_tests(runtimes, macos_version, build_root, suite, latest_ios_major, *, a
                     udid = create_device(runtime)
                     created_device = True
                 destination = f"platform=iOS Simulator,id={udid}"
-                # Leave time for test launch and cleanup within the ten-minute CI job.
+                # Bound simulator startup so a failed boot does not block later tests.
                 run_logged(["xcrun", "simctl", "bootstatus", udid, "-b"], diagnostics / "boot.log", timeout=300)
             products = build_root / f"build-{case['platform']}" / "Build/Products"
             xctestrun = next(products.glob("*.xctestrun"))
@@ -136,8 +130,6 @@ def run_tests(runtimes, macos_version, build_root, suite, latest_ios_major, *, a
                 "bash", str(Path(__file__).resolve().parents[2] / "Scripts/ci-xcodebuild-watchdog.sh"),
                 "xcodebuild", "test-without-building", "-xctestrun", str(xctestrun),
                 "-destination", destination, *test_selection(case),
-                *[f"-only-testing:{identifier}" for identifier in only_testing],
-                *[f"-skip-testing:{identifier}" for identifier in skip_testing],
                 "-parallel-testing-enabled", "NO",
                 "-test-timeouts-enabled", "YES", "-default-test-execution-time-allowance", "30",
                 "-maximum-test-execution-time-allowance", "60",
@@ -184,13 +176,6 @@ def main():
                         help="Test only this platform's build products")
     parser.add_argument("--reuse-simulators", action="store_true",
                         help="Borrow available shutdown iPhones instead of creating fresh devices")
-    parser.add_argument("--list-cases", action="store_true",
-                        help="Print the selected runtime/platform cases as JSON without running tests")
-    parser.add_argument("--runtime", help="Test only the selected iOS runtime with this exact identifier")
-    parser.add_argument("--only-testing", action="append", default=[], metavar="TEST",
-                        help="Include an xcodebuild test identifier; may be repeated")
-    parser.add_argument("--skip-testing", action="append", default=[], metavar="TEST",
-                        help="Exclude an xcodebuild test identifier; may be repeated")
     args = parser.parse_args()
 
     runtimes = []
@@ -199,15 +184,9 @@ def main():
         if not runtimes:
             raise ValueError("No available iOS runtime supported by CI is installed.")
     macos_version = subprocess.check_output(["sw_vers", "-productVersion"], text=True).strip()
-    if args.list_cases:
-        print(json.dumps(test_cases(runtimes, macos_version, args.suite, args.latest_ios_major,
-                                   all_native_runtimes=args.all_native_runtimes, platform=args.platform,
-                                   runtime_identifier=args.runtime)))
-        return 0
     return run_tests(runtimes, macos_version, args.build_root, args.suite, args.latest_ios_major,
                      all_native_runtimes=args.all_native_runtimes, platform=args.platform,
-                     reuse_simulators=args.reuse_simulators, runtime_identifier=args.runtime,
-                     only_testing=args.only_testing, skip_testing=args.skip_testing)
+                     reuse_simulators=args.reuse_simulators)
 
 
 if __name__ == "__main__":
