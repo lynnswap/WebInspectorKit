@@ -83,13 +83,45 @@ struct WebKitRuntimeTests {
         }
     }
     @Test
+    func fallbackNamesSelectTheFirstAvailableDeclaration() async throws {
+        let image = try fixture()
+        let symbol = RuntimeSymbol(
+            .mangled("_WKRuntimeFixtureMissingSpelling"),
+            fallbacks: [.cxx("WTF::StringImpl::deref()"), .cxx("WTF::StringImpl::deref(unsigned int)")],
+            in: image, kind: .function
+        )
+        let expected = try await WebKitRuntime.resolve([
+            .init(.mangled("_ZN3WTF10StringImpl5derefEv"), in: image, kind: .function),
+        ])
+        #expect(try await WebKitRuntime.resolve([symbol]) == expected)
+    }
+    @Test
+    func invalidAliasStorageStopsLookupDespiteOtherMatchesAndFallbacks() async throws {
+        let image = try fixture()
+        let symbol = RuntimeSymbol(
+            names: [.cxx("WTF::StringImpl::deref()"), .cxx("WKRuntimeFixture::value")],
+            fallbacks: [.cxx("WTF::StringImpl::deref(unsigned int)")],
+            in: [image], kind: .function
+        )
+        do {
+            _ = try await WebKitRuntime.resolve([symbol])
+            Issue.record("Invalid alias storage was hidden by another match.")
+        } catch let error as RuntimeLookupError {
+            #expect(error.reason == .invalidAddress)
+        }
+    }
+    @Test
     func imageAlternativesOnlyFallBackWhenMissing() async throws {
         let image = try fixture()
         let missingImage = RuntimeImage(pathSuffixes: ["/not-loaded.framework/not-loaded"])
         let query = RuntimeSymbol(names: [.cxx("WTF::StringImpl::deref()")], in: [missingImage, image], kind: .function)
         let resolved = try await WebKitRuntime.resolve([query])
         #expect(resolved[0].image == image)
-        let ambiguous = RuntimeSymbol(names: [.cxx("WTF::StringImpl::deref()"), .cxx("WTF::StringImpl::deref(unsigned int)")], in: [image, .webKit], kind: .function)
+        let ambiguous = RuntimeSymbol(
+            names: [.cxx("WTF::StringImpl::deref()"), .cxx("WTF::StringImpl::deref(unsigned int)")],
+            fallbacks: [.mangled("_WebInspectorNativeSymbolFixtureAnchor")],
+            in: [image, .webKit], kind: .function
+        )
         do { _ = try await WebKitRuntime.resolve([ambiguous]); Issue.record("Ambiguity bypassed") }
         catch let error as RuntimeLookupError { #expect(error.reason == .ambiguousSymbol) }
     }

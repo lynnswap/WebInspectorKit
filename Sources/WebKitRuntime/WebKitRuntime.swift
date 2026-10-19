@@ -12,7 +12,8 @@ public struct RuntimeImage: Hashable, Sendable {
 }
 
 /// The identity and storage required by one native operation.
-/// Names are alternatives at the same address. Images are tried in order, only when a symbol is absent.
+/// Names are aliases at the same address. Fallback names are tried only when all
+/// aliases are absent from every image. Invalid storage and ambiguity stop lookup.
 public struct RuntimeSymbol: Hashable, Sendable {
     public enum Name: Hashable, Sendable {
         /// A complete demangled declaration. Punctuation spacing is ignored, but type boundaries are preserved.
@@ -21,16 +22,21 @@ public struct RuntimeSymbol: Hashable, Sendable {
         case mangled(String)
     }
     public enum Kind: Hashable, Sendable { case function, data, vtable }
+    /// Spellings whose found definitions must agree on their address and image.
     public let names: [Name]
+    /// Independent candidates tried in order after every alias is absent.
+    public let fallbacks: [Name]
+    /// Loaded images searched in order for each candidate. Lookup never loads a missing image.
     public let images: [RuntimeImage]
     public let kind: Kind
-    public init(names: [Name], in images: [RuntimeImage], kind: Kind) {
+    public init(names: [Name], fallbacks: [Name] = [], in images: [RuntimeImage], kind: Kind) {
         self.names = names
+        self.fallbacks = fallbacks
         self.images = images
         self.kind = kind
     }
-    public init(_ name: Name, in image: RuntimeImage, kind: Kind) {
-        self.init(names: [name], in: [image], kind: kind)
+    public init(_ name: Name, fallbacks: [Name] = [], in image: RuntimeImage, kind: Kind) {
+        self.init(names: [name], fallbacks: fallbacks, in: [image], kind: kind)
     }
 }
 
