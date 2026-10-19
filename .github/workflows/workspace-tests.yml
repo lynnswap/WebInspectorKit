@@ -61,6 +61,17 @@ jobs:
       - name: Resolve Xcode
         id: toolchain
         run: ruby .ci/automation/.github/scripts/resolve-xcode.rb
+      - name: Start the first iOS simulator
+        id: prepare-simulator
+        continue-on-error: true
+        run: |
+          coverage_args=()
+          if [[ "$ALL_NATIVE_RUNTIMES" == "true" ]]; then
+            coverage_args+=(--all-native-runtimes)
+          fi
+          python3 .ci/automation/.github/scripts/runtime-tests.py "$RUNNER_TEMP" \
+            --suite "$TEST_SUITE" --latest-ios-major "$LATEST_IOS_MAJOR" \
+            --prepare-simulator --reuse-simulators "${coverage_args[@]}"
       - name: Restore Swift package cache
         id: spm-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -156,15 +167,23 @@ jobs:
           python3 .ci/automation/.github/scripts/runtime-tests.py "$RUNNER_TEMP" \
             --suite "$TEST_SUITE" --latest-ios-major "$LATEST_IOS_MAJOR" \
             --platform macOS
+      - name: Clean up the prepared simulator
+        if: ${{ always() && steps.toolchain.outcome == 'success' }}
+        run: |
+          python3 .ci/automation/.github/scripts/runtime-tests.py "$RUNNER_TEMP" \
+            --suite "$TEST_SUITE" --latest-ios-major "$LATEST_IOS_MAJOR" \
+            --cleanup-simulator
       - name: Check build and test results
         if: ${{ !cancelled() }}
         env:
+          SIMULATOR_PREPARATION: ${{ steps.prepare-simulator.outcome }}
           IOS_BUILD: ${{ steps.build-ios.outcome }}
           MACOS_BUILD: ${{ steps.build-macos.outcome }}
           IOS_TEST: ${{ steps.test-ios.outcome }}
           MACOS_TEST: ${{ steps.test-macos.outcome }}
         run: |
-          test "$IOS_BUILD" = success && test "$MACOS_BUILD" = success \
+          test "$SIMULATOR_PREPARATION" = success \
+            && test "$IOS_BUILD" = success && test "$MACOS_BUILD" = success \
             && test "$IOS_TEST" = success && test "$MACOS_TEST" = success
       - name: Upload diagnostics
         if: always()
