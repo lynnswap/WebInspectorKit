@@ -189,7 +189,11 @@ class RuntimeExecutionTests(unittest.TestCase):
                                     reuse_simulators=reuse_simulators)
 
     def test_workspace_runs_latest_only_and_excludes_low_level_suite(self):
-        self.assertEqual(self.execute("workspace"), 0)
+        def require_existing_result_stream(command, **options):
+            if "xcodebuild" in command:
+                self.assertIn("-verbose", command)
+                self.assertTrue(Path(command[command.index("-resultStreamPath") + 1]).is_file())
+        self.assertEqual(self.execute("workspace", require_existing_result_stream), 0)
         commands = [command for command, _ in self.commands if "xcodebuild" in command]
         self.assertEqual(len(commands), 2)
         self.assertIn("-skip-testing:WebInspectorNativeBridgeTests", commands[0])
@@ -222,6 +226,91 @@ class RuntimeExecutionTests(unittest.TestCase):
             self.assertEqual(runner.main(), 0)
         execute.assert_called_once_with(self.runtimes, "27.0", self.root, "native", 27,
                                         all_native_runtimes=True, platform="iOS", reuse_simulators=False)
+
+    def test_prepare_starts_only_the_first_runtime_selected_by_the_test_policy(self):
+        older = dict(self.runtimes[0], version="18.4", identifier=runtime("18.4")["identifier"])
+        installed = [older, *self.runtimes]
+        for suite, full_coverage, expected in (("native", False, "18.6"),
+                                                ("native", True, "18.4"),
+                                                ("workspace", False, "27.0")):
+            with self.subTest(suite=suite, full_coverage=full_coverage):
+                def start(command, path, **options):
+                    state = json.loads(runner.simulator_state_path(self.root).read_text())
+                    self.assertEqual(state, {"udid": "prepared-device", "runtime": runtime(expected)["identifier"],
+                                             "created": True})
+                    self.assertEqual(command, ["xcrun", "simctl", "boot", "prepared-device"])
+                with patch.object(runner, "create_device", return_value="prepared-device") as create, \
+                        patch.object(runner, "run_logged", side_effect=start) as start_boot:
+                    self.assertEqual(runner.prepare_simulator(
+                        installed, self.root, suite, 27, all_native_runtimes=full_coverage), 0)
+                self.assertEqual(create.call_args.args[0]["version"], expected)
+                start_boot.assert_called_once()
+                runner.simulator_state_path(self.root).unlink()
+
+    def test_prepared_borrowed_device_is_joined_and_cleaned_using_the_same_udid(self):
+        installed = self.runtimes[-1]
+        borrowed = {"udid": "borrowed", "state": "Shutdown", "isAvailable": True,
+                    "deviceTypeIdentifier": "phone"}
+        unrelated = dict(borrowed, udid="unrelated", state="Booted")
+        before = json.dumps({"devices": {installed["identifier"]: [unrelated, borrowed]}})
+        after = json.dumps({"devices": {installed["identifier"]: [unrelated, dict(borrowed, state="Booted")]}})
+        with patch.object(runner, "simctl", side_effect=[before, after]) as simctl, \
+                patch.object(runner.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as prepare:
+            self.assertEqual(runner.prepare_simulator(
+                self.runtimes, self.root, "workspace", 27, reuse_simulators=True), 0)
+            self.assertEqual(self.execute("workspace", platform="iOS", reuse_simulators=True), 0)
+        self.assertEqual(prepare.call_args.args[0], ["xcrun", "simctl", "boot", "borrowed"])
+        commands = [command for command, _ in self.commands]
+        self.assertIn(["xcrun", "simctl", "bootstatus", "borrowed", "-b"], commands)
+        self.assertIn(["xcrun", "simctl", "shutdown", "borrowed"], commands)
+        self.assertFalse(any("unrelated" in str(command) or "delete" in command for command in commands))
+        self.assertEqual(simctl.call_count, 2)
+        self.assertFalse(runner.simulator_state_path(self.root).exists())
+        test = next(command for command in commands if "xcodebuild" in command)
+        self.assertIn("platform=iOS Simulator,id=borrowed", test)
+
+    def test_cleanup_command_recovers_ownership_when_tests_are_skipped_or_prepare_fails(self):
+        arguments = ["runtime-tests.py", str(self.root), "--suite", "native",
+                     "--latest-ios-major", "27", "--platform", "iOS"]
+        for boot_fails in (False, True):
+            with self.subTest(boot_fails=boot_fails):
+                commands = []
+                def run(command, path, **options):
+                    commands.append(command)
+                    self.assertTrue(runner.simulator_state_path(self.root).exists())
+                    if boot_fails and command[2] == "boot":
+                        raise subprocess.CalledProcessError(1, command)
+                with patch.object(runner, "create_device", return_value="owned-device"), \
+                        patch.object(runner, "run_logged", side_effect=run), \
+                        patch.object(runner, "simctl", return_value=json.dumps({"runtimes": self.runtimes})) as simctl, \
+                        patch.object(runner.subprocess, "check_output") as host_version:
+                    with patch.object(sys, "argv", [*arguments, "--prepare-simulator"]):
+                        self.assertEqual(runner.main(), int(boot_fails))
+                    self.assertTrue(runner.simulator_state_path(self.root).exists())
+                    simctl.assert_called_once_with("list", "runtimes", "--json")
+                    simctl.reset_mock()
+                    with patch.object(sys, "argv", [*arguments, "--cleanup-simulator"]):
+                        self.assertEqual(runner.main(), 0)
+                        self.assertEqual(runner.main(), 0)
+                    simctl.assert_not_called()
+                    host_version.assert_not_called()
+                self.assertEqual(commands, [["xcrun", "simctl", "boot", "owned-device"],
+                                            ["xcrun", "simctl", "delete", "owned-device"]])
+                self.assertFalse(runner.simulator_state_path(self.root).exists())
+
+    def test_failed_prepared_cleanup_retains_ownership_for_workflow_cleanup(self):
+        with patch.object(runner, "create_device", return_value="owned-device"), \
+                patch.object(runner, "run_logged"):
+            self.assertEqual(runner.prepare_simulator(self.runtimes, self.root, "workspace", 27), 0)
+        def fail_cleanup(command, **options):
+            if command == ["xcrun", "simctl", "delete", "owned-device"]:
+                raise subprocess.TimeoutExpired(command, 30)
+        self.assertEqual(self.execute("workspace", fail_cleanup, platform="iOS"), 1)
+        self.assertTrue(runner.simulator_state_path(self.root).exists())
+        with patch.object(runner, "run_logged") as cleanup:
+            self.assertEqual(runner.cleanup_prepared_simulator(self.root), 0)
+        self.assertEqual(cleanup.call_args.args[0], ["xcrun", "simctl", "delete", "owned-device"])
+        self.assertFalse(runner.simulator_state_path(self.root).exists())
 
     def test_macos_command_line_does_not_require_or_access_simulators(self):
         arguments = ["runtime-tests.py", str(self.root), "--suite", "native",
@@ -314,6 +403,10 @@ class RuntimeExecutionTests(unittest.TestCase):
         environments = [options["env"]["WATCHDOG_SIMULATOR_UDID"]
                         for command, options in self.commands if "xcodebuild" in command]
         self.assertEqual(environments, ["first-device", "second-device", ""])
+        diagnostics = [options["env"]["WATCHDOG_DIAGNOSTICS_DIR"]
+                       for command, options in self.commands if "xcodebuild" in command]
+        self.assertEqual(diagnostics, [str(self.root / "runtime-tests" / case / "startup")
+                                      for case in ("iOS-18.6", "iOS-27.0", "macOS-27.0")])
 
     def test_slow_initial_migration_still_runs_tests_and_cleans_devices(self):
         def slow_boot(command, **options):

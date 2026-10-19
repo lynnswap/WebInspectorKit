@@ -61,22 +61,38 @@ jobs:
       - name: Resolve Xcode
         id: toolchain
         run: ruby .ci/automation/.github/scripts/resolve-xcode.rb
+      - name: Resolve package cache key
+        id: package-cache-key
+        run: python3 .ci/automation/.github/scripts/package-cache-key.py
       - name: Restore Swift package cache
         id: spm-cache
+        continue-on-error: true
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ${{ env.SPM_CACHE_DIR }}
             ~/Library/Caches/org.swift.swiftpm
-          key: spm-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.cache-id }}-${{ inputs.suite }}-${{ hashFiles('Package.resolved', 'ContractTests/Package.resolved', 'Monocly/**/Package.resolved', 'WebInspectorKit.xcworkspace/**/Package.resolved') }}
+          key: spm-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.cache-id }}-${{ inputs.suite }}-${{ steps.package-cache-key.outputs.lockfiles }}
       - name: Restore compiler cache
         id: compiler-cache
+        continue-on-error: true
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.COMPILATION_CACHE_DIR }}
           key: compile-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.cache-id }}-${{ inputs.suite }}-${{ inputs.revision }}
           restore-keys: |
             compile-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.cache-id }}-${{ inputs.suite }}-
+      - name: Start the first iOS simulator
+        id: prepare-simulator
+        continue-on-error: true
+        run: |
+          coverage_args=()
+          if [[ "$ALL_NATIVE_RUNTIMES" == "true" ]]; then
+            coverage_args+=(--all-native-runtimes)
+          fi
+          python3 .ci/automation/.github/scripts/runtime-tests.py "$RUNNER_TEMP" \
+            --suite "$TEST_SUITE" --latest-ios-major "$LATEST_IOS_MAJOR" \
+            --prepare-simulator --reuse-simulators "${coverage_args[@]}"
       - name: Build iOS test products
         id: build-ios
         continue-on-error: true
@@ -124,6 +140,7 @@ jobs:
             | tee "$RUNNER_TEMP/prepare-macOS.log"
       - name: Save Swift package cache
         if: ${{ !cancelled() && steps.spm-cache.outputs.cache-hit != 'true' && (steps.build-ios.outcome == 'success' || steps.build-macos.outcome == 'success') }}
+        continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -132,6 +149,7 @@ jobs:
           key: ${{ steps.spm-cache.outputs.cache-primary-key }}
       - name: Save compiler cache
         if: ${{ !cancelled() && steps.compiler-cache.outputs.cache-hit != 'true' && (steps.build-ios.outcome == 'success' || steps.build-macos.outcome == 'success') }}
+        continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.COMPILATION_CACHE_DIR }}
@@ -156,15 +174,23 @@ jobs:
           python3 .ci/automation/.github/scripts/runtime-tests.py "$RUNNER_TEMP" \
             --suite "$TEST_SUITE" --latest-ios-major "$LATEST_IOS_MAJOR" \
             --platform macOS
+      - name: Clean up the prepared simulator
+        if: ${{ always() && steps.toolchain.outcome == 'success' }}
+        run: |
+          python3 .ci/automation/.github/scripts/runtime-tests.py "$RUNNER_TEMP" \
+            --suite "$TEST_SUITE" --latest-ios-major "$LATEST_IOS_MAJOR" \
+            --cleanup-simulator
       - name: Check build and test results
         if: ${{ !cancelled() }}
         env:
+          SIMULATOR_PREPARATION: ${{ steps.prepare-simulator.outcome }}
           IOS_BUILD: ${{ steps.build-ios.outcome }}
           MACOS_BUILD: ${{ steps.build-macos.outcome }}
           IOS_TEST: ${{ steps.test-ios.outcome }}
           MACOS_TEST: ${{ steps.test-macos.outcome }}
         run: |
-          test "$IOS_BUILD" = success && test "$MACOS_BUILD" = success \
+          test "$SIMULATOR_PREPARATION" = success \
+            && test "$IOS_BUILD" = success && test "$MACOS_BUILD" = success \
             && test "$IOS_TEST" = success && test "$MACOS_TEST" = success
       - name: Upload diagnostics
         if: always()
