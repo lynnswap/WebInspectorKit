@@ -1079,29 +1079,48 @@ struct ParentContainerTests {
         let enableTask = Task { @MainActor in
             try await context.setElementPickerEnabled(true)
         }
-        _ = await fixture.runtime.backend.waitForRecordedCommands(
-            domain: "DOM",
-            method: "setInspectModeEnabled",
-            count: 1
-        )
-        let enableDesiredStateID = try #require(context.elementPickerDesiredStateForTesting?.id)
+        var retirementTask: Task<Void, Never>?
+        let raceResult: PickerShutdownRaceResult
+        do {
+            _ = try await fixture.runtime.backend.waitForRecordedCommandsForTesting(
+                domain: "DOM",
+                method: "setInspectModeEnabled",
+                count: 1
+            )
+            let enableDesiredStateID = try #require(context.elementPickerDesiredStateForTesting?.id)
 
-        let raceResultPromise = ReplyPromise<PickerShutdownRaceResult>()
-        context.elementPickerDesiredStateDidChangeForTesting = { id, isEnabled in
-            if id != enableDesiredStateID, !isEnabled {
-                raceResultPromise.fulfill(.success(.shutdownIntentRegistered))
+            let raceResultPromise = ReplyPromise<PickerShutdownRaceResult>()
+            context.elementPickerDesiredStateDidChangeForTesting = { id, isEnabled in
+                if id != enableDesiredStateID, !isEnabled {
+                    raceResultPromise.fulfill(.success(.shutdownIntentRegistered))
+                }
             }
+            defer { context.elementPickerDesiredStateDidChangeForTesting = nil }
+            retirementTask = Task { @MainActor in
+                await fixture.session.retireRootPresentation(detach: false)
+                raceResultPromise.fulfill(.success(.retirementCompleted))
+            }
+            let observedResult = try await withThrowingTaskGroup(of: PickerShutdownRaceResult?.self) { group in
+                defer { group.cancelAll() }
+                group.addTask { try await raceResultPromise.value() }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(1))
+                    return nil
+                }
+                return try await group.next() ?? nil
+            }
+            raceResult = try #require(observedResult, "Timed out waiting for picker shutdown intent or retirement.")
+            await enableGate.open()
+            try await enableTask.value
+            await retirementTask?.value
+        } catch {
+            enableTask.cancel()
+            retirementTask?.cancel()
+            await enableGate.open()
+            _ = try? await enableTask.value
+            await retirementTask?.value
+            throw error
         }
-        defer { context.elementPickerDesiredStateDidChangeForTesting = nil }
-        let retirementTask = Task { @MainActor in
-            await fixture.session.retireRootPresentation(detach: false)
-            raceResultPromise.fulfill(.success(.retirementCompleted))
-        }
-        let raceResult = try await raceResultPromise.value()
-        await enableGate.open()
-
-        try await enableTask.value
-        await retirementTask.value
 
         #expect(raceResult == .shutdownIntentRegistered)
         let pickerCommands = await fixture.runtime.backend.recordedCommands().filter {

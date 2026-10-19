@@ -1533,7 +1533,11 @@ struct BrowserSessionRestoreTests {
         }
         let values = await delivery.values(condition)
         defer { values.cancel() }
-        return await values.waitUntilValue(true)
+        return await withTaskCancellationHandler {
+            await values.waitUntilValue(true, timeout: .seconds(1))
+        } onCancel: {
+            values.cancel()
+        }
     }
 
     private func waitForInspectorPresentationRendering(
@@ -1545,7 +1549,11 @@ struct BrowserSessionRestoreTests {
         }
         let values = await delivery.values(condition)
         defer { values.cancel() }
-        return await values.waitUntilValue(true)
+        return await withTaskCancellationHandler {
+            await values.waitUntilValue(true, timeout: .seconds(1))
+        } onCancel: {
+            values.cancel()
+        }
     }
 
     private struct JavaScriptDialogFixture {
@@ -1782,6 +1790,7 @@ struct BrowserSessionRestoreTests {
         private var attachResult: Result<Void, any Error> = .success(())
 
         func attach(_ webView: WKWebView) async throws {
+            try Task.checkCancellation()
             attachedWebViews.append(webView)
             events.append(.attach(ObjectIdentifier(webView)))
             await withCheckedContinuation { continuation in
@@ -1831,8 +1840,11 @@ private func requireTestEvent(
     let values = await observation.values(condition)
     defer { values.cancel() }
     try await withTaskCancellationHandler {
-        let didObserveEvent = await values.waitUntilValue(true)
+        let didObserveEvent = await values.waitUntilValue(true, timeout: .seconds(1))
         try Task.checkCancellation()
+        if !didObserveEvent, let error = observation.error {
+            throw error
+        }
         try #require(didObserveEvent)
     } onCancel: {
         values.cancel()

@@ -261,11 +261,13 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
             let replacementDelegate = WebContentProcessNavigationProbe()
             fixture.webView.navigationDelegate = replacementDelegate
             let lifecycleEvents = initialPage.lifecycleEvents
-            await initialPage.proxy.waitForEventSubscription(
-                targetID: initialPage.id,
-                route: initialPage.route,
-                domain: .target
-            )
+            try await withIntegrationTimeout("the lifecycle event subscription to register") {
+                await initialPage.proxy.waitForEventSubscription(
+                    targetID: initialPage.id,
+                    route: initialPage.route,
+                    domain: .target
+                )
+            }
 
             async let relaunch: Void = replacementDelegate.terminateProcessAndWaitForRelaunch(
                 of: fixture.webView,

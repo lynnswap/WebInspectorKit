@@ -15489,6 +15489,9 @@ private func waitUntil(
     let values = await observation.values { condition() }
     defer { values.cancel() }
     guard await values.waitUntil(timeout: timeout, { $0 }) != nil else {
+        if let error = observation.error {
+            throw error
+        }
         throw TimedOut()
     }
 }
