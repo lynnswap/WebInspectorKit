@@ -1,5 +1,5 @@
 {
-  "originHash" : "7a969763d4d152fbb3114d10bc30d24417217f6b42cc893937b37ea133bd55f7",
+  "originHash" : "2b8c4324e7ced88ffbcef87f174936d5a9e29ab83bd645cf0969ca624fb5d2ab",
   "pins" : [
     {
       "identity" : "abibridge",
@@ -240,8 +240,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/WKViewportCoordinator.git",
       "state" : {
-        "revision" : "6daa6595e1b740c995ed4e578043596cea4d1a93",
-        "version" : "0.10.4"
+        "revision" : "694f485433932e6911b41eb872ce1b2fb4f15411",
+        "version" : "0.11.0"
       }
     },
     {
