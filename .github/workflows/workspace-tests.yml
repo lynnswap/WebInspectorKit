@@ -36,8 +36,8 @@ jobs:
   test:
     name: Build and test ${{ inputs.suite }} suites
     runs-on: ${{ inputs.runner }}
-    # Full Native coverage visits every installed runtime sequentially.
-    timeout-minutes: ${{ inputs.all_native_runtimes && 90 || 30 }}
+    # Allow the former build/test workers to run sequentially, plus full Native coverage.
+    timeout-minutes: ${{ inputs.all_native_runtimes && 90 || 60 }}
     env:
       XCODE_MAJOR: ${{ inputs.xcode_major }}
       XCODE_ALLOW_PRERELEASE: ${{ inputs.allow_prerelease }}
