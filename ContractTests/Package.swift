@@ -16,6 +16,7 @@ let package = Package(
     ],
     dependencies: [
         .package(path: ".."),
+        .package(url: "https://github.com/lynnswap/WebKitScreenTimeWorkaround.git", exact: "0.3.0"),
     ],
     targets: [
         .target(name: "RuntimeConsumerNative", dependencies: [.product(name: "WebKitRuntime", package: "WebInspectorKit")], publicHeadersPath: "include"),
@@ -30,6 +31,7 @@ let package = Package(
             name: "WebInspectorConsumerContractTests",
             dependencies: [
                 "RuntimeConsumerNative",
+                .product(name: "WebKitScreenTimeWorkaround", package: "WebKitScreenTimeWorkaround"),
                 .product(name: "WebKitRuntime", package: "WebInspectorKit"),
                 .product(name: "WebInspectorDataKit", package: "WebInspectorKit"),
                 .product(name: "WebInspectorDataKitTesting", package: "WebInspectorKit"),

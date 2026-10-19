@@ -178,7 +178,7 @@ func receiverOrdersProcessTerminationBeforeRelaunchedTargetDiscovery() async thr
 
 @MainActor
 @Test
-func nativeConnectionCloseAwaitsActiveReceiverTurnBeforeBackendDetach() async {
+func nativeConnectionCloseAwaitsActiveReceiverTurnBeforeBackendDetach() async throws {
     let parser = ControlledMessageParser(blockingInvocation: 1)
     let graph = ReceiverTransportGraph(parser: parser.parse)
     let closeCompletion = CompletionProbe()
@@ -202,7 +202,7 @@ func nativeConnectionCloseAwaitsActiveReceiverTurnBeforeBackendDetach() async {
         await connection.close()
         await closeCompletion.finish()
     }
-    await waitForReceiverCloseWaiter(receiver: graph.receiver)
+    try await graph.receiver.waitForCloseWaiterForTesting()
 
     #expect(await closeCompletion.isFinished == false)
     #expect(await graph.backend.isDetached() == false)
@@ -243,7 +243,7 @@ func malformedReceiverMessageClosesWithoutWaitingOnItself(explicitCloseFirst: Bo
             await proxy.close()
             await completion.finish()
         }
-        await waitForReceiverCloseWaiter(receiver: graph.receiver)
+        try await graph.receiver.waitForCloseWaiterForTesting()
         close?.cancel()
         #expect(await completion.isFinished == false)
         #expect(await graph.backend.isDetached() == false)
@@ -381,12 +381,6 @@ private actor CompletionProbe {
                 finishWaiters.append(continuation)
             }
         }
-    }
-}
-
-private func waitForReceiverCloseWaiter(receiver: TransportReceiver) async {
-    while receiver.closeWaiterCountForTesting() == 0 {
-        await Task.yield()
     }
 }
 

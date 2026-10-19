@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import Testing
 import UIKit
+import WebKitScreenTimeWorkaround
 import WebInspectorTestSupport
 @testable import WebInspectorDataKit
 @testable import WebInspectorProxyKit
@@ -13,6 +14,9 @@ import WebInspectorTestSupport
 @Suite(.serialized)
 struct DOMTreeTextViewTests {
     init() async throws {
+        if #available(iOS 26.1, *) {
+            try ScreenTimeWorkaround.install()
+        }
         try await WebInspectorSession.prepare()
     }
 

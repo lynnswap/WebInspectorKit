@@ -1,6 +1,9 @@
 #if canImport(UIKit)
 import UIKit
 import WebInspectorKit
+#if DEBUG
+import WebKitScreenTimeWorkaround
+#endif
 
 struct BrowserInspectorSceneDestructionRequester {
     let destroySceneSession: @MainActor (_ sceneSession: UISceneSession) -> Void
@@ -112,6 +115,17 @@ final class MonoclyAppDelegate: UIResponder, UIApplicationDelegate {
         _ application: UIApplication,
         willFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+#if DEBUG
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil,
+           #available(iOS 26.1, *) {
+            do {
+                try ScreenTimeWorkaround.install()
+            } catch {
+                // Test setup repeats installation to report this cached error through the test framework.
+                NSLog("Screen Time test workaround installation failed: %@", String(describing: error))
+            }
+        }
+#endif
         recoverLegacySceneStateIfNeeded(supportsMultipleScenes: application.supportsMultipleScenes)
         return true
     }

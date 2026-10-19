@@ -1,6 +1,7 @@
 import Testing
 import ObservationBridge
 import WebInspectorDataKit
+import WebInspectorProxyKit
 
 @MainActor
 func waitForObservedCondition(
@@ -112,14 +113,21 @@ final class UITestDeinitProbe {
     }
 }
 
-@MainActor
-func waitForTestCondition(
-    timeout: Duration = .seconds(1),
-    _ condition: @MainActor () -> Bool
+func waitForUITestSignal(
+    _ signal: ReplyPromise<Void>,
+    timeout: Duration = .seconds(1)
 ) async throws {
-    let deadline = ContinuousClock.now + timeout
-    while !condition() {
-        try #require(ContinuousClock.now < deadline, "Timed out waiting for the test condition.")
-        await Task.yield()
+    let didComplete = try await withThrowingTaskGroup(of: Bool.self) { group in
+        defer { group.cancelAll() }
+        group.addTask {
+            try await signal.value()
+            return true
+        }
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            return false
+        }
+        return try await group.next() == true
     }
+    try #require(didComplete, "Timed out waiting for the test signal.")
 }

@@ -1,13 +1,30 @@
-import Darwin
+import ObservationBridge
 import UIKit
 import WebKit
-import WebInspectorDataKit
+@testable import WebInspectorDataKit
+import WebKitScreenTimeWorkaround
 @testable import Monocly
 @testable import WebInspectorProxyKit
 import XCTest
 
 #if os(iOS)
 final class WebInspectorProxyKitIntegrationTests: XCTestCase {
+    @MainActor
+    private static let sharedAttachmentWebView: WKWebView = {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        return WKWebView(frame: .zero, configuration: configuration)
+    }()
+
+    @MainActor
+    override func setUp() async throws {
+        try await super.setUp()
+        if #available(iOS 26.1, *) {
+            try ScreenTimeWorkaround.install()
+        }
+        try await PortableObservationTracking.prepare()
+    }
+
     @MainActor
     func testLateInspectorAttachmentRestoresPageAndChildFrameResources() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("late-inspector-\(UUID())")
@@ -17,7 +34,7 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
             "index.html": "<html><head><link rel='stylesheet' href='style.css'><script src='app.js'></script></head><body><iframe src='child.html'></iframe></body></html>",
             "style.css": "body { color: rgb(255, 0, 0); }",
             "other.html": "<html><body>Other page</body></html>",
-            "app.js": "window.fixtureLoaded = true; addEventListener('message', e => { if (e.data === 'child-fixture-loaded') window.childFixtureLoaded = true; });",
+            "app.js": "window.fixtureLoaded = true; addEventListener('message', e => { if (e.data === 'child-fixture-loaded') { window.childFixtureLoaded = true; window.webkit.messageHandlers.fixtureReady.postMessage(null); } });",
             "child.html": "<html><head><script src='child.js'></script></head><body>Child</body></html>",
             "child.js": "parent.postMessage('child-fixture-loaded', '*');"
         ] {
@@ -25,16 +42,34 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
         }
         let fixture = try HostedWebViewFixture()
         defer { fixture.cleanup() }
+        let readiness = FixtureReadinessProbe()
+        let contentController = fixture.webView.configuration.userContentController
+        contentController.add(readiness, name: "fixtureReady")
+        defer { contentController.removeScriptMessageHandler(forName: "fixtureReady") }
         try await fixture.loadFileURL(directory.appendingPathComponent("index.html"))
+        try await withIntegrationTimeout("the child frame fixture to finish") {
+            try await readiness.signal.value()
+        }
         let loaded = try await fixture.webView.evaluateJavaScript("window.fixtureLoaded === true && window.childFixtureLoaded === true")
         XCTAssertEqual(loaded as? Bool, true)
 
         let container = try await WebInspectorContainer(attachingTo: fixture.webView)
         do {
             let context = container.mainContext
-            let deadline = ContinuousClock.now + .seconds(10)
-            while context.state == .attaching, ContinuousClock.now < deadline {
-                try await Task.sleep(for: .milliseconds(10))
+            try await waitForUpdates(
+                context.statusUpdates,
+                description: "inspector startup"
+            ) {
+                switch context.state {
+                case .attaching:
+                    return false
+                case .attached:
+                    return true
+                case .failed(let error):
+                    throw error
+                case .detached:
+                    throw WebContentProcessHarnessError.contextDetached
+                }
             }
             XCTAssertEqual(context.state, .attached)
             XCTAssertNil(context.networkResourceTreeError)
@@ -48,20 +83,26 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
             XCTAssertNil(stylesheet.status)
             await stylesheet.fetchResponseBody()
             XCTAssertEqual(stylesheet.responseBody.phase, .loaded)
+            let tree = context.rootTreeController()
+            let documentUpdates = tree.updates
             let otherURL = directory.appendingPathComponent("other.html")
             try await fixture.loadFileURL(otherURL)
-            let otherDeadline = ContinuousClock.now + .seconds(10)
-            while context.rootNode?.documentURL != otherURL.absoluteString, ContinuousClock.now < otherDeadline {
-                try await Task.sleep(for: .milliseconds(10))
+            try await waitForUpdates(documentUpdates, description: "the navigated DOM document") {
+                let snapshot = tree.snapshot
+                return snapshot.rootNodeID.flatMap { snapshot.node(for: $0)?.documentURL }
+                    == otherURL.absoluteString
             }
             XCTAssertEqual(context.rootNode?.documentURL, otherURL.absoluteString)
+            let networkResults = context.network.fetchedResults()
+            let networkController = WebInspectorFetchedResultsController(fetchedResults: networkResults)
+            let networkUpdates = networkController.transactions
             try await fixture.goBack()
-            let returnDeadline = ContinuousClock.now + .seconds(10)
-            while !context.network.fetchedResults().items.contains(where: { $0 !== stylesheet && $0.url == stylesheet.url && $0.state == .finished }),
-                  ContinuousClock.now < returnDeadline {
-                try await Task.sleep(for: .milliseconds(10))
+            try await waitForUpdates(networkUpdates, description: "the restored stylesheet resource") {
+                networkResults.items.contains {
+                    $0 !== stylesheet && $0.url == stylesheet.url && $0.state == .finished
+                }
             }
-            let restored = try XCTUnwrap(context.network.fetchedResults().items.last { $0 !== stylesheet && $0.url == stylesheet.url })
+            let restored = try XCTUnwrap(networkResults.items.last { $0 !== stylesheet && $0.url == stylesheet.url })
             await restored.fetchResponseBody()
             XCTAssertEqual(restored.responseBody.phase, .loaded)
             await container.close()
@@ -86,19 +127,36 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
             XCTAssertTrue(tab.webView.navigationDelegate?.responds(to: NSSelectorFromString(name)) == true)
         }
         do {
+            let historyChanges = AsyncStream<Bool>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            let historyObservation = tab.webView.observe(\.canGoBack, options: [.initial, .new]) { _, change in
+                if let canGoBack = change.newValue {
+                    historyChanges.continuation.yield(canGoBack)
+                }
+            }
+            defer {
+                historyObservation.invalidate()
+                historyChanges.continuation.finish()
+            }
             _ = try await tab.webView.evaluateJavaScript("history.pushState({}, '', '#second')")
-            let historyDeadline = ContinuousClock.now + .seconds(10)
-            while !tab.webView.canGoBack, ContinuousClock.now < historyDeadline {
-                try await Task.sleep(for: .milliseconds(10))
+            try await waitForUpdates(historyChanges.stream, description: "same-document back history") {
+                tab.webView.canGoBack
             }
             XCTAssertTrue(tab.webView.canGoBack)
             tab.goBack()
             XCTAssertTrue(tab.isShowingProgress)
             XCTAssertNil(tab.interactionStateData)
 
-            let deadline = ContinuousClock.now + .seconds(10)
-            while (tab.isShowingProgress || tab.interactionStateData == nil), ContinuousClock.now < deadline {
-                try await Task.sleep(for: .milliseconds(10))
+            let observation = withPortableContinuousObservation { _ in
+                _ = tab.isShowingProgress
+                _ = tab.interactionStateData
+            }
+            defer { observation.cancel() }
+            let values = await observation.values {
+                !tab.isShowingProgress && tab.interactionStateData != nil
+            }
+            defer { values.cancel() }
+            guard await values.waitUntil(timeout: .seconds(10), { $0 }) != nil else {
+                throw WebContentProcessHarnessError.timedOut("same-document navigation to settle")
             }
             XCTAssertFalse(tab.isShowingProgress)
             XCTAssertNotNil(tab.interactionStateData)
@@ -112,7 +170,7 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
 
     @MainActor
     func testNavigationContinuesAfterClientDelegateIsReleased() async throws {
-        let fixture = try HostedWebViewFixture()
+        let fixture = try HostedWebViewFixture(webView: Self.sharedAttachmentWebView)
         defer { fixture.cleanup() }
         try await fixture.loadHTMLString("<html><body>Initial page</body></html>")
 
@@ -132,8 +190,8 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
         XCTAssertNil(weakClient)
 
         let loaded = expectation(description: "Navigation finishes without a client delegate")
-        let observation = fixture.webView.observe(\.title, options: [.new]) { webView, _ in
-            if webView.title == "Released delegate" {
+        let observation = fixture.webView.observe(\.title, options: [.new]) { _, change in
+            if (change.newValue ?? nil) == "Released delegate" {
                 loaded.fulfill()
             }
         }
@@ -149,7 +207,7 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
 
     @MainActor
     func testClientPreferencesPolicyTakesPrecedenceOverLegacyPolicy() async throws {
-        let fixture = try HostedWebViewFixture()
+        let fixture = try HostedWebViewFixture(webView: Self.sharedAttachmentWebView)
         defer { fixture.cleanup() }
         try await fixture.loadHTMLString("<html><body>Initial page</body></html>")
         let proxy = try await WebInspectorProxy(attachingTo: fixture.webView)
@@ -203,11 +261,13 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
             let replacementDelegate = WebContentProcessNavigationProbe()
             fixture.webView.navigationDelegate = replacementDelegate
             let lifecycleEvents = initialPage.lifecycleEvents
-            await initialPage.proxy.waitForEventSubscription(
-                targetID: initialPage.id,
-                route: initialPage.route,
-                domain: .target
-            )
+            try await withIntegrationTimeout("the lifecycle event subscription to register") {
+                await initialPage.proxy.waitForEventSubscription(
+                    targetID: initialPage.id,
+                    route: initialPage.route,
+                    domain: .target
+                )
+            }
 
             async let relaunch: Void = replacementDelegate.terminateProcessAndWaitForRelaunch(
                 of: fixture.webView,
@@ -219,7 +279,7 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
             )
             try await relaunch
 
-            guard let replacementPage = try await proxy.waitForCurrentPageReplacement(gracePeriod: nil) else {
+            guard let replacementPage = try await proxy.waitForCurrentPageReplacement(gracePeriod: .seconds(10)) else {
                 throw WebContentProcessHarnessError.replacementPageWasUnavailable
             }
             let replacementDocument = try await replacementPage.dom.getDocument()
@@ -256,7 +316,7 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
 
     @MainActor
     func testSecondNativeInspectorAttachmentFailsWithoutReplacingDelegate() async throws {
-        let fixture = try HostedWebViewFixture()
+        let fixture = try HostedWebViewFixture(webView: Self.sharedAttachmentWebView)
         defer { fixture.cleanup() }
 
         try await fixture.loadHTMLString(
@@ -339,19 +399,69 @@ private final class PreferencesNavigationPolicyProbe: NSObject, WKNavigationDele
     }
 }
 
+@MainActor
+private func withIntegrationTimeout(
+    _ description: String,
+    operation: @escaping @MainActor @Sendable () async throws -> Void
+) async throws {
+    try await withThrowingTaskGroup(of: Void.self) { group in
+        defer { group.cancelAll() }
+        group.addTask {
+            try await operation()
+        }
+        group.addTask {
+            try await Task.sleep(for: .seconds(10))
+            throw WebContentProcessHarnessError.timedOut(description)
+        }
+        try await group.next()
+    }
+}
+
+@MainActor
+private func waitForUpdates<Event: Sendable>(
+    _ updates: AsyncStream<Event>,
+    description: String,
+    until condition: @escaping @MainActor @Sendable () throws -> Bool
+) async throws {
+    try await withIntegrationTimeout(description) {
+        if try condition() {
+            return
+        }
+        for await _ in updates {
+            try Task.checkCancellation()
+            if try condition() {
+                return
+            }
+        }
+        try Task.checkCancellation()
+        throw WebContentProcessHarnessError.updatesEnded(description)
+    }
+}
+
+@MainActor
 private func waitForTargetDestruction(
     targetID: WebInspectorTarget.ID,
     events: AsyncStream<WebInspectorTargetLifecycleEvent>
 ) async throws {
-    for await event in events {
-        try Task.checkCancellation()
-        if case .targetDestroyed(targetID) = event {
-            return
+    try await withIntegrationTimeout("the original inspector target to be destroyed") {
+        for await event in events {
+            try Task.checkCancellation()
+            if case .targetDestroyed(targetID) = event {
+                return
+            }
         }
+        try Task.checkCancellation()
+        throw WebContentProcessHarnessError.lifecycleEndedBeforeTargetDestruction
     }
+}
 
-    try Task.checkCancellation()
-    throw WebContentProcessHarnessError.lifecycleEndedBeforeTargetDestruction
+@MainActor
+private final class FixtureReadinessProbe: NSObject, WKScriptMessageHandler {
+    let signal = ReplyPromise<Void>()
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        signal.fulfill(.success(()))
+    }
 }
 
 @MainActor
@@ -396,19 +506,19 @@ private final class HostedWebViewFixture {
     }
 
     func loadHTMLString(_ html: String) async throws {
-        try await navigationProbe.load {
+        try await navigationProbe.load(in: webView) {
             webView.loadHTMLString(html, baseURL: nil)
         }
     }
 
     func loadFileURL(_ url: URL) async throws {
-        try await navigationProbe.load {
+        try await navigationProbe.load(in: webView) {
             webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
         }
     }
 
     func goBack() async throws {
-        try await navigationProbe.load { webView.goBack() }
+        try await navigationProbe.load(in: webView) { webView.goBack() }
     }
 
     func cleanup() {
@@ -425,8 +535,10 @@ private final class HostedWebViewFixture {
 private enum WebContentProcessHarnessError: Error {
     case missingWindowScene
     case navigationWasNotCreated
-    case processIdentifierWasUnavailable
-    case processTerminationFailed(Int32)
+    case processTerminationIsUnsupported
+    case timedOut(String)
+    case updatesEnded(String)
+    case contextDetached
     case processTerminatedWhileLoading
     case processTerminatedAgainBeforeRelaunch
     case relaunchNavigationWasNotCreated
@@ -450,8 +562,11 @@ private final class WebContentProcessNavigationProbe: NSObject, WKNavigationDele
 
     private var navigationOperation: NavigationOperation?
     private var relaunchOperation: RelaunchOperation?
+    private var timeoutTask: Task<Void, Never>?
+    private var pendingOperationID: UUID?
 
-    func load(_ startNavigation: () -> WKNavigation?) async throws {
+    func load(in webView: WKWebView, _ startNavigation: () -> WKNavigation?) async throws {
+        let operationID = UUID()
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation {
                 (continuation: CheckedContinuation<Void, any Error>) in
@@ -469,14 +584,16 @@ private final class WebContentProcessNavigationProbe: NSObject, WKNavigationDele
                     )
                     return
                 }
+                pendingOperationID = operationID
                 navigationOperation = NavigationOperation(
                     navigation: navigation,
                     continuation: continuation
                 )
+                startTimeout(in: webView, operationID: operationID, description: "navigation to finish")
             }
         } onCancel: { [weak self] in
             Task { @MainActor in
-                self?.cancelPendingOperation()
+                self?.cancelPendingOperation(id: operationID)
             }
         }
     }
@@ -485,11 +602,12 @@ private final class WebContentProcessNavigationProbe: NSObject, WKNavigationDele
         of webView: WKWebView,
         loading html: String
     ) async throws {
-        guard let processIdentifier =
-                (webView.value(forKey: "_webProcessIdentifier") as? NSNumber)?.int32Value,
-              processIdentifier > 0 else {
-            throw WebContentProcessHarnessError.processIdentifierWasUnavailable
+        // The AndResetState variant would also clear the page state under test.
+        let terminateSelector = NSSelectorFromString("_killWebContentProcess")
+        guard webView.responds(to: terminateSelector) else {
+            throw WebContentProcessHarnessError.processTerminationIsUnsupported
         }
+        let operationID = UUID()
 
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation {
@@ -502,34 +620,55 @@ private final class WebContentProcessNavigationProbe: NSObject, WKNavigationDele
                     navigationOperation == nil && relaunchOperation == nil,
                     "A navigation probe can own only one operation at a time."
                 )
+                pendingOperationID = operationID
                 relaunchOperation = RelaunchOperation(
                     didObserveTermination: false,
                     navigation: nil,
                     html: html,
                     continuation: continuation
                 )
-                guard kill(processIdentifier, SIGKILL) == 0 else {
-                    relaunchOperation = nil
-                    continuation.resume(
-                        throwing: WebContentProcessHarnessError.processTerminationFailed(errno)
-                    )
-                    return
-                }
+                startTimeout(in: webView, operationID: operationID, description: "WebContent process termination and relaunch")
+                _ = unsafe webView.perform(terminateSelector)
             }
         } onCancel: { [weak self] in
             Task { @MainActor in
-                self?.cancelPendingOperation()
+                self?.cancelPendingOperation(id: operationID)
             }
         }
     }
 
-    func cancelPendingOperation() {
+    @discardableResult
+    func cancelPendingOperation(id: UUID? = nil, error: any Error = CancellationError()) -> Bool {
+        guard pendingOperationID != nil, id == nil || pendingOperationID == id else {
+            return false
+        }
+        pendingOperationID = nil
+        timeoutTask?.cancel()
+        timeoutTask = nil
         let navigationContinuation = navigationOperation?.continuation
         navigationOperation = nil
         let relaunchContinuation = relaunchOperation?.continuation
         relaunchOperation = nil
-        navigationContinuation?.resume(throwing: CancellationError())
-        relaunchContinuation?.resume(throwing: CancellationError())
+        navigationContinuation?.resume(throwing: error)
+        relaunchContinuation?.resume(throwing: error)
+        return true
+    }
+
+    private func startTimeout(in webView: WKWebView, operationID: UUID, description: String) {
+        timeoutTask = Task { @MainActor [weak self, weak webView] in
+            do {
+                try await Task.sleep(for: .seconds(10))
+            } catch {
+                return
+            }
+            guard self?.cancelPendingOperation(
+                id: operationID,
+                error: WebContentProcessHarnessError.timedOut(description)
+            ) == true else {
+                return
+            }
+            webView?.stopLoading()
+        }
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -553,11 +692,8 @@ private final class WebContentProcessNavigationProbe: NSObject, WKNavigationDele
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        if let operation = navigationOperation {
-            navigationOperation = nil
-            operation.continuation.resume(
-                throwing: WebContentProcessHarnessError.processTerminatedWhileLoading
-            )
+        if navigationOperation != nil {
+            cancelPendingOperation(error: WebContentProcessHarnessError.processTerminatedWhileLoading)
             return
         }
 
@@ -565,18 +701,12 @@ private final class WebContentProcessNavigationProbe: NSObject, WKNavigationDele
             return
         }
         guard operation.didObserveTermination == false else {
-            relaunchOperation = nil
-            operation.continuation.resume(
-                throwing: WebContentProcessHarnessError.processTerminatedAgainBeforeRelaunch
-            )
+            cancelPendingOperation(error: WebContentProcessHarnessError.processTerminatedAgainBeforeRelaunch)
             return
         }
         operation.didObserveTermination = true
         guard let navigation = webView.loadHTMLString(operation.html, baseURL: nil) else {
-            relaunchOperation = nil
-            operation.continuation.resume(
-                throwing: WebContentProcessHarnessError.relaunchNavigationWasNotCreated
-            )
+            cancelPendingOperation(error: WebContentProcessHarnessError.relaunchNavigationWasNotCreated)
             return
         }
         operation.navigation = navigation
@@ -590,6 +720,9 @@ private final class WebContentProcessNavigationProbe: NSObject, WKNavigationDele
         if let operation = navigationOperation,
            operation.navigation === navigation {
             navigationOperation = nil
+            pendingOperationID = nil
+            timeoutTask?.cancel()
+            timeoutTask = nil
             operation.continuation.resume(with: result)
             return
         }
@@ -600,6 +733,9 @@ private final class WebContentProcessNavigationProbe: NSObject, WKNavigationDele
             return
         }
         relaunchOperation = nil
+        pendingOperationID = nil
+        timeoutTask?.cancel()
+        timeoutTask = nil
         operation.continuation.resume(with: result)
     }
 }

@@ -875,6 +875,8 @@ public final class NetworkBody {
     }
 
 #if DEBUG
+    @ObservationIgnored package var responseFetchWaiterDidRegisterForTesting: (@Sendable () -> Void)?
+
     package var responseFetchWaiterCountForTesting: Int {
         responseFetch?.lease.completion.bookkeepingCountForTesting() ?? 0
     }
@@ -1649,7 +1651,13 @@ public final class NetworkRequest: WebInspectorPersistentModel {
             body.installResponseFetchTask(task, for: newLease)
         }
 
+        #if DEBUG
+        _ = try? await lease.completion.value(
+            onWaiterRegisteredForTesting: body.responseFetchWaiterDidRegisterForTesting
+        )
+        #else
         _ = try? await lease.completion.value()
+        #endif
     }
 
     func invalidateResponseBodyFetch() {

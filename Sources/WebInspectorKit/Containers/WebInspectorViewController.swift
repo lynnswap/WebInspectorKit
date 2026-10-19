@@ -146,6 +146,7 @@ public final class WebInspectorViewController: UIViewController {
     private let presentationLifecycleCoordinator = WebInspectorRootPresentationLifecycleCoordinator()
     #if DEBUG
     private(set) var rootPresentationRetirementTaskForTesting: Task<Void, Never>?
+    private var deinitHandlerForTesting: (@MainActor () -> Void)?
     #endif
     private lazy var presentationHostWindowObserver: WebInspectorPresentationHostWindowObserverView = {
         let view = WebInspectorPresentationHostWindowObserverView(frame: .zero)
@@ -197,6 +198,9 @@ public final class WebInspectorViewController: UIViewController {
             id: rootPresentationID,
             detach: automaticallyDetachesOnDismiss
         )
+        #if DEBUG
+        deinitHandlerForTesting?()
+        #endif
     }
 
     /// Configures the inspector layout after the view loads.
@@ -433,6 +437,10 @@ public final class WebInspectorViewController: UIViewController {
     }
 
     #if DEBUG
+    func setDeinitHandlerForTesting(_ handler: @escaping @MainActor () -> Void) {
+        deinitHandlerForTesting = handler
+    }
+
     var presentationContentStoreForTesting: PresentationContentStore {
         presentationContentStore
     }

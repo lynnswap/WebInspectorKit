@@ -10,6 +10,13 @@ private actor CSSOperationGate {
     private var waitersByTargetID: [WebInspectorTarget.ID: [UInt64: Waiter]] = [:]
     private var waiterOrderByTargetID: [WebInspectorTarget.ID: [UInt64]] = [:]
     private var nextWaiterID: UInt64 = 0
+    #if DEBUG
+    private struct QueueCountWaiter {
+        let count: Int
+        let promise: ReplyPromise<Void>
+    }
+    private var queueCountWaiters: [WebInspectorTarget.ID: [QueueCountWaiter]] = [:]
+    #endif
 
     func acquire(targetID: WebInspectorTarget.ID) async throws {
         try Task.checkCancellation()
@@ -31,6 +38,9 @@ private actor CSSOperationGate {
                     continuation: continuation
                 )
                 waiterOrderByTargetID[targetID, default: []].append(waiterID)
+                #if DEBUG
+                resolveQueueCountWaiters(for: targetID)
+                #endif
             }
         } onCancel: {
             Task {
@@ -67,9 +77,40 @@ private actor CSSOperationGate {
         acquiredTargetIDs.remove(targetID)
     }
 
-    func queuedOperationCount(for targetID: WebInspectorTarget.ID) -> Int {
-        waitersByTargetID[targetID]?.count ?? 0
+    #if DEBUG
+    private enum QueueWaitError: Error {
+        case timedOut
     }
+
+    func waitForQueuedOperationCount(_ count: Int, for targetID: WebInspectorTarget.ID) async throws {
+        guard (waitersByTargetID[targetID]?.count ?? 0) < count else {
+            return
+        }
+        let promise = ReplyPromise<Void>()
+        queueCountWaiters[targetID, default: []].append(QueueCountWaiter(count: count, promise: promise))
+        defer {
+            queueCountWaiters[targetID]?.removeAll { $0.promise === promise }
+        }
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { try await promise.value() }
+            group.addTask {
+                try await Task.sleep(for: .seconds(1))
+                throw QueueWaitError.timedOut
+            }
+            defer { group.cancelAll() }
+            _ = try await group.next()
+        }
+    }
+
+    private func resolveQueueCountWaiters(for targetID: WebInspectorTarget.ID) {
+        let count = waitersByTargetID[targetID]?.count ?? 0
+        let ready = (queueCountWaiters[targetID] ?? []).filter { $0.count <= count }
+        queueCountWaiters[targetID]?.removeAll { $0.count <= count }
+        for waiter in ready {
+            waiter.promise.fulfill(.success(()))
+        }
+    }
+    #endif
 
     private func cancel(targetID: WebInspectorTarget.ID, waiterID: UInt64) {
         waitersByTargetID[targetID]?.removeValue(forKey: waiterID)?.continuation.resume(
@@ -498,30 +539,78 @@ public final class WebInspectorContext {
     private let domainEnablement: WebInspectorDomainEnablementRegistry
     private let owner: any Actor
     /// The current attachment state.
-    public private(set) var state: State
+    public private(set) var state: State {
+        didSet {
+            #if DEBUG
+            stateChangesForTesting.yield(())
+            #endif
+        }
+    }
 
     /// The terminal teardown error, if the context failed or detached because
     /// of an inspector error.
-    public private(set) var teardownError: WebInspectorProxyError?
+    public private(set) var teardownError: WebInspectorProxyError? {
+        didSet {
+            #if DEBUG
+            stateChangesForTesting.yield(())
+            #endif
+        }
+    }
 
     /// The failure from the latest initial resource-tree lookup, if any.
     /// Live Network events remain available when only this lookup fails.
-    public private(set) var networkResourceTreeError: WebInspectorProxyError?
+    public private(set) var networkResourceTreeError: WebInspectorProxyError? {
+        didSet {
+            #if DEBUG
+            stateChangesForTesting.yield(())
+            #endif
+        }
+    }
 
     /// The current root DOM node, if a document is loaded.
-    public private(set) var rootNode: DOMNode?
+    public private(set) var rootNode: DOMNode? {
+        didSet {
+            #if DEBUG
+            stateChangesForTesting.yield(())
+            #endif
+        }
+    }
 
     /// The currently selected DOM node.
-    public private(set) var selectedNode: DOMNode?
+    public private(set) var selectedNode: DOMNode? {
+        didSet {
+            #if DEBUG
+            stateChangesForTesting.yield(())
+            #endif
+        }
+    }
 
     /// A Boolean value indicating whether WebKit inspect mode is enabled.
-    public private(set) var isElementPickerEnabled: Bool
+    public private(set) var isElementPickerEnabled: Bool {
+        didSet {
+            #if DEBUG
+            stateChangesForTesting.yield(())
+            #endif
+        }
+    }
 
     /// Runtime execution contexts known to the current page.
-    public private(set) var executionContexts: [RuntimeContext]
+    public private(set) var executionContexts: [RuntimeContext] {
+        didSet {
+            #if DEBUG
+            stateChangesForTesting.yield(())
+            #endif
+        }
+    }
 
     /// The selected Runtime execution context.
-    public private(set) var selectedContext: RuntimeContext?
+    public private(set) var selectedContext: RuntimeContext? {
+        didSet {
+            #if DEBUG
+            stateChangesForTesting.yield(())
+            #endif
+        }
+    }
 
     private var currentPage: WebInspectorTarget?
     private var currentPageGeneration: Int
@@ -536,7 +625,22 @@ public final class WebInspectorContext {
     private var inspectResolutionTask: Task<Void, Never>?
     private var pageHighlightMaintenanceTask: Task<Void, Never>?
     private var elementPickerOperation: ElementPickerOperation?
-    private var elementPickerDesiredState: ElementPickerDesiredState?
+    private var elementPickerDesiredState: ElementPickerDesiredState? {
+        didSet {
+            #if DEBUG
+            stateChangesForTesting.yield(())
+            if let elementPickerDesiredState {
+                elementPickerDesiredStateDidChangeForTesting?(
+                    elementPickerDesiredState.id,
+                    elementPickerDesiredState.requestedEnabled
+                )
+            }
+            #endif
+        }
+    }
+    #if DEBUG
+    package var elementPickerDesiredStateDidChangeForTesting: (@Sendable (UInt64, Bool) -> Void)?
+    #endif
     private var nextElementPickerOperationID: UInt64
     private var frameDocumentLoadTasks: [WebInspectorTarget.ID: Task<Void, Never>]
     private var styleRefreshTask: Task<Void, Never>?
@@ -566,7 +670,13 @@ public final class WebInspectorContext {
     private var networkTrackingTarget: WebInspectorTarget?
     private var runtimeTrackingTarget: WebInspectorTarget?
     private var consoleTrackingTarget: WebInspectorTarget?
-    private var nodesByID: [DOMNode.ID: DOMNode]
+    private var nodesByID: [DOMNode.ID: DOMNode] {
+        didSet {
+            #if DEBUG
+            stateChangesForTesting.yield(())
+            #endif
+        }
+    }
     private var frameDocumentProjectionIndex: FrameDocumentProjectionIndex
     private var treeStates: [WeakDOMTreeState]
     private let statusRelay: WebInspectorAsyncStreamRelay<Status>
@@ -755,6 +865,14 @@ public final class WebInspectorContext {
             )
         }
     }
+
+    #if DEBUG
+    private let stateChangesForTesting = WebInspectorAsyncStreamRelay<Void>()
+
+    package func stateChangeStreamForTesting() -> AsyncStream<Void> {
+        stateChangesForTesting.makeStream()
+    }
+    #endif
 
     package var status: Status {
         Status(
@@ -5090,13 +5208,16 @@ extension WebInspectorContext {
         }
     }
 
-    package func queuedCSSOperationCountForTesting(
+    #if DEBUG
+    package func waitForQueuedCSSOperationCountForTesting(
+        _ count: Int,
         for target: WebInspectorTarget,
         isolation: isolated (any Actor) = #isolation
-    ) async -> Int {
+    ) async throws {
         requireOwner(isolation)
-        return await cssOperationGate.queuedOperationCount(for: target.id)
+        try await cssOperationGate.waitForQueuedOperationCount(count, for: target.id)
     }
+    #endif
 
     private func withExclusiveCSSOperation<Output>(
         on target: WebInspectorTarget,

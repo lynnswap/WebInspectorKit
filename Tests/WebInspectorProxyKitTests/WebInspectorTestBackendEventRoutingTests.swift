@@ -2,6 +2,64 @@ import Testing
 import WebInspectorProxyKit
 import WebInspectorProxyKitTesting
 
+@Test(.timeLimit(.minutes(1)))
+func testBackendCancelledCommandWaitReleasesRegistrationAndAllowsLaterWaits() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let target = try await runtime.proxy.waitForCurrentPage()
+    let registered = ReplyPromise<Void>()
+    let cancelledWait = Task {
+        try await runtime.backend.waitForRecordedCommandsForTesting(
+            domain: "Page",
+            method: "reload",
+            count: 1,
+            onWaiterRegistered: { registered.fulfill(.success(())) }
+        )
+    }
+    try await registered.value()
+    #expect(await runtime.backend.cancellableRecordedCommandWaiterCountForTesting() == 1)
+
+    cancelledWait.cancel()
+    await #expect(throws: CancellationError.self) {
+        try await cancelledWait.value
+    }
+    #expect(await runtime.backend.cancellableRecordedCommandWaiterCountForTesting() == 0)
+
+    do {
+        _ = try await runtime.backend.waitForRecordedCommandsForTesting(
+            domain: "Page",
+            method: "reload",
+            count: 1,
+            timeout: .zero
+        )
+        Issue.record("A missing command must fail when the deadline expires.")
+    } catch {
+        #expect(!(error is CancellationError))
+    }
+    #expect(await runtime.backend.cancellableRecordedCommandWaiterCountForTesting() == 0)
+
+    let nextRegistered = ReplyPromise<Void>()
+    let nextWait = Task {
+        try await runtime.backend.waitForRecordedCommandsForTesting(
+            domain: "Page",
+            method: "reload",
+            count: 1,
+            onWaiterRegistered: { nextRegistered.fulfill(.success(())) }
+        )
+    }
+    try await nextRegistered.value()
+    let publicWait = Task {
+        await runtime.backend.waitForRecordedCommands(domain: "Page", method: "reload", count: 1)
+    }
+    await runtime.backend.enqueue((), for: "Page", method: "reload")
+    try await target.page.reload()
+
+    let expected = [RecordedCommand(domain: "Page", method: "reload")]
+    #expect(try await nextWait.value == expected)
+    #expect(await publicWait.value == expected)
+    #expect(await runtime.backend.cancellableRecordedCommandWaiterCountForTesting() == 0)
+    await runtime.proxy.close()
+}
+
 @Test
 func testBackendEmissionWithoutRecipientsAdvancesOrderedFeedSequence() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()

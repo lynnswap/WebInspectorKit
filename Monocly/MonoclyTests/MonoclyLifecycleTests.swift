@@ -5,11 +5,15 @@ import Testing
 import UIKit
 import WebKit
 import WebInspectorKit
+import WebKitScreenTimeWorkaround
 
 @Suite(.serialized)
 @MainActor
 struct MonoclyLifecycleTests {
     init() async throws {
+        if #available(iOS 26.1, *) {
+            try ScreenTimeWorkaround.install()
+        }
         try await WebInspectorSession.prepare()
     }
 

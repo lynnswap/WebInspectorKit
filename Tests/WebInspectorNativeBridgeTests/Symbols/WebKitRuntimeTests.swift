@@ -136,7 +136,7 @@ struct WebKitRuntimeTests {
     }
     @Test @MainActor
     func pageAccessKeepsTheOwnerAliveAndPropagatesClosureErrors() throws {
-        let view = WKWebView(frame: .zero)
+        let view = try makeNativeTestWebView()
         enum Expected: Error { case failure }
         let first = try unsafe WebKitRuntime.withUnsafePage(of: view) { pointer, count in
             #expect(count >= MemoryLayout<UInt>.size)

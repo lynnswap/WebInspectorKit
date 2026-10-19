@@ -2,10 +2,14 @@
 import Testing
 import WebKit
 import WebInspectorKit
+import WebKitScreenTimeWorkaround
 
 @MainActor
 @Test
 func publicUIKitModuleSupportsAttachAndDetachForConsumers() async throws {
+    if #available(iOS 26.1, *) {
+        try ScreenTimeWorkaround.install()
+    }
     try await WebInspectorSession.prepare()
     let session = WebInspectorKit.WebInspectorSession()
     let inspector = WebInspectorKit.WebInspectorViewController(session: session)

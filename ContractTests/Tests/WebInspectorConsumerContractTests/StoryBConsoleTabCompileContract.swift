@@ -2,10 +2,14 @@
 import Testing
 import UIKit
 import WebInspectorKit
+import WebKitScreenTimeWorkaround
 
 @MainActor
 @Test
 func customUIKitTabFactoryReceivesWebInspectorSession() async throws {
+    if #available(iOS 26.1, *) {
+        try ScreenTimeWorkaround.install()
+    }
     try await WebInspectorSession.prepare()
     let consoleTab = WebInspectorTab(
         id: "contract_console",

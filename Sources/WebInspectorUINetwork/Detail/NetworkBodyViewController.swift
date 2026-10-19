@@ -91,6 +91,7 @@ final class NetworkBodyViewController: UIViewController {
 #if DEBUG
     private var bodyObservationDelivery: PortableObservationTracking.Token?
     private var previewRenderObservationDelivery: PortableObservationTracking.Token?
+    private var moviePreviewFailureHandlerForTesting: (@MainActor () -> Void)?
 #endif
 
     init(
@@ -744,6 +745,9 @@ final class NetworkBodyViewController: UIViewController {
         }
         failedMediaPlayerPreview = preview
         failedMediaPlayerMessage = message
+        #if DEBUG
+        moviePreviewFailureHandlerForTesting?()
+        #endif
         guard isRenderingActive else {
             return
         }
@@ -1197,6 +1201,12 @@ extension NetworkBodyViewController {
         loadViewIfNeeded()
         return failedMediaPlayerPreview != nil
     }
+
+    #if DEBUG
+    func setMoviePreviewFailureHandlerForTesting(_ handler: (@MainActor () -> Void)?) {
+        moviePreviewFailureHandlerForTesting = handler
+    }
+    #endif
 
     func waitUntilMediaPreviewPreparationFinishedForTesting() async {
         await mediaPreviewCoordinator.waitUntilPreparationFinishedForTesting()

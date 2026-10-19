@@ -3525,6 +3525,11 @@ struct NetworkDetailViewControllerTests {
         }
         defer { renderedFailure.cancel() }
 
+        let failureHandled = ReplyPromise<Void>()
+        viewController.setMoviePreviewFailureHandlerForTesting {
+            failureHandled.fulfill(.success(()))
+        }
+        defer { viewController.setMoviePreviewFailureHandlerForTesting(nil) }
         viewController.suspendKeepingSurface()
         NotificationCenter.default.post(
             name: AVPlayerItem.failedToPlayToEndTimeNotification,
@@ -3540,9 +3545,8 @@ struct NetworkDetailViewControllerTests {
             ]
         )
 
-        try await waitForTestCondition {
-            viewController.hasMoviePreviewFailureForTesting
-        }
+        try await waitForUITestSignal(failureHandled)
+        #expect(viewController.hasMoviePreviewFailureForTesting)
         #expect(viewController.isMoviePreviewStatusVisibleForTesting == false)
         #expect(viewController.mediaPlayerViewControllerIdentityForTesting == playerViewControllerIdentity)
 
