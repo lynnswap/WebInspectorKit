@@ -3802,10 +3802,10 @@ func startCancelsInFlightCurrentPageRetargetBeforeRestarting() async throws {
             cancellationProbe.markCancelled()
         }
     })
-    try await cancellationProbe.waitUntilStarted()
+    try await cancellationProbe.waitUntilStarted(timeout: .seconds(5))
 
     context.start()
-    try await cancellationProbe.waitUntilCancelled()
+    try await cancellationProbe.waitUntilCancelled(timeout: .seconds(5))
 }
 
 @MainActor
@@ -15413,12 +15413,25 @@ private final class CancellationProbe: Sendable {
         cancelledSignal.fulfill(.success(()))
     }
 
-    func waitUntilStarted() async throws {
-        try await startedSignal.value()
+    func waitUntilStarted(timeout: Duration = .seconds(1)) async throws {
+        try await wait(for: startedSignal, timeout: timeout)
     }
 
-    func waitUntilCancelled() async throws {
-        try await cancelledSignal.value()
+    func waitUntilCancelled(timeout: Duration = .seconds(1)) async throws {
+        try await wait(for: cancelledSignal, timeout: timeout)
+    }
+
+    private func wait(for signal: ReplyPromise<Void>, timeout: Duration) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { try await signal.value() }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw TimedOut()
+            }
+            defer { group.cancelAll() }
+            _ = try await group.next()
+        }
+        try Task.checkCancellation()
     }
 }
 

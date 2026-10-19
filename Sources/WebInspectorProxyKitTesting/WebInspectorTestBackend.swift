@@ -276,7 +276,7 @@ public actor WebInspectorTestBackend {
         }
     }
 
-    private enum RecordedCommandWaitError: Error {
+    private enum SignalWaitError: Error {
         case timedOut
     }
 
@@ -308,11 +308,18 @@ public actor WebInspectorTestBackend {
             }
         }
         onWaiterRegistered?()
-        let result = try await withThrowingTaskGroup(of: [RecordedCommand].self) { group in
+        return try await Self.waitForTestingSignal(promise, timeout: timeout)
+    }
+
+    private static func waitForTestingSignal<Value: Sendable>(
+        _ promise: ReplyPromise<Value>,
+        timeout: Duration
+    ) async throws -> Value {
+        let result = try await withThrowingTaskGroup(of: Value.self) { group in
             group.addTask { try await promise.value() }
             group.addTask {
                 try await Task.sleep(for: timeout)
-                throw RecordedCommandWaitError.timedOut
+                throw SignalWaitError.timedOut
             }
             defer { group.cancelAll() }
             guard let result = try await group.next() else {
@@ -390,7 +397,11 @@ public actor WebInspectorTestBackend {
         )]?.count ?? 0
     }
 
-    package func waitForNoOrderedEventSubscribers(for target: WebInspectorTarget) async throws {
+    package func waitForNoOrderedEventSubscribers(
+        for target: WebInspectorTarget,
+        timeout: Duration = .seconds(1)
+    ) async throws {
+        try Task.checkCancellation()
         let key = OrderedEventSubscriptionKey(route: target.route, targetID: target.id)
         guard orderedEventContinuations[key]?.isEmpty == false else {
             return
@@ -400,7 +411,7 @@ public actor WebInspectorTestBackend {
         defer {
             orderedSubscriberTerminationWaiters[key]?.removeAll { $0 === promise }
         }
-        try await promise.value()
+        try await Self.waitForTestingSignal(promise, timeout: timeout)
     }
 
     package func eventSubscriptionBookkeepingCountForTesting() -> Int {

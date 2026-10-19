@@ -24,6 +24,19 @@ func testBackendCancelledCommandWaitReleasesRegistrationAndAllowsLaterWaits() as
     }
     #expect(await runtime.backend.cancellableRecordedCommandWaiterCountForTesting() == 0)
 
+    do {
+        _ = try await runtime.backend.waitForRecordedCommandsForTesting(
+            domain: "Page",
+            method: "reload",
+            count: 1,
+            timeout: .zero
+        )
+        Issue.record("A missing command must fail when the deadline expires.")
+    } catch {
+        #expect(!(error is CancellationError))
+    }
+    #expect(await runtime.backend.cancellableRecordedCommandWaiterCountForTesting() == 0)
+
     let nextRegistered = ReplyPromise<Void>()
     let nextWait = Task {
         try await runtime.backend.waitForRecordedCommandsForTesting(
