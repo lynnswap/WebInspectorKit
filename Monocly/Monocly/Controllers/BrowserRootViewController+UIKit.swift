@@ -11,14 +11,6 @@ final class BrowserRootViewController: UINavigationController {
     private let inspectorSessionAttachmentLifecycle: BrowserInspectorSessionAttachmentLifecycle
     private var isPreservingInspectorSessionForSceneDisconnection = false
     var onSelectedWebViewInstalledForTesting: ((WKWebView) -> Void)?
-    var onAttachInspectorSessionForTesting: ((WKWebView) -> Void)? {
-        get {
-            inspectorSessionAttachmentLifecycle.onAttachForTesting
-        }
-        set {
-            inspectorSessionAttachmentLifecycle.onAttachForTesting = newValue
-        }
-    }
 
     init(
         browserWindow: BrowserWindow? = nil,
