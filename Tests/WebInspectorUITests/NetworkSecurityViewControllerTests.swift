@@ -29,6 +29,7 @@ struct NetworkSecurityViewControllerTests {
             "network.security.value.not_applicable",
             defaultValue: "Not applicable"
         ))
+        #expect(certificateVerdicts(in: viewController).isEmpty)
 
         await render(.pending(.wss), epoch: epoch, in: viewController)
         #expect(viewController.snapshotForTesting.sectionIdentifiers == [.status])
@@ -38,6 +39,7 @@ struct NetworkSecurityViewControllerTests {
             defaultValue: "Waiting for Response"
         ))
         #expect(row(.status, in: viewController)?.value == nil)
+        #expect(certificateVerdicts(in: viewController).isEmpty)
 
         await render(
             .encryptedScheme(.https, metadata: .notReported),
@@ -54,6 +56,41 @@ struct NetworkSecurityViewControllerTests {
             row(.securityMetadata, in: viewController)?.value
                 == localized("network.security.value.not_reported", defaultValue: "Not reported")
         )
+        #expect(certificateVerdicts(in: viewController).isEmpty)
+
+        // The certificate has expired and names the request host, so a computed
+        // trust or hostname verdict would have something to report.
+        let validFrom = Date(timeIntervalSince1970: 1_000)
+        let validUntil = Date(timeIntervalSince1970: 2_000)
+        await render(
+            .encryptedScheme(
+                .https,
+                metadata: .reported(Network.Security(
+                    connection: Network.Security.Connection(
+                        tlsProtocol: "TLS 1.3",
+                        cipher: "AES_128_GCM_SHA256"
+                    ),
+                    certificate: Network.Security.Certificate(
+                        subject: "CN=example.test",
+                        validFrom: validFrom,
+                        validUntil: validUntil,
+                        dnsNames: ["example.test"],
+                        ipAddresses: ["192.0.2.1"]
+                    )
+                ))
+            ),
+            epoch: epoch,
+            in: viewController
+        )
+        #expect(
+            viewController.snapshotForTesting.sectionIdentifiers
+                == [.status, .connection, .certificate]
+        )
+        #expect(row(.subject, in: viewController)?.value == "CN=example.test")
+        #expect(row(.validFrom, in: viewController)?.value == validFrom.formatted(date: .numeric, time: .complete))
+        #expect(row(.validUntil, in: viewController)?.value == validUntil.formatted(date: .numeric, time: .complete))
+        #expect(row(.dnsName(0), in: viewController)?.value == "example.test")
+        #expect(certificateVerdicts(in: viewController).isEmpty)
 
         await render(
             .unavailable(.https, reason: .canceledBeforeResponse(reason: "cancelled raw")),
@@ -68,6 +105,7 @@ struct NetworkSecurityViewControllerTests {
         #expect(row(.status, in: viewController)?.value == nil)
         #expect(row(.reason, in: viewController)?.value == "cancelled raw")
         #expect(row(.reason, in: viewController)?.usesTechnicalValueDirection == true)
+        #expect(certificateVerdicts(in: viewController).isEmpty)
 
         await render(.notApplicable(scheme: "Custom+Scheme"), epoch: epoch, in: viewController)
         #expect(row(.scheme, in: viewController)?.value == "Custom+Scheme")
@@ -75,15 +113,7 @@ struct NetworkSecurityViewControllerTests {
             "network.security.value.not_classified",
             defaultValue: "Not Classified"
         ))
-        let visibleText = viewController.snapshotForTesting.itemIdentifiers.flatMap { itemID -> [String] in
-            guard let row = viewController.rowContentForTesting(itemID) else {
-                return []
-            }
-            return [row.label, row.value].compactMap { $0 }
-        }.joined(separator: "\n").lowercased()
-        for verdict in ["trusted", "valid certificate", "hostname matched", "expired", "secure connection"] {
-            #expect(visibleText.contains(verdict) == false)
-        }
+        #expect(certificateVerdicts(in: viewController).isEmpty)
         #expect(NetworkSecurityViewController.listConfigurationForTesting.appearance == .insetGrouped)
         #expect(NetworkSecurityViewController.listConfigurationForTesting.headerMode == .supplementary)
         #expect(viewController.collectionView.collectionViewLayout is UICollectionViewCompositionalLayout)
@@ -455,6 +485,17 @@ struct NetworkSecurityViewControllerTests {
             return nil
         }
         return viewController.rowContentForTesting(itemID)
+    }
+
+    private func certificateVerdicts(in viewController: NetworkSecurityViewController) -> [String] {
+        let renderedText = viewController.snapshotForTesting.itemIdentifiers.flatMap { itemID -> [String] in
+            guard let row = viewController.rowContentForTesting(itemID) else {
+                return []
+            }
+            return [row.label, row.value, row.accessibilityLabel].compactMap { $0 }
+        }.joined(separator: "\n").lowercased()
+        return ["trusted", "valid certificate", "hostname matched", "expired", "secure connection"]
+            .filter { renderedText.contains($0) }
     }
 
     private func itemID(

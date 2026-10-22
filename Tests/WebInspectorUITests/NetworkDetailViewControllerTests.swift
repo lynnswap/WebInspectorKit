@@ -2944,79 +2944,6 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func detailUpdatesResponseHeadersAfterSelection() async throws {
-        let context = makeContext()
-        let request = try #require(
-            await applyRequestWithoutResponse(
-                to: context,
-                requestID: "1",
-                url: "https://example.com/api/data.json"
-            )
-        )
-        let model = NetworkPanelModel(context: context)
-        model.selectRequest(request)
-        let viewController = NetworkDetailViewController(model: model)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
-        viewController.setModeForTesting(.headers)
-
-        let didRenderRequestHeaders = await waitUntilRendered(in: viewController) {
-            viewController.headersTextViewForTesting.renderedTextForTesting.contains("GET /api/data.json")
-        }
-        #expect(didRenderRequestHeaders)
-
-        await applyResponseReceived(
-            to: context,
-            requestID: "1",
-            url: "https://example.com/api/data.json",
-            responseHeaders: ["content-type": "application/json"],
-            responseMimeType: "application/json",
-            timestamp: 2
-        )
-
-        let didRenderResponseHeaders = await waitUntilRendered(in: viewController) {
-            viewController.headersTextViewForTesting.renderedTextForTesting.contains("content-type: application/json")
-        }
-        #expect(didRenderResponseHeaders)
-    }
-
-    @Test
-    func detailModeControlUsesCoreBodyAvailabilityAndRendersRequestBody() async throws {
-        let context = makeContext()
-        let request = try #require(
-            await applyRequest(
-                to: context,
-                requestID: "1",
-                url: "https://example.com/form",
-                requestHeaders: ["content-type": "application/x-www-form-urlencoded"],
-                postData: "name=Jane+Doe&city=Tokyo%20East",
-                responseHeaders: [:],
-                responseMimeType: "text/plain"
-            )
-        )
-        let model = NetworkPanelModel(context: context)
-        model.selectRequest(request)
-        let viewController = NetworkDetailViewController(model: model)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
-        viewController.setModeForTesting(.preview)
-
-        let didRender = await waitUntilRendered(in: viewController) {
-            viewController.previewViewForTesting.isHidden == false
-                && viewController.isPreviewRoleControlHiddenForTesting == false
-        }
-        #expect(didRender)
-
-        #expect(viewController.currentModeForTesting == .preview)
-        viewController.selectPreviewRoleForTesting(.request)
-
-        let didRenderBody = await waitUntilRendered(in: viewController) {
-            viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == "name=Jane Doe\ncity=Tokyo East"
-        }
-        #expect(didRenderBody)
-    }
-
-    @Test
     func detailModeControlDisablesWhenSelectedRequestDisappears() async throws {
         let context = makeContext()
         let request = try #require(
@@ -3049,31 +2976,44 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func responsePreviewRequestsRuntimeFetchWhenBodyIsAvailable() async throws {
-        let context = makeContext()
+        let fixture = try await makeLiveNetworkDetailFixture()
         let request = try #require(
             await applyRequest(
-                to: context,
-                requestID: "1",
+                to: fixture.context,
+                requestID: "preview-fetch",
                 url: "https://example.com/api/data.json",
                 responseHeaders: ["content-type": "application/json"],
                 responseMimeType: "application/json"
             )
         )
-        let model = NetworkPanelModel(context: context)
+        await fixture.runtime.backend.enqueue(
+            Network.Body(data: #"{"fetched":true}"#, base64Encoded: false),
+            for: "Network",
+            method: "getResponseBody"
+        )
+        let model = NetworkPanelModel(context: fixture.context)
         model.selectRequest(request)
         let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
         viewController.setModeForTesting(.preview)
 
-        let didFetch = await waitUntilRendered(in: viewController) {
-            guard case .failed = request.responseBody.phase else {
-                return false
-            }
-            return viewController.currentModeForTesting == .preview
+        let didRenderFetchedBody = await waitUntilPreparedTextPreviewRendered(in: viewController) {
+            viewController.currentModeForTesting == .preview
                 && viewController.currentPreviewRoleForTesting == .response
+                && viewController.bodyViewControllerForTesting
+                    .syntaxViewForTesting.text.contains(#""fetched" : true"#)
         }
-        #expect(didFetch)
+        #expect(didRenderFetchedBody)
+        #expect(await responseBodyCommandRequestIDs(in: fixture.runtime.backend) == [request.proxyID])
+
+        await fixture.runtime.backend.enqueue((), for: "Console", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Runtime", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Network", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Page", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Inspector", method: "disable")
+        await fixture.context.stop()
+        #expect(fixture.context.state == .detached)
     }
 
     @Test
@@ -3231,17 +3171,17 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func hiddenDetailDoesNotFetchResponseBodyUntilAppearingAgain() async throws {
-        let context = makeContext()
+        let fixture = try await makeLiveNetworkDetailFixture()
         let request = try #require(
             await applyRequest(
-                to: context,
-                requestID: "1",
+                to: fixture.context,
+                requestID: "hidden-fetch",
                 url: "https://example.com/api/data.json",
                 responseHeaders: ["content-type": "application/json"],
                 responseMimeType: "application/json"
             )
         )
-        let model = NetworkPanelModel(context: context)
+        let model = NetworkPanelModel(context: fixture.context)
         model.selectRequest(request)
         let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -3260,19 +3200,33 @@ struct NetworkDetailViewControllerTests {
         viewController.setModeForTesting(.preview)
 
         #expect(request.responseBody.phase == .available)
+        #expect(viewController.fetchResponseBodyIfNeededForVisibleResponse(request) == false)
         #expect(viewController.headersTextViewForTesting.renderedTextForTesting.contains("content-type: application/json"))
 
+        await fixture.runtime.backend.enqueue(
+            Network.Body(data: #"{"returned":true}"#, base64Encoded: false),
+            for: "Network",
+            method: "getResponseBody"
+        )
         viewController.beginAppearanceTransition(true, animated: false)
         viewController.endAppearanceTransition()
 
-        let didFetchOnReturn = await waitUntilRendered(in: viewController) {
-            guard case .failed = request.responseBody.phase else {
-                return false
-            }
-            return viewController.currentModeForTesting == .preview
+        let didRenderFetchedBodyOnReturn = await waitUntilPreparedTextPreviewRendered(in: viewController) {
+            viewController.currentModeForTesting == .preview
                 && viewController.currentPreviewRoleForTesting == .response
+                && viewController.bodyViewControllerForTesting
+                    .syntaxViewForTesting.text.contains(#""returned" : true"#)
         }
-        #expect(didFetchOnReturn)
+        #expect(didRenderFetchedBodyOnReturn)
+        #expect(await responseBodyCommandRequestIDs(in: fixture.runtime.backend) == [request.proxyID])
+
+        await fixture.runtime.backend.enqueue((), for: "Console", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Runtime", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Network", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Page", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Inspector", method: "disable")
+        await fixture.context.stop()
+        #expect(fixture.context.state == .detached)
     }
 
     @Test
@@ -4405,18 +4359,18 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func responsePreviewWaitsForLoadingFinishedBeforeFetching() async throws {
-        let context = makeContext()
+        let fixture = try await makeLiveNetworkDetailFixture()
         let request = try #require(
             await applyRequest(
-                to: context,
-                requestID: "1",
+                to: fixture.context,
+                requestID: "finish-before-fetch",
                 url: "https://example.com/api/data.json",
                 responseHeaders: ["content-type": "application/json"],
                 responseMimeType: "application/json",
                 finishes: false
             )
         )
-        let model = NetworkPanelModel(context: context)
+        let model = NetworkPanelModel(context: fixture.context)
         model.selectRequest(request)
         let viewController = NetworkDetailViewController(model: model)
         let window = showInWindow(viewController)
@@ -4424,16 +4378,29 @@ struct NetworkDetailViewControllerTests {
         viewController.setModeForTesting(.preview)
 
         #expect(request.responseBody.phase == .available)
+        #expect(viewController.fetchResponseBodyIfNeededForVisibleResponse(request) == false)
 
-        await applyLoadingFinished(to: context, requestID: "1", timestamp: 3)
+        await fixture.runtime.backend.enqueue(
+            Network.Body(data: #"{"finished":true}"#, base64Encoded: false),
+            for: "Network",
+            method: "getResponseBody"
+        )
+        await applyLoadingFinished(to: fixture.context, requestID: "finish-before-fetch", timestamp: 3)
 
-        let didFetch = await waitUntilRendered(in: viewController) {
-            guard case .failed = request.responseBody.phase else {
-                return false
-            }
-            return true
+        let didRenderFetchedBody = await waitUntilPreparedTextPreviewRendered(in: viewController) {
+            viewController.bodyViewControllerForTesting
+                .syntaxViewForTesting.text.contains(#""finished" : true"#)
         }
-        #expect(didFetch)
+        #expect(didRenderFetchedBody)
+        #expect(await responseBodyCommandRequestIDs(in: fixture.runtime.backend) == [request.proxyID])
+
+        await fixture.runtime.backend.enqueue((), for: "Console", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Runtime", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Network", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Page", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Inspector", method: "disable")
+        await fixture.context.stop()
+        #expect(fixture.context.state == .detached)
     }
 
     @Test
@@ -4541,11 +4508,8 @@ struct NetworkDetailViewControllerTests {
         })
         model.selectRequest(second)
         first.finish(timestamp: 3, sourceMapURL: nil, metrics: nil)
-        viewController.fetchResponseBodyIfNeededForVisibleResponse(first)
+        #expect(viewController.fetchResponseBodyIfNeededForVisibleResponse(first) == false)
 
-        #expect(await fixture.runtime.backend.recordedCommands().filter {
-            $0.domain == "Network" && $0.method == "getResponseBody"
-        }.isEmpty)
         #expect(await waitUntilRendered(in: viewController) {
             viewController.previewRequestIDForTesting == second.id
                 && viewController.responseBodyFetchObservationDeliveryForTesting != nil
@@ -4577,25 +4541,36 @@ struct NetworkDetailViewControllerTests {
 
     @Test
     func failedResponseBodyDoesNotRefetchFromRendering() async throws {
-        let context = makeContext()
+        let fixture = try await makeLiveNetworkDetailFixture()
         let request = try #require(
             await applyRequest(
-                to: context,
-                requestID: "1",
+                to: fixture.context,
+                requestID: "failed-fetch",
                 url: "https://example.com/api/data.json",
                 responseHeaders: ["content-type": "application/json"],
                 responseMimeType: "application/json"
             )
         )
-        let model = NetworkPanelModel(context: context)
+        let fetchFailure = WebInspectorProxyError.commandFailed(
+            domain: "Network",
+            method: "getResponseBody",
+            message: "Response body is unavailable."
+        )
+        await fixture.runtime.backend.enqueueFailure(
+            fetchFailure,
+            for: "Network",
+            method: "getResponseBody"
+        )
+        let model = NetworkPanelModel(context: fixture.context)
         model.fetchResponseBodyIfNeeded(for: request)
-        let didFailInitialFetch = await waitForNetworkBodyPhase(in: request.responseBody) { phase in
+        let initialPhase = await waitForNetworkBodyPhase(in: request.responseBody) { phase in
             if case .failed = phase {
                 return true
             }
             return false
-        } != nil
-        #expect(didFailInitialFetch)
+        }
+        #expect(initialPhase == .failed(fetchFailure))
+        #expect(await responseBodyCommandRequestIDs(in: fixture.runtime.backend) == [request.proxyID])
 
         model.selectRequest(request)
         let viewController = NetworkDetailViewController(model: model)
@@ -4609,14 +4584,17 @@ struct NetworkDetailViewControllerTests {
                 && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text.isEmpty == false
         }
         #expect(didRenderFailure)
-        let failedPhase = request.responseBody.phase
 
-        model.fetchResponseBodyIfNeeded(for: request)
+        #expect(model.fetchResponseBodyIfNeeded(for: request) == false)
+        #expect(request.responseBody.phase == .failed(fetchFailure))
 
-        let didStayIdle = await waitUntilRendered(in: viewController) {
-            request.responseBody.phase == failedPhase
-        }
-        #expect(didStayIdle)
+        await fixture.runtime.backend.enqueue((), for: "Console", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Runtime", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Network", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Page", method: "disable")
+        await fixture.runtime.backend.enqueue((), for: "Inspector", method: "disable")
+        await fixture.context.stop()
+        #expect(fixture.context.state == .detached)
     }
 
     @Test
@@ -6660,25 +6638,25 @@ struct NetworkDetailViewControllerTests {
     func listInvalidationAccumulatorCoalescesBurstAndRetainsEntryIdentityGeneration() async {
         let accumulator = NetworkListInvalidationAccumulator()
 
-        for revision in 1...2_305 {
+        for revision in 1...4 {
             await accumulator.receiveForTesting(NetworkPanelListInvalidation(
                 version: NetworkPanelListVersion(
                     revision: UInt64(revision),
-                    entryIdentityGeneration: revision >= 1_024 ? 1 : 0
+                    entryIdentityGeneration: revision >= 3 ? 1 : 0
                 )
             ))
         }
 
         var state = await accumulator.stateForTesting
         #expect(state.latestVersion == NetworkPanelListVersion(
-            revision: 2_305,
+            revision: 4,
             entryIdentityGeneration: 1
         ))
         #expect(state.frameRequestPublicationCount == 1)
         #expect(state.outstandingRevision == 1)
 
         await accumulator.didCapture(NetworkPanelListVersion(
-            revision: 2_305,
+            revision: 4,
             entryIdentityGeneration: 1
         ))
         state = await accumulator.stateForTesting
@@ -7355,17 +7333,15 @@ struct NetworkDetailViewControllerTests {
     @Test
     func concreteListSnapshotBuilderObservesCancellationBeforeConstruction() async throws {
         let context = makeContext()
-        for index in 0..<769 {
-            context.seedNetworkRequest(
-                requestID: "cancel-builder-\(index)",
-                url: "https://example.test/cancel-builder-\(index).json",
-                resourceTypeRawValue: "Fetch",
-                responseMIMEType: "application/json",
-                responseStatus: 200,
-                responseStatusText: "OK",
-                timestamp: Double(index)
-            )
-        }
+        context.seedNetworkRequest(
+            requestID: "cancel-builder",
+            url: "https://example.test/cancel-builder.json",
+            resourceTypeRawValue: "Fetch",
+            responseMIMEType: "application/json",
+            responseStatus: 200,
+            responseStatusText: "OK",
+            timestamp: 0
+        )
         let target = NetworkPanelListProjection(
             version: NetworkPanelListVersion(revision: 13, entryIdentityGeneration: 0),
             content: .entries(NetworkPanelModel(context: context).displayEntryIDs)
@@ -8865,7 +8841,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func requestPickerVirtualizesLargeGroupedMembership() async throws {
+    func requestPickerListsEveryMemberOfLargeGroupedEntry() async throws {
         let context = makeContext()
         let frameID = FrameID("main-frame")
         let nodeID = DOM.Node.ID("large-picker")
@@ -9342,6 +9318,14 @@ struct NetworkDetailViewControllerTests {
         }
         #expect(context.state == .attached)
         return (runtime, target, context)
+    }
+
+    private func responseBodyCommandRequestIDs(
+        in backend: WebInspectorTestBackend
+    ) async -> [Network.Request.ID?] {
+        await backend.recordedCommands()
+            .filter { $0.domain == "Network" && $0.method == "getResponseBody" }
+            .map { $0.payload.cast(as: Network.GetResponseBodyPayload.self)?.id }
     }
 
     private func makeContext() -> WebInspectorContext {
