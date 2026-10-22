@@ -296,26 +296,22 @@ struct DOMTreeTextViewTests {
     }
 
     @Test
-    func selectingNodeUpdatesDataKitSelectionAndRowDecoration() async throws {
+    func primaryClickingRowPointSelectsNodeAndClearsMultiSelection() async throws {
         let session = makeDOMTreeFixture()
         let view = await makeTreeView(fixture: session)
+        view.layoutIfNeeded()
+        let fragments = view.rowFragmentSnapshotsForTesting
+        let divFragment = try #require(fragments.first { $0.text.contains("<div id=\"start-of-content\"") })
+        let inputFragment = try #require(fragments.first { $0.text.contains("<input disabled>") })
 
-        view.selectRowForTesting(containing: "<input disabled>")
+        view.primaryClickContentPointForTesting(rowContentPoint(of: divFragment), modifiers: .command)
+        #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.map(\.text) == [divFragment.text])
+
+        view.primaryClickContentPointForTesting(rowContentPoint(of: inputFragment))
         view.layoutIfNeeded()
 
         #expect(session.selectedNode?.localName == "input")
-        #expect(view.selectedRowRectsForTesting().count == 1)
-    }
-
-    @Test
-    func primaryClickingRowUpdatesDataKitSelection() async throws {
-        let session = makeDOMTreeFixture()
-        let view = await makeTreeView(fixture: session)
-
-        view.primaryClickRowForTesting(containing: "<input disabled>")
-        view.layoutIfNeeded()
-
-        #expect(session.selectedNode?.localName == "input")
+        #expect(view.multiSelectedRowSnapshotsInDisplayOrderForTesting.isEmpty)
         #expect(view.selectedRowRectsForTesting().count == 1)
     }
 
@@ -324,13 +320,10 @@ struct DOMTreeTextViewTests {
         let view = await makeTreeView()
         view.layoutIfNeeded()
         let visibleFragments = view.rowFragmentSnapshotsForTesting.prefix(16)
+        try #require(visibleFragments.contains { $0.text.contains("<input disabled>") })
 
         for fragment in visibleFragments {
-            let point = CGPoint(
-                x: max(4, fragment.frame.minX + 4),
-                y: fragment.frame.midY
-            )
-            #expect(view.hitTestedLineTextForTesting(atContentPoint: point) == fragment.text)
+            #expect(view.hitTestedLineTextForTesting(atContentPoint: rowContentPoint(of: fragment)) == fragment.text)
         }
     }
 
@@ -1793,6 +1786,13 @@ private func makeTreeView(fixture: DOMTreeTestFixture) async -> DOMTreeTextView 
 @MainActor
 private func configureTreeViewForDeterministicTesting(_ view: DOMTreeTextView) {
     view.setUsesInlineRowRenderBuildsForTesting(true)
+}
+
+private func rowContentPoint(of fragment: DOMTreeTextView.RowFragmentSnapshot) -> CGPoint {
+    CGPoint(
+        x: max(4, fragment.frame.minX + 4),
+        y: fragment.frame.midY
+    )
 }
 
 @MainActor
