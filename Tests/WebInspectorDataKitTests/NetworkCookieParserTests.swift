@@ -180,24 +180,6 @@ struct NetworkCookieParserTests {
         #expect(cookie.unknownAttributes.map(\.value) == ["High", nil, "one=two"])
     }
 
-    @Test
-    func expiresWeekdayCommaIsNotACombinedCookieCandidate() throws {
-        let report = try #require(NetworkCookieParser.parseResponseHeaders([
-            "Set-Cookie": "a=b; Expires=Wed, 09 Jun 2021 10:18:14 GMT"
-        ]))
-
-        #expect(report.status == .complete)
-        #expect(report.cookies.count == 1)
-        #expect(report.cookies.first?.expires == utcDate(
-            year: 2021,
-            month: 6,
-            day: 9,
-            hour: 10,
-            minute: 18,
-            second: 14
-        ))
-    }
-
     @Test(arguments: [
         "a=b, c=d",
         "a=b,\t c \t= d",

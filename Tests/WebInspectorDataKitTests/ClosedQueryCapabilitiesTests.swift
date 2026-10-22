@@ -40,6 +40,14 @@ func networkFilterFactoriesMatchTheirDocumentedCapabilities() async throws {
         .any([.method(equals: "GET"), .statusCode(atLeast: 400)]),
     ]
     #expect(matchingFilters.allSatisfy { $0.matches(record: record) })
+    let nonmatchingFilters: [NetworkRequestQuery.Filter] = [
+        .method(containing: "get"),
+        .url(equals: "https://api.example.test"),
+        .searchableText(equals: "graphql"),
+        .searchableText(containing: "stylesheet"),
+        .all([.method(equals: "POST"), .statusCode(atLeast: 500)]),
+    ]
+    #expect(nonmatchingFilters.allSatisfy { $0.matches(record: record) == false })
     #expect(NetworkRequestQuery.Filter.statusCode(greaterThan: 404).matches(record: record) == false)
     #expect(NetworkRequestQuery.Filter.statusCode(lessThan: 404).matches(record: record) == false)
     #expect(NetworkRequestQuery.Filter.statusCode(atLeast: 404).matches(record: record))
@@ -97,6 +105,15 @@ func consoleFilterFactoriesAndSortsMatchTheirDocumentedCapabilities() throws {
         .any([.level(error.level), .text(containing: "Alpha")]),
     ]
     #expect(matchingFilters.allSatisfy { $0.matches(warning) })
+    let nonmatchingFilters: [ConsoleMessageQuery.Filter] = [
+        .source(error.source),
+        .kind(Console.Kind(rawValue: "log")),
+        .url("https://example.test/app.js"),
+        .text(containing: "beta"),
+        .all([.source(warning.source), .level(error.level)]),
+        .any([.source(error.source), .level(error.level)]),
+    ]
+    #expect(nonmatchingFilters.allSatisfy { $0.matches(warning) == false })
     #expect(ConsoleMessageQuery.Filter.all([]).matches(warning))
     #expect(ConsoleMessageQuery.Filter.any([]).matches(warning) == false)
 
@@ -105,11 +122,10 @@ func consoleFilterFactoriesAndSortsMatchTheirDocumentedCapabilities() throws {
         ConsoleMessageQuery.Sort.text(comparison: .lexical, order: .reverse)
             .compare(warning, error) == .orderedDescending
     )
-    let levelForward = ConsoleMessageQuery.Sort.level().compare(warning, error)
-    let levelReverse = ConsoleMessageQuery.Sort.level(order: .reverse).compare(warning, error)
-    #expect(levelForward != .orderedSame)
-    #expect(levelReverse != .orderedSame)
-    #expect(levelForward != levelReverse)
+    #expect(ConsoleMessageQuery.Sort.level().compare(warning, error) == .orderedDescending)
+    #expect(
+        ConsoleMessageQuery.Sort.level(order: .reverse).compare(warning, error) == .orderedAscending
+    )
 }
 
 @MainActor
