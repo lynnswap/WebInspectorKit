@@ -6,12 +6,9 @@ import WebInspectorProxyKit
 @Suite
 struct NetworkRequestHeadersContextTests {
 
-    @Test
-    func queryParametersPreserveRepeatsEmptyValuesBareNamesAndEmptyFragments() throws {
-        let report = try #require(
-            NetworkParameterParser.parseQuery(
-                in: "https://example.test/path?repeat=1&empty=&bare&=value&&repeat=2&#ignored"
-            ))
+    @Test(arguments: [ParameterEntry.query, .form])
+    func parametersPreserveRepeatsEmptyValuesBareNamesAndEmptyFragments(entry: ParameterEntry) throws {
+        let report = try #require(entry.parse("repeat=1&empty=&bare&=value&&repeat=2&"))
 
         #expect(report.rawValue == "repeat=1&empty=&bare&=value&&repeat=2&")
         #expect(report.parameters.map(\.ordinal) == Array(0...6))
@@ -46,11 +43,11 @@ struct NetworkRequestHeadersContextTests {
         #expect(report.status == .complete)
     }
 
-    @Test
-    func malformedParameterComponentsRemainLocalAndKeepValidSiblings() throws {
+    @Test(arguments: [ParameterEntry.query, .form])
+    func malformedParameterComponentsRemainLocalAndKeepValidSiblings(entry: ParameterEntry) throws {
         let report = try #require(
-            NetworkParameterParser.parseQuery(
-                in: "?badPercent=%&badHex=%G0&invalid=%FF&incomplete=%E3%81&%FF=value&good=%E6%9D%B1&next=ok"
+            entry.parse(
+                "badPercent=%&badHex=%G0&invalid=%FF&incomplete=%E3%81&%FF=value&good=%E6%9D%B1&next=ok"
             ))
 
         #expect(report.parameters.count == 7)
@@ -77,7 +74,7 @@ struct NetworkRequestHeadersContextTests {
         #expect(report.diagnostics.map(\.ordinal) == [0, 1, 2, 3, 4])
         #expect(report.diagnostics.map(\.field) == [.value, .value, .value, .value, .name])
 
-        let unparsed = NetworkParameterParser.parseForm("%=%")
+        let unparsed = try #require(entry.parse("%=%"))
         #expect(unparsed.status == .unparsed)
         #expect(unparsed.diagnostics.count == 2)
     }
@@ -98,15 +95,6 @@ struct NetworkRequestHeadersContextTests {
 
         #expect(NetworkParameterParser.parseQuery(in: "https://example.test/path") == nil)
         #expect(NetworkParameterParser.parseQuery(in: "https://example.test/path#fragment?ignored=1") == nil)
-    }
-
-    @Test
-    func formAndQueryUseTheSameParameterParserContract() throws {
-        let rawValue = "repeat=1&repeat=2&bare&empty=&bad=%ZZ"
-        let query = try #require(NetworkParameterParser.parseQuery(in: "scheme:?\(rawValue)#fragment"))
-        let form = NetworkParameterParser.parseForm(rawValue)
-
-        #expect(form == query)
     }
 
     @Test
@@ -703,4 +691,20 @@ struct NetworkRequestHeadersContextTests {
         #expect(body.textRepresentationSyntaxKind == .plainText)
     }
 
+}
+
+extension NetworkRequestHeadersContextTests {
+    enum ParameterEntry: Sendable {
+        case query
+        case form
+
+        func parse(_ rawValue: String) -> NetworkParameterParseReport? {
+            switch self {
+            case .query:
+                NetworkParameterParser.parseQuery(in: "https://example.test/path?\(rawValue)#ignored")
+            case .form:
+                NetworkParameterParser.parseForm(rawValue)
+            }
+        }
+    }
 }
