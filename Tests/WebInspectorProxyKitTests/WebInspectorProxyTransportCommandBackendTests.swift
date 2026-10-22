@@ -2958,31 +2958,34 @@ func transportDoesNotGuessRootNetworkOriginAcrossSameLoaderPageTargets() async t
 func transportUsesUniqueFrameLoaderOriginDespiteCompetingFrameTargets() async throws {
     let transport = TransportSession(
         backend: FakeTransportBackend(),
+        protocolProfile: .latest,
         responseTimeout: .milliseconds(750)
     )
-    await installPageTarget(
-        in: transport,
-        targetID: ProtocolTarget.ID("page-main"),
-        frameID: "main-frame"
-    )
+    await installPageTarget(in: transport)
+    await installMainPageFrame(in: transport)
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-main","type":"frame","frameId":"main-frame","isProvisional":false}}}"#
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-1-7","type":"frame","isProvisional":false,"isPaused":false}}}"#
     )
     await receiveTargetEvent(
         transport,
         targetID: ProtocolTarget.ID("page-main"),
         method: "Page.frameNavigated",
-        params: #"{"frame":{"id":"main-frame","loaderId":"page-loader"}}"#
+        params: #"{"frame":{"id":"frame-7.1","loaderId":"page-loader"}}"#
     )
     let stream = await transport.events(for: .network)
     var iterator = stream.makeAsyncIterator()
 
     await transport.receiveRootMessage(
-        #"{"method":"Network.requestWillBeSent","params":{"requestId":"page-request","frameId":"main-frame","loaderId":"page-loader","targetId":""}}"#
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"page-request","frameId":"frame-7.1","loaderId":"page-loader","targetId":""}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"unrecorded-request","frameId":"frame-7.1","loaderId":"unrecorded-loader","targetId":""}}"#
     )
 
-    let event = try #require(await iterator.next())
-    #expect(event.networkOriginTargetID == ProtocolTarget.ID("page-main"))
+    let recorded = try #require(await iterator.next())
+    let unrecorded = try #require(await iterator.next())
+    #expect(recorded.networkOriginTargetID == ProtocolTarget.ID("page-main"))
+    #expect(unrecorded.networkOriginTargetID == nil)
 }
 
 @Test
@@ -3084,23 +3087,37 @@ func transportRemovesDestroyedTargetFromFrameLoaderOrigins() async throws {
     )
     await installPageTarget(in: transport)
     await transport.receiveRootMessage(
-        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","frameId":"child-frame","parentFrameId":"main-frame","isProvisional":false}}}"#
-    )
-    await transport.receiveRootMessage(
-        #"{"method":"Page.frameNavigated","params":{"frame":{"id":"child-frame","parentId":"main-frame","loaderId":"child-loader"}}}"#
-    )
-    await transport.receiveRootMessage(
-        #"{"method":"Target.targetDestroyed","params":{"targetId":"frame-target"}}"#
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","isProvisional":false}}}"#
     )
     let stream = await transport.events(for: .network)
     var iterator = stream.makeAsyncIterator()
 
     await transport.receiveRootMessage(
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"frame-request","frameId":"child-frame","loaderId":"child-loader","targetId":"frame-target"}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Network.responseReceived","params":{"requestId":"before-destroy","frameId":"child-frame","loaderId":"child-loader"}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetDestroyed","params":{"targetId":"frame-target"}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"frame-target","type":"frame","isProvisional":false}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Network.requestWillBeSent","params":{"requestId":"recreated-request","frameId":"other-frame","loaderId":"other-loader","targetId":"frame-target"}}"#
+    )
+    await transport.receiveRootMessage(
         #"{"method":"Network.responseReceived","params":{"requestId":"late-response","frameId":"child-frame","loaderId":"child-loader"}}"#
     )
 
-    let event = try #require(await iterator.next())
-    #expect(event.networkOriginTargetID == nil)
+    _ = try #require(await iterator.next())
+    let beforeDestroy = try #require(await iterator.next())
+    let recreated = try #require(await iterator.next())
+    let lateResponse = try #require(await iterator.next())
+    #expect(beforeDestroy.networkOriginTargetID == ProtocolTarget.ID("frame-target"))
+    #expect(recreated.networkOriginTargetID == ProtocolTarget.ID("frame-target"))
+    #expect(lateResponse.networkOriginTargetID == nil)
 }
 
 @Test
@@ -4051,6 +4068,19 @@ func transportBackendFiltersEventsByRoute() async throws {
         method: "Network.loadingFinished",
         params: #"{"requestId":"frame-request","timestamp":4,"sourceMapURL":"frame.js.map","metrics":{"protocol":"h2","remoteAddress":"203.0.113.10:443","requestHeaders":{"Cookie":"session=abc"},"responseBodyBytesReceived":128,"responseBodyDecodedSize":256,"securityConnection":{"protocol":"TLS 1.3","cipher":"AES_128_GCM_SHA256","futureConnectionField":true},"futureField":true}}"#
     )
+    await receiveTargetEvent(
+        transport,
+        targetID: ProtocolTarget.ID("page-main"),
+        method: "Network.loadingFinished",
+        params: #"{"requestId":"page-request","timestamp":5}"#
+    )
+
+    let pageEvent = try #require(try await value(of: pageEventTask))
+    guard case let .loadingFinished(pageRequestID, _, _, _) = pageEvent else {
+        Issue.record("Expected page route to receive Network.loadingFinished.")
+        return
+    }
+    #expect(pageRequestID == Network.Request.ID("page-request"))
 
     let frameEvent = try #require(try await value(of: frameEventTask))
     guard case let .loadingFinished(id, timestamp, sourceMapURL, metrics) = frameEvent else {
@@ -4067,8 +4097,6 @@ func transportBackendFiltersEventsByRoute() async throws {
     #expect(metrics?.decodedBodyLength == 256)
     #expect(metrics?.securityConnection?.tlsProtocol == "TLS 1.3")
     #expect(metrics?.securityConnection?.cipher == "AES_128_GCM_SHA256")
-
-    pageEventTask.cancel()
 }
 
 @Test
