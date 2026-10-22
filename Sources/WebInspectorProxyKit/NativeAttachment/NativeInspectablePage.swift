@@ -5,21 +5,15 @@ import WebInspectorNativeBridge
 package struct NativeInspectorConnection: Sendable {
     package let transport: TransportSession
     package let receiver: TransportReceiver
-    package let reloadPage: @MainActor @Sendable () async throws -> Void
-    package let canReloadPage: @MainActor @Sendable () -> Bool
     private let cleanup: @MainActor @Sendable () -> Void
 
     package init(
         transport: TransportSession,
         receiver: TransportReceiver,
-        reloadPage: @escaping @MainActor @Sendable () async throws -> Void,
-        canReloadPage: @escaping @MainActor @Sendable () -> Bool,
         cleanup: @escaping @MainActor @Sendable () -> Void
     ) {
         self.transport = transport
         self.receiver = receiver
-        self.reloadPage = reloadPage
-        self.canReloadPage = canReloadPage
         self.cleanup = cleanup
     }
 
@@ -96,13 +90,6 @@ package enum NativeInspectorConnectionFactory {
             return NativeInspectorConnection(
                 transport: createdTransport,
                 receiver: receiver,
-                reloadPage: { [page] in
-                    try Task.checkCancellation()
-                    try page.reload()
-                },
-                canReloadPage: { [page] in
-                    page.canReload
-                },
                 cleanup: { [page] in
                     page.restoreInspectabilityIfNeeded()
                 }
@@ -150,17 +137,6 @@ package final class NativeInspectablePage {
         )
     }
 
-    package var canReload: Bool {
-        webView != nil
-    }
-
-    package func reload() throws {
-        guard let webView else {
-            throw NativeInspectablePageError.missingWebView
-        }
-        webView.reload()
-    }
-
     package func restoreInspectabilityIfNeeded() {
         guard let webView else {
             return
@@ -169,21 +145,6 @@ package final class NativeInspectablePage {
             webView: webView,
             owner: inspectabilityOwner
         )
-    }
-
-    #if DEBUG
-    package init(missingWebViewForTesting: Void) {}
-    #endif
-}
-
-package enum NativeInspectablePageError: Error, Equatable, Sendable, CustomStringConvertible {
-    case missingWebView
-
-    package var description: String {
-        switch self {
-        case .missingWebView:
-            "Inspected WKWebView is no longer available."
-        }
     }
 }
 
