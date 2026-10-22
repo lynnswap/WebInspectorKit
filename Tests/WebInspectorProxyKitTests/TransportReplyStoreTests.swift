@@ -38,28 +38,6 @@ func replyStoreUsesCommandIndexForRetargetedTimeout() {
     #expect(store.pendingTargetReplyKeys.isEmpty)
 }
 
-@Test
-func replyStoreReplacingCommandCleansStaleIndexes() {
-    var store = TransportReplyStore()
-    let oldKey = TransportSession.ReplyKey(targetID: .init("frame-old"), commandID: 7)
-    let newKey = TransportSession.ReplyKey(targetID: .init("frame-new"), commandID: 7)
-
-    store.insertTargetReply(
-        pendingReply(targetID: .init("frame-old")),
-        key: oldKey,
-        rootWrapperID: 100
-    )
-    store.insertTargetReply(
-        pendingReply(targetID: .init("frame-new")),
-        key: newKey,
-        rootWrapperID: 200
-    )
-
-    #expect(store.pendingTargetReplyKeys == [newKey])
-    #expect(store.takeTargetReplyKey(forRootWrapperID: 100) == nil)
-    #expect(store.takeTargetReplyKey(forRootWrapperID: 200) == newKey)
-}
-
 private func pendingReply(targetID: ProtocolTarget.ID) -> TransportSession.PendingReply {
     TransportSession.PendingReply(
         domain: .dom,

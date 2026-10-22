@@ -42,21 +42,13 @@ struct TransportReplyStore: Sendable {
         rootReplies[commandID] = pending
     }
 
+    /// No pending reply may already use `key.commandID` or `rootWrapperID`;
+    /// each index maps one ID to a single target reply.
     mutating func insertTargetReply(
         _ pending: TransportSession.PendingReply,
         key: TransportSession.ReplyKey,
         rootWrapperID: UInt64
     ) {
-        if let existingKey = targetReplyKeysByCommandID[key.commandID] {
-            _ = removeTargetReply(for: existingKey)
-        }
-        if let existingKey = targetReplyKeysByRootWrapperID[rootWrapperID] {
-            _ = removeTargetReply(for: existingKey)
-        }
-        if let existingRecord = targetReplies.removeValue(forKey: key) {
-            removeIndexes(for: key, record: existingRecord)
-        }
-
         let record = TargetReplyRecord(pending: pending, rootWrapperID: rootWrapperID)
         targetReplies[key] = record
         insertIndexes(for: key, record: record)
@@ -67,8 +59,7 @@ struct TransportReplyStore: Sendable {
     }
 
     mutating func takeTargetReplyKey(forRootWrapperID rootWrapperID: UInt64) -> TransportSession.ReplyKey? {
-        guard let key = targetReplyKeysByRootWrapperID.removeValue(forKey: rootWrapperID),
-              targetReplies[key]?.rootWrapperID == rootWrapperID else {
+        guard let key = targetReplyKeysByRootWrapperID.removeValue(forKey: rootWrapperID) else {
             return nil
         }
         targetReplies[key]?.rootWrapperID = nil
@@ -154,9 +145,6 @@ struct TransportReplyStore: Sendable {
             }
             removeIndexes(for: oldKey, record: record)
             let newKey = TransportSession.ReplyKey(targetID: newTargetID, commandID: oldKey.commandID)
-            if let existingRecord = targetReplies.removeValue(forKey: newKey) {
-                removeIndexes(for: newKey, record: existingRecord)
-            }
             record.pending.targetID = newTargetID
             targetReplies[newKey] = record
             insertIndexes(for: newKey, record: record)
@@ -178,12 +166,9 @@ struct TransportReplyStore: Sendable {
     }
 
     private mutating func removeIndexes(for key: TransportSession.ReplyKey, record: TargetReplyRecord) {
-        if let rootWrapperID = record.rootWrapperID,
-           targetReplyKeysByRootWrapperID[rootWrapperID] == key {
+        if let rootWrapperID = record.rootWrapperID {
             targetReplyKeysByRootWrapperID.removeValue(forKey: rootWrapperID)
         }
-        if targetReplyKeysByCommandID[key.commandID] == key {
-            targetReplyKeysByCommandID.removeValue(forKey: key.commandID)
-        }
+        targetReplyKeysByCommandID.removeValue(forKey: key.commandID)
     }
 }
