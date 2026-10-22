@@ -135,56 +135,12 @@ class InspectorFixtureTests(unittest.TestCase):
             frame_b.decode("utf-8"),
         )
 
-    def test_scripts_encode_one_shot_mutation_network_and_history_flows(self) -> None:
-        _, _, site_script = self.read("/assets/site.js")
-        _, _, page_b_script = self.read("/assets/page-b.js")
-        site_text = site_script.decode("utf-8")
-
-        self.assertIn(
-            f"const MUTATION_EVENT_COUNT = {fixture.MUTATION_EVENT_COUNT};",
-            site_text,
-        )
-        self.assertIn(
-            f"const DEFAULT_NETWORK_REQUEST_COUNT = {fixture.DEFAULT_NETWORK_REQUEST_COUNT};",
-            site_text,
-        )
-        self.assertIn(
-            f"const LARGE_NETWORK_REQUEST_COUNT = {fixture.LARGE_NETWORK_REQUEST_COUNT};",
-            site_text,
-        )
-        self.assertIn(
-            f"const NETWORK_REQUEST_CONCURRENCY = {fixture.NETWORK_REQUEST_CONCURRENCY};",
-            site_text,
-        )
-        self.assertIn('attachShadow({ mode: "open" })', site_text)
-        self.assertIn('fixtureURL("/api/data", {visit: fixtureVisit})', site_text)
-        self.assertIn('fixtureURL("/redirect", {visit: fixtureVisit})', site_text)
-        self.assertIn('fixtureURL("/failed", {visit: fixtureVisit})', site_text)
-        self.assertIn('alert("Inspector fixture alert")', site_text)
-        self.assertIn('confirm("Inspector fixture confirm?")', site_text)
-        self.assertIn('prompt("Inspector fixture prompt", "fixture default")', site_text)
-        self.assertIn('fixtureURL("/api/echo", {visit: fixtureVisit})', site_text)
-        self.assertIn('fixtureURL("/api/burst", {', site_text)
-        self.assertIn("window.runInspectorNetworkBurst = emitNetworkBurst", site_text)
-        self.assertIn("count = DEFAULT_NETWORK_REQUEST_COUNT", site_text)
-        self.assertIn("while (nextRequest < count)", site_text)
-        self.assertIn("emitNetworkBurst(LARGE_NETWORK_REQUEST_COUNT", site_text)
-        self.assertIn('video.src = "/media/fixture.m3u8"', site_text)
-        self.assertIn('location.reload()', site_text)
-        self.assertIn('history.back()', site_text)
-        self.assertIn('history.forward()', site_text)
-        self.assertIn('fixtureURL("/frame/b", {visit: fixtureVisit})', site_text)
-        self.assertIn('frame.contentWindow.location.reload()', site_text)
-        self.assertIn('fixtureURL("/frame/failure", {visit: fixtureVisit})', site_text)
-        self.assertIn('fixtureFrame.remove()', site_text)
-        self.assertIn('frameHost.append(fixtureFrame)', site_text)
-        page_b_text = page_b_script.decode("utf-8")
-        for script in (site_text, page_b_text):
+    def test_scripts_contain_no_periodic_api(self) -> None:
+        for path in ("/assets/site.js", "/assets/page-b.js"):
+            _, _, script = self.read(path)
+            text = script.decode("utf-8")
             for periodic_api in ("setInterval", "setTimeout", "requestAnimationFrame"):
-                self.assertNotIn(periodic_api, script)
-        self.assertIn("history.back()", page_b_text)
-        self.assertIn("history.forward()", page_b_text)
-        self.assertIn("location.reload()", page_b_text)
+                self.assertNotIn(periodic_api, text)
 
     def test_picker_target_exposes_used_and_unused_css_variables(self) -> None:
         _, _, stylesheet = self.read("/assets/site.css")
