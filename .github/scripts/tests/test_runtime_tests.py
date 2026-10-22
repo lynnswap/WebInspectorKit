@@ -128,19 +128,15 @@ class RuntimeSelectionTests(unittest.TestCase):
         self.assertEqual(jobs[-1], {"runtime": "", "version": "26.6.2", "platform": "macOS", "suite": "native"})
 
     def test_workspace_suites_run_only_on_the_latest_ios_and_host_macos(self):
-        installed = [runtime(version) for version in ("27.2", "18.6", "27.10", "27.9", "26.5")]
-        for full_coverage in (False, True):
-            with self.subTest(all_native_runtimes=full_coverage):
-                jobs = runner.test_cases(installed, "27.1", "workspace", latest_ios_major=27,
-                                         all_native_runtimes=full_coverage)
-                self.assertEqual(len(jobs), 2)
-                self.assertEqual([(job["platform"], job["version"]) for job in jobs],
-                                 [("iOS", "27.10"), ("macOS", "27.1")])
-                self.assertTrue(all(job["suite"] == "workspace" for job in jobs))
-
-    def test_latest_runner_with_one_ios_runtime_keeps_full_coverage(self):
-        jobs = runner.test_cases([runtime("27.0")], "27.0", "workspace", latest_ios_major=27)
-        self.assertEqual([job["suite"] for job in jobs], ["workspace", "workspace"])
+        for versions, latest in ((("27.2", "18.6", "27.10", "27.9", "26.5"), "27.10"),
+                                 (("27.0",), "27.0")):
+            installed = [runtime(version) for version in versions]
+            for full_coverage in (False, True):
+                with self.subTest(installed=versions, all_native_runtimes=full_coverage):
+                    jobs = runner.test_cases(installed, "27.1", "workspace", latest_ios_major=27,
+                                             all_native_runtimes=full_coverage)
+                    self.assertEqual([(job["platform"], job["version"], job["suite"]) for job in jobs],
+                                     [("iOS", latest, "workspace"), ("macOS", "27.1", "workspace")])
 
     def test_platform_filter_preserves_every_selected_ios_runtime(self):
         installed = [runtime(version) for version in ("18.4", "18.6", "27.0", "27.1")]
