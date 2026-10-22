@@ -13080,7 +13080,7 @@ func lateEvaluateReplyDoesNotRegisterObjectAfterContextDestruction() async throw
 
 @MainActor
 @Test
-func evaluateRejectsRemoteObjectOwnedByDifferentTarget() async throws {
+func evaluateRejectsAndReleasesReplyObjectScopedToDifferentTarget() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (_, context) = try await startContext(runtime: runtime)
     let frameTargetID = WebInspectorTarget.ID("runtime-frame")
@@ -13105,6 +13105,8 @@ func evaluateRejectsRemoteObjectOwnedByDifferentTarget() async throws {
     )
     let frameContext = try #require(context.executionContexts.first)
 
+    // Live replies take their object scope from the reply route, so this
+    // foreign scope can only come from a substituted backend.
     await runtime.backend.enqueue(
         Runtime.EvaluationResult(
             object: Runtime.RemoteObject(id: otherObjectID, kind: .object)
@@ -13154,7 +13156,7 @@ func evaluateRejectsRemoteObjectOwnedByDifferentTarget() async throws {
 
 @MainActor
 @Test
-func propertiesRejectAccessorOwnedByDifferentTarget() async throws {
+func propertiesRejectAndReleaseReplyAccessorScopedToDifferentTarget() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (_, context) = try await startContext(runtime: runtime)
     let frameTargetID = WebInspectorTarget.ID("property-runtime-frame")
@@ -13191,6 +13193,8 @@ func propertiesRejectAccessorOwnedByDifferentTarget() async throws {
         "foreign-getter",
         scopedToTargetRawValue: otherTargetID.rawValue
     )
+    // Live replies take their object scope from the reply route, so this
+    // foreign scope can only come from a substituted backend.
     await runtime.backend.enqueue(
         [
             Runtime.PropertyDescriptor(
