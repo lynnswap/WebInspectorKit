@@ -877,7 +877,8 @@ package final class NetworkDetailViewController: UIViewController, ScrollableTab
         responseBodyFetchObservationBinding.cancel()
     }
 
-    func fetchResponseBodyIfNeededForVisibleResponse(_ request: NetworkRequest) {
+    @discardableResult
+    func fetchResponseBodyIfNeededForVisibleResponse(_ request: NetworkRequest) -> Bool {
         guard isRenderingActive,
               mode == .preview,
               let currentSubject = model.detailSubject,
@@ -886,9 +887,9 @@ package final class NetworkDetailViewController: UIViewController, ScrollableTab
               selectedPreviewRole(from: availablePreviewRoles(in: request)) == .response,
               (previewCandidate(for: request)?.allowsResponseBodySurface ?? true),
               request.canFetchResponseBody else {
-            return
+            return false
         }
-        model.fetchResponseBodyIfNeeded(
+        return model.fetchResponseBodyIfNeeded(
             for: request,
             ifSubjectUnchanged: currentSubject
         )

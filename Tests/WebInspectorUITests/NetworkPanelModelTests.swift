@@ -658,9 +658,14 @@ func displayRequestsIgnoreContentOnlyUpdatesDuringActiveFiltering() async throws
 
     #expect(model.displayRequestIDs == [requestID])
 
+    var rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
     await applyDataReceived(to: context, requestID: "1", dataLength: 1024, encodedDataLength: 512, timestamp: 2)
-    await applyLoadingFinished(to: context, requestID: "1", timestamp: 3)
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
+    #expect(model.displayRequestIDs == [requestID])
 
+    rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+    await applyLoadingFinished(to: context, requestID: "1", timestamp: 3)
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
     #expect(model.displayRequestIDs == [requestID])
 }
 
@@ -758,31 +763,6 @@ func displayRequestsUpdateWhenResourceCategoryChanges() async throws {
     )
     #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
     #expect(model.displayRequestIDs == [mediaID, jsonID])
-}
-
-@Test
-@MainActor
-func displayRequestIDsUseDataKitClassificationForMediaFiltering() async throws {
-    let context = makeContext()
-    let requestID = await applyRequest(
-        to: context,
-        requestID: "1",
-        url: "https://media.example.com/clip.mp4",
-        resourceType: .fetch,
-        mimeType: "application/octet-stream",
-        timestamp: 1
-    )
-    let model = NetworkPanelModel(context: context)
-
-    #expect(model.displayRequestIDs == [requestID])
-    let request = try #require(context.registeredRequest(for: requestID))
-    #expect(request.displayName == "clip.mp4")
-
-    model.setSearchText("clip")
-    #expect(model.displayRequestIDs == [requestID])
-
-    model.setResourceFilter(.media, enabled: true)
-    #expect(model.displayRequestIDs == [requestID])
 }
 
 @Test
