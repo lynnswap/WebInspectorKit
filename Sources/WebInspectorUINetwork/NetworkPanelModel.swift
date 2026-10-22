@@ -119,10 +119,6 @@ package final class NetworkListEntry: Identifiable {
         requests.insert(request, at: index)
     }
 
-    fileprivate func replaceRequest(at index: Int, with request: NetworkRequest) {
-        requests[index] = request
-    }
-
     fileprivate func replaceChronology(timestamp: Double?, sequence: UInt64) {
         chronologyTimestamp = timestamp
         chronologySequence = sequence
@@ -367,7 +363,7 @@ package final class NetworkPanelModel {
     }
 
     private struct RequestRegistration {
-        var request: NetworkRequest
+        let request: NetworkRequest
         var entry: NetworkListEntry
         var statusSeverity: NetworkDisplay.StatusSeverity
         var creation: RequestCreationMetadata
@@ -862,7 +858,6 @@ package final class NetworkPanelModel {
             return
         }
 
-        let previousRequest = registration.request
         let previousEntry = registration.entry
         let previousStatusSeverity = registration.statusSeverity
         let lifecycleRestarted = registration.creation.lifecycleRevision != creation.lifecycleRevision
@@ -870,7 +865,6 @@ package final class NetworkPanelModel {
             || registration.creation.sequence != creation.sequence
 
         if previousEntry.id == nextEntryID {
-            registration.request = request
             registration.statusSeverity = request.statusSeverity
             registration.creation = creation
             registrationsByRequestID[request.id] = registration
@@ -878,23 +872,18 @@ package final class NetworkPanelModel {
                 from: previousStatusSeverity,
                 to: request.statusSeverity
             )
-            if previousRequest !== request || lifecycleRestarted || chronologyChanged {
+            if lifecycleRestarted || chronologyChanged {
 #if DEBUG
                 memberTraversalCountStorageForTesting += previousEntry.requests.count
 #endif
                 guard let index = previousEntry.requests.firstIndex(where: { $0.id == request.id }) else {
                     preconditionFailure("A registered Network request must be present in its entry.")
                 }
-                if previousRequest !== request {
-                    previousEntry.replaceRequest(at: index, with: request)
-                }
-                if lifecycleRestarted || chronologyChanged {
-                    repositionRequest(at: index, in: previousEntry)
-                    refreshEntryChronologyAndOrdering(
-                        previousEntry,
-                        topologyChangedEntryIDs: &topologyChangedEntryIDs
-                    )
-                }
+                repositionRequest(at: index, in: previousEntry)
+                refreshEntryChronologyAndOrdering(
+                    previousEntry,
+                    topologyChangedEntryIDs: &topologyChangedEntryIDs
+                )
             }
             if hasActiveDisplayCriteria {
                 affectedEntryIDs.insert(previousEntry.id)
@@ -910,7 +899,6 @@ package final class NetworkPanelModel {
             topologyChangedEntryIDs: &topologyChangedEntryIDs
         )
         if let entry = entriesByID[nextEntryID] {
-            registration.request = request
             registration.entry = entry
             registration.statusSeverity = request.statusSeverity
             registration.creation = creation
@@ -930,7 +918,6 @@ package final class NetworkPanelModel {
                 chronologyTimestamp: creation.timestamp,
                 chronologySequence: creation.sequence
             )
-            registration.request = request
             registration.entry = entry
             registration.statusSeverity = request.statusSeverity
             registration.creation = creation

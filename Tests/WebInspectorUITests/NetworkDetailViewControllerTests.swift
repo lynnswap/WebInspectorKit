@@ -598,7 +598,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func securityModePreservesExpansionAcrossHiddenUpdatesAndResetsForNewEpochs() async throws {
+    func securityModePreservesExpansionAcrossHiddenUpdatesAndResetsAfterClearReregistrationAndRedirect() async throws {
         let context = makeContext()
         let proxyID = Network.Request.ID("security-epoch")
         let initialDNSNames = (1...7).map { "initial-\($0).example.test" }
@@ -760,39 +760,43 @@ struct NetworkDetailViewControllerTests {
         #expect(securityController.expandedListsForTesting == [.dnsNames])
         #expect(securityController.currentEpochForTesting == originalEpoch)
 
-        let replacement = NetworkRequest(
+        let reregistrationTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+        context.clearNetworkRequests()
+        await context.apply(.requestWillBeSent(
+            id: proxyID,
             request: Network.Request(
                 id: proxyID,
-                url: "https://example.test/replacement",
+                url: "https://example.test/reregistered",
                 method: "GET"
             ),
-            initiator: original.initiator,
-            navigationVisit: original.navigationVisit,
-            resourceType: original.resourceType,
-            timestamp: 4,
-            chronologySequence: original.chronologySequence + 1,
-            modelContext: context
-        )
-        replacement.applyResponse(
-            Network.Response(
-                url: "https://example.test/replacement",
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 4
+        ))
+        await context.apply(.responseReceived(
+            id: proxyID,
+            response: Network.Response(
+                url: "https://example.test/reregistered",
                 status: 200
             ).reporting(security: Network.Security(
                 certificate: Network.Security.Certificate(
-                    subject: "CN=replacement",
+                    subject: "CN=reregistered",
                     dnsNames: hiddenDNSNames
                 )
             )),
             resourceType: .fetch,
             timestamp: 5
-        )
-        model.upsertRequestForTesting(replacement)
-        #expect(model.selectedRequest === replacement)
+        ))
+        let reregistered = try #require(context.registeredRequest(forProxyID: proxyID))
         #expect(
-            model.selectedEntry?.requests.contains(where: { $0 === replacement }) == true
+            await model.waitForRawTransactionDeliveryForTesting(
+                after: reregistrationTransactionBaseline + 1
+            )
         )
+        model.selectRequest(reregistered)
+        #expect(model.selectedRequest === reregistered)
         #expect(await waitUntilRendered(in: viewController) {
-            model.selectedRequest === replacement
+            model.selectedRequest === reregistered
                 && securityController.currentEpochForTesting != originalEpoch
                 && securityController.expandedListsForTesting.isEmpty
                 && securityController.snapshotForTesting.itemIdentifiers.filter {
@@ -821,8 +825,8 @@ struct NetworkDetailViewControllerTests {
             }) == false
         )
 
-        let replacementEpoch = try #require(securityController.currentEpochForTesting)
-        replacement.applyRedirect(
+        let reregisteredEpoch = try #require(securityController.currentEpochForTesting)
+        reregistered.applyRedirect(
             to: Network.Request(
                 id: proxyID,
                 url: "https://example.test/redirected",
@@ -833,7 +837,7 @@ struct NetworkDetailViewControllerTests {
             resourceType: .fetch
         )
         #expect(await waitUntilRendered(in: viewController) {
-            securityController.currentEpochForTesting != replacementEpoch
+            securityController.currentEpochForTesting != reregisteredEpoch
                 && securityController.expandedListsForTesting.isEmpty
                 && securityController.snapshotForTesting.itemIdentifiers.contains(where: {
                     $0.kind == .status
@@ -1341,7 +1345,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func cookiesModeRebindsSameIDInstanceAndIgnoresHiddenAndOldMutations() async throws {
+    func cookiesModeCatchesUpHiddenUpdatesAndIgnoresClearedInstanceAfterSameIDReregistration() async throws {
         let context = makeContext()
         let request = try #require(await applyRequest(
             to: context,
@@ -1378,25 +1382,22 @@ struct NetworkDetailViewControllerTests {
         })
 
         let proxyID = Network.Request.ID("cookie-instance")
-        let replacement = NetworkRequest(
-            request: Network.Request(
-                id: proxyID,
-                url: "https://example.com/replacement",
-                method: "GET",
-                headers: ["Cookie": "replacement=3"]
-            ),
-            initiator: request.initiator,
-            navigationVisit: request.navigationVisit,
-            resourceType: request.resourceType,
-            timestamp: request.logicalStartTimestamp,
-            chronologySequence: request.chronologySequence,
-            modelContext: context
-        )
-        model.upsertRequestForTesting(replacement)
+        let reregistrationTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+        context.clearNetworkRequests()
+        let reregistered = try #require(await applyRequest(
+            to: context,
+            requestID: "cookie-instance",
+            url: "https://example.com/reregistered",
+            requestHeaders: ["Cookie": "reregistered=3"]
+        ))
+        #expect(await model.waitForRawTransactionDeliveryForTesting(
+            after: reregistrationTransactionBaseline + 1
+        ))
+        model.selectRequest(reregistered)
 
         #expect(await waitUntilRendered(in: viewController) {
-            model.selectedRequest === replacement
-                && requestCookieName(in: viewController) == "replacement"
+            model.selectedRequest === reregistered
+                && requestCookieName(in: viewController) == "reregistered"
         })
 
         request.applyRequestWillBeSent(
@@ -1412,18 +1413,18 @@ struct NetworkDetailViewControllerTests {
             timestamp: 5,
             chronologySequence: 5
         )
-        #expect(requestCookieName(in: viewController) == "replacement")
+        #expect(requestCookieName(in: viewController) == "reregistered")
 
-        replacement.applyRequestWillBeSent(
+        reregistered.applyRequestWillBeSent(
             request: Network.Request(
                 id: proxyID,
                 url: "https://example.com/current",
                 method: "GET",
                 headers: ["Cookie": "current=5"]
             ),
-            initiator: replacement.initiator,
-            navigationVisit: replacement.navigationVisit,
-            resourceType: replacement.resourceType,
+            initiator: reregistered.initiator,
+            navigationVisit: reregistered.navigationVisit,
+            resourceType: reregistered.resourceType,
             timestamp: 6,
             chronologySequence: 6
         )
@@ -2368,7 +2369,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func webSocketPreviewSuspendsCatchesUpAndRebindsRequestEpochs() async throws {
+    func webSocketPreviewSuspendsCatchesUpAndRebindsAcrossRestartAndSameIDReregistrationAfterClear() async throws {
         let context = makeContext()
         let first = try await applyWebSocket(
             to: context,
@@ -2571,38 +2572,29 @@ struct NetworkDetailViewControllerTests {
         )
         #expect(await model.waitForRawTransactionDeliveryForTesting(after: transactionBaseline))
 
-        let replacedWebSocket = try #require(second.webSocket)
-        let replacement = NetworkRequest(
-            request: Network.Request(
-                id: second.proxyID,
-                url: "wss://example.com/rebind-second-instance",
-                method: "GET"
-            ),
-            initiator: nil,
-            resourceType: .webSocket,
-            timestamp: 20,
-            chronologySequence: 2_000,
-            requestHeaderSource: .unavailable,
-            modelContext: context
+        let clearedWebSocket = try #require(second.webSocket)
+        let reregistrationTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+        context.clearNetworkRequests()
+        let reregistered = try await applyWebSocket(
+            to: context,
+            requestID: "ws-rebind-second",
+            url: "wss://example.com/rebind-second-reregistered",
+            requestTimestamp: 20,
+            responseTimestamp: 21
         )
-        _ = replacement.applyWebSocketHandshakeResponse(
-            Network.Response(
-                url: replacement.url,
-                status: 101,
-                statusText: "Switching Protocols"
-            ),
-            timestamp: 21,
-            chronologySequence: 2_001
-        )
-        model.upsertRequestForTesting(replacement)
-        #expect(await waitUntilWebSocketPreviewBound(to: replacement, in: viewController))
-        #expect(model.selectedRequest === replacement)
+        #expect(reregistered !== second)
+        #expect(await model.waitForRawTransactionDeliveryForTesting(
+            after: reregistrationTransactionBaseline + 1
+        ))
+        model.selectRequest(reregistered)
+        #expect(await waitUntilWebSocketPreviewBound(to: reregistered, in: viewController))
+        #expect(model.selectedRequest === reregistered)
         #expect(
             viewController.webSocketPreviewViewControllerForTesting
                 .snapshotForTesting.itemIdentifiers.count == 1
         )
-        replacedWebSocket.appendError(
-            "stale-replaced-instance",
+        clearedWebSocket.appendError(
+            "stale-cleared-instance",
             timestamp: 22,
             lifecycleRevision: second.lifecycleRevision,
             chronologySequence: 2_002
@@ -5410,7 +5402,7 @@ struct NetworkDetailViewControllerTests {
     }
 
     @Test
-    func headersRebindSameIDRequestDataActionAndIgnoreOldInstanceMutations() async throws {
+    func headersRequestDataActionTargetsSameIDReregistrationAfterClearAndIgnoresClearedInstance() async throws {
         let context = makeContext()
         let original = try #require(
             await applyRequest(
@@ -5435,25 +5427,24 @@ struct NetworkDetailViewControllerTests {
             })
 
         let proxyID = Network.Request.ID("headers-request-data-instance")
-        let replacement = NetworkRequest(
-            request: Network.Request(
-                id: proxyID,
-                url: "https://example.com/replacement",
-                method: "POST",
-                headers: [
+        let reregistrationTransactionBaseline = model.rawTransactionDeliveryCountForTesting
+        context.clearNetworkRequests()
+        let reregistered = try #require(
+            await applyRequestWithoutResponse(
+                to: context,
+                requestID: "headers-request-data-instance",
+                url: "https://example.com/reregistered",
+                requestHeaders: [
                     "Content-Type": "application/json",
                     "content-type": "text/plain",
                 ],
-                postData: #"{"instance":"replacement"}"#
-            ),
-            initiator: original.initiator,
-            navigationVisit: original.navigationVisit,
-            resourceType: original.resourceType,
-            timestamp: original.logicalStartTimestamp,
-            chronologySequence: original.chronologySequence,
-            modelContext: context
-        )
-        model.upsertRequestForTesting(replacement)
+                postData: #"{"instance":"reregistered"}"#
+            ))
+        #expect(
+            await model.waitForRawTransactionDeliveryForTesting(
+                after: reregistrationTransactionBaseline + 1
+            ))
+        model.selectRequest(reregistered)
         let ambiguousContentTypeLabel = String(
             localized: "network.headers.request_data.content_type_ambiguous",
             defaultValue: "Ambiguous Content Type",
@@ -5463,8 +5454,8 @@ struct NetworkDetailViewControllerTests {
         #expect(
             await waitUntilRendered(in: viewController) {
                 let text = viewController.headersTextViewForTesting.renderedTextForTesting
-                return model.selectedRequest === replacement
-                    && text.contains("https://example.com/replacement")
+                return model.selectedRequest === reregistered
+                    && text.contains("https://example.com/reregistered")
                     && text.contains("application/json")
                     && text.contains("text/plain")
                     && text.components(separatedBy: ambiguousContentTypeLabel).count == 2
@@ -5479,7 +5470,7 @@ struct NetworkDetailViewControllerTests {
         #expect(
             await waitUntilRendered(in: viewController) {
                 viewController.currentModeForTesting == .preview
-                    && model.selectedRequest === replacement
+                    && model.selectedRequest === reregistered
                     && viewController.bodyViewControllerForTesting.syntaxViewForTesting.text == unavailable
             })
 
@@ -5509,7 +5500,7 @@ struct NetworkDetailViewControllerTests {
                 .contains("https://example.com/stale") == false)
         #expect(viewController.headersTextViewForTesting.requestPreviewTagRangesForTesting.count == 1)
 
-        replacement.applyRequestWillBeSent(
+        reregistered.applyRequestWillBeSent(
             request: Network.Request(
                 id: proxyID,
                 url: "https://example.com/current",
@@ -5517,9 +5508,9 @@ struct NetworkDetailViewControllerTests {
                 headers: ["Content-Type": "application/x-www-form-urlencoded"],
                 postData: "current=value"
             ),
-            initiator: replacement.initiator,
-            navigationVisit: replacement.navigationVisit,
-            resourceType: replacement.resourceType,
+            initiator: reregistered.initiator,
+            navigationVisit: reregistered.navigationVisit,
+            resourceType: reregistered.resourceType,
             timestamp: 6,
             chronologySequence: 6
         )
@@ -8486,127 +8477,6 @@ struct NetworkDetailViewControllerTests {
         #expect(secondObservation.isActive == false)
         #expect(cell.observedRequestForTesting == nil)
         #expect(cell.titleForTesting == nil)
-    }
-
-    @Test
-    func requestPickerRebindsVisibleCellWhenRequestInstanceIsReplaced() async throws {
-        let context = makeContext()
-        let frameID = FrameID("main-frame")
-        let nodeID = DOM.Node.ID("picker-instance")
-        installNavigationVisit(in: context, frameID: frameID)
-        let firstRequest = try #require(await applyGroupedRequest(
-            to: context,
-            requestID: "picker-instance-first",
-            url: "https://example.com/first-instance.json",
-            frameID: frameID,
-            initiatorNodeID: nodeID,
-            timestamp: 1
-        ))
-        _ = try #require(await applyGroupedRequest(
-            to: context,
-            requestID: "picker-instance-second",
-            url: "https://example.com/second-instance.json",
-            frameID: frameID,
-            initiatorNodeID: nodeID,
-            timestamp: 4
-        ))
-        let model = NetworkPanelModel(context: context)
-        let entryID = try #require(model.entryID(containing: firstRequest.id))
-        let entry = try #require(model.entry(for: entryID))
-        model.selectEntry(entry)
-        let picker = NetworkDetailRequestPickerViewController(
-            model: model,
-            subject: try #require(model.detailSubject)
-        )
-        let window = showInWindow(picker, useUIKitVisibility: true)
-        defer { window.isHidden = true }
-        picker.resumeRenderingForTesting()
-        let cell = try #require(picker.requestCellForTesting(requestID: firstRequest.id))
-        let originalCellObservation = try #require(cell.requestObservationForTesting)
-        let originalCellIdentity = ObjectIdentifier(cell)
-        let proxyID = Network.Request.ID("picker-instance-first")
-        let origin = Network.Request.Origin(
-            frameID: frameID,
-            loaderID: "loader",
-            targetID: "page"
-        )
-        let replacementRequest = NetworkRequest(
-            request: Network.Request(
-                id: proxyID,
-                url: "https://example.com/replacement-instance.json",
-                method: "GET",
-                origin: origin
-            ),
-            initiator: firstRequest.initiator,
-            navigationVisit: firstRequest.navigationVisit,
-            resourceType: firstRequest.resourceType,
-            timestamp: firstRequest.logicalStartTimestamp,
-            chronologySequence: firstRequest.chronologySequence,
-            modelContext: context
-        )
-        let pickerObservation = try #require(picker.modelObservationDeliveryForTesting)
-        let reboundVisibleCell = await pickerObservation.values {
-            cell.observedRequestForTesting === replacementRequest
-        }
-        defer { reboundVisibleCell.cancel() }
-
-        model.upsertRequestForTesting(replacementRequest)
-
-        #expect(model.request(for: firstRequest.id) === replacementRequest)
-        #expect(model.entry(for: entryID) === entry)
-        #expect(
-            model.entry(for: entryID)?.requests.first { $0.id == firstRequest.id }
-                === replacementRequest
-        )
-        #expect(pickerObservation.isActive)
-        #expect(picker.collectionView.visibleCells.contains { $0 === cell })
-        #expect(await reboundVisibleCell.waitUntilValue(true))
-        #expect(picker.boundEntryIDForTesting == entryID)
-        #expect(
-            picker.requestCellForTesting(requestID: firstRequest.id)
-                .map(ObjectIdentifier.init) == originalCellIdentity
-        )
-        #expect(cell.observedRequestForTesting === replacementRequest)
-        #expect(cell.titleForTesting == "replacement-instance.json")
-        #expect(originalCellObservation.isActive == false)
-        let replacementCellObservation = try #require(cell.requestObservationForTesting)
-        let replacementTitle = await replacementCellObservation.values {
-            cell.titleForTesting
-        }
-        defer { replacementTitle.cancel() }
-
-        firstRequest.applyRequestWillBeSent(
-            request: Network.Request(
-                id: proxyID,
-                url: "https://example.com/stale-old-instance.json",
-                method: "GET",
-                origin: origin
-            ),
-            initiator: firstRequest.initiator,
-            navigationVisit: firstRequest.navigationVisit,
-            resourceType: firstRequest.resourceType,
-            timestamp: 20,
-            chronologySequence: 20
-        )
-
-        #expect(firstRequest.displayName == "stale-old-instance.json")
-        #expect(cell.titleForTesting == "replacement-instance.json")
-
-        replacementRequest.applyRequestWillBeSent(
-            request: Network.Request(
-                id: proxyID,
-                url: "https://example.com/current-instance.json",
-                method: "GET",
-                origin: origin
-            ),
-            initiator: replacementRequest.initiator,
-            navigationVisit: replacementRequest.navigationVisit,
-            resourceType: replacementRequest.resourceType,
-            timestamp: 21,
-            chronologySequence: 21
-        )
-
-        #expect(await replacementTitle.waitUntilValue("current-instance.json"))
     }
 
     @Test
