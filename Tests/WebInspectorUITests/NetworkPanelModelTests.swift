@@ -1657,68 +1657,32 @@ func sameInstanceQueryResetRebindsEntryAndCarriesSelectionIntent() async throws 
 
 @Test
 @MainActor
-func authoritativeSameIDInstanceReplacementRebindsSubjectAndCarriesIntent() throws {
+func entryScopedConditionalFetchRejectsClearedInstanceAfterSameIDReregistration() async throws {
     let context = makeContext()
     let original = try seedFinishedRequest(
         in: context,
-        requestID: "authoritative-replacement",
+        requestID: "entry-fetch-reregistration",
         url: "https://example.test/original",
         timestamp: 1
     )
     let model = NetworkPanelModel(context: context)
-    model.selectRequest(original)
-    let previousSubject = try #require(model.detailSubject)
+    let deliveryBaseline = model.rawTransactionDeliveryCountForTesting
 
-    let replacementContext = makeContext()
-    let replacement = try seedFinishedRequest(
-        in: replacementContext,
-        requestID: "authoritative-replacement",
-        url: "https://example.test/replacement",
+    context.clearNetworkRequests()
+    let reregistered = try seedFinishedRequest(
+        in: context,
+        requestID: "entry-fetch-reregistration",
+        url: "https://example.test/reregistered",
         timestamp: 2
     )
-    model.upsertRequestForTesting(replacement)
 
-    let reboundSubject = try #require(model.detailSubject)
-    #expect(reboundSubject.intentID == previousSubject.intentID)
-    #expect(reboundSubject.entry === previousSubject.entry)
-    #expect(reboundSubject.activeRequest === replacement)
-    #expect(model.request(for: replacement.id) === replacement)
-}
-
-@Test
-@MainActor
-func entryScopedConditionalFetchRejectsAReplacedSameIDInstance() throws {
-    let context = makeContext()
-    let original = try seedFinishedRequest(
-        in: context,
-        requestID: "entry-fetch-replacement",
-        url: "https://example.test/original",
-        timestamp: 1
-    )
-    let model = NetworkPanelModel(context: context)
-    let entryID = try #require(model.entryID(containing: original.id))
+    #expect(original !== reregistered)
+    #expect(await model.waitForRawTransactionDeliveryForTesting(after: deliveryBaseline + 1))
+    let entryID = try #require(model.entryID(containing: reregistered.id))
     let entry = try #require(model.entry(for: entryID))
     model.selectEntry(entry)
     let entrySubject = try #require(model.detailSubject)
-    let proxyID = Network.Request.ID("entry-fetch-replacement")
-    let replacement = NetworkRequest(
-        request: Network.Request(
-            id: proxyID,
-            url: "https://example.test/replacement",
-            method: "GET"
-        ),
-        initiator: original.initiator,
-        navigationVisit: original.navigationVisit,
-        resourceType: original.resourceType,
-        timestamp: original.logicalStartTimestamp,
-        chronologySequence: original.chronologySequence,
-        modelContext: context
-    )
-
-    model.upsertRequestForTesting(replacement)
-
-    #expect(model.detailSubject?.hasSameIdentity(as: entrySubject) == true)
-    #expect(model.request(for: original.id) === replacement)
+    #expect(original.canFetchResponseBody)
     let traversalBaseline = model.memberTraversalCountForTesting
     #expect(
         model.fetchResponseBodyIfNeeded(
