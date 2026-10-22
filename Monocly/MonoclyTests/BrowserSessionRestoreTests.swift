@@ -883,20 +883,19 @@ struct BrowserSessionRestoreTests {
         rootViewController.viewControllers.first?.loadViewIfNeeded()
         let firstWebView = store.tabs[0].webView
         let secondWebView = store.tabs[1].webView
+        firstWebView.underPageBackgroundColor = .white
+        secondWebView.underPageBackgroundColor = .black
         let selectedWebViewInstalled = WebViewIdentitySignal()
-        let inspectorSessionAttached = WebViewIdentitySignal()
         rootViewController.setInspectorSessionAttachedForTesting(to: firstWebView)
         rootViewController.onSelectedWebViewInstalledForTesting = { webView in
             selectedWebViewInstalled.record(webView)
-        }
-        rootViewController.onAttachInspectorSessionForTesting = { webView in
-            inspectorSessionAttached.record(webView)
         }
 
         store.selectTab(id: secondID)
         try await selectedWebViewInstalled.wait(for: secondWebView)
         await rootViewController.waitForInspectorSessionTransitions()
-        try await inspectorSessionAttached.wait(for: secondWebView)
+
+        #expect(rootViewController.inspectorSession.pageUserInterfaceStyle == .dark)
     }
 
     @Test
@@ -1078,7 +1077,7 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
-    func javaScriptAlertPresentedAboveInspectorCompletesFromOKAction() async throws {
+    func javaScriptAlertDelegatesToDialogPresenterAboveInspectorAndResumesOnCompletion() async throws {
         let dialogPresenter = JavaScriptDialogPresenterSpy()
         let fixture = try makeJavaScriptDialogFixture(dialogPresenter: dialogPresenter)
         defer { fixture.cleanup() }
@@ -1090,11 +1089,11 @@ struct BrowserSessionRestoreTests {
 
         #expect(dialogPresenter.alertMessage == "Fixture alert")
         #expect(dialogPresenter.presenter === fixture.inspectorViewController)
-        #expect(dialogPresenter.alertCompletionCount == 1)
+        #expect(dialogPresenter.alertPresentationCount == 1)
     }
 
     @Test
-    func javaScriptConfirmPresentedAboveInspectorCompletesFromCancelAction() async throws {
+    func javaScriptConfirmDelegatesToDialogPresenterAboveInspectorAndReturnsCompletionResult() async throws {
         let dialogPresenter = JavaScriptDialogPresenterSpy(confirmResult: false)
         let fixture = try makeJavaScriptDialogFixture(dialogPresenter: dialogPresenter)
         defer { fixture.cleanup() }
@@ -1107,11 +1106,11 @@ struct BrowserSessionRestoreTests {
         #expect(result == false)
         #expect(dialogPresenter.confirmMessage == "Fixture confirm")
         #expect(dialogPresenter.presenter === fixture.inspectorViewController)
-        #expect(dialogPresenter.confirmCompletionCount == 1)
+        #expect(dialogPresenter.confirmPresentationCount == 1)
     }
 
     @Test
-    func javaScriptPromptPresentedAboveInspectorCompletesWithEnteredText() async throws {
+    func javaScriptPromptDelegatesToDialogPresenterAboveInspectorAndReturnsCompletionText() async throws {
         let dialogPresenter = JavaScriptDialogPresenterSpy(promptResult: "Entered value")
         let fixture = try makeJavaScriptDialogFixture(dialogPresenter: dialogPresenter)
         defer { fixture.cleanup() }
@@ -1126,7 +1125,7 @@ struct BrowserSessionRestoreTests {
         #expect(dialogPresenter.prompt == "Fixture prompt")
         #expect(dialogPresenter.defaultText == "Default value")
         #expect(dialogPresenter.presenter === fixture.inspectorViewController)
-        #expect(dialogPresenter.promptCompletionCount == 1)
+        #expect(dialogPresenter.promptPresentationCount == 1)
     }
 
     @Test
@@ -1306,31 +1305,7 @@ struct BrowserSessionRestoreTests {
     }
 
     @Test
-    func inFlightAttachmentDoesNotRetainLifecycleOwner() async throws {
-        let fixture = try makeAttachmentLifecycleFixture()
-        let actions = ControlledInspectorAttachmentActions()
-        defer { actions.releaseAttach(result: .failure(CancellationError())) }
-        var lifecycle: BrowserInspectorSessionAttachmentLifecycle? = BrowserInspectorSessionAttachmentLifecycle(
-            browserWindow: fixture.browserWindow,
-            inspectorSession: WebInspectorSession(),
-            attachAction: actions.attach,
-            detachAction: actions.detach
-        )
-        weak var retainedLifecycle = lifecycle
-
-        lifecycle?.request(.attached)
-        try await actions.waitUntilAttachStarted(count: 1)
-
-        lifecycle = nil
-
-        #expect(retainedLifecycle == nil)
-
-        actions.releaseAttach()
-        try await actions.waitUntilAttachCompleted(count: 1)
-    }
-
-    @Test
-    func lateAttachmentCompletionDoesNotStartPendingReattachmentAfterLifecycleRelease() async throws {
+    func inFlightAttachmentDoesNotRetainLifecycleOwnerOrStartPendingReattachment() async throws {
         let fixture = try makeAttachmentLifecycleFixture()
         let actions = ControlledInspectorAttachmentActions()
         defer { actions.releaseAttach(result: .failure(CancellationError())) }
@@ -1729,9 +1704,9 @@ struct BrowserSessionRestoreTests {
         private(set) var confirmMessage: String?
         private(set) var prompt: String?
         private(set) var defaultText: String?
-        private(set) var alertCompletionCount = 0
-        private(set) var confirmCompletionCount = 0
-        private(set) var promptCompletionCount = 0
+        private(set) var alertPresentationCount = 0
+        private(set) var confirmPresentationCount = 0
+        private(set) var promptPresentationCount = 0
 
         init(confirmResult: Bool = true, promptResult: String? = nil) {
             self.confirmResult = confirmResult
@@ -1745,7 +1720,7 @@ struct BrowserSessionRestoreTests {
         ) {
             self.presenter = presenter
             alertMessage = message
-            alertCompletionCount += 1
+            alertPresentationCount += 1
             completion()
         }
 
@@ -1756,7 +1731,7 @@ struct BrowserSessionRestoreTests {
         ) {
             self.presenter = presenter
             confirmMessage = message
-            confirmCompletionCount += 1
+            confirmPresentationCount += 1
             completion(confirmResult)
         }
 
@@ -1769,7 +1744,7 @@ struct BrowserSessionRestoreTests {
             self.presenter = presenter
             self.prompt = prompt
             self.defaultText = defaultText
-            promptCompletionCount += 1
+            promptPresentationCount += 1
             completion(promptResult)
         }
     }
