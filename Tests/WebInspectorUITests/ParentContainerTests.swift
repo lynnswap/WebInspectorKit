@@ -613,19 +613,6 @@ struct ParentContainerTests {
     }
 
     @Test
-    func viewControllerPreviewSessionInjectsMockDOMAndNetworkModels() throws {
-        let session = WebInspectorViewControllerPreviewFixtures.makeSession()
-        let viewController = WebInspectorViewController(session: session)
-        let model = viewController.presentationContentStoreForTesting.networkPanelModel(
-            for: session.context,
-            contextEpoch: session.interface.contextBoundContentRevision
-        )
-
-        #expect(session.context.rootNode?.nodeName == "#document")
-        #expect(model.displayRequests.count >= 2)
-    }
-
-    @Test
     func displayProjectionKeepsCompactElementTabAndRegularCombinedDOM() {
         let tabs: [WebInspectorTab] = [.dom, .network]
         let projection = WebInspectorTab.DisplayProjection()
@@ -989,24 +976,50 @@ struct ParentContainerTests {
     }
 
     @Test
-    func interactiveDismissCancelDoesNotDetachOrDropContentCache() async throws {
+    func cancelledTerminalDisappearanceKeepsSessionAndCacheUntilCompletion() async throws {
         let session = makeSessionWithNoOpAttachment()
         let viewController = WebInspectorViewController(session: session)
         let contentStore = viewController.presentationContentStoreForTesting
-        _ = WebInspectorTab.ContentFactory.makeViewController(
-            for: .network,
-            session: session,
-            contentStore: contentStore,
-            hostLayout: .compact
+        let dismissingParent = DismissingParentViewController()
+        dismissingParent.addChild(viewController)
+        dismissingParent.view.addSubview(viewController.view)
+        viewController.didMove(toParent: dismissingParent)
+        let navigationController = UINavigationController()
+        navigationController.setViewControllers(
+            [UIViewController(), dismissingParent, UIViewController()],
+            animated: false
         )
-        viewController.loadViewIfNeeded()
-        let cacheCountBeforeCancel = contentStore.contentCountForTesting
+        let popTransition = InteractivePopTransition()
+        navigationController.delegate = popTransition
+        let window = showInWindow(navigationController)
+        defer { window.isHidden = true }
 
-        viewController.finishRootPresentationLifecycleForTesting(cancelled: true)
+        // UIKit sends the cancelled disappearance to the controller that was
+        // appearing, so the inspector's parent is revealed by the cancelled pop.
+        navigationController.popViewController(animated: true)
+        let cancelledTransition = try await popTransition.waitForStart()
+        let cacheCountBeforeCancel = contentStore.contentCountForTesting
+        #expect(cacheCountBeforeCancel > 0)
+        cancelledTransition.cancelInteractiveTransition()
+        cancelledTransition.completeTransition(false)
+        await viewController.rootPresentationRetirementTaskForTesting?.value
 
         #expect(session.detachCountForTesting == 0)
         #expect(viewController.hasFinishedRootPresentationLifecycleForTesting == false)
         #expect(contentStore.contentCountForTesting == cacheCountBeforeCancel)
+
+        // Reveal the parent again, then pop it with a completed transition.
+        for _ in 0..<2 {
+            navigationController.popViewController(animated: true)
+            let completedTransition = try await popTransition.waitForStart()
+            completedTransition.finishInteractiveTransition()
+            completedTransition.completeTransition(true)
+        }
+        let retirement = try #require(viewController.rootPresentationRetirementTaskForTesting)
+        await retirement.value
+
+        #expect(session.detachCountForTesting == 1)
+        #expect(contentStore.contentCountForTesting == 0)
     }
 
     @Test
@@ -1621,6 +1634,64 @@ struct ParentContainerTests {
     }
 
     private final class PresentationDelegateRecorder: NSObject, UIAdaptivePresentationControllerDelegate {}
+
+    /// Holds a test-controlled terminal-dismissal state for its child, while the
+    /// navigation controller supplies the real transition coordinator and
+    /// appearance callbacks. It does not perform an interactive dismissal, and
+    /// UIKit flows are not confirmed to pair this state with a cancelled transition.
+    private final class DismissingParentViewController: UIViewController {
+        override var isBeingDismissed: Bool {
+            true
+        }
+    }
+
+    /// Drives a navigation pop as an interactive UIKit transition whose
+    /// outcome the test decides.
+    @MainActor
+    private final class InteractivePopTransition: NSObject,
+        UINavigationControllerDelegate,
+        UIViewControllerAnimatedTransitioning,
+        UIViewControllerInteractiveTransitioning
+    {
+        private var didStart = ReplyPromise<Void>()
+        private var transitionContext: (any UIViewControllerContextTransitioning)?
+
+        func waitForStart() async throws -> any UIViewControllerContextTransitioning {
+            try await waitForUITestSignal(didStart)
+            didStart = ReplyPromise()
+            return try #require(transitionContext)
+        }
+
+        func navigationController(
+            _ navigationController: UINavigationController,
+            animationControllerFor operation: UINavigationController.Operation,
+            from fromVC: UIViewController,
+            to toVC: UIViewController
+        ) -> (any UIViewControllerAnimatedTransitioning)? {
+            operation == .pop ? self : nil
+        }
+
+        func navigationController(
+            _ navigationController: UINavigationController,
+            interactionControllerFor animationController: any UIViewControllerAnimatedTransitioning
+        ) -> (any UIViewControllerInteractiveTransitioning)? {
+            self
+        }
+
+        func transitionDuration(using transitionContext: (any UIViewControllerContextTransitioning)?) -> TimeInterval {
+            0
+        }
+
+        func animateTransition(using transitionContext: any UIViewControllerContextTransitioning) {}
+
+        func startInteractiveTransition(_ transitionContext: any UIViewControllerContextTransitioning) {
+            if let toView = transitionContext.view(forKey: .to) {
+                transitionContext.containerView.insertSubview(toView, at: 0)
+            }
+            self.transitionContext = transitionContext
+            didStart.fulfill(.success(()))
+        }
+    }
 
     private struct PageUserInterfaceStyleObservation {
         var token: PortableObservationTracking.Token

@@ -445,9 +445,8 @@ public final class WebInspectorViewController: UIViewController {
         presentationContentStore
     }
 
-    func finishRootPresentationLifecycleForTesting(cancelled: Bool = false) {
-        guard cancelled == false,
-              presentationLifecycleCoordinator.hasFinishedCurrentPresentationForTesting == false else {
+    func finishRootPresentationLifecycleForTesting() {
+        guard presentationLifecycleCoordinator.hasFinishedCurrentPresentationForTesting == false else {
             return
         }
         session.beginRootPresentation(id: rootPresentationID)
