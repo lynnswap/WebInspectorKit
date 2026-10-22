@@ -137,22 +137,14 @@ struct NativeInspectorSymbolResolverTests {
     }
     @Test(.disabled(if: !shouldRunNativeRuntimeSmokeTests, nativeRuntimeSmokeDisabledReason))
     @MainActor
-    func nativeSymbolResolutionTiming() async throws {
+    func cachedNativeSymbolResolutionMatchesUncachedResolution() async throws {
         try await withWebKitLoaded {
+            // Other smoke tests may or may not have populated the shared cache;
+            // the second call is always served from it.
+            _ = try await NativeInspectorSymbolResolver.resolveCurrent()
             let cached = try await NativeInspectorSymbolResolver.resolveCurrent()
-            var samples: [Double] = []
-            for _ in 0..<5 {
-                let start = ProcessInfo.processInfo.systemUptime
-                let resolution = try await NativeInspectorSymbolResolver.resolveForTesting()
-                samples.append((ProcessInfo.processInfo.systemUptime - start) * 1_000)
-                #expect(resolution == cached)
-            }
-            let start = ProcessInfo.processInfo.systemUptime
-            for _ in 0..<1_000 {
-                _ = try await NativeInspectorSymbolResolver.resolveCurrent()
-            }
-            let cachedMicroseconds = (ProcessInfo.processInfo.systemUptime - start) * 1_000
-            print("SYMBOL_RESOLUTION_TIMING uncachedMedianMS=\(samples.sorted()[2]) cachedMeanUS=\(cachedMicroseconds)")
+            let uncached = try await NativeInspectorSymbolResolver.resolveForTesting()
+            #expect(cached == uncached)
         }
     }
     @Test
