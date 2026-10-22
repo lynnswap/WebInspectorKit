@@ -1174,10 +1174,6 @@ public final class WebInspectorContext {
         currentPage
     }
 
-    package func installCurrentPageRetargetTaskForTesting(_ task: Task<Void, Never>) {
-        currentPageRetargetTask = task
-    }
-
     package func currentPageRetargetTaskForTesting(
         isolation: isolated (any Actor) = #isolation
     ) -> Task<Void, Never>? {
