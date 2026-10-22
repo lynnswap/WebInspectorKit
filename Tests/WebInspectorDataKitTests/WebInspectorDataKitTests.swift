@@ -8418,8 +8418,7 @@ func setCSSDeclarationTextRewritesStyleTextAndMarksUndoableState() async throws 
                 name: "display",
                 value: "flex",
                 text: "display: flex;",
-                isEditable: true,
-                isModifiedByInspector: true
+                isEditable: true
             )
         ],
         cssText: "display: flex;",
