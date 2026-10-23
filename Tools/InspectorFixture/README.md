@@ -102,3 +102,22 @@ bodies, finite local HLS media with byte-range responses, local-only assets,
 redirects, JSON/image responses, and one-shot JavaScript without periodic
 timers. It does not claim to verify inspector UI state; the matrix above marks
 those sim-use-only assertions explicitly.
+
+Representative served-script operations run in WebKit through Monocly's
+`BrowserTab`. With the server running, pass its loopback URL to the Monocly test
+host:
+
+```sh
+TEST_RUNNER_MONOCLY_INSPECTOR_FIXTURE_URL=http://127.0.0.1:8765/a \
+xcodebuild test \
+  -workspace WebInspectorKit.xcworkspace \
+  -scheme WebInspectorKitTests \
+  -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
+  -only-testing:MonoclyTests/InspectorFixtureBehaviorTests
+```
+
+These tests click **Emit 2305 DOM mutations** and check every card revision,
+call `runInspectorNetworkBurst(3, run)` and check `/metrics/network-burst`, and
+use the page buttons for A → B → back → forward while checking each document's
+visit marker and the back-forward list. Without the environment key they are
+skipped, including in CI. They do not verify inspector UI state either.
