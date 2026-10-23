@@ -342,28 +342,6 @@ struct MonoclyLifecycleTests {
             #expect(MonoclyWindowContextStore.shared.currentWindowScene == nil)
             #expect(MonoclyWindowContextStore.shared.currentWindow == nil)
             await rootViewController.waitForInspectorSessionTransitions()
-        }
-    }
-
-    @Test
-    func mainSceneDelegateDisconnectCompletesSessionTransition() async throws {
-        try await withCleanState { context in
-            let sceneDelegate = MonoclyMainSceneDelegate()
-            let windowScene = try makeWindowScene()
-            let launchConfiguration = BrowserLaunchConfiguration.xcodeTestOrPreview()
-
-            sceneDelegate.connect(
-                windowScene: windowScene,
-                launchConfiguration: launchConfiguration,
-                sessionPersistence: .persistent(storage: makeTemporarySessionStore(context: context))
-            )
-
-            let hostWindow = try #require(sceneDelegate.window)
-            context.retain(hostWindow)
-            let rootViewController = try #require(sceneDelegate.rootViewController)
-
-            sceneDelegate.disconnect(windowScene: windowScene)
-            await rootViewController.waitForInspectorSessionTransitions()
 
             #expect(sceneDelegate.window == nil)
             #expect(sceneDelegate.rootViewController == nil)

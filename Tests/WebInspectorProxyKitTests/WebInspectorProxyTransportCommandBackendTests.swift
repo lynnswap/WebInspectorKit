@@ -812,18 +812,27 @@ func liveSubscriptionWaitersReleaseOnCancellationAndExplicitClose() async throws
 }
 
 @Test(arguments: [
-    "{",
-    "[]",
-    "{}",
-    #"{"method":"Target.dispatchMessageFromTarget","params":{}}"#,
-    #"{"method":"Target.dispatchMessageFromTarget","params":{"targetId":"page-main","message":42}}"#,
-    #"{"method":"Network.loadingFinished","params":"INSPECTED_SECRET"}"#,
-    #"{"id":0,"result":"INSPECTED_SECRET"}"#,
-    #"{"id":0,"result":[]}"#,
-    #"{"id":0,"result":null}"#,
-    #"{"id":0,"error":{"message":null}}"#,
-], [0, 1, 2])
-func malformedTransportEnvelopeTerminatesEveryConsumer(message: String, wrapperDepth: Int) async throws {
+    (
+        #"{"id":0,"result":"INSPECTED_SECRET"}"#,
+        0,
+        "Failed to decode root envelope: Invalid protocol field: result."
+    ),
+    (
+        #"{"method":"Network.loadingFinished","params":"INSPECTED_SECRET"}"#,
+        1,
+        "Failed to decode target envelope: Invalid protocol field: params."
+    ),
+    (
+        #"{"id":0,"result":"INSPECTED_SECRET"}"#,
+        2,
+        "Failed to decode target envelope: Invalid protocol field: result."
+    ),
+])
+func malformedTransportEnvelopeTerminatesEveryConsumer(
+    message: String,
+    wrapperDepth: Int,
+    expectedFailure: String
+) async throws {
     let backend = FakeTransportBackend()
     let transport = TransportSession(backend: backend)
     await installPageTarget(in: transport)
@@ -860,8 +869,7 @@ func malformedTransportEnvelopeTerminatesEveryConsumer(message: String, wrapperD
     await transport.receiveRootMessage(input)
 
     let failure = try #require(await disconnectedMessage(from: closeWait))
-    #expect(failure.contains("Failed to decode"))
-    #expect(!failure.contains("INSPECTED_SECRET"))
+    #expect(failure == expectedFailure)
     #expect(await disconnectedMessage(from: reload) == failure)
     #expect(await disconnectedMessage(from: enable) == failure)
     #expect(await disconnectedMessage(from: orderedEvents) == failure)

@@ -93,6 +93,39 @@ func invalidReplyIdentityCannotResolveAnotherCommand(identifier: String) async t
     await session.detach()
 }
 
+@Test(arguments: [
+    ("{", "root envelope", "Invalid JSON."),
+    ("[]", "root envelope", "Expected a protocol message object with an id or method."),
+    ("{}", "root envelope", "Expected a protocol message object with an id or method."),
+    (
+        #"{"method":"Target.dispatchMessageFromTarget","params":{}}"#,
+        "Target.dispatchMessageFromTarget parameters",
+        "Missing required field: targetId."
+    ),
+    (
+        #"{"method":"Target.dispatchMessageFromTarget","params":{"targetId":"page-main","message":42}}"#,
+        "Target.dispatchMessageFromTarget parameters",
+        "A protocol field has an unexpected type."
+    ),
+    (#"{"method":"Network.loadingFinished","params":"INSPECTED_SECRET"}"#, "root envelope", "Invalid protocol field: params."),
+    (#"{"id":0,"result":"INSPECTED_SECRET"}"#, "root envelope", "Invalid protocol field: result."),
+    (#"{"id":0,"result":[]}"#, "root envelope", "Invalid protocol field: result."),
+    (#"{"id":0,"result":null}"#, "root envelope", "Invalid protocol field: result."),
+    (#"{"id":0,"error":{"message":null}}"#, "root envelope", "Invalid protocol field: error.message."),
+])
+func malformedRootMessageFailsTransportWithRedactedReason(
+    message: String,
+    boundary: String,
+    reason: String
+) async throws {
+    let session = TransportSession(backend: FakeTransportBackend())
+    await session.receiveRootMessage(message)
+    await #expect(throws: TransportSession.Error.messageDecodingFailed(boundary: boundary, message: reason)) {
+        try await session.requireOpen()
+    }
+    await session.detach()
+}
+
 @Test
 func unknownEventAndOmittedParametersDoNotCloseTransport() async throws {
     let backend = FakeTransportBackend()

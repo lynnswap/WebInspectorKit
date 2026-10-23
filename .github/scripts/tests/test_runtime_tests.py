@@ -17,22 +17,26 @@ spec = importlib.util.spec_from_file_location(
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 
+IPHONE_DUO = "com.apple.CoreSimulator.SimDeviceType.iPhone-Duo"
+
 
 def runtime(version, *, available=True, platform="iOS", identifier=None):
     return {
         "version": version,
         "identifier": identifier or f"com.apple.CoreSimulator.SimRuntime.{platform}-{version.replace('.', '-')}",
         "isAvailable": available,
+        "supportedDeviceTypes": [{"identifier": "phone", "productFamily": "iPhone"}],
     }
 
 
 class RuntimeSelectionTests(unittest.TestCase):
-    def test_resolution_creates_an_isolated_device_for_the_exact_runtime(self):
+    def test_resolution_creates_an_isolated_non_duo_iphone_for_the_exact_runtime(self):
         installed = runtime("26.4.1", identifier="com.apple.CoreSimulator.SimRuntime.iOS-26-4")
         installed.update({
             "buildversion": "test-build",
             "supportedDeviceTypes": [
                 {"identifier": "tablet", "productFamily": "iPad"},
+                {"identifier": IPHONE_DUO, "productFamily": "iPhone"},
                 {"identifier": "phone", "productFamily": "iPhone"},
             ],
         })
@@ -41,10 +45,11 @@ class RuntimeSelectionTests(unittest.TestCase):
         self.assertEqual(simctl.call_args_list[-1].args,
                          ("create", "WebInspectorKit CI", "phone", installed["identifier"]))
 
-    def test_reuse_selects_only_an_available_shutdown_iphone_for_the_exact_runtime(self):
+    def test_reuse_selects_only_an_available_shutdown_non_duo_iphone_for_the_exact_runtime(self):
         installed = runtime("26.4.1")
         installed["supportedDeviceTypes"] = [
             {"identifier": "tablet", "productFamily": "iPad"},
+            {"identifier": IPHONE_DUO, "productFamily": "iPhone"},
             {"identifier": "phone", "productFamily": "iPhone"},
         ]
         devices = {
@@ -59,6 +64,8 @@ class RuntimeSelectionTests(unittest.TestCase):
                  "deviceTypeIdentifier": "phone"},
                 {"udid": "ipad", "state": "Shutdown", "isAvailable": True,
                  "deviceTypeIdentifier": "tablet"},
+                {"udid": "iphone-duo", "state": "Shutdown", "isAvailable": True,
+                 "deviceTypeIdentifier": IPHONE_DUO},
                 {"udid": "borrowed", "state": "Shutdown", "isAvailable": True,
                  "deviceTypeIdentifier": "phone"},
             ],
@@ -76,9 +83,12 @@ class RuntimeSelectionTests(unittest.TestCase):
             ["18.4", "18.6", "26.1", "26.1.1", "26.2", "26.4.1", "27.0", "27.2"],
         )
 
-    def test_deployment_floor_unavailable_runtimes_and_other_platforms(self):
+    def test_deployment_floor_unavailable_runtimes_other_platforms_and_duo_only_runtimes(self):
+        duo = {"identifier": IPHONE_DUO, "productFamily": "iPhone"}
         installed = [runtime("18.3.1"), runtime("18.4"), runtime("26.0", available=False),
-                     runtime("26.0", platform="tvOS")]
+                     runtime("26.0", platform="tvOS"), runtime("27.1")]
+        installed[1]["supportedDeviceTypes"].insert(0, duo)
+        installed[4]["supportedDeviceTypes"] = [duo]
         self.assertEqual(runner.supported_runtimes(installed), [installed[1]])
 
     def test_runtime_identifier_is_preserved_when_version_contains_a_patch(self):
@@ -128,19 +138,15 @@ class RuntimeSelectionTests(unittest.TestCase):
         self.assertEqual(jobs[-1], {"runtime": "", "version": "26.6.2", "platform": "macOS", "suite": "native"})
 
     def test_workspace_suites_run_only_on_the_latest_ios_and_host_macos(self):
-        installed = [runtime(version) for version in ("27.2", "18.6", "27.10", "27.9", "26.5")]
-        for full_coverage in (False, True):
-            with self.subTest(all_native_runtimes=full_coverage):
-                jobs = runner.test_cases(installed, "27.1", "workspace", latest_ios_major=27,
-                                         all_native_runtimes=full_coverage)
-                self.assertEqual(len(jobs), 2)
-                self.assertEqual([(job["platform"], job["version"]) for job in jobs],
-                                 [("iOS", "27.10"), ("macOS", "27.1")])
-                self.assertTrue(all(job["suite"] == "workspace" for job in jobs))
-
-    def test_latest_runner_with_one_ios_runtime_keeps_full_coverage(self):
-        jobs = runner.test_cases([runtime("27.0")], "27.0", "workspace", latest_ios_major=27)
-        self.assertEqual([job["suite"] for job in jobs], ["workspace", "workspace"])
+        for versions, latest in ((("27.2", "18.6", "27.10", "27.9", "26.5"), "27.10"),
+                                 (("27.0",), "27.0")):
+            installed = [runtime(version) for version in versions]
+            for full_coverage in (False, True):
+                with self.subTest(installed=versions, all_native_runtimes=full_coverage):
+                    jobs = runner.test_cases(installed, "27.1", "workspace", latest_ios_major=27,
+                                             all_native_runtimes=full_coverage)
+                    self.assertEqual([(job["platform"], job["version"], job["suite"]) for job in jobs],
+                                     [("iOS", latest, "workspace"), ("macOS", "27.1", "workspace")])
 
     def test_platform_filter_preserves_every_selected_ios_runtime(self):
         installed = [runtime(version) for version in ("18.4", "18.6", "27.0", "27.1")]
@@ -165,8 +171,6 @@ class RuntimeExecutionTests(unittest.TestCase):
             products.mkdir(parents=True)
             (products / "tests.xctestrun").touch()
         self.runtimes = [runtime("18.6"), runtime("27.0")]
-        for installed in self.runtimes:
-            installed["supportedDeviceTypes"] = [{"identifier": "phone", "productFamily": "iPhone"}]
         self.commands = []
         self.output = io.StringIO()
         self.summary = self.root / "summary.md"
@@ -202,9 +206,7 @@ class RuntimeExecutionTests(unittest.TestCase):
         self.assertNotIn("18.6", self.summary.read_text())
 
     def test_release_validation_runs_older_minors_and_cleans_each_device(self):
-        older = runtime("18.4")
-        older["supportedDeviceTypes"] = [{"identifier": "phone", "productFamily": "iPhone"}]
-        self.runtimes.insert(0, older)
+        self.runtimes.insert(0, runtime("18.4"))
         with patch.object(runner, "simctl", side_effect=["older-device", "first-device", "second-device"]):
             self.assertEqual(self.execute("native", all_native_runtimes=True), 0)
         commands = [command for command, _ in self.commands]
@@ -228,8 +230,7 @@ class RuntimeExecutionTests(unittest.TestCase):
                                         all_native_runtimes=True, platform="iOS", reuse_simulators=False)
 
     def test_prepare_starts_only_the_first_runtime_selected_by_the_test_policy(self):
-        older = dict(self.runtimes[0], version="18.4", identifier=runtime("18.4")["identifier"])
-        installed = [older, *self.runtimes]
+        installed = [runtime("18.4"), *self.runtimes]
         for suite, full_coverage, expected in (("native", False, "18.6"),
                                                 ("native", True, "18.4"),
                                                 ("workspace", False, "27.0")):
@@ -341,17 +342,22 @@ class RuntimeExecutionTests(unittest.TestCase):
         self.assertTrue(all(call.args == ("list", "devices", "available", "--json")
                             for call in simctl.call_args_list))
 
-    def test_reuse_falls_back_to_creation_without_touching_a_running_device(self):
+    def test_reuse_falls_back_to_creation_without_touching_a_running_device_or_iphone_duo(self):
         installed = self.runtimes[-1]
+        installed["supportedDeviceTypes"] = [{"identifier": IPHONE_DUO, "productFamily": "iPhone"},
+                                             {"identifier": "phone", "productFamily": "iPhone"}]
         devices = json.dumps({"devices": {installed["identifier"]: [
             {"udid": "unrelated", "state": "Booted", "isAvailable": True,
              "deviceTypeIdentifier": "phone"},
+            {"udid": "iphone-duo", "state": "Shutdown", "isAvailable": True,
+             "deviceTypeIdentifier": IPHONE_DUO},
         ]}})
         with patch.object(runner, "simctl", side_effect=[devices, "fresh-device\n"]):
             self.assertEqual(self.execute("workspace", platform="iOS", reuse_simulators=True), 0)
         commands = [command for command, _ in self.commands]
         self.assertIn(["xcrun", "simctl", "delete", "fresh-device"], commands)
         self.assertFalse(any("unrelated" in str(command) for command in commands))
+        self.assertFalse(any("iphone-duo" in command for command in commands))
         self.assertFalse(any("shutdown" in command for command in commands))
 
     def test_borrowed_boot_failure_still_cleans_up_and_runs_remaining_platform(self):

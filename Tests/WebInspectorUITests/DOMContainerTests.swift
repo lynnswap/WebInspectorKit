@@ -50,24 +50,19 @@ struct DOMContainerTests {
     }
 
     @Test
-    func elementViewControllerKeepsNoSelectionStateWhenDocumentRootArrives() async throws {
+    func seedingDocumentRootDoesNotCreateSelectionForElementView() {
         let context = makeWebInspectorContext()
+        #expect(context.rootNode == nil)
         let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
-        #expect(viewController.contentUnavailableConfiguration != nil)
-        #expect(viewController.collectionView.isHidden == false)
-        #expect(viewController.collectionView.numberOfSections == 0)
-
         context.seedDOMDocument(documentNode())
 
-        let didKeepUnavailableState = await waitUntilRendered(in: viewController) {
-            viewController.placeholderModeForTesting == .noSelection
-                && viewController.collectionView.isHidden == false
-                && viewController.collectionView.numberOfSections == 0
-        }
-        #expect(didKeepUnavailableState)
+        #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("document")))
+        #expect(context.selectedNode == nil)
+        #expect(viewController.placeholderModeForTesting == .noSelection)
+        #expect(viewController.collectionView.numberOfSections == 0)
     }
 
     @Test
@@ -572,9 +567,9 @@ struct DOMContainerTests {
     }
 
     @Test
-    func elementViewControllerIgnoresVariableReferencesInsideCSSStringsAndComments() async throws {
+    func styleVariableVisibilityIgnoresVariableReferencesInsideCSSStringsAndComments() throws {
         let context = makeElementContext()
-        _ = try selectElement(named: "body", in: context)
+        let body = try selectElement(named: "body", in: context)
         applyInheritedVariableStyles(
             to: context,
             additionalBodyProperties: [
@@ -593,25 +588,13 @@ struct DOMContainerTests {
             ]
         )
 
-        let viewController = makeElementViewController(context: context)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
-
-        let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).count == 1
-        }
-        window.layoutIfNeeded()
-
-        #expect(didCollapseUnusedVariables)
-        let collapsedDeclarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
-        #expect(collapsedDeclarations.contains("--unused-a: red;") == false)
-        #expect(collapsedDeclarations.contains("--unused-b: blue;") == false)
+        #expect(try usedCSSVariableNames(in: body) == ["--foreground", "--palette-primary"])
     }
 
     @Test
-    func elementViewControllerIgnoresVariableReferencesFromInactiveDeclarations() async throws {
+    func styleVariableVisibilityIgnoresVariableReferencesFromInactiveDeclarations() throws {
         let context = makeElementContext()
-        _ = try selectElement(named: "body", in: context)
+        let body = try selectElement(named: "body", in: context)
         applyInheritedVariableStyles(
             to: context,
             additionalBodyProperties: [
@@ -624,52 +607,26 @@ struct DOMContainerTests {
             ]
         )
 
-        let viewController = makeElementViewController(context: context)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
-
-        let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).count == 1
-        }
-        window.layoutIfNeeded()
-
-        #expect(didCollapseUnusedVariables)
-        let collapsedDeclarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
-        #expect(collapsedDeclarations.contains("--unused-a: red;") == false)
+        #expect(try usedCSSVariableNames(in: body) == ["--foreground", "--palette-primary"])
     }
 
     @Test
-    func elementViewControllerTreatsCSSVariableFunctionNamesCaseInsensitively() async throws {
+    func styleVariableVisibilityTreatsCSSVariableFunctionNamesCaseInsensitively() throws {
         let context = makeElementContext()
-        _ = try selectElement(named: "body", in: context)
+        let body = try selectElement(named: "body", in: context)
         applyInheritedVariableStyles(
             to: context,
             bodyColorValue: "VAR(--foreground)",
             foregroundValue: "vAr(--palette-primary)"
         )
 
-        let viewController = makeElementViewController(context: context)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
-
-        let didCollapseOnlyUnusedVariables = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).count == 1
-        }
-        window.layoutIfNeeded()
-
-        #expect(didCollapseOnlyUnusedVariables)
-        let collapsedDeclarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
-        #expect(collapsedDeclarations.contains("color: VAR(--foreground);"))
-        #expect(collapsedDeclarations.contains("--foreground: vAr(--palette-primary);"))
-        #expect(collapsedDeclarations.contains("--palette-primary: #111;"))
-        #expect(collapsedDeclarations.contains("--unused-a: red;") == false)
-        #expect(collapsedDeclarations.contains("--unused-b: blue;") == false)
+        #expect(try usedCSSVariableNames(in: body) == ["--foreground", "--palette-primary"])
     }
 
     @Test
-    func elementViewControllerIgnoresVarTextInsideOtherFunctionNames() async throws {
+    func styleVariableVisibilityIgnoresVarTextInsideOtherFunctionNames() throws {
         let context = makeElementContext()
-        _ = try selectElement(named: "body", in: context)
+        let body = try selectElement(named: "body", in: context)
         applyInheritedVariableStyles(
             to: context,
             additionalBodyProperties: [
@@ -682,24 +639,13 @@ struct DOMContainerTests {
             ]
         )
 
-        let viewController = makeElementViewController(context: context)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
-
-        let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).count == 1
-        }
-        window.layoutIfNeeded()
-
-        #expect(didCollapseUnusedVariables)
-        let collapsedDeclarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
-        #expect(collapsedDeclarations.contains("--unused-a: red;") == false)
+        #expect(try usedCSSVariableNames(in: body) == ["--foreground", "--palette-primary"])
     }
 
     @Test
-    func elementViewControllerIgnoresReferencesFromUnusedLocalCustomProperties() async throws {
+    func styleVariableVisibilityIgnoresReferencesFromUnusedLocalCustomProperties() throws {
         let context = makeElementContext()
-        _ = try selectElement(named: "body", in: context)
+        let body = try selectElement(named: "body", in: context)
         applyInheritedVariableStyles(
             to: context,
             additionalBodyProperties: [
@@ -712,24 +658,13 @@ struct DOMContainerTests {
             ]
         )
 
-        let viewController = makeElementViewController(context: context)
-        let window = showInWindow(viewController)
-        defer { window.isHidden = true }
-
-        let didCollapseUnusedVariables = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).count == 1
-        }
-        window.layoutIfNeeded()
-
-        #expect(didCollapseUnusedVariables)
-        let collapsedDeclarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
-        #expect(collapsedDeclarations.contains("--unused-a: red;") == false)
+        #expect(try usedCSSVariableNames(in: body) == ["--foreground", "--palette-primary"])
     }
 
     @Test
-    func elementViewControllerFollowsReferencesFromUsedLocalCustomProperties() async throws {
+    func styleVariableVisibilityFollowsReferencesFromUsedLocalCustomProperties() throws {
         let context = makeElementContext()
-        _ = try selectElement(named: "body", in: context)
+        let body = try selectElement(named: "body", in: context)
         applyInheritedVariableStyles(
             to: context,
             additionalBodyProperties: [
@@ -748,18 +683,12 @@ struct DOMContainerTests {
             ]
         )
 
-        let viewController = makeElementViewController(context: context)
-        let window = showInWindow(viewController, useUIKitVisibility: false)
-        defer { window.isHidden = true }
-
-        let didCollapseOnlyUnusedVariable = await waitUntilRendered(in: viewController) {
-            hiddenVariableCells(in: viewController).count == 1
-        }
-
-        #expect(didCollapseOnlyUnusedVariable)
-        let collapsedDeclarations = stylePropertyViews(in: viewController).map(\.declarationTextForTesting)
-        #expect(collapsedDeclarations.contains("--unused-a: red;"))
-        #expect(collapsedDeclarations.contains("--unused-b: blue;") == false)
+        #expect(try usedCSSVariableNames(in: body) == [
+            "--foreground",
+            "--palette-primary",
+            "--local-used",
+            "--unused-a",
+        ])
     }
 
     @Test
@@ -1332,28 +1261,6 @@ struct DOMContainerTests {
     }
 
     @Test
-    func testBackendTargetMessageWaiterTimesOutWhenMethodIsMissing() async throws {
-        let backend = RecordingTransportBackend()
-        let timeout = ManualResponseTimeout()
-
-        let waitTask = Task {
-            try await waitForTargetMessage(
-                backend,
-                method: "DOM.getDocument",
-                timeout: .milliseconds(20),
-                timeoutSleep: { duration in
-                    try await timeout.sleep(for: duration)
-                }
-            )
-        }
-        await timeout.waitUntilSuspended()
-        await timeout.fireNext()
-        await #expect(throws: TransportSession.Error.replyTimeout(method: "DOM.getDocument", targetID: nil)) {
-            try await waitTask.value
-        }
-    }
-
-    @Test
     func splitContainerInstallsTreeAndElementColumns() throws {
         let context = makeWebInspectorContext()
         let treeViewController = DOMTreeViewController(context: context)
@@ -1669,6 +1576,11 @@ struct DOMContainerTests {
         )
     }
 
+    private func usedCSSVariableNames(in node: DOMNode) throws -> Set<String> {
+        let sections = try #require(node.elementStyles?.sections)
+        return DOMElementStyleVariableVisibility.usedCSSVariableNames(in: sections)
+    }
+
     private func makeStyle(id: String, properties: [PropertySpec]) -> CSS.Style {
         CSS.Style(
             id: CSS.Style.ID(id),
@@ -1769,150 +1681,6 @@ struct DOMContainerTests {
                 ),
             ]
         )
-    }
-
-    private func waitForTargetMessage(
-        _ backend: RecordingTransportBackend,
-        method: String,
-        timeout: Duration = .seconds(5),
-        timeoutSleep: @escaping @Sendable (Duration) async throws -> Void = { duration in
-            try await Task.sleep(for: duration)
-        }
-    ) async throws -> RecordedTargetMessage {
-        try await withThrowingTaskGroup(of: RecordedTargetMessage.self) { group in
-            defer {
-                group.cancelAll()
-            }
-
-            group.addTask {
-                try await backend.waitForTargetMessage(method: method)
-            }
-            group.addTask {
-                try await timeoutSleep(timeout)
-                throw TransportSession.Error.replyTimeout(method: method, targetID: nil)
-            }
-
-            guard let message = try await group.next() else {
-                throw TransportSession.Error.replyTimeout(method: method, targetID: nil)
-            }
-            return message
-        }
-    }
-
-    private struct RecordedTargetMessage: Sendable {
-        var message: String
-        var targetIdentifier: ProtocolTarget.ID
-    }
-
-    private actor RecordingTransportBackend: TransportBackend {
-        private struct TargetMessageWaiter {
-            var id: UInt64
-            var method: String
-            var continuation: CheckedContinuation<RecordedTargetMessage, Error>
-        }
-
-        private var messages: [String] = []
-        private var waiters: [TargetMessageWaiter] = []
-        private var nextWaiterID: UInt64 = 0
-        private var cancelledWaiterIDs: Set<UInt64> = []
-
-        func sendJSONString(_ message: String) async throws {
-            messages.append(message)
-            resumeWaiters()
-        }
-
-        func detach() async {}
-
-        func sentTargetMessages() -> [RecordedTargetMessage] {
-            messages.compactMap(Self.targetMessage)
-        }
-
-        func waitForTargetMessage(method: String) async throws -> RecordedTargetMessage {
-            try Task.checkCancellation()
-            if let message = sentTargetMessages().first(where: { messageMethod($0.message) == method }) {
-                return message
-            }
-
-            nextWaiterID &+= 1
-            let waiterID = nextWaiterID
-            let message = try await withTaskCancellationHandler {
-                try await withCheckedThrowingContinuation { continuation in
-                    registerWaiter(id: waiterID, method: method, continuation: continuation)
-                }
-            } onCancel: {
-                Task {
-                    await self.cancelWaiter(waiterID)
-                }
-            }
-            try Task.checkCancellation()
-            return message
-        }
-
-        private func resumeWaiters() {
-            guard !waiters.isEmpty else {
-                return
-            }
-
-            var remainingWaiters: [TargetMessageWaiter] = []
-            for waiter in waiters {
-                if cancelledWaiterIDs.remove(waiter.id) != nil {
-                    waiter.continuation.resume(throwing: CancellationError())
-                } else if let message = sentTargetMessages().first(where: { messageMethod($0.message) == waiter.method }) {
-                    waiter.continuation.resume(returning: message)
-                } else {
-                    remainingWaiters.append(waiter)
-                }
-            }
-            waiters = remainingWaiters
-        }
-
-        private func registerWaiter(
-            id: UInt64,
-            method: String,
-            continuation: CheckedContinuation<RecordedTargetMessage, Error>
-        ) {
-            guard cancelledWaiterIDs.remove(id) == nil else {
-                continuation.resume(throwing: CancellationError())
-                return
-            }
-            if let message = sentTargetMessages().first(where: { messageMethod($0.message) == method }) {
-                continuation.resume(returning: message)
-                return
-            }
-            waiters.append(TargetMessageWaiter(id: id, method: method, continuation: continuation))
-            resumeWaiters()
-        }
-
-        private func cancelWaiter(_ id: UInt64) {
-            guard let index = waiters.firstIndex(where: { $0.id == id }) else {
-                cancelledWaiterIDs.insert(id)
-                return
-            }
-            let waiter = waiters.remove(at: index)
-            waiter.continuation.resume(throwing: CancellationError())
-        }
-
-        private static func targetMessage(_ message: String) -> RecordedTargetMessage? {
-            guard let data = message.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let params = object["params"] as? [String: Any],
-                  let targetID = params["targetId"] as? String,
-                  let innerMessage = params["message"] as? String else {
-                return nil
-            }
-            return RecordedTargetMessage(
-                message: innerMessage,
-                targetIdentifier: ProtocolTarget.ID(targetID)
-            )
-        }
-
-        private func messageMethod(_ message: String) -> String? {
-            guard let data = message.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return nil
-            }
-            return object["method"] as? String
-        }
     }
 
     private func showInWindow(

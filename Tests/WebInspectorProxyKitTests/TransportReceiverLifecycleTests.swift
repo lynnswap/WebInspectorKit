@@ -185,8 +185,6 @@ func nativeConnectionCloseAwaitsActiveReceiverTurnBeforeBackendDetach() async th
     let connection = NativeInspectorConnection(
         transport: graph.transport,
         receiver: graph.receiver,
-        reloadPage: {},
-        canReloadPage: { false },
         cleanup: {}
     )
 

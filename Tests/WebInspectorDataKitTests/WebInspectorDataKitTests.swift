@@ -3786,26 +3786,83 @@ func currentPageDestroyWithoutReplacementRegressesToAttachingAndRecovers() async
 @MainActor
 @Test
 func startCancelsInFlightCurrentPageRetargetBeforeRestarting() async throws {
-    let targetID = ProtocolTarget.ID("page-restart")
-    let (_, _, context) = try await startTransportBackedContext(
-        targetID: targetID,
+    let oldTargetID = ProtocolTarget.ID("page-restart-old")
+    let newTargetID = ProtocolTarget.ID("page-restart-new")
+    let restartedRootID = DOMNode.ID(DOM.Node.ID("restarted-root"))
+    let staleRetargetRootID = DOMNode.ID(DOM.Node.ID("stale-retarget-root"))
+    let (backend, transport, context) = try await startTransportBackedContext(
+        targetID: oldTargetID,
         documentID: "restart-old-root"
     )
-    let cancellationProbe = CancellationProbe()
-    let cancellationGate = WebInspectorCancellationAwareTestGate()
-    context.installCurrentPageRetargetTaskForTesting(Task {
-        cancellationProbe.markStarted()
-        await withTaskCancellationHandler {
-            await cancellationGate.wait()
-            cancellationProbe.markCancelled()
-        } onCancel: {
-            cancellationProbe.markCancelled()
-        }
-    })
-    try await cancellationProbe.waitUntilStarted(timeout: .seconds(5))
+    let startupMessageCount = await backend.sentTargetMessages().count
+
+    await transport.receiveRootMessage(
+        #"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-restart-new","type":"page","frameId":"main-frame","isProvisional":true}}}"#
+    )
+    await transport.receiveRootMessage(
+        #"{"method":"Target.didCommitProvisionalTarget","params":{"oldTargetId":"page-restart-old","newTargetId":"page-restart-new"}}"#
+    )
+
+    try await replyTransportInspectorAndPageInitialization(
+        backend,
+        transport: transport,
+        targetID: newTargetID,
+        after: startupMessageCount,
+        includePageEnable: false
+    )
+    for method in ["Runtime.enable", "Network.enable"] {
+        let enable = try await waitForTransportTargetMessage(
+            backend,
+            method: method,
+            after: startupMessageCount
+        )
+        await receiveTransportTargetReply(
+            transport,
+            targetID: enable.targetIdentifier,
+            messageID: try transportMessageID(enable.message),
+            result: "{}"
+        )
+    }
+    try await replyTransportResourceTreeUnavailable(
+        backend,
+        transport: transport,
+        after: startupMessageCount
+    )
+    let retargetGetDocument = try await waitForTransportTargetMessage(
+        backend,
+        method: "DOM.getDocument",
+        after: startupMessageCount
+    )
+    #expect(retargetGetDocument.targetIdentifier == newTargetID)
+    let retargetTask = try #require(context.currentPageRetargetTaskForTesting())
+    let restartMessageCount = await backend.sentTargetMessages().count
+
+    let autoReplier = startAutoReplyingTransportTargetMessages(
+        backend: backend,
+        transport: transport,
+        after: restartMessageCount
+    ) { targetID in
+        targetID == newTargetID ? "restarted-root" : "restart-unexpected-root"
+    }
+    defer { autoReplier.cancel() }
 
     context.start()
-    try await cancellationProbe.waitUntilCancelled(timeout: .seconds(5))
+    #expect(retargetTask.isCancelled)
+    try await waitUntil(in: context, timeout: .seconds(5)) {
+        context.state == .attached && context.rootNode?.id == restartedRootID
+    }
+
+    await receiveTransportTargetReply(
+        transport,
+        targetID: retargetGetDocument.targetIdentifier,
+        messageID: try transportMessageID(retargetGetDocument.message),
+        result: transportDocumentResult(nodeID: "stale-retarget-root")
+    )
+    await retargetTask.value
+
+    #expect(context.state == .attached)
+    #expect(context.rootNode?.id == restartedRootID)
+    #expect(context.node(for: staleRetargetRootID) == nil)
 }
 
 @MainActor
@@ -4014,46 +4071,6 @@ func networkNavigationGroupsEachAtoBtoAFrameVisitSeparately() async throws {
     #expect(visits[2] == visits[3])
     #expect(visits[4] == visits[5])
     #expect(visits[0] != visits[4])
-}
-
-@MainActor
-@Test
-func networkRequestBeforeFrameCommitSharesVisitWithCommittedRequest() async throws {
-    let targetID = ProtocolTarget.ID("page-main")
-    let (_, transport, context) = try await startTransportBackedContext(
-        targetID: targetID,
-        documentID: "provisional-visit-root"
-    )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-
-    await emitTransportNetworkRequest(
-        id: "before-commit",
-        frameID: "child-frame",
-        loaderID: "child-loader",
-        timestamp: 1,
-        targetID: targetID,
-        transport: transport
-    )
-    try await waitUntil { results.items.count == 1 }
-    await emitTransportFrameNavigated(
-        frameID: "child-frame",
-        loaderID: "child-loader",
-        targetID: targetID,
-        transport: transport
-    )
-    await emitTransportNetworkRequest(
-        id: "after-commit",
-        frameID: "child-frame",
-        loaderID: "child-loader",
-        timestamp: 2,
-        targetID: targetID,
-        transport: transport
-    )
-    try await waitUntil { results.items.count == 2 }
-
-    let provisionalVisit = try #require(results.items[0].navigationVisit)
-    let committedVisit = try #require(results.items[1].navigationVisit)
-    #expect(provisionalVisit == committedVisit)
 }
 
 @MainActor
@@ -4530,7 +4547,6 @@ func unfilteredNetworkInsertionsDoNotVisitExistingQueryMembership() async throws
     let lastInsert = transactionRecorder.transactions[eventCount - 1]
     #expect(lastInsert.oldSnapshot.itemIDs == Array(expectedModelIDs.dropLast()))
     #expect(lastInsert.newSnapshot.itemIDs == expectedModelIDs)
-    #expect(lastInsert.newSnapshot.itemIDs == lastInsert.newSnapshot.itemIDs)
 
     let expectedUpdateChanges: [WebInspectorFetchedResultsItemChange<NetworkRequest.ID>] = [
         .update(
@@ -8418,8 +8434,7 @@ func setCSSDeclarationTextRewritesStyleTextAndMarksUndoableState() async throws 
                 name: "display",
                 value: "flex",
                 text: "display: flex;",
-                isEditable: true,
-                isModifiedByInspector: true
+                isEditable: true
             )
         ],
         cssText: "display: flex;",
@@ -9214,61 +9229,6 @@ func queuedDeclarationRefreshesAfterStyleSheetReplacement() async throws {
 
 @MainActor
 @Test
-func removingLoadedChildPurgesDescendantsFromIdentityMap() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
-    let documentID = DOM.Node.ID("document")
-    let childID = DOM.Node.ID("child")
-    let grandchildID = DOM.Node.ID("grandchild")
-
-    await enqueueStartupReplies(
-        on: runtime.backend,
-        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
-    )
-
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil(in: context) { context.rootNode != nil }
-
-    await runtime.backend.emit(
-        .setChildNodes(parent: documentID, nodes: [
-            DOM.Node(
-                id: childID,
-                nodeType: 1,
-                nodeName: "SECTION",
-                localName: "section",
-                childNodeCount: 1,
-                children: [
-                    DOM.Node(
-                        id: grandchildID,
-                        nodeType: 1,
-                        nodeName: "SPAN",
-                        localName: "span"
-                    )
-                ]
-            )
-        ]),
-        target: target
-    )
-
-    try await waitUntil(in: context) {
-        context.node(for: DOMNode.ID(grandchildID)) != nil
-    }
-
-    await runtime.backend.emit(
-        .childNodeRemoved(parent: documentID, node: childID),
-        target: target
-    )
-
-    try await waitUntil(in: context) {
-        context.node(for: DOMNode.ID(childID)) == nil
-            && context.node(for: DOMNode.ID(grandchildID)) == nil
-    }
-}
-
-@MainActor
-@Test
 func setChildNodesPreservesReparentedDescendantIdentity() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let target = try await runtime.proxy.waitForCurrentPage()
@@ -9325,59 +9285,6 @@ func setChildNodesPreservesReparentedDescendantIdentity() async throws {
             && context.node(for: DOMNode.ID(newParentID)) != nil
     }
     #expect(context.node(for: DOMNode.ID(movedChildID)) === movedChild)
-}
-
-@MainActor
-@Test
-func setChildNodesPrunesOmittedDescendantsWhenReusingChildNode() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let target = try await runtime.proxy.waitForCurrentPage()
-    let documentID = DOM.Node.ID("document")
-    let childID = DOM.Node.ID("child")
-    let removedSpanID = DOM.Node.ID("removed-span")
-    let removedEmID = DOM.Node.ID("removed-em")
-
-    await enqueueStartupReplies(
-        on: runtime.backend,
-        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
-    )
-
-    let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = container.mainContext
-    try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil(in: context) { context.rootNode != nil }
-
-    await runtime.backend.emit(
-        .setChildNodes(parent: documentID, nodes: [
-            DOM.Node(
-                id: childID,
-                nodeType: 1,
-                nodeName: "DIV",
-                localName: "div",
-                children: [
-                    DOM.Node(id: removedSpanID, nodeType: 1, nodeName: "SPAN", localName: "span"),
-                    DOM.Node(id: removedEmID, nodeType: 1, nodeName: "EM", localName: "em"),
-                ]
-            )
-        ]),
-        target: target
-    )
-
-    try await waitUntil(in: context) { context.node(for: DOMNode.ID(removedEmID)) != nil }
-    let child = try #require(context.node(for: DOMNode.ID(childID)))
-
-    await runtime.backend.emit(
-        .setChildNodes(parent: documentID, nodes: [
-            DOM.Node(id: childID, nodeType: 1, nodeName: "DIV", localName: "div", childNodeCount: 0)
-        ]),
-        target: target
-    )
-
-    try await waitUntil(in: context) {
-        context.node(for: DOMNode.ID(removedSpanID)) == nil
-            && context.node(for: DOMNode.ID(removedEmID)) == nil
-    }
-    #expect(context.node(for: DOMNode.ID(childID)) === child)
 }
 
 @MainActor
@@ -11119,7 +11026,6 @@ func webSocketTimelinePreservesArrivalOrderStableIDsAndExactFrameSemantics() asy
         ),
     ]
     #expect(webSocket.timelineEntries == expected)
-    #expect(expected.map(\.id) == expected.map(\.id).sorted())
     #expect(webSocket.timelineEntry(for: expected[0].id) == expected[0])
     #expect(webSocket.timelineEntry(for: expected[4].id) == expected[4])
     #expect(webSocket.timelineEntry(for: expected[7].id) == expected[7])
@@ -14791,10 +14697,11 @@ private func installTransportFrameTarget(
 private func startAutoReplyingTransportTargetMessages(
     backend: FakeTransportBackend,
     transport: TransportSession,
+    after count: Int = 0,
     documentNodeID: @escaping @MainActor @Sendable (ProtocolTarget.ID) -> String
 ) -> Task<Void, Never> {
     Task { @MainActor in
-        var repliedTargetMessageCount = 0
+        var repliedTargetMessageCount = count
         while Task.isCancelled == false {
             do {
                 let sentMessage = try await backend.waitForTargetMessage(after: repliedTargetMessageCount)

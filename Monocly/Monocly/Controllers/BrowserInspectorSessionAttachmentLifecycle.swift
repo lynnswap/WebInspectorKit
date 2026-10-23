@@ -76,7 +76,6 @@ final class BrowserInspectorSessionAttachmentLifecycle {
     private var activeEffectID: UInt64?
     private var nextEffectID: UInt64 = 0
     private weak var attachedWebView: WKWebView?
-    var onAttachForTesting: ((WKWebView) -> Void)?
 
     init(
         browserWindow: BrowserWindow,
@@ -216,10 +215,6 @@ final class BrowserInspectorSessionAttachmentLifecycle {
         guard lifecycleTask == nil,
               let effect = phase.currentEffect else {
             return
-        }
-
-        if case let .attach(webView) = effect {
-            onAttachForTesting?(webView)
         }
 
         let effectID = nextEffectID

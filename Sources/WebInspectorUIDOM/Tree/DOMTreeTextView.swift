@@ -2987,14 +2987,6 @@ extension DOMTreeTextView {
         findDecorationState.highlightedRanges
     }
 
-    @discardableResult
-    func selectRowForTesting(containing text: String) -> Bool {
-        guard let row = rows.first(where: { $0.text.contains(text) }) else {
-            return false
-        }
-        return select(row.nodeID)
-    }
-
     func toggleRowForTesting(containing text: String) {
         guard let row = rows.first(where: { $0.text.contains(text) }) else {
             return

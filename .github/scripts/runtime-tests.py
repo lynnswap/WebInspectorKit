@@ -12,6 +12,13 @@ def version_components(version):
     return tuple((list(map(int, version.split("."))) + [0, 0])[:3])
 
 
+def phone_device_types(runtime):
+    # iPhone Duo layout support is deferred, so CI uses only other iPhones.
+    return [device_type["identifier"] for device_type in runtime["supportedDeviceTypes"]
+            if device_type["productFamily"] == "iPhone"
+            and device_type["identifier"] != "com.apple.CoreSimulator.SimDeviceType.iPhone-Duo"]
+
+
 def supported_runtimes(runtimes):
     # CoreSimulator can retain older builds with the same runtime identifier.
     # A destination selects the installed runtime for that identifier.
@@ -23,6 +30,8 @@ def supported_runtimes(runtimes):
             continue
         version = version_components(runtime["version"])
         if version < (18, 4, 0) or (26, 0, 0) <= version < (26, 1, 0):
+            continue
+        if not phone_device_types(runtime):
             continue
         selected[runtime["identifier"]] = runtime
     return sorted(selected.values(), key=lambda runtime: version_components(runtime["version"]))
@@ -67,14 +76,12 @@ def simctl(*arguments):
 
 
 def create_device(runtime):
-    device_type = next(device_type for device_type in runtime["supportedDeviceTypes"]
-                       if device_type["productFamily"] == "iPhone")
-    return simctl("create", "WebInspectorKit CI", device_type["identifier"], runtime["identifier"]).strip()
+    device_type = phone_device_types(runtime)[0]
+    return simctl("create", "WebInspectorKit CI", device_type, runtime["identifier"]).strip()
 
 
 def reusable_device(runtime, devices):
-    phone_types = {device_type["identifier"] for device_type in runtime["supportedDeviceTypes"]
-                   if device_type["productFamily"] == "iPhone"}
+    phone_types = phone_device_types(runtime)
     return next((device["udid"] for device in devices.get(runtime["identifier"], [])
                  if device.get("isAvailable", False) and device["state"] == "Shutdown"
                  and device.get("deviceTypeIdentifier") in phone_types), None)
