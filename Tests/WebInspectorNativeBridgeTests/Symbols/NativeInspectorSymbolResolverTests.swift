@@ -127,7 +127,7 @@ struct NativeInspectorSymbolResolverTests {
                                   native.stringImplToNSString, native.derefStringImpl,
                                   native.dispatchMessageFromRemote, native.debuggableVTable]
             let addresses = unsafe handles.map { handle in
-                unsafe UInt64(UInt(bitPattern: ABIResolvedSymbolAddress(handle!)))
+                unsafe UInt64(UInt(bitPattern: ABIResolvedSymbolGetAddress(handle!)))
             }
             #expect(addresses == expected.map(\.address))
         }
