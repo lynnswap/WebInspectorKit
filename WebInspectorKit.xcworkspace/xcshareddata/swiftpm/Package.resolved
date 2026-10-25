@@ -1,13 +1,13 @@
 {
-  "originHash" : "e1735f8502da29c0f24c6cb0e6f7ab9cf9b149ebd046565c26c7fcbdd3571503",
+  "originHash" : "8fccea5d6d1e3dedb01509f22c56bbf805cfcdae3486879bca6a61c15c11a101",
   "pins" : [
     {
       "identity" : "abibridge",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ABIBridge.git",
       "state" : {
-        "revision" : "600b7762c41e351532c6021701a2cacaf0f0046a",
-        "version" : "0.12.1"
+        "revision" : "df6a28f070d09d46da66a73418173aed1f91605a",
+        "version" : "0.13.0"
       }
     },
     {
@@ -33,8 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ObservationBridge.git",
       "state" : {
-        "revision" : "b85931071f4aa9214b7a71384a6bfd1bd134dd6e",
-        "version" : "0.15.2"
+        "revision" : "cf4f35d77416e6d49931861a07db989b652cf7c2",
+        "version" : "0.15.3"
       }
     },
     {
@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ScrollableTabBar.git",
       "state" : {
-        "revision" : "99b09842ea891596450b30242bb0c0f1af29ad3d",
-        "version" : "0.2.5"
+        "revision" : "c76bdcb09c520a7dee7157e037e6080d26ca5f60",
+        "version" : "0.2.6"
       }
     },
     {
@@ -132,8 +132,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/SyntaxEditorUI.git",
       "state" : {
-        "revision" : "5745e2073ddca38e039c52d7b3010e3145553fa9",
-        "version" : "0.18.2"
+        "revision" : "60d7ebb551bd15cf2c40029e96fbe1aff9f06616",
+        "version" : "0.19.0"
       }
     },
     {
@@ -231,8 +231,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/UIHostingMenu.git",
       "state" : {
-        "revision" : "276f452011ff392bb4711a3eee4e91e9c7c617b7",
-        "version" : "0.5.6"
+        "revision" : "ca9796c7a68aea1b326fdb40f721a2d8fe2d8e04",
+        "version" : "0.5.7"
       }
     },
     {
@@ -249,8 +249,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/WKViewportCoordinator.git",
       "state" : {
-        "revision" : "694f485433932e6911b41eb872ce1b2fb4f15411",
-        "version" : "0.11.0"
+        "revision" : "3d9ae462f366834e67f680656e411ecda09de5c0",
+        "version" : "0.11.2"
       }
     },
     {

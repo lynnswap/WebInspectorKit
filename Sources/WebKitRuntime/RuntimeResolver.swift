@@ -63,9 +63,9 @@ actor RuntimeResolver {
         // A catalog snapshot owns descriptions only. Unrelated images must not
         // acquire loader leases just to decide which image this request needs.
         guard let list = unsafe ABICopyLoadedImages() else { throw RuntimeLookupError(.imageUnavailable) }
-        defer { unsafe ABIFreeImageList(list) }
-        return unsafe (0..<ABIImageListCount(list)).map { index in
-            let info = unsafe ABIImageListGet(list, index)
+        defer { unsafe ABIReleaseImageList(list) }
+        return unsafe (0..<ABIImageListGetCount(list)).map { index in
+            let info = unsafe ABIImageListGetImage(list, index)
             return unsafe String(cString: info.path)
         }
     }
