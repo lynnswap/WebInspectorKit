@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ABIBridge.git",
       "state" : {
-        "revision" : "1cf7322ec0ed4700b90d95140e549fa4e6af83df",
-        "version" : "0.13.1"
+        "revision" : "8aa09a1d9e319c5e10aa8641a58fd7569de6c2e9",
+        "version" : "0.13.2"
       }
     },
     {
@@ -33,8 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ObservationBridge.git",
       "state" : {
-        "revision" : "e682e5ec899c6e2646533eade082d68a69f86228",
-        "version" : "0.15.4"
+        "revision" : "4a3a886a85bc5353d96c44216c19c3a02bc62ba3",
+        "version" : "0.15.5"
       }
     },
     {
@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ScrollableTabBar.git",
       "state" : {
-        "revision" : "c24848f1d0fb64b7a3355db2d44059a9eaad5f8f",
-        "version" : "0.2.7"
+        "revision" : "abcd4ed8910fdefb8089c58fab58d6847ed4052e",
+        "version" : "0.2.8"
       }
     },
     {
@@ -132,8 +132,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/SyntaxEditorUI.git",
       "state" : {
-        "revision" : "ffda976b3cd68b8cabefd9a20a0c42757ce66596",
-        "version" : "0.19.1"
+        "revision" : "f0469fed5a5a19ec9d1ba450df7a13988347aff4",
+        "version" : "0.19.2"
       }
     },
     {
@@ -231,8 +231,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/UIHostingMenu.git",
       "state" : {
-        "revision" : "13df4f203c661de991672f6321a792de6da97b30",
-        "version" : "0.5.8"
+        "revision" : "a0249aea0072ac43776316454c3c2d9361fcc9ff",
+        "version" : "0.5.9"
       }
     },
     {
