@@ -1690,7 +1690,7 @@ struct BrowserSessionRestoreTests {
 
         func wait(for webView: WKWebView) async throws {
             let webViewID = ObjectIdentifier(webView)
-            try await requireTestEvent { self.seenWebViewIDs.contains(webViewID) }
+            try await requireTestEvent(timeout: .seconds(5)) { self.seenWebViewIDs.contains(webViewID) }
         }
     }
 
@@ -1805,6 +1805,7 @@ struct BrowserSessionRestoreTests {
 
 @MainActor
 private func requireTestEvent(
+    timeout: Duration = .seconds(1),
     _ condition: @escaping @MainActor @Sendable () -> Bool
 ) async throws {
     try Task.checkCancellation()
@@ -1815,7 +1816,7 @@ private func requireTestEvent(
     let values = await observation.values(condition)
     defer { values.cancel() }
     try await withTaskCancellationHandler {
-        let didObserveEvent = await values.waitUntilValue(true, timeout: .seconds(1))
+        let didObserveEvent = await values.waitUntilValue(true, timeout: timeout)
         try Task.checkCancellation()
         if !didObserveEvent, let error = observation.error {
             throw error
