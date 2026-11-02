@@ -3803,9 +3803,8 @@ struct NetworkDetailViewControllerTests {
             resourceType: .media
         ))
         let playerFactory = MoviePreviewPlayerFactorySpy()
-        let viewController = NetworkBodyViewController(
-            moviePreviewPlayerFactory: playerFactory.makePlayer
-        )
+        let viewController = NetworkBodyViewController()
+        viewController.setMoviePreviewPlayerFactoryForTesting(playerFactory.makePlayer)
         viewController.setSurface(.body(
             request.responseBody,
             metadata: NetworkMediaPreviewMetadata(
