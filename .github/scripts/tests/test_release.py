@@ -97,13 +97,13 @@ class ReleaseTests(unittest.TestCase):
         values.update(overrides)
         release.start(github, **values)
 
-    def test_start_keeps_notes_and_pins_dispatch_without_creating_tag(self):
+    def test_start_creates_tag_before_dispatch_and_keeps_approved_notes(self):
         github = FakeGitHub()
         self.start(github)
         self.assertEqual(github.release, draft())
-        self.assertIsNone(github.tag)
+        self.assertEqual(github.tag, SHA)
         self.assertEqual([call[0] for call in github.writes],
-                         ["releases", "actions/workflows/release.yml/dispatches"])
+                         ["releases", "git/refs", "actions/workflows/release.yml/dispatches"])
         dispatch = github.writes[-1][2]
         self.assertEqual(dispatch["ref"], "main")
         self.assertEqual(dispatch["inputs"], dict(
@@ -111,6 +111,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_start_reuses_matching_draft_in_later_page(self):
         github = FakeGitHub(draft())
+        github.tag = SHA
         github.older_page = True
         self.start(github)
         self.assertEqual(len(github.writes), 1)
@@ -128,10 +129,10 @@ class ReleaseTests(unittest.TestCase):
     def test_dispatch_failure_leaves_reusable_draft(self):
         github = FakeGitHub()
         github.dispatch_error = True
-        with self.assertRaisesRegex(release.ReleaseError, "Draft 42 remains"):
+        with self.assertRaisesRegex(release.ReleaseError, "Draft 42 and tag v0.1.0 remain"):
             self.start(github)
         self.assertTrue(github.release["draft"])
-        self.assertIsNone(github.tag)
+        self.assertEqual(github.tag, SHA)
         github.dispatch_error = False
         self.start(github)
         self.assertEqual(sum(call[0] == "releases" for call in github.writes), 1)
@@ -178,22 +179,24 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(github.writes, [])
         self.assertTrue(github.release["draft"])
 
-    def test_publish_creates_exact_tag_and_preserves_stable_or_prerelease_content(self):
+    def test_publish_preserves_existing_tag_and_stable_or_prerelease_content(self):
         for prerelease in (False, True):
             github = FakeGitHub(draft(prerelease=prerelease))
+            github.tag = SHA
             digest = release.fingerprint(github.release)
             release.publish(github, 42, SHA, digest)
             self.assertEqual(github.tag, SHA)
             self.assertFalse(github.release["draft"])
             self.assertEqual(release.fingerprint(github.release), digest)
-            self.assertEqual(github.writes[0], ("git/refs", "POST", dict(ref="refs/tags/v0.1.0", sha=SHA)))
-            self.assertEqual(github.writes[1][2], dict(
+            self.assertEqual(len(github.writes), 1)
+            self.assertEqual(github.writes[0][2], dict(
                 tag_name="v0.1.0", target_commitish=SHA, name="First release",
                 body="One\n\nTwo\n", prerelease=prerelease, draft=False,
                 make_latest="false" if prerelease else "legacy"))
 
     def test_publish_writes_approved_fields_even_if_the_draft_changes_after_verification(self):
         github = FakeGitHub(draft())
+        github.tag = SHA
         digest = release.fingerprint(github.release)
         github.before_publish = lambda state: state.release.update(
             name="Unapproved title", body="Unapproved notes", tag_name="v9.9.9",
@@ -221,6 +224,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_failed_publication_can_resume_without_recreating_tag(self):
         github = FakeGitHub(draft())
+        github.tag = SHA
         digest = release.fingerprint(github.release)
         github.publish_error = True
         with self.assertRaisesRegex(release.ReleaseError, "Tag v0.1.0 may already exist"):
@@ -230,32 +234,46 @@ class ReleaseTests(unittest.TestCase):
         github.publish_error = False
         release.publish(github, 42, SHA, digest)
         self.assertFalse(github.release["draft"])
-        self.assertEqual(sum(call[0] == "git/refs" for call in github.writes), 1)
+        self.assertEqual(sum(call[0] == "git/refs" for call in github.writes), 0)
         github.calls = []
         release.publish(github, 42, SHA, digest)
         self.assertEqual(github.writes, [])
 
-    def test_change_during_tag_creation_stops_publication(self):
+    def test_change_during_tag_creation_stops_dispatch(self):
         github = FakeGitHub(draft())
         github.after_tag = lambda state: state.release.update(body="Edited during CI")
         with self.assertRaises(release.ReleaseError):
-            release.publish(github, 42, SHA, release.fingerprint(draft()))
+            self.start(github)
         self.assertTrue(github.release["draft"])
         self.assertEqual(len(github.writes), 1)
 
-    def test_workflow_permission_failure_preserves_draft_and_can_resume_with_new_credentials(self):
+    def test_tag_permission_failure_preserves_draft_and_can_resume_with_new_credentials(self):
         github = FakeGitHub(draft())
-        digest = release.fingerprint(github.release)
         github.tag_error = True
-        with self.assertRaisesRegex(release.ReleaseError, "configure RELEASE_TOKEN"):
-            release.publish(github, 42, SHA, digest)
+        with self.assertRaisesRegex(release.ReleaseError, "Contents and Workflows write access"):
+            self.start(github)
         self.assertTrue(github.release["draft"])
         self.assertIsNone(github.tag)
         self.assertFalse(any(call[1] == "PATCH" for call in github.writes))
+        self.assertFalse(any("dispatches" in call[0] for call in github.writes))
         github.tag_error = False
-        release.publish(github, 42, SHA, digest)
+        self.start(github)
         self.assertEqual(github.tag, SHA)
-        self.assertFalse(github.release["draft"])
+        self.assertTrue(github.release["draft"])
+        self.assertIn("dispatches", github.writes[-1][0])
+
+    def test_publication_does_not_create_a_missing_tag(self):
+        github = FakeGitHub(draft())
+        with self.assertRaisesRegex(release.ReleaseError, "Tag v0.1.0 is missing"):
+            release.publish(github, 42, SHA, release.fingerprint(draft()))
+        self.assertEqual(github.writes, [])
+
+    def test_tag_moving_after_initial_verification_stops_publication(self):
+        github = FakeGitHub(draft())
+        with patch.object(release, "tag_commit", side_effect=[SHA, OTHER]):
+            with self.assertRaisesRegex(release.ReleaseError, "not approved commit"):
+                release.publish(github, 42, SHA, release.fingerprint(draft()))
+        self.assertEqual(github.writes, [])
 
     def test_racing_tag_creation_only_accepts_the_same_commit(self):
         for actual in (SHA, OTHER):
@@ -265,12 +283,14 @@ class ReleaseTests(unittest.TestCase):
                 raise release.APIError(422, "Reference already exists")
             github.after_tag = create
             if actual == SHA:
-                release.publish(github, 42, SHA, release.fingerprint(draft()))
-                self.assertFalse(github.release["draft"])
+                self.start(github)
+                self.assertTrue(github.release["draft"])
+                self.assertIn("dispatches", github.writes[-1][0])
             else:
                 with self.assertRaises(release.ReleaseError):
-                    release.publish(github, 42, SHA, release.fingerprint(draft()))
+                    self.start(github)
                 self.assertTrue(github.release["draft"])
+                self.assertFalse(any("dispatches" in call[0] for call in github.writes))
 
     def test_gh_transport_preserves_json_and_distinguishes_http_failure(self):
         github = release.GitHub("example/project")
