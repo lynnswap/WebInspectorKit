@@ -2,8 +2,8 @@
 
 ## Releases
 
-- Follow [RELEASING.md](RELEASING.md). `Scripts/release.py start` creates a draft
-  with the approved notes and starts the workflow that validates and publishes it.
+- Follow [RELEASING.md](RELEASING.md). `Scripts/release.py start` creates the approved
+  tag and draft, then starts the workflow that validates and publishes it.
 
 ## Testing
 
