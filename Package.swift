@@ -45,23 +45,23 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/lynnswap/ObservationBridge.git",
-            exact: "0.15.7"
+            exact: "0.15.9"
         ),
         .package(
             url: "https://github.com/lynnswap/ScrollableTabBar.git",
-            exact: "0.2.10"
+            exact: "0.2.11"
         ),
         .package(
             url: "https://github.com/lynnswap/UIHostingMenu.git",
-            exact: "0.5.11"
+            exact: "0.5.12"
         ),
         .package(
             url: "https://github.com/lynnswap/SyntaxEditorUI.git",
-            exact: "0.19.4"
+            exact: "0.19.5"
         ),
         .package(
             url: "https://github.com/lynnswap/ABIBridge.git",
-            exact: "0.16.2"
+            exact: "0.17.0"
         ),
         .package(
             url: "https://github.com/swiftlang/swift-docc-plugin",
