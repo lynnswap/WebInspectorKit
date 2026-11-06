@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ABIBridge.git",
       "state" : {
-        "revision" : "fb86913e3fe335efef0913e19006c80e8b5b6ac7",
-        "version" : "0.16.2"
+        "revision" : "4cbe8405dfd812c5683e10a39c219f00f1e7a6c3",
+        "version" : "0.17.0"
       }
     },
     {
@@ -33,8 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ObservationBridge.git",
       "state" : {
-        "revision" : "9a1ccc5682f559c911d42ec547273698df765321",
-        "version" : "0.15.7"
+        "revision" : "0eab3af7768d2296c1e71c88a2fe1423a95577cd",
+        "version" : "0.15.9"
       }
     },
     {
@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ScrollableTabBar.git",
       "state" : {
-        "revision" : "86c325f58af5013ec3a1071f70a52cfded975e79",
-        "version" : "0.2.10"
+        "revision" : "3d3d92e48344edbdc77f0f09dc06068e5cfcd271",
+        "version" : "0.2.11"
       }
     },
     {
@@ -132,8 +132,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/SyntaxEditorUI.git",
       "state" : {
-        "revision" : "568e91387db935ba3ab9bac14926088c70faad94",
-        "version" : "0.19.4"
+        "revision" : "103d8623a9e0f5c7dad8da319f244b7bf20dcb33",
+        "version" : "0.19.5"
       }
     },
     {
@@ -231,8 +231,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/UIHostingMenu.git",
       "state" : {
-        "revision" : "9afa49e31f711f755d10d0937715ecdc49f5b853",
-        "version" : "0.5.11"
+        "revision" : "41949a800c30c36fe063b88d72ed4024deefa2a1",
+        "version" : "0.5.12"
       }
     },
     {
@@ -249,8 +249,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/WKViewportCoordinator.git",
       "state" : {
-        "revision" : "57074903db08e46e016042f21712ac9a1f119aa1",
-        "version" : "0.11.5"
+        "revision" : "df2bfb7adc7be3863b11c9576d81b0b7b32224bc",
+        "version" : "0.11.7"
       }
     },
     {
