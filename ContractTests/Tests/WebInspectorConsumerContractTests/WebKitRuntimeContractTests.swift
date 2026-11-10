@@ -4,7 +4,7 @@ import RuntimeConsumerNative
 import Testing
 import WebKit
 import WebKitRuntime
-import WebKitScreenTimeWorkaround
+import WebKitTestWorkarounds
 
 struct WebKitRuntimeContractTests {
     @Test

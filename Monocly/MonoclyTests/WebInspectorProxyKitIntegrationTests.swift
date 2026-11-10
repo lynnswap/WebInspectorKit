@@ -2,7 +2,7 @@ import ObservationBridge
 import UIKit
 import WebKit
 @testable import WebInspectorDataKit
-import WebKitScreenTimeWorkaround
+import WebKitTestWorkarounds
 @testable import Monocly
 @testable import WebInspectorProxyKit
 import XCTest
