@@ -2,7 +2,7 @@
 import UIKit
 import WebInspectorKit
 #if DEBUG
-import WebKitScreenTimeWorkaround
+import WebKitTestWorkarounds
 #endif
 
 struct BrowserInspectorSceneDestructionRequester {
