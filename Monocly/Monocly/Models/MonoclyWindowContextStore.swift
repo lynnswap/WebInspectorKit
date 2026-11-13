@@ -46,12 +46,6 @@ final class MonoclyWindowContextStore {
             activeSceneIdentifiers.removeAll()
         }
 
-        func setOnlyActive(_ scene: UIWindowScene) {
-            let sceneIdentifier = scene.session.persistentIdentifier
-            scenesByIdentifier = [sceneIdentifier: WeakSceneBox(scene: scene)]
-            activeSceneIdentifiers = [sceneIdentifier]
-        }
-
         func resolvedCurrentScene() -> UIWindowScene? {
             pruneDisconnectedScenes()
 
@@ -115,17 +109,6 @@ extension MonoclyWindowContextStore {
         currentWindowScene = nil
         currentWindow = nil
         sceneRegistry.removeAll()
-    }
-
-    func setCurrentSceneForTesting(_ scene: UIWindowScene?, window: UIWindow? = nil) {
-        resetForTesting()
-        guard let scene else {
-            return
-        }
-
-        sceneRegistry.setOnlyActive(scene)
-        currentWindowScene = scene
-        currentWindow = window ?? Self.preferredWindow(in: scene)
     }
 
     private func setCurrentScene(_ scene: UIWindowScene) {

@@ -1545,6 +1545,19 @@ func transportBackedProxyWaitUntilClosedSuspendsUntilClose() async throws {
 }
 
 @Test
+func proxyWithoutBackendFailsCommandsAndEndsEventStreams() async throws {
+    let proxy = WebInspectorProxy()
+    let target = await proxy.installTargetForTesting()
+
+    await #expect(throws: WebInspectorProxyError.self) {
+        try await target.dom.getDocument()
+    }
+    for await event in target.dom.events {
+        Issue.record("Unexpected event from a proxy without a backend: \(event)")
+    }
+}
+
+@Test
 func proxyWaitUntilClosedReturnsImmediatelyAfterClose() async throws {
     let proxy = WebInspectorProxy()
 

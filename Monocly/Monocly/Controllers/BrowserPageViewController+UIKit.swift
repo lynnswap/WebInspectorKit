@@ -727,10 +727,6 @@ extension BrowserPageViewController {
         inspectorPresentationObservation
     }
 
-    var selectedTabObservationIsActiveForTesting: Bool {
-        selectedTabObservation != nil
-    }
-
     var hostedWebViewForTesting: WKWebView? {
         hostedWebView
     }

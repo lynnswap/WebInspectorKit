@@ -197,3 +197,50 @@ package protocol WebInspectorProxyBackend: Sendable {
         domain: WebInspectorProxyEventDomain
     ) async
 }
+
+/// The backend of a proxy that is not connected to a web view, which
+/// previews and tests create. Every command fails, and every event stream
+/// ends without an event.
+package struct UnavailableProxyBackend: WebInspectorProxyBackend {
+    package init() {}
+
+    package func dispatchCommand<Payload: WebInspectorProxyCommandPayload>(
+        _ command: WebInspectorProxyCommand<Payload>
+    ) async throws -> Payload.Result {
+        throw unimplementedCommand(domain: Payload.domain.rawValue, method: Payload.method)
+    }
+
+    package func dispatchCommandWithReplyBoundary<Payload: WebInspectorProxyCommandPayload>(
+        _ command: WebInspectorProxyCommand<Payload>
+    ) async throws -> WebInspectorProxyCommandReply<Payload.Result> {
+        throw unimplementedCommand(domain: Payload.domain.rawValue, method: Payload.method)
+    }
+
+    package func finishEventSubscriptions(throwing error: WebInspectorProxyError?) async {}
+
+    package func orderedEvents(
+        route: RoutingTargetID,
+        targetID: WebInspectorTarget.ID,
+        terminalFailureHandler: @escaping WebInspectorProxyTerminalFailureHandler
+    ) async -> WebInspectorProxyOrderedEventFeed {
+        WebInspectorProxyOrderedEventFeed(
+            initialSequence: 0,
+            events: AsyncThrowingStream { $0.finish() }
+        )
+    }
+
+    package nonisolated func events(
+        route: RoutingTargetID,
+        targetID: WebInspectorTarget.ID,
+        domain: WebInspectorProxyEventDomain,
+        terminalFailureHandler: @escaping WebInspectorProxyTerminalFailureHandler
+    ) -> AsyncStream<WebInspectorProxyEvent> {
+        finishedStream()
+    }
+
+    package func waitForEventSubscription(
+        route: RoutingTargetID,
+        targetID: WebInspectorTarget.ID,
+        domain: WebInspectorProxyEventDomain
+    ) async {}
+}

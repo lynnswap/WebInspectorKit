@@ -214,38 +214,7 @@ func targetCommandUsesNestedReplyKey() async throws {
 }
 
 @Test
-func domEnableIsTransportLocalWhileCSSEnableRoutesToTargetBackend() async throws {
-    let backend = FakeTransportBackend()
-    let session = TransportSession(backend: backend, responseTimeout: testResponseTimeout)
-    await session.receiveRootMessage(#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"page-main","type":"page","frameId":"main-frame","isProvisional":false}}}"#)
-
-    let domResult = try await session.send(
-        ProtocolCommand(domain: .dom, method: "DOM.enable", routing: .target(.init("page-main")))
-    )
-    #expect(await backend.sentTargetMessages().isEmpty)
-
-    let cssTask = Task {
-        try await session.send(
-            ProtocolCommand(domain: .css, method: "CSS.enable", routing: .octopus(pageTarget: .init("page-main")))
-        )
-    }
-    let cssSent = try await waitForTargetMessage(backend)
-    await receiveTargetDispatch(
-        session,
-        targetID: .init("page-main"),
-        message: #"{"id":\#(try messageID(cssSent.message)),"result":{}}"#
-    )
-    let cssResult = try await cssTask.value
-
-    #expect(domResult.targetID == ProtocolTarget.ID("page-main"))
-    #expect(cssResult.targetID == ProtocolTarget.ID("page-main"))
-    #expect(String(data: domResult.resultData, encoding: .utf8) == "{}")
-    #expect(String(data: cssResult.resultData, encoding: .utf8) == "{}")
-    #expect(cssSent.targetIdentifier == ProtocolTarget.ID("page-main"))
-}
-
-@Test
-func unsupportedTargetDomainFailsBeforeTransportLocalHandlingOrWireSend() async {
+func unsupportedTargetDomainFailsBeforeWireSend() async {
     let backend = FakeTransportBackend()
     let session = TransportSession(
         backend: backend,
@@ -262,7 +231,7 @@ func unsupportedTargetDomainFailsBeforeTransportLocalHandlingOrWireSend() async 
     )) {
         try await session.send(ProtocolCommand(
             domain: .dom,
-            method: "DOM.enable",
+            method: "DOM.getDocument",
             routing: .target(ProtocolTarget.ID("frame-target"))
         ))
     }

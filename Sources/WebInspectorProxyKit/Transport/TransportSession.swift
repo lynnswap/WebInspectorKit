@@ -149,16 +149,10 @@ package actor TransportSession {
                 return try await sendRoot(command, semanticTargetID: routingTargetID)
             }
             try requireSupport(for: command, targetID: routingTargetID)
-            if let result = transportLocalResult(for: command, targetID: routingTargetID) {
-                return result
-            }
             return try await sendTarget(command, targetID: routingTargetID)
         case let .octopus(pageTarget):
             let resolvedTarget = try pageTarget ?? currentMainPageTarget()
             try requireSupport(for: command, targetID: resolvedTarget)
-            if let result = transportLocalResult(for: command, targetID: resolvedTarget) {
-                return result
-            }
             return try await sendTarget(command, targetID: resolvedTarget)
         }
     }
@@ -466,24 +460,6 @@ package actor TransportSession {
             timeout: .target(key),
             method: command.method,
             targetID: targetID
-        )
-    }
-
-    private func transportLocalResult(
-        for command: ProtocolCommand,
-        targetID: ProtocolTarget.ID
-    ) -> ProtocolCommand.Result? {
-        guard command.method == "DOM.enable" else {
-            return nil
-        }
-        let eventSequence = eventSequences.current
-        return ProtocolCommand.Result(
-            domain: command.domain,
-            method: command.method,
-            targetID: targetID,
-            receivedSequence: eventSequence.sequence,
-            receivedDomainSequences: eventSequence.receivedDomainSequences,
-            resultData: Data("{}".utf8)
         )
     }
 

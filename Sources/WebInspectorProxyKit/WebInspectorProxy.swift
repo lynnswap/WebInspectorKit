@@ -55,7 +55,7 @@ public actor WebInspectorProxy {
     }
 
     private let configuration: Configuration
-    private let backend: (any WebInspectorProxyBackend)?
+    private let backend: any WebInspectorProxyBackend
     private let transport: TransportSession?
     private let closeConnection: (@Sendable (TransportSession.Error) async -> Void)?
     private var pageTarget: WebInspectorTarget?
@@ -164,7 +164,7 @@ public actor WebInspectorProxy {
 
     package init(
         configuration: Configuration = .init(),
-        backend: (any WebInspectorProxyBackend)? = nil,
+        backend: any WebInspectorProxyBackend = UnavailableProxyBackend(),
         closeConnection: (@Sendable (TransportSession.Error) async -> Void)? = nil
     ) {
         self.configuration = configuration
@@ -364,9 +364,6 @@ public actor WebInspectorProxy {
         payload: Payload
     ) async throws -> Payload.Result {
         try ensureOpenForOperation()
-        guard let backend else {
-            throw unimplementedCommand(domain: Payload.domain.rawValue, method: Payload.method)
-        }
         do {
             return try await backend.dispatchCommand(command(targetID: targetID, route: route, payload: payload))
         } catch {
@@ -380,9 +377,6 @@ public actor WebInspectorProxy {
         payload: Payload
     ) async throws -> WebInspectorProxyCommandReply<Payload.Result> {
         try ensureOpenForOperation()
-        guard let backend else {
-            throw unimplementedCommand(domain: Payload.domain.rawValue, method: Payload.method)
-        }
         do {
             return try await backend.dispatchCommandWithReplyBoundary(
                 command(targetID: targetID, route: route, payload: payload)
@@ -413,9 +407,6 @@ public actor WebInspectorProxy {
         targetID: WebInspectorTarget.ID,
         route: RoutingTargetID
     ) async -> WebInspectorProxyOrderedEventFeed {
-        guard let backend else {
-            preconditionFailure("WebInspectorProxy has no backend for ordered events.")
-        }
         let backendFeed = await backend.orderedEvents(
             route: route,
             targetID: targetID,
@@ -455,9 +446,7 @@ public actor WebInspectorProxy {
         targetID: WebInspectorTarget.ID,
         route: RoutingTargetID
     ) -> AsyncStream<DOM.Event> {
-        guard let backend else {
-            preconditionFailure("WebInspectorProxy has no backend for DOM events.")
-        }
+        let backend = backend
         return AsyncStream<DOM.Event> { continuation in
             let task = Task {
                 await withTaskGroup(of: Void.self) { group in
@@ -565,9 +554,7 @@ public actor WebInspectorProxy {
         targetID: WebInspectorTarget.ID,
         route: RoutingTargetID
     ) -> AsyncStream<WebInspectorTargetLifecycleEvent> {
-        guard let backend else {
-            preconditionFailure("WebInspectorProxy has no backend for lifecycle events.")
-        }
+        let backend = backend
         return AsyncStream<WebInspectorTargetLifecycleEvent> { continuation in
             let task = Task {
                 await withTaskGroup(of: Void.self) { group in
@@ -602,9 +589,6 @@ public actor WebInspectorProxy {
         route: RoutingTargetID,
         domain: WebInspectorProxyEventDomain
     ) async {
-        guard let backend else {
-            preconditionFailure("WebInspectorProxy has no backend for \(domain.rawValue) events.")
-        }
         await backend.waitForEventSubscription(route: route, targetID: targetID, domain: domain)
     }
 
@@ -614,9 +598,7 @@ public actor WebInspectorProxy {
         domain: WebInspectorProxyEventDomain,
         extract: @escaping @Sendable (WebInspectorProxyEvent) -> Element?
     ) -> AsyncStream<Element> {
-        guard let backend else {
-            preconditionFailure("WebInspectorProxy has no backend for \(domain.rawValue) events.")
-        }
+        let backend = backend
         return AsyncStream<Element> { continuation in
             let task = Task {
                 for await event in backend.events(
@@ -791,7 +773,7 @@ public actor WebInspectorProxy {
     }
 
     private func finishTermination(_ reason: TerminationReason) async {
-        await backend?.finishEventSubscriptions(throwing: reason.failureError)
+        await backend.finishEventSubscriptions(throwing: reason.failureError)
         await closeConnection?(reason.transportError)
         closeState = .closed(reason)
         resumeCloseWaiters(with: reason)
