@@ -134,6 +134,10 @@ final class WebInspectorSession {
         self.inspector = inspector
         self.retainedInspector = retainsInspector ? inspector : nil
         self.makePageUserInterfaceStyleObserver = makePageUserInterfaceStyleObserver
+        inspector.attachmentWillChange = { [weak self] in
+            // The style belongs to the page that is being left.
+            self?.stopPageUserInterfaceStyleObservation()
+        }
         inspector.contextDidChange = { [weak self] in
             self?.inspectorContextDidChange()
         }

@@ -31,6 +31,8 @@ final class WebInspectorAttachment {
     private(set) weak var inspectedWebView: WKWebView?
     /// The number of attach and detach calls made so far.
     @ObservationIgnored private(set) var requestCount: UInt64 = 0
+    /// Called when an attach or detach call is made, before it is applied.
+    @ObservationIgnored var attachmentWillChange: (@MainActor () -> Void)?
     /// Called after the context was replaced.
     @ObservationIgnored var contextDidChange: (@MainActor () -> Void)?
     /// What the latest call asked for, until that call has been applied.
@@ -171,6 +173,7 @@ final class WebInspectorAttachment {
         }
         // An attachment that is still starting has been superseded.
         runningAttach?.cancel()
+        attachmentWillChange?()
         if worker == nil {
             worker = Task {
                 await self.applyRequests()

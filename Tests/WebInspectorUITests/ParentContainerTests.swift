@@ -106,6 +106,27 @@ struct ParentContainerTests {
     }
 
     @Test
+    func sessionClearsPageUserInterfaceStyleAsSoonAsTheAttachmentIsReplaced() async throws {
+        let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
+        let session = makeSessionWithNoOpAttachment()
+        let inspector = try #require(session.inspector)
+
+        try await attach(
+            session,
+            makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
+        )
+        let observer = try #require(observerRecorder.observers.first)
+        #expect(session.pageUserInterfaceStyle == .dark)
+
+        // The style of the page that is being left is dropped when the call
+        // is made, not when the next attachment is ready.
+        inspector.detach()
+        #expect(observer.isInvalidated)
+        #expect(session.pageUserInterfaceStyle == .unspecified)
+        await inspector.waitUntilIdle()
+    }
+
+    @Test
     func sessionClearsPageUserInterfaceStyleAndStopsObservingWhenAttachFails() async throws {
         let observerRecorder = PageUserInterfaceStyleObserverRecorder(styleOnStart: .dark)
         let session = makeSessionWithNoOpAttachment()

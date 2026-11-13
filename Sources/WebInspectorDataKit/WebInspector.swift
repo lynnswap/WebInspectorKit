@@ -136,6 +136,12 @@ public final class WebInspector {
         attachment.requestCount
     }
 
+    /// Called when an attach or detach call is made, before it is applied.
+    package var attachmentWillChange: (@MainActor () -> Void)? {
+        get { attachment.attachmentWillChange }
+        set { attachment.attachmentWillChange = newValue }
+    }
+
     /// Called after ``context`` was replaced, in the same step.
     package var contextDidChange: (@MainActor () -> Void)? {
         get { attachment.contextDidChange }
