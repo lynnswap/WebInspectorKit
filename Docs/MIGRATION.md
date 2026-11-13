@@ -195,3 +195,7 @@ Selection, child requests, and response body fetches ignore them.
 `inspector.attachForTesting(to: proxy)`, which attaches through the proxy of a
 `WebInspectorProxyTestRuntime` and waits for startup. `inspector.detachForTesting()`
 waits until the attachment has ended.
+
+`WebInspectorDataKitTestingError.statusUpdatesEndedBeforeStartupCompleted` is
+removed. Startup is observed on the inspector's state, which has no stream that
+can end.
