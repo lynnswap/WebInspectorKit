@@ -357,7 +357,7 @@ public final class NetworkModelController {
     /// The result is published on ``NetworkRequest/responseBody``. Concurrent
     /// callers join one protocol command. Cancelling a caller ends only that
     /// caller's wait and does not cancel the shared fetch. A request that is
-    /// no longer registered here fails its body with an invalidation error.
+    /// not registered in this context is ignored.
     public func fetchResponseBody(for request: NetworkRequest) async {
         await context.fetchResponseBody(for: request)
     }

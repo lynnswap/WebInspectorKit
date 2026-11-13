@@ -1228,6 +1228,11 @@ public final class WebInspectorContext {
     }
 
     func fetchResponseBody(for request: NetworkRequest) async {
+        // The fetch changes the body's phase, so a request that another
+        // context owns must not get as far as starting one.
+        guard networkRequestStore.isCurrent(request) else {
+            return
+        }
         await request.fetchResponseBody { [weak self] request in
             guard let self else {
                 return .failure(NetworkBody.invalidatedResponseFetchError)

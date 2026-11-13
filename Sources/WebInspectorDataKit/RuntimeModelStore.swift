@@ -367,6 +367,13 @@ final class RuntimeModelStore {
         removeObject(id: object.id, object: object)
     }
 
+    isolated deinit {
+        // An object that outlives the store has no command route left.
+        for object in objectsByID.values {
+            object.invalidateRemoteHandle()
+        }
+    }
+
     private func removeAllObjects() {
         let objects = objectsByID
         for (id, object) in objects {
