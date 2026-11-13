@@ -4,6 +4,7 @@ import Testing
 @testable import WebInspectorDataKit
 import WebInspectorProxyKit
 import WebInspectorProxyKitTesting
+import WebKit
 
 @MainActor
 private func applyFinishedRequest(_ id: String, to context: WebInspectorContext) {
@@ -236,4 +237,42 @@ func domTreeControllerFollowsTheInspectorAcrossAttachments() async throws {
     second.seedDOMDocument(DOM.Node(id: DOM.Node.ID("second-document"), nodeType: 9, nodeName: "#document"))
     #expect(tree.snapshot.rootNodeID == second.rootNode?.id)
     #expect(tree.snapshot.rootNodeID != nil)
+}
+
+@MainActor
+@Test
+func attachingToTheInspectedWebViewAgainKeepsTheAttachment() async throws {
+    let inspector = WebInspector()
+    let webView = WKWebView(frame: .zero)
+    var attachmentCount = 0
+    let makeContainer: @MainActor () async throws -> WebInspectorContainer = {
+        attachmentCount += 1
+        return WebInspectorContainer(proxy: try await WebInspectorProxyTestRuntime.start().proxy)
+    }
+    #expect(inspector.inspectedWebView == nil)
+
+    inspector.attach(webView: webView, makeContainer: makeContainer)
+    #expect(inspector.inspectedWebView === webView)
+    inspector.attach(webView: webView, makeContainer: makeContainer)
+    await inspector.waitUntilIdle()
+    let context = inspector.context
+    inspector.attach(webView: webView, makeContainer: makeContainer)
+    await inspector.waitUntilIdle()
+
+    #expect(attachmentCount == 1)
+    #expect(inspector.context === context)
+
+    // A failed attachment is tried again.
+    await inspector.detachAndWait()
+    #expect(inspector.inspectedWebView == nil)
+    let failure = WebInspectorProxyError.disconnected("The web view has no inspectable page.")
+    inspector.attach(webView: webView, makeContainer: { throw failure })
+    await inspector.waitUntilIdle()
+    #expect(inspector.state == .failed(failure))
+    #expect(inspector.inspectedWebView === webView)
+    inspector.attach(webView: webView, makeContainer: makeContainer)
+    await inspector.waitUntilIdle()
+
+    #expect(attachmentCount == 2)
+    await inspector.detachAndWait()
 }

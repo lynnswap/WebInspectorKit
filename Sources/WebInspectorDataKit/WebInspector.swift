@@ -96,11 +96,24 @@ public final class WebInspector {
         attachment.state
     }
 
+    /// The web view that the inspector was last asked to attach to, or `nil`
+    /// after ``detach()``.
+    ///
+    /// The inspector does not keep the web view alive.
+    public var inspectedWebView: WKWebView? {
+        attachment.inspectedWebView
+    }
+
     /// Starts inspecting a web view, replacing the current attachment.
     ///
     /// The call returns immediately. ``state`` is ``State/attaching`` until
     /// the page's initial state is loaded, and ``State/failed(_:)`` if the
     /// connection cannot be made.
+    ///
+    /// The call does nothing while the inspector is attaching or attached to
+    /// the same web view, so it is safe to make whenever the web view to
+    /// inspect may have changed. To start over on the same web view, call
+    /// ``detach()`` first.
     public func attach(
         to webView: WKWebView,
         configuration: WebInspectorProxy.Configuration = .init()
@@ -124,11 +137,6 @@ public final class WebInspector {
     /// attachment starts or ends.
     package var context: WebInspectorContext {
         attachment.context
-    }
-
-    /// The web view of the current attachment, when it was made to one.
-    package var inspectedWebView: WKWebView? {
-        attachment.inspectedWebView
     }
 
     /// The number of attach and detach calls made so far.
@@ -158,11 +166,13 @@ public final class WebInspector {
         attachment.replaceContext(context)
     }
 
-    /// Starts an attachment whose connection `makeContainer` provides.
+    /// Starts an attachment whose connection `makeContainer` provides, as
+    /// ``attach(to:configuration:)`` does for `webView`.
     package func attach(
+        webView: WKWebView? = nil,
         makeContainer: @escaping @MainActor () async throws -> WebInspectorContainer
     ) {
-        attachment.attach(makeContainer: makeContainer)
+        attachment.attach(webView: webView, makeContainer: makeContainer)
     }
 
     /// Attaches with `makeContainer` and waits until the call is applied.
