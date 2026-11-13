@@ -131,7 +131,7 @@ func cancellingAnAttachCallEndsItsAttachment() async throws {
 
 @MainActor
 @Test
-func detachReportsDetachedBeforeTheAttachmentHasEnded() async throws {
+func detachReportsDetachingUntilTheAttachmentHasEnded() async throws {
     let context = WebInspectorContext.preview()
     let inspector = WebInspector(context: context)
     applyFinishedRequest("before-detach", to: context)
@@ -139,7 +139,7 @@ func detachReportsDetachedBeforeTheAttachmentHasEnded() async throws {
     #expect(inspector.network.requests.count == 1)
 
     inspector.detach()
-    #expect(inspector.state == .detached)
+    #expect(inspector.state == .detaching)
 
     await inspector.waitUntilIdle()
     #expect(inspector.state == .detached)

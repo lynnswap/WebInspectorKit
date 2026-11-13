@@ -94,6 +94,11 @@ final class BrowserInspectorAttachmentLifecycle {
             }
             inspector.attach(to: webView)
             await inspector.waitUntilSettled()
+            if Task.isCancelled {
+                // An abandoned lifecycle does not leave its attachment behind.
+                inspector.detach()
+                throw CancellationError()
+            }
             if case let .failed(error) = inspector.state {
                 throw error
             }
@@ -358,18 +363,38 @@ final class BrowserInspectorAttachmentLifecycle {
 }
 
 private extension WebInspector {
-    /// Suspends until the inspector has applied its latest call and is no
-    /// longer attaching.
+    /// Suspends until the inspector has finished attaching or detaching, or
+    /// until the calling task is cancelled.
     func waitUntilSettled() async {
-        while state == .attaching {
-            await withCheckedContinuation { continuation in
-                withObservationTracking {
-                    _ = state
-                } onChange: {
-                    continuation.resume()
+        while state == .attaching || state == .detaching, Task.isCancelled == false {
+            let waiter = StateChangeWaiter()
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    waiter.continuation = continuation
+                    withObservationTracking {
+                        _ = state
+                    } onChange: {
+                        Task { @MainActor in
+                            waiter.resume()
+                        }
+                    }
+                }
+            } onCancel: {
+                Task { @MainActor in
+                    waiter.resume()
                 }
             }
         }
+    }
+}
+
+@MainActor
+private final class StateChangeWaiter {
+    var continuation: CheckedContinuation<Void, Never>?
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
     }
 }
 #endif

@@ -177,17 +177,26 @@ public final class WebInspectorViewController: UIViewController {
         }
     }
 
-    /// Creates a view controller that presents an inspector with a set of
-    /// tabs.
+    /// Creates a view controller that presents an inspector.
     ///
-    /// The tabs and the selected tab belong to the inspector's presentation,
-    /// so view controllers that present the same inspector share them.
+    /// The tabs and the selected tab belong to the inspector's presentation:
+    /// view controllers that present the same inspector share them, and they
+    /// stay with the inspector between presentations.
+    ///
+    /// - Parameters:
+    ///   - inspector: The inspector to present. The default is a new,
+    ///     detached inspector.
+    ///   - tabs: The tabs to show. Pass `nil` to keep the tabs that the
+    ///     inspector was last presented with, which are the DOM and Network
+    ///     tabs for an inspector that has not been presented.
     public convenience init(
         inspector: WebInspector = WebInspector(),
-        tabs: [WebInspectorTab] = [.dom, .network]
+        tabs: [WebInspectorTab]? = nil
     ) {
         let session = WebInspectorSession.session(for: inspector)
-        session.interface.setTabs(tabs)
+        if let tabs {
+            session.interface.setTabs(tabs)
+        }
         self.init(inspector: inspector, session: session)
     }
 

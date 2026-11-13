@@ -291,12 +291,18 @@ struct ParentContainerTests {
     @Test
     func inspectorKeepsItsPresentationStateAcrossViewControllers() {
         let inspector = WebInspector()
-        var first: WebInspectorViewController? = WebInspectorViewController(inspector: inspector)
+        let customTab = makeNoOpTab()
+        var first: WebInspectorViewController? = WebInspectorViewController(
+            inspector: inspector,
+            tabs: [.dom, .network, customTab]
+        )
         first?.session.interface.selectTab(.network)
         first = nil
 
+        // A view controller made without tabs keeps the inspector's.
         let second = WebInspectorViewController(inspector: inspector)
         #expect(second.session === WebInspectorSession.session(for: inspector))
+        #expect(second.session.interface.tabs == [.dom, .network, customTab])
         #expect(second.session.interface.selectedTab == .network)
     }
 

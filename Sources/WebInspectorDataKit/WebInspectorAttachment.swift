@@ -72,7 +72,16 @@ final class WebInspectorAttachment {
         if let attachFailure {
             return .failed(attachFailure)
         }
-        return context.state
+        switch context.state {
+        case .attaching:
+            return .attaching
+        case .attached:
+            return .attached
+        case .detached:
+            return .detached
+        case let .failed(error):
+            return .failed(error)
+        }
     }
 
     var requestChanges: AsyncStream<WebInspectorCollectionChange<NetworkRequest>> {
@@ -158,7 +167,7 @@ final class WebInspectorAttachment {
         case .attach:
             requestedState = .attaching
         case .detach:
-            requestedState = .detached
+            requestedState = .detaching
         }
         // An attachment that is still starting has been superseded.
         runningAttach?.cancel()

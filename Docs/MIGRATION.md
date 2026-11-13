@@ -59,7 +59,8 @@ inspector.detach()
 ```
 
 - `attach(to:)` and `detach()` return immediately. Read `inspector.state` for
-  the progress and for an attachment failure.
+  the progress and for an attachment failure. After `detach()` the state is
+  `detaching` until the connection is closed, and then `detached`.
 - Calling `attach(to:)` again replaces the current attachment. Remove code that
   waits for a detach before attaching to another web view.
 - `inspector.dom`, `css`, `network`, `console`, `runtime`, and `page` replace

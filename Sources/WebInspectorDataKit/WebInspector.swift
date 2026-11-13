@@ -39,6 +39,10 @@ public final class WebInspector {
         /// The inspector is attached and observing the page.
         case attached
 
+        /// The inspector is ending its attachment and closing the
+        /// connection.
+        case detaching
+
         /// The inspector is not attached.
         case detached
 
@@ -108,8 +112,10 @@ public final class WebInspector {
 
     /// Stops inspecting.
     ///
-    /// The call returns immediately. The models of the ended attachment keep
-    /// their last state, and the domain collections become empty.
+    /// The call returns immediately. ``state`` is ``State/detaching`` until
+    /// the connection is closed, and then ``State/detached``. The models of
+    /// the ended attachment keep their last state, and the domain collections
+    /// become empty.
     public func detach() {
         attachment.detach()
     }
