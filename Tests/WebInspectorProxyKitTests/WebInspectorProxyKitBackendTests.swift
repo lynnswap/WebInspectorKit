@@ -560,13 +560,6 @@ func scopedRuntimeIDsDispatchToOwningTarget() async throws {
     #expect(release.payload.cast(as: Runtime.ReleaseObjectPayload.self)?.id == objectID)
 }
 
-private struct TimedOut: Error {}
-
-private enum TaskValueRace<Value: Sendable>: Sendable {
-    case value(Value)
-    case timedOut
-}
-
 @Test
 func taskValueTimeoutCancelsTheUnderlyingTask() async {
     let pair = AsyncStream<Int>.makeStream()
@@ -580,30 +573,4 @@ func taskValueTimeoutCancelsTheUnderlyingTask() async {
         _ = try await value(of: task, timeout: .milliseconds(10))
     }
     #expect(task.isCancelled)
-}
-
-private func value<T: Sendable>(
-    of task: Task<T, Never>,
-    timeout: Duration = .seconds(1)
-) async throws -> T {
-    try await withThrowingTaskGroup(of: TaskValueRace<T>.self) { group in
-        defer { group.cancelAll() }
-        group.addTask {
-            .value(await task.value)
-        }
-        group.addTask {
-            try await Task.sleep(for: timeout)
-            return .timedOut
-        }
-        guard let outcome = try await group.next() else {
-            throw TimedOut()
-        }
-        switch outcome {
-        case let .value(value):
-            return value
-        case .timedOut:
-            task.cancel()
-            throw TimedOut()
-        }
-    }
 }
