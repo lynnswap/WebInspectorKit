@@ -150,7 +150,7 @@ to GitHub Pages.
 
 | Document | Purpose |
 | --- | --- |
-| [Migration Guide](Docs/MIGRATION.md) | Version-by-version source migration notes for app code. |
+| [Migration Guide](Docs/MIGRATION.md) | Source changes since the last release, for app code. |
 | [WebInspectorKit UIKit implementation](Sources/WebInspectorKit/README.md) | UIKit inspector implementation notes and UI/DataKit ownership boundaries. |
 | [WebKit Version Mapping](Docs/WebKitVersionMapping.md) | Local notes for mapping iOS WebKit framework versions to public WebKit source refs. |
 | [Inspector Integration Fixture](Tools/InspectorFixture/README.md) | Manual verification with Monocly and fixture regression tests. |
@@ -171,7 +171,7 @@ Tests/
   WebInspectorNativeBridgeTests/   Native bridge and runtime tests.
   WebInspectorNativeSymbolFixtures/ Native symbol fixtures.
 Docs/
-  MIGRATION.md                 Version-by-version migration notes.
+  MIGRATION.md                 Source changes since the last release.
   WebKitVersionMapping.md      WebKit runtime/source mapping notes.
 ```
 
