@@ -99,7 +99,8 @@ public final class WebInspector {
     /// The web view that the inspector was last asked to attach to, or `nil`
     /// after ``detach()``.
     ///
-    /// The inspector does not keep the web view alive.
+    /// The connection of an attachment keeps its web view alive until the
+    /// attachment ends.
     public var inspectedWebView: WKWebView? {
         attachment.inspectedWebView
     }
