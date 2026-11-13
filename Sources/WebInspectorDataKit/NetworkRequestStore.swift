@@ -54,7 +54,8 @@ package final class NetworkRequestStore {
         case newAttachment
     }
 
-    private var orderedRegistrations: [Registration]
+    /// The registered requests, in arrival order.
+    private(set) var requests: [NetworkRequest]
     @ObservationIgnored private var registrationsByID: [NetworkRequest.ID: Registration]
     @ObservationIgnored private var requestAliases: [NetworkRequest.ID: NetworkRequest.ID] = [:]
     @ObservationIgnored private var clearedResourceTreeKeys: Set<ResourceTreeKey> = []
@@ -65,7 +66,7 @@ package final class NetworkRequestStore {
     @ObservationIgnored private let changeRelay = WebInspectorAsyncStreamRelay<WebInspectorCollectionChange<NetworkRequest>>()
 
     init() {
-        orderedRegistrations = []
+        requests = []
         registrationsByID = [:]
         tombstonedIDs = []
         generation = 0
@@ -74,14 +75,6 @@ package final class NetworkRequestStore {
     /// The changes to `requests`, starting from the moment of the call.
     var changes: AsyncStream<WebInspectorCollectionChange<NetworkRequest>> {
         changeRelay.makeStream()
-    }
-
-    package var hasRequests: Bool {
-        orderedRegistrations.isEmpty == false
-    }
-
-    var requestCount: Int {
-        orderedRegistrations.count
     }
 
     /// Returns the registration for `id`, creating the request when the
@@ -135,10 +128,6 @@ package final class NetworkRequestStore {
         }
     }
 
-    var requests: [NetworkRequest] {
-        orderedRegistrations.map(\.request)
-    }
-
     func registration(for id: NetworkRequest.ID) -> Registration? {
         registrationsByID[requestAliases[id] ?? id]
     }
@@ -181,11 +170,11 @@ package final class NetworkRequestStore {
         )
         let registration = Registration(
             request: request,
-            orderIndex: orderedRegistrations.count,
+            orderIndex: requests.count,
             generation: generation
         )
         registrationsByID[request.id] = registration
-        orderedRegistrations.append(registration)
+        requests.append(request)
         if request.resourceContentFrameID != nil, let origin = request.origin {
             let key = ResourceTreeKey(url: request.url, origin: origin)
             clearedResourceTreeKeys.remove(key)
@@ -196,11 +185,11 @@ package final class NetworkRequestStore {
 
     func isCurrent(_ registration: Registration) -> Bool {
         guard registration.belongs(to: generation),
-            orderedRegistrations.indices.contains(registration.orderIndex)
+            requests.indices.contains(registration.orderIndex)
         else {
             return false
         }
-        return orderedRegistrations[registration.orderIndex].request === registration.request
+        return requests[registration.orderIndex] === registration.request
     }
 
     func isCurrent(_ request: NetworkRequest) -> Bool {
@@ -217,10 +206,9 @@ package final class NetworkRequestStore {
     func reset(for reason: ResetReason) {
         switch reason {
         case .userClear:
-            tombstonedIDs.formUnion(orderedRegistrations.map { $0.request.id })
+            tombstonedIDs.formUnion(requests.map(\.id))
             tombstonedIDs.formUnion(requestAliases.keys)
-            for registration in orderedRegistrations {
-                let request = registration.request
+            for request in requests {
                 if request.resourceContentLocation != nil, let origin = request.origin {
                     clearedResourceTreeKeys.insert(ResourceTreeKey(url: request.url, origin: origin))
                 }
@@ -229,11 +217,11 @@ package final class NetworkRequestStore {
             tombstonedIDs.removeAll(keepingCapacity: false)
             clearedResourceTreeKeys = []
         }
-        for registration in orderedRegistrations {
-            registration.request.invalidateResponseBodyFetch()
+        for request in requests {
+            request.invalidateResponseBodyFetch()
         }
         generation += 1
-        orderedRegistrations = []
+        requests = []
         registrationsByID = [:]
         requestAliases = [:]
         pendingResourceTreeRequests = [:]

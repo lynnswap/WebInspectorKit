@@ -287,8 +287,9 @@ public final class NetworkModelController {
 
     /// The changes to ``requests``, starting from the moment of the call.
     ///
-    /// An `updated` change reports that a request's own properties changed;
-    /// each ``NetworkRequest`` is also observable on its own.
+    /// An `updated` change reports that a Network event changed a request.
+    /// Fetching a response body changes ``NetworkRequest/responseBody``
+    /// without publishing a change; observe the request or its body for that.
     public var requestChanges: AsyncStream<WebInspectorCollectionChange<NetworkRequest>> {
         context.networkRequestChanges
     }
