@@ -95,10 +95,6 @@ extension DOMElementStylePropertyCollectionCell {
     package var propertyViewForTesting: DOMElementStylePropertyView {
         propertyView
     }
-
-    package var usesModifiedBackgroundForTesting: Bool {
-        backgroundConfiguration?.backgroundColor == Self.modifiedBackgroundColor
-    }
 }
 #endif
 #endif

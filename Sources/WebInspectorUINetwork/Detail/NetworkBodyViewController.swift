@@ -1212,14 +1212,6 @@ extension NetworkBodyViewController {
         await mediaPreviewCoordinator.waitUntilPreparationFinishedForTesting()
     }
 
-    var hasActiveTextPreviewPreparationForTesting: Bool {
-        textPreviewCoordinator.hasActivePreparationForTesting
-    }
-
-    var activeTextPreviewPreparationBodyIDForTesting: ObjectIdentifier? {
-        textPreviewCoordinator.activePreparationBodyIDForTesting
-    }
-
     func waitUntilTextPreviewPreparationFinishedForTesting() async {
         await textPreviewCoordinator.waitUntilPreparationFinishedForTesting()
     }

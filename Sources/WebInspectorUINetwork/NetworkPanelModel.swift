@@ -402,7 +402,6 @@ package final class NetworkPanelModel {
     @ObservationIgnored private var memberTraversalCountStorageForTesting = 0
     @ObservationIgnored private var requestOrderComparisonCountStorageForTesting = 0
     @ObservationIgnored private var listTransactionPublicationCountStorageForTesting = 0
-    @ObservationIgnored private var lastListInvalidationStorageForTesting: NetworkPanelListInvalidation?
     @ObservationIgnored private var rawTransactionDeliveryWaitersForTesting: [RawTransactionDeliveryWaiter] = []
     @ObservationIgnored private var rawTransactionDeliveryWaiterIDStorageForTesting = 0
 #endif
@@ -1325,11 +1324,7 @@ package final class NetworkPanelModel {
 #if DEBUG
         listTransactionPublicationCountStorageForTesting &+= 1
 #endif
-        let invalidation = NetworkPanelListInvalidation(version: listProjectionVersion)
-#if DEBUG
-        lastListInvalidationStorageForTesting = invalidation
-#endif
-        listInvalidationRelay.yield(invalidation)
+        listInvalidationRelay.yield(NetworkPanelListInvalidation(version: listProjectionVersion))
     }
 
     private func takeSelectionIntentID() -> NetworkPanelSelectionIntent.ID {
@@ -1398,10 +1393,6 @@ extension NetworkPanelModel {
 
     package var listTransactionPublicationCountForTesting: Int {
         listTransactionPublicationCountStorageForTesting
-    }
-
-    package var lastListInvalidationForTesting: NetworkPanelListInvalidation? {
-        lastListInvalidationStorageForTesting
     }
 
     package func waitForRawTransactionDeliveryForTesting(
