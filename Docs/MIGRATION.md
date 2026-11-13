@@ -52,8 +52,10 @@ inspector.detach()
   `NetworkInspector`, `ConsoleModelController` to `ConsoleInspector`,
   `RuntimeModelController` to `RuntimeInspector`, and `PageModelController` to
   `PageInspector`.
-- `context.state` and `context.teardownError` become `inspector.state`, whose
-  `failed` case carries the error.
+- `context.state` becomes `inspector.state`, whose `failed` case carries the
+  error of a failed attachment. `context.teardownError` has no replacement: the
+  inspector closes the connection when an attachment ends and logs a domain
+  that could not be disabled first.
 - In tests, `startAndWaitForStartupForTesting()` becomes
   `inspector.attachForTesting(to: proxy)`.
 

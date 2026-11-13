@@ -102,6 +102,16 @@ public final class WebInspector {
         page = PageInspector(attachment: attachment)
     }
 
+    isolated deinit {
+        // The worker keeps the inspector alive while a call is being applied,
+        // so only an idle attachment is left to end here.
+        if let container {
+            Task {
+                await container.close()
+            }
+        }
+    }
+
     /// The progress of the latest ``attach(to:configuration:)`` or
     /// ``detach()`` call.
     public var state: State {
@@ -165,7 +175,11 @@ public final class WebInspector {
                 self?.abandonRequest(id)
             }
         }
-        guard lastAppliedRequestID == id else {
+        if Task.isCancelled, lastRequestID == id {
+            // The attachment finished before the cancellation reached it.
+            await detachAndWait()
+        }
+        guard lastRequestID == id, lastAppliedRequestID == id else {
             return false
         }
         if let lastAttachError {
@@ -205,8 +219,10 @@ public final class WebInspector {
         // An attachment that is still starting has been superseded.
         runningAttach?.cancel()
         if worker == nil {
-            worker = Task { [weak self] in
-                await self?.applyRequests()
+            // The task keeps the inspector alive until every call is applied,
+            // so a detach followed by a release still closes the connection.
+            worker = Task {
+                await self.applyRequests()
             }
         }
         return lastRequestID
@@ -266,11 +282,19 @@ public final class WebInspector {
     }
 
     private func closeCurrentAttachment() async {
+        let context = attachment.context
         if let container {
             self.container = nil
             await container.close()
         } else {
-            await attachment.context.stop()
+            await context.stop()
+        }
+        // The connection is closed either way, so a domain that could not be
+        // disabled leaves nothing for the caller to recover.
+        if let teardownError = context.teardownError {
+            WebInspectorDataKitLog.error(
+                "Ending the attachment reported an error: \(String(describing: teardownError))"
+            )
         }
     }
 }

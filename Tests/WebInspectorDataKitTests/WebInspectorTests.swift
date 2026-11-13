@@ -58,6 +58,52 @@ func latestAttachReplacesAnAttachmentThatIsStillStarting() async throws {
 
 @MainActor
 @Test
+func releasingAnInspectorEndsItsAttachment() async throws {
+    let attachedRuntime = try await WebInspectorProxyTestRuntime.start()
+    var attached: WebInspector? = WebInspector()
+    #expect(try await #require(attached).attach(makeContainer: {
+        WebInspectorContainer(proxy: attachedRuntime.proxy)
+    }))
+    attached = nil
+    try await attachedRuntime.proxy.waitUntilClosed()
+
+    // A detach that has not been applied yet survives the release as well.
+    let detachingRuntime = try await WebInspectorProxyTestRuntime.start()
+    var detaching: WebInspector? = WebInspector()
+    #expect(try await #require(detaching).attach(makeContainer: {
+        WebInspectorContainer(proxy: detachingRuntime.proxy)
+    }))
+    detaching?.detach()
+    detaching = nil
+    try await detachingRuntime.proxy.waitUntilClosed()
+}
+
+@MainActor
+@Test
+func cancellingAnAttachCallEndsItsAttachment() async throws {
+    let inspector = WebInspector()
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let started = WebInspectorTestGate()
+    let gate = WebInspectorTestGate()
+
+    let attach = Task { @MainActor in
+        try await inspector.attach(makeContainer: {
+            await started.open()
+            await gate.wait()
+            return WebInspectorContainer(proxy: runtime.proxy)
+        })
+    }
+    await started.wait()
+    attach.cancel()
+    await gate.open()
+
+    #expect(try await attach.value == false)
+    #expect(inspector.state == .detached)
+    try await runtime.proxy.waitUntilClosed()
+}
+
+@MainActor
+@Test
 func detachReportsDetachedBeforeTheAttachmentHasEnded() async throws {
     let context = WebInspectorContext.preview()
     let inspector = WebInspector(context: context)
