@@ -29,9 +29,10 @@ controller.inspector.attach(to: webView)
   return immediately. Remove code that waits for a detach before attaching to
   another web view; attaching again replaces the current attachment.
 - To keep the inspection while the UI is off screen, keep the `WebInspector`
-  where you kept the session and pass it to
-  `WebInspectorViewController(inspector:tabs:)`. The tabs and the selected tab
-  stay with the inspector, and `tabs: nil` keeps them.
+  where you kept the session, pass it to
+  `WebInspectorViewController(inspector:tabs:)`, and set
+  `automaticallyDetachesOnDismiss` to `false` as before. The tabs and the
+  selected tab stay with the inspector, and `tabs: nil` keeps them.
 - A custom tab's factory receives the `WebInspector` instead of the session, so
   the tab can read `inspector.dom`, `inspector.network`, and the other domains.
 - `session.pageUserInterfaceStyle` becomes `inspector.pageUserInterfaceStyle`.
