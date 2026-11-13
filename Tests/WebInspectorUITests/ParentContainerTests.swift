@@ -150,7 +150,13 @@ struct ParentContainerTests {
             try await session.attachForTesting(
                 makeContainer: { [self] in
                     await firstAttachStarted.open()
-                    await firstAttachGate.wait()
+                    // The session cancels an attachment that a later call
+                    // supersedes, and waits for it to end.
+                    await withTaskCancellationHandler {
+                        await firstAttachGate.wait()
+                    } onCancel: {
+                        Task { await firstAttachGate.open() }
+                    }
                     return try await makeFakeContainer()
                 },
                 makePageUserInterfaceStyleObserver: observerRecorder.makeObserver
@@ -194,7 +200,13 @@ struct ParentContainerTests {
             try await session.attachForTesting(
                 makeContainer: { [self] in
                     await attachStarted.open()
-                    await attachGate.wait()
+                    // Detaching cancels the attachment that is starting and
+                    // waits for it to end.
+                    await withTaskCancellationHandler {
+                        await attachGate.wait()
+                    } onCancel: {
+                        Task { await attachGate.open() }
+                    }
                     return try await makeFakeContainer()
                 },
                 makePageUserInterfaceStyleObserver: observerRecorder.makeObserver

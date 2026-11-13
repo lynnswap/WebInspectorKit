@@ -64,6 +64,10 @@ package final class NetworkRequestStore {
     /// Advances whenever the collection is reset.
     @ObservationIgnored private(set) var generation: UInt64
     @ObservationIgnored private let changeRelay = WebInspectorAsyncStreamRelay<WebInspectorCollectionChange<NetworkRequest>>()
+    /// A second relay that receives every change, in the same call that
+    /// publishes it. A ``WebInspector`` uses it to keep one change stream
+    /// across attachments.
+    @ObservationIgnored var changeMirror: WebInspectorAsyncStreamRelay<WebInspectorCollectionChange<NetworkRequest>>?
 
     init() {
         requests = []
@@ -93,7 +97,7 @@ package final class NetworkRequestStore {
         let request = create()
         precondition(request.id == id, "A Network request must be registered under its own ID.")
         let registration = register(request)
-        changeRelay.yield(.inserted([request]))
+        publish(.inserted([request]))
         return .inserted(registration)
     }
 
@@ -102,13 +106,13 @@ package final class NetworkRequestStore {
         guard isCurrent(registration) else {
             return
         }
-        changeRelay.yield(.updated([registration.request]))
+        publish(.updated([registration.request]))
     }
 
     func insertResourceTreeRequests(_ newRequests: [NetworkRequest]) {
         guard !newRequests.isEmpty else { return }
         for request in newRequests { _ = register(request) }
-        changeRelay.yield(.inserted(newRequests))
+        publish(.inserted(newRequests))
     }
 
     func invalidateResourceTreeContent(replacedBy request: Network.Request) {
@@ -126,6 +130,11 @@ package final class NetworkRequestStore {
                 registration(for: id)?.request.invalidateResourceTreeContent()
             }
         }
+    }
+
+    private func publish(_ change: WebInspectorCollectionChange<NetworkRequest>) {
+        changeRelay.yield(change)
+        changeMirror?.yield(change)
     }
 
     func registration(for id: NetworkRequest.ID) -> Registration? {
@@ -225,7 +234,7 @@ package final class NetworkRequestStore {
         registrationsByID = [:]
         requestAliases = [:]
         pendingResourceTreeRequests = [:]
-        changeRelay.yield(.removedAll)
+        publish(.removedAll)
     }
 
     private func prepareAdmission(for id: NetworkRequest.ID, admission: Admission) -> Bool {

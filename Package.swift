@@ -103,7 +103,8 @@ let package = Package(
         .target(
             name: "WebInspectorDataKitTesting",
             dependencies: [
-                "WebInspectorDataKit"
+                "WebInspectorDataKit",
+                "WebInspectorProxyKit"
             ],
             swiftSettings: strictSwiftSettings
         ),

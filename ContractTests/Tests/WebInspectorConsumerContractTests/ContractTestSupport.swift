@@ -92,16 +92,11 @@ struct ContractEventStreamEnded: Error {}
 
 @MainActor
 final class ContractDataKitActor {
-    nonisolated let inspectorContainer: WebInspectorContainer
-
     private let runtime: WebInspectorProxyTestRuntime
-    private var context: WebInspectorContext?
+    private let inspector = WebInspector()
 
-    init(runtime: WebInspectorProxyTestRuntime, inspectorContainer: WebInspectorContainer? = nil) {
+    init(runtime: WebInspectorProxyTestRuntime) {
         self.runtime = runtime
-        let container = inspectorContainer ?? WebInspectorContainer(proxy: runtime.proxy)
-        self.inspectorContainer = container
-        context = nil
     }
 
     @discardableResult
@@ -110,7 +105,6 @@ final class ContractDataKitActor {
         requiresDomainEnableReplies: Bool = true,
         pageEnableFailure: WebInspectorProxyError? = nil
     ) async throws -> WebInspectorTarget {
-        let context = modelContext()
         let target = try await runtime.proxy.waitForCurrentPage()
         await ContractTestSupport.enqueueDataKitStartupReplies(
             on: runtime.backend,
@@ -121,7 +115,7 @@ final class ContractDataKitActor {
         if pageEnableFailure != nil {
             await runtime.backend.enqueue((), for: "Inspector", method: "disable")
         }
-        try await context.startAndWaitForStartupForTesting()
+        try await inspector.attachForTesting(to: runtime.proxy)
         return target
     }
 
@@ -292,41 +286,17 @@ final class ContractDataKitActor {
         #expect(evaluation.object.canRequestProperties)
     }
 
-    func consoleMessageChanges() -> AsyncStream<WebInspectorCollectionChange<ConsoleMessage>> {
-        modelContext().console.messageChanges
-    }
-
-    func containsConsoleMessage(text: String) -> Bool {
-        modelContext().console.messages.contains { $0.text == text }
-    }
-
-    private func modelContext() -> WebInspectorContext {
-        if let context {
-            return context
-        }
-        let context = WebInspectorContext(inspectorContainer)
-        self.context = context
-        return context
+    private func modelContext() -> WebInspector {
+        inspector
     }
 
     private func requirePersistentModel<Model: WebInspectorPersistentModel>(_ model: Model) {
         #expect(Set([model]).contains(model))
     }
 
-    func stopContext(enqueueShutdownReplies: Bool = true) async {
-        guard let context else {
-            return
-        }
-        if enqueueShutdownReplies {
-            await ContractTestSupport.enqueueDataKitShutdownReplies(on: runtime.backend)
-        }
-        await context.stop()
-        #expect(context.state == .detached)
-        #expect(context.teardownError == nil)
-    }
-
     func close() async {
-        await stopContext()
-        await inspectorContainer.close()
+        await ContractTestSupport.enqueueDataKitShutdownReplies(on: runtime.backend)
+        await inspector.detachForTesting()
+        #expect(inspector.state == .detached)
     }
 }

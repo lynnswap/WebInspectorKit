@@ -11,8 +11,8 @@ package for symbol-level details.
 ## Main Areas
 
 - `WebInspectorSession`: UIKit facade and custom-tab compatibility owner. It
-  wraps `WebInspectorContainer` / `WebInspectorContext` and is the UI-facing
-  inspection lifecycle surface.
+  wraps a DataKit `WebInspector` and is the UI-facing inspection lifecycle
+  surface.
 - `WebInspectorViewController`: Public built-in inspector root controller.
 - `PresentationContentStore`: Root-controller-owned cache for tab controllers
   and the Network panel model. It is never shared through a session.
@@ -30,8 +30,9 @@ regular width uses split presentation.
 
 ## Data Flow
 
-`WebInspectorSession` owns the UI-facing session lifecycle and exposes the
-current `WebInspectorContext`. DOM and Network controllers observe DataKit
+`WebInspectorSession` owns the UI-facing session lifecycle and the
+`WebInspector` whose current attachment the built-in tabs present. DOM and
+Network controllers observe DataKit
 models and submit DataKit commands. Each `WebInspectorViewController` owns its
 presentation content so two roots borrowing one session cannot reparent or
 retire each other's view controllers.

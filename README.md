@@ -31,7 +31,7 @@ UIKit Web Inspector for `WKWebView`.
 | `WebKitRuntime` | You implement native WebKit features and need shared symbol discovery and scoped page access. |
 | `WebInspectorKit` | You want the built-in UIKit inspector UI. |
 | `WebInspectorDataKit` | You want observable DOM, Network, Console, Runtime, and CSS models for a custom UI. |
-| `WebInspectorDataKitTesting` | You want deterministic `WebInspectorContext` startup synchronization in tests. |
+| `WebInspectorDataKitTesting` | You want to attach a `WebInspector` to a test proxy and wait for startup in tests. |
 | `WebInspectorProxyKit` | You want typed Web Inspector protocol commands and events directly over an inspected `WKWebView`. |
 | `WebInspectorProxyKitTesting` | You want a controllable proxy backend and protocol fixtures without the native WebKit bridge. |
 
