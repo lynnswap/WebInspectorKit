@@ -191,6 +191,14 @@ static TargetResolution resolveTarget(WKRuntimePageStorage *storage, ptrdiff_t c
 
 @end
 
+// WebKit reports a terminated web content process through this private
+// callback instead of `webViewWebContentProcessDidTerminate:` when the delegate
+// responds to it.
+@protocol WebInspectorNativeProcessTerminationDelegate <NSObject>
+@optional
+- (void)_webView:(WKWebView *)webView webContentProcessDidTerminateWithReason:(NSInteger)reason;
+@end
+
 @interface WebInspectorNativeNavigationDelegateProxy : NSObject <WKNavigationDelegate>
 
 - (instancetype)initWithWebView:(WKWebView *)webView
@@ -330,7 +338,8 @@ private:
     if (![super respondsToSelector:selector])
         return [self signatureForForwardingClientSelector:selector] != nil;
 
-    if (protocol_getMethodDescription(@protocol(WKNavigationDelegate), selector, NO, YES).name)
+    if (protocol_getMethodDescription(@protocol(WKNavigationDelegate), selector, NO, YES).name
+        || selector == @selector(_webView:webContentProcessDidTerminateWithReason:))
         return [_client respondsToSelector:selector];
     return YES;
 }
@@ -502,6 +511,15 @@ private:
     id<WKNavigationDelegate> client = _client;
     if ([client respondsToSelector:_cmd])
         [client webViewWebContentProcessDidTerminate:webView];
+}
+
+- (void)_webView:(WKWebView *)webView webContentProcessDidTerminateWithReason:(NSInteger)reason
+{
+    [_bridge handleWebContentProcessTermination];
+
+    id<WebInspectorNativeProcessTerminationDelegate> client = (id)_client;
+    if ([client respondsToSelector:_cmd])
+        [client _webView:webView webContentProcessDidTerminateWithReason:reason];
 }
 
 - (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation

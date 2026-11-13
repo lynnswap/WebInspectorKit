@@ -282,6 +282,24 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
 
     @MainActor
     func testNativeInspectorReconnectsAfterWebContentProcessTermination() async throws {
+        try await assertNativeInspectorReconnectsAfterWebContentProcessTermination(
+            delegate: WebContentProcessNavigationProbe()
+        )
+    }
+
+    /// WebKit calls the private termination callback instead of the public
+    /// one when the delegate implements it.
+    @MainActor
+    func testNativeInspectorReconnectsWhenDelegateTakesTerminationReason() async throws {
+        try await assertNativeInspectorReconnectsAfterWebContentProcessTermination(
+            delegate: WebContentProcessTerminationReasonProbe()
+        )
+    }
+
+    @MainActor
+    private func assertNativeInspectorReconnectsAfterWebContentProcessTermination(
+        delegate replacementDelegate: WebContentProcessNavigationProbe
+    ) async throws {
         let fixture = try HostedWebViewFixture()
         defer { fixture.cleanup() }
 
@@ -295,7 +313,6 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
             let initialDocument = try await initialPage.dom.getDocument()
             XCTAssertEqual(initialDocument.nodeName, "#document")
 
-            let replacementDelegate = WebContentProcessNavigationProbe()
             fixture.webView.navigationDelegate = replacementDelegate
             let lifecycleEvents = initialPage.lifecycleEvents
             try await withIntegrationTimeout("the lifecycle event subscription to register") {
@@ -406,6 +423,14 @@ private final class NavigationPolicyProbe: NSObject, WKNavigationDelegate {
         decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void
     ) {
         decisionHandler(.allow)
+    }
+}
+
+@MainActor
+private final class WebContentProcessTerminationReasonProbe: WebContentProcessNavigationProbe {
+    @objc(_webView:webContentProcessDidTerminateWithReason:)
+    func webView(_ webView: WKWebView, webContentProcessDidTerminateWithReason reason: Int) {
+        webViewWebContentProcessDidTerminate(webView)
     }
 }
 
@@ -605,7 +630,7 @@ private enum WebContentProcessHarnessError: Error {
 }
 
 @MainActor
-private final class WebContentProcessNavigationProbe: NSObject, WKNavigationDelegate {
+private class WebContentProcessNavigationProbe: NSObject, WKNavigationDelegate {
     private struct NavigationOperation {
         let navigation: WKNavigation
         let continuation: CheckedContinuation<Void, any Error>
