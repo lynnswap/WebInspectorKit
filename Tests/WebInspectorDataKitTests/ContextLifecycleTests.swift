@@ -320,7 +320,6 @@ func supersededOrderedFeedSubscriptionReleasesItsProducer() async throws {
 func currentPageCommitOnSameProtocolAgentRetainsRequiredDomainLeases() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await runtime.backend.enqueue(
         DOM.Node(id: DOM.Node.ID("same-agent-root"), nodeType: 9, nodeName: "#document"),
@@ -353,7 +352,7 @@ func currentPageCommitOnSameProtocolAgentRetainsRequiredDomainLeases() async thr
         backend: runtime.backend
     )
     try await waitUntil {
-        results.items.map(\.id) == [NetworkRequest.ID(Network.Request.ID("same-agent-network"))]
+        context.network.requests.map(\.id) == [NetworkRequest.ID(Network.Request.ID("same-agent-network"))]
     }
 
     let commands = await runtime.backend.recordedCommands()
@@ -368,7 +367,6 @@ func currentPageCommitOnSameProtocolAgentRetainsRequiredDomainLeases() async thr
 func currentPageCommitInitializesNewAgentWithoutReenablingPage() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await enqueueStartupReplies(
         on: runtime.backend,
@@ -400,7 +398,7 @@ func currentPageCommitInitializesNewAgentWithoutReenablingPage() async throws {
         backend: runtime.backend
     )
     try await waitUntil {
-        results.items.map(\.id) == [NetworkRequest.ID(Network.Request.ID("new-agent-network"))]
+        context.network.requests.map(\.id) == [NetworkRequest.ID(Network.Request.ID("new-agent-network"))]
     }
 
     let commands = await runtime.backend.recordedCommands()
@@ -777,8 +775,6 @@ func closeAfterAttachedClearsAttachmentBackedModels() async throws {
         connection: Network.Security.Connection(tlsProtocol: "TLS 1.3")
     )
     let runtimeContextID = Runtime.ExecutionContext.ID("main")
-    let networkResults: WebInspectorFetchedResults<NetworkRequest>
-    let consoleResults: WebInspectorFetchedResults<ConsoleMessage>
 
     await enqueueStartupReplies(
         on: runtime.backend,
@@ -787,8 +783,6 @@ func closeAfterAttachedClearsAttachmentBackedModels() async throws {
 
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
-    networkResults = context.network.fetchedResults()
-    consoleResults = context.console.fetchedResults()
     try await waitForStartupSubscribers(runtime: runtime, target: target)
     try await waitUntil(in: context) { context.state == .attached }
 
@@ -825,14 +819,14 @@ func closeAfterAttachedClearsAttachmentBackedModels() async throws {
         target: target
     )
     try await waitUntil(in: context) {
-        networkResults.items.count == 1
-            && networkResults.items.first?.security == requestSecurity
-            && consoleResults.items.count == 1
+        context.network.requests.count == 1
+            && context.network.requests.first?.security == requestSecurity
+            && context.console.messages.count == 1
             && context.executionContexts.count == 1
     }
 
-    let request = try #require(networkResults.items.first)
-    let message = try #require(consoleResults.items.first)
+    let request = try #require(context.network.requests.first)
+    let message = try #require(context.console.messages.first)
     #expect(context.rootNode?.id == DOMNode.ID(documentID))
     #expect(context.node(for: DOMNode.ID(documentID)) != nil)
     #expect(context.registeredRequest(for: request.id) === request)
@@ -845,10 +839,10 @@ func closeAfterAttachedClearsAttachmentBackedModels() async throws {
     #expect(context.rootNode == nil)
     #expect(context.node(for: DOMNode.ID(documentID)) == nil)
     #expect(context.registeredRequest(for: request.id) == nil)
-    #expect(networkResults.items.isEmpty)
+    #expect(context.network.requests.isEmpty)
     #expect(request.security == requestSecurity)
     #expect(context.registeredMessage(for: message.id) == nil)
-    #expect(consoleResults.items.isEmpty)
+    #expect(context.console.messages.isEmpty)
     #expect(context.executionContexts.isEmpty)
     #expect(context.selectedContext == nil)
 }
@@ -993,12 +987,7 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
         ]
     )
     let (target, context) = try await startContext(runtime: runtime, document: oldDocument)
-    let networkResults = context.network.fetchedResults(
-        for: NetworkRequestQuery(filter: .all([]))
-    )
-    let networkController = WebInspectorFetchedResultsController(fetchedResults: networkResults)
-    var networkTransactions = networkController.transactions.makeAsyncIterator()
-    let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
+    var networkChanges = context.network.requestChanges.makeAsyncIterator()
 
     let seedAppliedBaseline = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(
@@ -1045,19 +1034,15 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
     context.select(oldElement)
     context.seedSelectedNodeStyles(matchedStyles: CSS.MatchedStyles())
     let oldStyles = try #require(oldElement.elementStyles)
-    let oldConsoleMessage = try #require(consoleResults.items.first)
+    let oldConsoleMessage = try #require(context.console.messages.first)
     let oldRuntimeContext = try #require(context.executionContexts.first)
     #expect(oldStyles.phase == .loaded)
-    #expect(networkResults.items.count == 1)
+    let oldRequest = try #require(context.registeredRequest(forProxyID: oldRequestID))
+    #expect(context.network.requests == [oldRequest])
     #expect(oldElement.attributes["data-generation"] == "old")
     #expect(oldConsoleMessage.text == "old-console")
     #expect(oldRuntimeContext.id == RuntimeContext.ID(oldRuntimeID))
-    #expect(try #require(await networkTransactions.next()).itemChanges == [
-        .insert(
-            itemID: NetworkRequest.ID(oldRequestID),
-            indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
-        ),
-    ])
+    #expect(await networkChanges.next() == .inserted([oldRequest]))
 
     let supersededSubscription = context.orderedEventSubscriptionStateForTesting
     let appliedBaseline = context.eventPumpAppliedSequenceForTesting
@@ -1072,11 +1057,9 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
     let linearizedSubscription = context.orderedEventSubscriptionStateForTesting
     #expect(linearizedSubscription.generation == supersededSubscription.generation + 1)
     #expect(linearizedSubscription.sequence == supersededSubscription.sequence)
-    #expect(networkResults.items.isEmpty)
+    #expect(context.network.requests.isEmpty)
     #expect(context.registeredRequest(forProxyID: oldRequestID) == nil)
-    let resetTransaction = try #require(await networkTransactions.next())
-    #expect(resetTransaction.isReset)
-    #expect(resetTransaction.newSnapshot.itemIDs.isEmpty)
+    #expect(await networkChanges.next() == .removedAll)
 
     _ = await runtime.backend.waitForRecordedCommands(
         domain: "Console",
@@ -1128,12 +1111,12 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
 
     #expect(context.orderedEventSubscriptionStateForTesting == linearizedSubscription)
     #expect(context.eventPumpAppliedSequenceForTesting == appliedBaseline)
-    #expect(networkResults.items.isEmpty)
+    #expect(context.network.requests.isEmpty)
     #expect(context.registeredRequest(forProxyID: staleRequestID) == nil)
     #expect(oldElement.attributes["data-generation"] == "old")
     #expect(oldStyles.phase == .loaded)
-    #expect(consoleResults.items.first === oldConsoleMessage)
-    #expect(consoleResults.items.map(\.text) == ["old-console"])
+    #expect(context.console.messages.first === oldConsoleMessage)
+    #expect(context.console.messages.map(\.text) == ["old-console"])
     #expect(context.executionContexts.first === oldRuntimeContext)
     #expect(context.executionContexts.map(\.id) == [RuntimeContext.ID(oldRuntimeID)])
 
@@ -1198,17 +1181,12 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
     let freshSubscription = context.orderedEventSubscriptionStateForTesting
     #expect(freshSubscription.generation == linearizedSubscription.generation + 1)
     #expect(freshSubscription.sequence > supersededSubscription.sequence)
-    #expect(networkResults.items.count == 1)
-    #expect(context.registeredRequest(forProxyID: freshRequestID) != nil)
-    #expect(try #require(await networkTransactions.next()).itemChanges == [
-        .insert(
-            itemID: NetworkRequest.ID(freshRequestID),
-            indexPath: WebInspectorFetchedResultsIndexPath(section: 0, item: 0)
-        ),
-    ])
+    let freshRequest = try #require(context.registeredRequest(forProxyID: freshRequestID))
+    #expect(context.network.requests == [freshRequest])
+    #expect(await networkChanges.next() == .inserted([freshRequest]))
     #expect(freshElement.attributes["data-generation"] == "fresh")
     #expect(freshStyles.phase == .needsRefresh)
-    #expect(consoleResults.items.map(\.text) == ["fresh-console"])
+    #expect(context.console.messages.map(\.text) == ["fresh-console"])
     #expect(context.executionContexts.map(\.id) == [RuntimeContext.ID(freshRuntimeID)])
 }
 
@@ -1278,7 +1256,6 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
         targetID: oldTargetID,
         documentID: "old-root"
     )
-    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     let domTreeController = try await context.treeController()
     let domUpdates = DOMTreeUpdateRecorder(stream: domTreeController.updates)
     defer { domUpdates.cancel() }
@@ -1296,7 +1273,7 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
         params: #"{"requestId":"commit-retained-request","frameId":"main-frame","loaderId":"loader-1","request":{"url":"https://example.test/retained","method":"GET"},"initiator":{"type":"other"},"type":"Fetch","timestamp":1}"#
     )
     try await waitUntil {
-        networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)]
+        context.network.requests.map(\.id) == [NetworkRequest.ID(retainedRequestID)]
     }
 
     await transport.receiveRootMessage(
@@ -1413,7 +1390,7 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     #expect(context.state == .attached)
     #expect(context.node(for: oldRootID) == nil)
     #expect(context.node(for: newRootID) != nil)
-    #expect(networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)])
+    #expect(context.network.requests.map(\.id) == [NetworkRequest.ID(retainedRequestID)])
 
     let postCommitRequestID = Network.Request.ID("commit-post-request")
     await receiveTransportTargetEvent(
@@ -1423,7 +1400,7 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
         params: #"{"requestId":"commit-post-request","frameId":"new-main-frame","loaderId":"loader-2","request":{"url":"https://example.test/after-commit","method":"GET"},"initiator":{"type":"other"},"type":"Fetch","timestamp":2}"#
     )
     try await waitUntil {
-        Set(networkResults.items.map(\.id)) == [
+        Set(context.network.requests.map(\.id)) == [
             NetworkRequest.ID(retainedRequestID),
             NetworkRequest.ID(postCommitRequestID),
         ]
@@ -1498,7 +1475,6 @@ func currentPageProcessTerminationInterruptsPickerAndRetargetsWithoutClearingNet
         targetID: oldTargetID,
         documentID: "destroyed-root"
     )
-    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     let startupMessageCount = await backend.sentTargetMessages().count
 
     #expect(context.state == .attached)
@@ -1516,10 +1492,10 @@ func currentPageProcessTerminationInterruptsPickerAndRetargetsWithoutClearingNet
         params: #"{"requestId":"destroy-retained-request","frameId":"main-frame","loaderId":"loader-1","type":"Fetch","response":{"url":"https://example.test/retained","status":200,"headers":{},"security":{"connection":{"protocol":"TLS 1.3"},"certificate":{"subject":"retained.example.test"}}},"timestamp":1.5}"#
     )
     try await waitUntil {
-        networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)]
-            && networkResults.items.first?.security?.certificate?.subject == "retained.example.test"
+        context.network.requests.map(\.id) == [NetworkRequest.ID(retainedRequestID)]
+            && context.network.requests.first?.security?.certificate?.subject == "retained.example.test"
     }
-    let retainedRequest = try #require(networkResults.items.first)
+    let retainedRequest = try #require(context.network.requests.first)
 
     let interruptedPickerMessageCount = await backend.sentTargetMessages().count
     let interruptedPickerTask = Task { @MainActor in
@@ -1541,8 +1517,8 @@ func currentPageProcessTerminationInterruptsPickerAndRetargetsWithoutClearingNet
     #expect(context.state == .attached)
     #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("destroyed-root")))
     #expect(context.isElementPickerEnabled == false)
-    #expect(networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)])
-    #expect(networkResults.items.first === retainedRequest)
+    #expect(context.network.requests.map(\.id) == [NetworkRequest.ID(retainedRequestID)])
+    #expect(context.network.requests.first === retainedRequest)
     #expect(retainedRequest.security?.connection?.tlsProtocol == "TLS 1.3")
     await installTransportPageTarget(in: transport, targetID: newTargetID)
 
@@ -1622,8 +1598,8 @@ func currentPageProcessTerminationInterruptsPickerAndRetargetsWithoutClearingNet
     }
     #expect(context.state == .attached)
     #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("reattached-root")))
-    #expect(networkResults.items.map(\.id) == [NetworkRequest.ID(retainedRequestID)])
-    #expect(networkResults.items.first === retainedRequest)
+    #expect(context.network.requests.map(\.id) == [NetworkRequest.ID(retainedRequestID)])
+    #expect(context.network.requests.first === retainedRequest)
     #expect(retainedRequest.security?.certificate?.subject == "retained.example.test")
 
     let pickerMessageCount = await backend.sentTargetMessages().count
@@ -1838,7 +1814,6 @@ func mainFrameNavigatedReloadsDOMAndClearsRuntimeContexts() async throws {
         targetID: targetID,
         documentID: "initial-root"
     )
-    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     let undoCommands = try context.domUndoRedoCommands()
     let startupMessageCount = await backend.sentTargetMessages().count
 
@@ -1877,7 +1852,7 @@ func mainFrameNavigatedReloadsDOMAndClearsRuntimeContexts() async throws {
         params: #"{"requestId":"navigated-request","frameId":"main-frame","loaderId":"loader-2","request":{"url":"https://example.test/after-frame-navigation","method":"GET"},"initiator":{"type":"other"},"type":"Document","timestamp":3}"#
     )
     try await waitUntil {
-        networkResults.items.map(\.id) == [NetworkRequest.ID(navigatedRequestID)]
+        context.network.requests.map(\.id) == [NetworkRequest.ID(navigatedRequestID)]
     }
     await #expect(throws: WebInspectorProxyError.disconnected("DOM undo/redo target is no longer current.")) {
         try await undoCommands.undo()

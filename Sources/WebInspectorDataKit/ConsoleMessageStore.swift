@@ -1,20 +1,23 @@
 import Foundation
+import Observation
 import WebInspectorProxyKit
 
-/// Console messages and their fetched-results registrations for one
-/// `WebInspectorContext`.
+/// The Console messages of one `WebInspectorContext`, in arrival order.
 ///
 /// Message parameters are remote objects registered in `RuntimeModelStore`
-/// with the `.console` owner. Calls must come from the context's actor.
+/// with the `.console` owner.
+@Observable
 @MainActor
 final class ConsoleMessageStore {
-    private let runtime: RuntimeModelStore
-    private var messagesByID: [ConsoleMessage.ID: ConsoleMessage] = [:]
-    private var orderedMessageIDs: [ConsoleMessage.ID] = []
-    private var lastMessageID: ConsoleMessage.ID?
-    private var lastMessageIDByTargetID: [WebInspectorTarget.ID: ConsoleMessage.ID] = [:]
-    private var nextMessageOrdinal = 0
-    private var fetchedResults: [WeakWebInspectorFetchedResults<ConsoleMessage>] = []
+    /// The messages in arrival order.
+    private(set) var messages: [ConsoleMessage] = []
+
+    @ObservationIgnored private let runtime: RuntimeModelStore
+    @ObservationIgnored private var messagesByID: [ConsoleMessage.ID: ConsoleMessage] = [:]
+    @ObservationIgnored private var lastMessageID: ConsoleMessage.ID?
+    @ObservationIgnored private var lastMessageIDByTargetID: [WebInspectorTarget.ID: ConsoleMessage.ID] = [:]
+    @ObservationIgnored private var nextMessageOrdinal = 0
+    @ObservationIgnored private let changeRelay = WebInspectorAsyncStreamRelay<WebInspectorCollectionChange<ConsoleMessage>>()
 
     init(runtime: RuntimeModelStore) {
         self.runtime = runtime
@@ -22,6 +25,11 @@ final class ConsoleMessageStore {
 
     func message(for id: ConsoleMessage.ID) -> ConsoleMessage? {
         messagesByID[id]
+    }
+
+    /// The changes to `messages`, starting from the moment of the call.
+    var changes: AsyncStream<WebInspectorCollectionChange<ConsoleMessage>> {
+        changeRelay.makeStream()
     }
 
     // MARK: - Events
@@ -57,7 +65,7 @@ final class ConsoleMessageStore {
                 return
             }
             message.updateRepeatCount(count, timestamp: timestamp)
-            publishMessages(updatedItemIDs: [message.id])
+            changeRelay.yield(.updated([message]))
         case .messagesCleared:
             // WebKit releases its "console" Runtime object group before
             // emitting this event. DataKit owns only the local registrations.
@@ -73,28 +81,25 @@ final class ConsoleMessageStore {
         guard let targetID else {
             removeAllMessages()
             runtime.unregisterObjects(owner: .console)
-            publishMessages()
+            changeRelay.yield(.removedAll)
             return
         }
-        let removedMessages = messagesByID.values.filter { $0.targetID == targetID }
+        let removedMessages = messages.filter { $0.targetID == targetID }
         guard removedMessages.isEmpty == false else {
             lastMessageIDByTargetID[targetID] = nil
-            publishMessages()
             return
         }
         let removedIDs = Set(removedMessages.map(\.id))
         for id in removedIDs {
             messagesByID[id] = nil
         }
-        orderedMessageIDs.removeAll { removedIDs.contains($0) }
+        messages.removeAll { removedIDs.contains($0.id) }
         if let lastMessageID, removedIDs.contains(lastMessageID) {
-            self.lastMessageID = orderedMessageIDs.last
+            self.lastMessageID = messages.last?.id
         }
-        lastMessageIDByTargetID[targetID] = orderedMessageIDs.last { id in
-            messagesByID[id]?.targetID == targetID
-        }
+        lastMessageIDByTargetID[targetID] = nil
         unregisterUnreferencedParameters(of: removedMessages)
-        publishMessages()
+        changeRelay.yield(.removed(removedMessages))
     }
 
     /// Removes every message before WebKit replays the Console log. The
@@ -102,7 +107,7 @@ final class ConsoleMessageStore {
     /// left to unregister.
     func resetBeforeReplay() {
         removeAllMessages()
-        publishMessages()
+        changeRelay.yield(.removedAll)
     }
 
     private func applyMessageAdded(
@@ -138,17 +143,17 @@ final class ConsoleMessageStore {
             modelContext: modelContext
         )
         messagesByID[id] = message
-        orderedMessageIDs.append(id)
+        messages.append(message)
         lastMessageID = id
         if let targetID {
             lastMessageIDByTargetID[targetID] = id
         }
-        publishMessages()
+        changeRelay.yield(.inserted([message]))
     }
 
     private func removeAllMessages() {
         messagesByID = [:]
-        orderedMessageIDs = []
+        messages = []
         lastMessageID = nil
         lastMessageIDByTargetID = [:]
     }
@@ -164,73 +169,6 @@ final class ConsoleMessageStore {
                 continue
             }
             runtime.unregisterObject(object, owner: .console)
-        }
-    }
-
-    // MARK: - Fetched results
-
-    func makeFetchedResults(
-        for query: ConsoleMessageQuery,
-        modelContext: WebInspectorContext
-    ) -> WebInspectorFetchedResults<ConsoleMessage> {
-        let results = WebInspectorFetchedResults<ConsoleMessage>(
-            query: query,
-            modelContext: modelContext
-        )
-        results.setItems(messages(for: query))
-        fetchedResults.append(WeakWebInspectorFetchedResults(results))
-        return results
-    }
-
-    func updateQuery(
-        _ query: ConsoleMessageQuery,
-        for results: WebInspectorFetchedResults<ConsoleMessage>
-    ) {
-        results.applyConsoleQuery(query, items: messages(for: query))
-    }
-
-    func invalidateFetchedResultsRegistrations() {
-        let registeredResults = fetchedResults.compactMap(\.value)
-        fetchedResults.removeAll()
-        for results in registeredResults {
-            results.invalidateRegistration()
-        }
-    }
-
-    private func messages(for query: ConsoleMessageQuery) -> [ConsoleMessage] {
-        var items = orderedMessageIDs.compactMap { messagesByID[$0] }
-        if let filter = query.filter {
-            items = items.filter(filter.matches)
-        }
-        if query.sortBy.isEmpty == false {
-            items.sort { lhs, rhs in
-                for sort in query.sortBy {
-                    switch sort.compare(lhs, rhs) {
-                    case .orderedAscending:
-                        return true
-                    case .orderedDescending:
-                        return false
-                    case .orderedSame:
-                        continue
-                    }
-                }
-                return lhs.id < rhs.id
-            }
-        }
-        let lowerBound = min(query.fetchOffsetAsInt, items.count)
-        let remainingCount = items.count - lowerBound
-        let visibleCount = min(query.fetchLimitAsInt ?? remainingCount, remainingCount)
-        let upperBound = lowerBound + visibleCount
-        return Array(items[lowerBound..<upperBound])
-    }
-
-    private func publishMessages(updatedItemIDs: Set<ConsoleMessage.ID> = []) {
-        fetchedResults.removeAll { $0.value == nil }
-        for registration in fetchedResults {
-            guard let results = registration.value else {
-                continue
-            }
-            results.setItems(messages(for: results.consoleQuery), updatedItemIDs: updatedItemIDs)
         }
     }
 }

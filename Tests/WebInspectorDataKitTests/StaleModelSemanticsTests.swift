@@ -7,10 +7,6 @@ import WebInspectorProxyKitTesting
 private let staleDOMNodeError = WebInspectorProxyError.disconnected(
     "DOMNode is not registered in this WebInspectorContext."
 )
-private let staleFetchedResultsError = WebInspectorProxyError.disconnected(
-    "WebInspectorFetchedResults is not registered in this WebInspectorContext."
-)
-
 @MainActor
 @Test
 func retainedDOMNodeAfterContextReleaseKeepsSnapshotAndFailsWithoutTrapping() async throws {
@@ -209,129 +205,15 @@ func staleAndForeignRuntimeContextsPreserveTheCurrentSelection() async throws {
 
 @MainActor
 @Test
-func contextReleaseFinishesEveryFetchedResultsStreamAndRetainsFinalSnapshots() async throws {
-    var context: WebInspectorContext? = WebInspectorContext.preview()
-    context?.seedNetworkRequest(
-        requestID: "retained-request",
-        url: "https://example.test/data.json",
-        resourceTypeRawValue: "Fetch",
-        responseMIMEType: "application/json",
-        responseStatus: 200,
-        responseStatusText: "OK",
-        timestamp: 1
-    )
-    context?.apply(
-        .messageAdded(
-            Console.Message(
-                source: Console.Source(rawValue: "console-api"),
-                level: Console.Level(rawValue: "warning"),
-                text: "retained message"
-            )))
-    let retainedNetworkQuery = NetworkRequestQuery(
-        filter: .method(equals: "GET"),
-        sortBy: [.requestSentTimestamp(order: .reverse)],
-        sectionBy: .method,
-        fetchLimit: 4,
-        fetchOffset: 0
-    )
-    let retainedConsoleQuery = ConsoleMessageQuery(
-        filter: .level(Console.Level(rawValue: "warning")),
-        sortBy: [.text(comparison: .lexical)],
-        sectionBy: .level,
-        fetchLimit: 4,
-        fetchOffset: 0
-    )
-    let networkResults: WebInspectorFetchedResults<NetworkRequest> = try #require(
-        context?.network.fetchedResults(for: retainedNetworkQuery)
-    )
-    let secondNetworkResults: WebInspectorFetchedResults<NetworkRequest> = try #require(
-        context?.network.fetchedResults()
-    )
-    let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = try #require(
-        context?.console.fetchedResults(for: retainedConsoleQuery)
-    )
-    let networkController = WebInspectorFetchedResultsController(fetchedResults: networkResults)
-    let consoleController = WebInspectorFetchedResultsController(fetchedResults: consoleResults)
-    let retainedNetworkSnapshot = networkController.snapshot
-    let retainedConsoleSnapshot = consoleController.snapshot
-    var activeNetworkIterator = networkController.transactions.makeAsyncIterator()
-    var secondActiveIterator = WebInspectorFetchedResultsController(
-        fetchedResults: secondNetworkResults
-    ).transactions.makeAsyncIterator()
-    var activeConsoleIterator = consoleController.transactions.makeAsyncIterator()
-    weak let releasedContext = context
+func contextReleaseFinishesCollectionChangeStreams() async throws {
+    var container: WebInspectorContainer? = WebInspectorContainer(proxy: WebInspectorProxy())
+    var context: WebInspectorContext? = WebInspectorContext(try #require(container))
+    var requestChanges = try #require(context?.network.requestChanges).makeAsyncIterator()
+    var messageChanges = try #require(context?.console.messageChanges).makeAsyncIterator()
 
     context = nil
+    container = nil
 
-    #expect(releasedContext == nil)
-    #expect(await activeNetworkIterator.next() == nil)
-    #expect(await secondActiveIterator.next() == nil)
-    #expect(await activeConsoleIterator.next() == nil)
-    var lateNetworkIterator = networkController.transactions.makeAsyncIterator()
-    var lateConsoleIterator = consoleController.transactions.makeAsyncIterator()
-    #expect(await lateNetworkIterator.next() == nil)
-    #expect(await lateConsoleIterator.next() == nil)
-    #expect(networkController.snapshot == retainedNetworkSnapshot)
-    #expect(consoleController.snapshot == retainedConsoleSnapshot)
-    #expect(networkResults.items.map(\.url) == ["https://example.test/data.json"])
-    #expect(consoleResults.items.map(\.text) == ["retained message"])
-    #expect(networkResults.query == retainedNetworkQuery)
-    #expect(networkController.query == retainedNetworkQuery)
-    #expect(consoleResults.query == retainedConsoleQuery)
-    #expect(consoleController.query == retainedConsoleQuery)
-
-    let networkQuery = NetworkRequestQuery(fetchLimit: 1)
-    let consoleQuery = ConsoleMessageQuery(fetchLimit: 1)
-    #expect(throws: staleFetchedResultsError) {
-        try consoleResults.updateQuery(consoleQuery)
-    }
-    #expect(throws: staleFetchedResultsError) {
-        try networkResults.updateQuery(networkQuery)
-    }
-    #expect(throws: staleFetchedResultsError) {
-        try networkController.updateQuery(networkQuery)
-    }
-    #expect(throws: staleFetchedResultsError) {
-        try consoleController.updateQuery(consoleQuery)
-    }
-}
-
-@MainActor
-@Test
-func liveFetchedResultsRemainRegisteredAcrossContextStatesAndRejectForeignUpdates() async throws {
-    let context = WebInspectorContext.preview()
-    let foreignContext = WebInspectorContext.preview()
-    let networkResults = context.network.fetchedResults()
-    let consoleResults = context.console.fetchedResults()
-    let networkController = WebInspectorFetchedResultsController(fetchedResults: networkResults)
-    let consoleController = WebInspectorFetchedResultsController(fetchedResults: consoleResults)
-    let firstNetworkQuery = NetworkRequestQuery(fetchLimit: 2)
-    let firstConsoleQuery = ConsoleMessageQuery(fetchLimit: 2)
-
-    try networkResults.updateQuery(firstNetworkQuery)
-    try consoleController.updateQuery(firstConsoleQuery)
-    #expect(networkResults.query.fetchLimit == 2)
-    #expect(consoleResults.query.fetchLimit == 2)
-
-    await context.stop()
-    #expect(context.state == .detached)
-    try networkController.updateQuery(NetworkRequestQuery(fetchLimit: 3))
-    try consoleResults.updateQuery(ConsoleMessageQuery(fetchLimit: 3))
-    #expect(networkResults.query.fetchLimit == 3)
-    #expect(consoleResults.query.fetchLimit == 3)
-
-    context.start()
-    #expect(context.state == .attaching)
-    try networkResults.updateQuery(NetworkRequestQuery(fetchLimit: 4))
-    try consoleController.updateQuery(ConsoleMessageQuery(fetchLimit: 4))
-    #expect(networkResults.query.fetchLimit == 4)
-    #expect(consoleResults.query.fetchLimit == 4)
-
-    #expect(throws: staleFetchedResultsError) {
-        try foreignContext.updateNetworkQuery(
-            NetworkRequestQuery(fetchLimit: 1),
-            for: networkResults
-        )
-    }
-    #expect(networkResults.query.fetchLimit == 4)
+    #expect(await requestChanges.next() == nil)
+    #expect(await messageChanges.next() == nil)
 }

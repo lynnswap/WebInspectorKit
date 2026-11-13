@@ -60,8 +60,8 @@ print(result.object.description ?? "")
 ```
 
 Reach for WebInspectorDataKit when your UI wants stable model identity, undoable
-DOM edits, fetched-results style collection updates, or derived DOM tree
-snapshots. Reach for WebInspectorProxyKit when you need direct typed protocol
+DOM edits, ordered request and message collections with change feeds, or
+derived DOM tree snapshots. Reach for WebInspectorProxyKit when you need direct typed protocol
 access with no model layer.
 
 ## Topics
@@ -69,7 +69,6 @@ access with no model layer.
 ### Essentials
 
 - <doc:ModelRegistrationLifetimes>
-- <doc:QueryCapabilities>
 
 ### Creating a Model Context
 
@@ -87,9 +86,7 @@ access with no model layer.
 
 - ``NetworkRequest``
 - ``ConsoleMessage``
-- ``NetworkRequestQuery``
-- ``ConsoleMessageQuery``
-- ``WebInspectorFetchedResultsController``
+- ``WebInspectorCollectionChange``
 
 ### Runtime and CSS Models
 

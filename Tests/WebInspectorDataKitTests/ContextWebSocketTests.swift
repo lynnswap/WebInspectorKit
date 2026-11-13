@@ -19,9 +19,8 @@ func webSocketCreatedCreatesRequestWithConnectingState() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-    try await waitUntil { results.items.count == 1 }
-    let request = try #require(results.items.first)
+    try await waitUntil { context.network.requests.count == 1 }
+    let request = try #require(context.network.requests.first)
     #expect(request.url == "wss://example.com/socket")
     #expect(request.method == "GET")
     #expect(request.resourceType == .webSocket)
@@ -77,9 +76,8 @@ func webSocketCreatedPreservesExistingNetworkLifecycleMetadata() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-    try await waitUntil { results.items.first?.decodedDataLength == 7 }
-    let request = try #require(results.items.first)
+    try await waitUntil { context.network.requests.first?.decodedDataLength == 7 }
+    let request = try #require(context.network.requests.first)
     let webSocket = try #require(request.webSocket)
 
     await runtime.backend.emit(
@@ -152,9 +150,8 @@ func webSocketLifecycleStoresHandshakeFramesErrorAndClosedState() async throws {
         .webSocket(.created(id: requestID, url: "wss://example.com/socket")),
         target: target
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-    try await waitUntil { results.items.count == 1 }
-    let request = try #require(results.items.first)
+    try await waitUntil { context.network.requests.count == 1 }
+    let request = try #require(context.network.requests.first)
 
     await runtime.backend.emit(
         .webSocket(.handshakeRequest(
@@ -282,9 +279,8 @@ func webSocketTimelinePreservesArrivalOrderStableIDsAndExactFrameSemantics() asy
         .webSocket(.created(id: requestID, url: "wss://example.com/timeline")),
         target: target
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-    try await waitUntil { results.items.count == 1 }
-    let request = try #require(results.items.first)
+    try await waitUntil { context.network.requests.count == 1 }
+    let request = try #require(context.network.requests.first)
 
     await runtime.backend.emit(
         .webSocket(.handshakeRequest(
@@ -476,9 +472,8 @@ func webSocketFirstCloseAndHandshakeAreTerminalAndDuplicateEventsDoNotNotify() a
         .webSocket(.created(id: requestID, url: "wss://example.com/terminal")),
         target: target
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-    try await waitUntil { results.items.count == 1 }
-    let request = try #require(results.items.first)
+    try await waitUntil { context.network.requests.count == 1 }
+    let request = try #require(context.network.requests.first)
     await runtime.backend.emit(
         .webSocket(.handshakeResponse(
             id: requestID,
@@ -493,7 +488,7 @@ func webSocketFirstCloseAndHandshakeAreTerminalAndDuplicateEventsDoNotNotify() a
     )
     try await waitUntil { request.webSocket?.readyState == .closed }
 
-    let indexSequence = context.networkRequestIndexSequenceForTesting
+    let changesAfterClose = context.network.requestChanges
     let eventSequence = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(
         .webSocket(.closed(id: requestID, timestamp: 99)),
@@ -522,7 +517,6 @@ func webSocketFirstCloseAndHandshakeAreTerminalAndDuplicateEventsDoNotNotify() a
     #expect(processed)
 
     let webSocket = try #require(request.webSocket)
-    #expect(context.networkRequestIndexSequenceForTesting == indexSequence)
     #expect(webSocket.readyState == .closed)
     #expect(webSocket.handshakeResponse?.status == 101)
     #expect(webSocket.handshakeResponse?.statusText == "First")
@@ -544,6 +538,7 @@ func webSocketFirstCloseAndHandshakeAreTerminalAndDuplicateEventsDoNotNotify() a
     ))
     #expect(request.finishedOrFailedTimestamp == 3)
     #expect(request.responseReceivedTimestamp == 2)
+    #expect(await changesBeforeClearingRequests(in: context, changesAfterClose).isEmpty)
 }
 
 @MainActor
@@ -557,9 +552,8 @@ func webSocketRejectedHandshakePreservesResponseWithoutOpeningAndOrdersTerminalE
         .webSocket(.created(id: requestID, url: "wss://example.com/rejected")),
         target: target
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-    try await waitUntil { results.items.count == 1 }
-    let request = try #require(results.items.first)
+    try await waitUntil { context.network.requests.count == 1 }
+    let request = try #require(context.network.requests.first)
     await runtime.backend.emit(
         .webSocket(.handshakeResponse(
             id: requestID,
@@ -598,7 +592,7 @@ func webSocketRejectedHandshakePreservesResponseWithoutOpeningAndOrdersTerminalE
     ))
     #expect(webSocket.frames.isEmpty)
 
-    let indexSequence = context.networkRequestIndexSequenceForTesting
+    let changesAfterRejection = context.network.requestChanges
     let eventSequence = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(
         .webSocket(.handshakeResponse(
@@ -609,7 +603,6 @@ func webSocketRejectedHandshakePreservesResponseWithoutOpeningAndOrdersTerminalE
         target: target
     )
     #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: eventSequence))
-    #expect(context.networkRequestIndexSequenceForTesting == indexSequence)
     #expect(webSocket.handshakeResponse?.status == 403)
     #expect(webSocket.timelineEntries.count == 1)
 
@@ -633,6 +626,11 @@ func webSocketRejectedHandshakePreservesResponseWithoutOpeningAndOrdersTerminalE
     #expect(webSocket.readyState == .closed)
     #expect(request.finishedOrFailedTimestamp == 4)
     #expect(webSocket.frames.map(\.direction) == [.error("upgrade failed")])
+    // The late handshake response published nothing; the error and the close each did.
+    #expect(await changesBeforeClearingRequests(in: context, changesAfterRejection) == [
+        .updated([request]),
+        .updated([request]),
+    ])
 }
 
 @MainActor
@@ -731,9 +729,8 @@ func activeDuplicateWebSocketCreatedPreservesStateIdentityAndTimeline() async th
         .webSocket(.created(id: requestID, url: "wss://example.com/initial")),
         target: target
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-    try await waitUntil { results.items.count == 1 }
-    let request = try #require(results.items.first)
+    try await waitUntil { context.network.requests.count == 1 }
+    let request = try #require(context.network.requests.first)
     await runtime.backend.emit(
         .webSocket(.handshakeResponse(
             id: requestID,
@@ -933,9 +930,8 @@ func terminalWebSocketCreatedRestartsSameRequestThroughCommonLifecycleReset() as
         ),
         target: target
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-    try await waitUntil { results.items.count == 1 }
-    let request = try #require(results.items.first)
+    try await waitUntil { context.network.requests.count == 1 }
+    let request = try #require(context.network.requests.first)
     let responseBody = request.responseBody
     await runtime.backend.emit(
         .requestWillBeSent(
@@ -1015,7 +1011,7 @@ func terminalWebSocketCreatedRestartsSameRequestThroughCommonLifecycleReset() as
         request.lifecycleRevision == 1 && request.webSocket?.readyState == .connecting
     }
 
-    #expect(results.items.first === request)
+    #expect(context.network.requests.first === request)
     #expect(request.webSocket !== previousState)
     #expect(request.webSocket?.timelineEntries.isEmpty == true)
     #expect(request.url == "wss://example.com/restarted")
@@ -1060,9 +1056,8 @@ func webSocketCreatedRestartsLifecycleClosedByErrorWithoutClosedEvent(
         .webSocket(.created(id: requestID, url: "wss://example.com/first")),
         target: target
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-    try await waitUntil { results.items.count == 1 }
-    let request = try #require(results.items.first)
+    try await waitUntil { context.network.requests.count == 1 }
+    let request = try #require(context.network.requests.first)
     if hasHandshakeResponse {
         await runtime.backend.emit(
             .webSocket(.handshakeResponse(
@@ -1093,7 +1088,7 @@ func webSocketCreatedRestartsLifecycleClosedByErrorWithoutClosedEvent(
         request.lifecycleRevision == 1 && request.webSocket?.readyState == .connecting
     }
 
-    #expect(results.items.first === request)
+    #expect(context.network.requests.first === request)
     #expect(request.webSocket !== previousState)
     #expect(request.webSocket?.timelineEntries.isEmpty == true)
     #expect(request.webSocket?.frames.isEmpty == true)
@@ -1261,9 +1256,8 @@ func closedWebSocketCannotFetchResponseBodyOrSendProtocolCommand() async throws 
         .webSocket(.created(id: requestID, url: "wss://example.com/no-body")),
         target: target
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-    try await waitUntil { results.items.count == 1 }
-    let request = try #require(results.items.first)
+    try await waitUntil { context.network.requests.count == 1 }
+    let request = try #require(context.network.requests.first)
     await runtime.backend.emit(
         .webSocket(.handshakeResponse(
             id: requestID,
@@ -1311,10 +1305,9 @@ func webSocketEventForUnknownRequestIsSkipped() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-    try await waitUntil { results.items.count == 1 }
-    #expect(results.items.first?.webSocket?.readyState == .connecting)
-    #expect(results.items.first?.webSocket?.handshakeResponse == nil)
+    try await waitUntil { context.network.requests.count == 1 }
+    #expect(context.network.requests.first?.webSocket?.readyState == .connecting)
+    #expect(context.network.requests.first?.webSocket?.handshakeResponse == nil)
     #expect(context.state == .attached)
 }
 
@@ -1323,7 +1316,6 @@ func webSocketEventForUnknownRequestIsSkipped() async throws {
 func webSocketOtherEventDoesNotMutateRequests() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     let baseline = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(
@@ -1333,6 +1325,6 @@ func webSocketOtherEventDoesNotMutateRequests() async throws {
     let didProcessOtherEvent = await context.waitForEventPumpAppliedSequenceForTesting(after: baseline)
     #expect(didProcessOtherEvent)
 
-    #expect(results.items.isEmpty)
+    #expect(context.network.requests.isEmpty)
     #expect(context.state == .attached)
 }

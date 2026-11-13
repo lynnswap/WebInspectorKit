@@ -451,7 +451,6 @@ public final class WebInspectorContext {
     }
 
     isolated deinit {
-        invalidateFetchedResultsRegistrations()
         startupTask?.cancel()
         currentPageRetargetTask?.cancel()
         currentPageCleanupTask?.cancel()
@@ -546,10 +545,6 @@ public final class WebInspectorContext {
         return networkRequestStore.registration(for: id)?.request
     }
 
-    package var networkRequestsCollectionState: NetworkRequestStore {
-        networkRequestStore
-    }
-
     package func registeredRequest(
         forProxyID id: Network.Request.ID
     ) -> NetworkRequest? {
@@ -557,10 +552,6 @@ public final class WebInspectorContext {
     }
 
 #if DEBUG
-    package func networkFullProjectionRecordVisitCountForTesting() async -> Int {
-        return await networkRequestStore.fullProjectionRecordVisitCount()
-    }
-
     package func domTreeRegistrationCountForTesting() -> Int {
         pruneReleasedTreeStates()
         return treeStates.count
@@ -794,10 +785,6 @@ public final class WebInspectorContext {
 
     package var eventPumpAppliedSequenceForTesting: UInt64 {
         eventPumpAppliedSequenceForTestingStorage
-    }
-
-    package var networkRequestIndexSequenceForTesting: UInt64 {
-        networkRequestStore.indexSequenceForTesting
     }
 
     package var orderedEventSubscriptionStateForTesting: (generation: UInt64, sequence: UInt64) {
@@ -1238,48 +1225,20 @@ public final class WebInspectorContext {
         )
     }
 
-    package func networkFetchedResults(
-        for query: NetworkRequestQuery
-    ) -> WebInspectorFetchedResults<NetworkRequest> {
-        return networkRequestStore.makeFetchedResults(
-            query: query,
-            modelContext: self
-        )
+    package var networkRequests: [NetworkRequest] {
+        networkRequestStore.requests
     }
 
-    package func consoleFetchedResults(
-        for query: ConsoleMessageQuery
-    ) -> WebInspectorFetchedResults<ConsoleMessage> {
-        return consoleStore.makeFetchedResults(for: query, modelContext: self)
+    package var networkRequestChanges: AsyncStream<WebInspectorCollectionChange<NetworkRequest>> {
+        networkRequestStore.changes
     }
 
-    package func updateNetworkQuery(
-        _ query: NetworkRequestQuery,
-        for results: WebInspectorFetchedResults<NetworkRequest>
-    ) throws {
-        guard results.modelContext === self else {
-            throw WebInspectorProxyError.disconnected(
-                "WebInspectorFetchedResults is not registered in this WebInspectorContext."
-            )
-        }
-        networkRequestStore.updateQuery(query, for: results)
+    package var consoleMessages: [ConsoleMessage] {
+        consoleStore.messages
     }
 
-    package func updateConsoleQuery(
-        _ query: ConsoleMessageQuery,
-        for results: WebInspectorFetchedResults<ConsoleMessage>
-    ) throws {
-        guard results.modelContext === self else {
-            throw WebInspectorProxyError.disconnected(
-                "WebInspectorFetchedResults is not registered in this WebInspectorContext."
-            )
-        }
-        consoleStore.updateQuery(query, for: results)
-    }
-
-    private func invalidateFetchedResultsRegistrations() {
-        networkRequestStore.invalidateFetchedResultsRegistrations()
-        consoleStore.invalidateFetchedResultsRegistrations()
+    package var consoleMessageChanges: AsyncStream<WebInspectorCollectionChange<ConsoleMessage>> {
+        consoleStore.changes
     }
 
     func responseBodyResult(
@@ -1671,7 +1630,7 @@ public final class WebInspectorContext {
         on target: WebInspectorTarget,
         generation: Int
     ) async throws {
-        let storeGeneration = networkRequestStore.projectionGeneration.id
+        let storeGeneration = networkRequestStore.generation
         networkResourceTreeError = nil
         while !Task.isCancelled, isCurrentPageGeneration(generation) {
             let revision = networkRecorder.resourceTreeRevision
@@ -1697,7 +1656,7 @@ public final class WebInspectorContext {
                 throw CancellationError()
             }
             // A user clear must not be undone by an in-flight snapshot.
-            guard networkRequestStore.projectionGeneration.id == storeGeneration else { return }
+            guard networkRequestStore.generation == storeGeneration else { return }
             // Navigation can replace a frame while its resource snapshot is in flight.
             guard revision == networkRecorder.resourceTreeRevision else { continue }
             networkRecorder.applyResourceTree(reply.value, modelContext: self)
@@ -1997,7 +1956,7 @@ public final class WebInspectorContext {
             case let .css(value):
                 apply(value)
             case let .network(value):
-                await apply(value)
+                apply(value)
             case let .console(value):
                 apply(value.event, targetID: value.targetID)
             case let .runtime(value):
@@ -4517,7 +4476,7 @@ extension WebInspectorContext {
         )
     }
 
-    package func apply(_ event: Network.Event) async {
-        await networkRecorder.apply(event, modelContext: self)
+    package func apply(_ event: Network.Event) {
+        networkRecorder.apply(event, modelContext: self)
     }
 }

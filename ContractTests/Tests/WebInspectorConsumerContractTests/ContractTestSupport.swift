@@ -96,14 +96,12 @@ final class ContractDataKitActor {
 
     private let runtime: WebInspectorProxyTestRuntime
     private var context: WebInspectorContext?
-    private var consoleController: WebInspectorFetchedResultsController<ConsoleMessage>?
 
     init(runtime: WebInspectorProxyTestRuntime, inspectorContainer: WebInspectorContainer? = nil) {
         self.runtime = runtime
         let container = inspectorContainer ?? WebInspectorContainer(proxy: runtime.proxy)
         self.inspectorContainer = container
         context = nil
-        consoleController = nil
     }
 
     @discardableResult
@@ -129,25 +127,10 @@ final class ContractDataKitActor {
 
     func assertPublicSurfaceIsUsable() async throws {
         let context = modelContext()
-        let requestResults = context.network.fetchedResults()
-        let consoleResults = context.console.fetchedResults()
-        let sectionedRequests: WebInspectorFetchedResults<NetworkRequest> =
-            context.network.fetchedResults(for: NetworkRequestQuery(sectionBy: .method))
-        let sectionedConsole: WebInspectorFetchedResults<ConsoleMessage> =
-            context.console.fetchedResults(for: ConsoleMessageQuery(sectionBy: .level))
-        let requestController: WebInspectorFetchedResultsController<NetworkRequest> =
-            context.network.fetchedResultsController()
-        let consoleController: WebInspectorFetchedResultsController<ConsoleMessage> =
-            context.console.fetchedResultsController()
-
-        #expect(requestResults.items.isEmpty)
-        #expect(consoleResults.items.isEmpty)
-        #expect(sectionedRequests.sections.isEmpty)
-        #expect(sectionedConsole.sections.isEmpty)
-        #expect(requestController.snapshot.itemIDs.isEmpty)
-        #expect(consoleController.snapshot.itemIDs.isEmpty)
-        _ = requestController.transactions
-        _ = consoleController.transactions
+        #expect(context.network.requests.isEmpty)
+        #expect(context.console.messages.isEmpty)
+        let _: AsyncStream<WebInspectorCollectionChange<NetworkRequest>> = context.network.requestChanges
+        let _: AsyncStream<WebInspectorCollectionChange<ConsoleMessage>> = context.console.messageChanges
         #expect(context.state == .attached)
 
         let root = try #require(context.rootNode)
@@ -250,17 +233,15 @@ final class ContractDataKitActor {
             url: "https://example.com/data.json",
             headers: ["Accept": "application/json"]
         )
-        let requestController: WebInspectorFetchedResultsController<NetworkRequest> =
-            context.network.fetchedResultsController()
-        var requestTransactions = requestController.transactions.makeAsyncIterator()
+        var requestChanges = context.network.requestChanges.makeAsyncIterator()
         await ContractTestSupport.emitFinishedRequest(request, target: target, backend: runtime.backend)
 
-        while requestController.items.first?.state != .finished {
-            guard await requestTransactions.next() != nil else {
+        while context.network.requests.first?.state != .finished {
+            guard await requestChanges.next() != nil else {
                 throw ContractEventStreamEnded()
             }
         }
-        let requestModel = try #require(requestController.items.first)
+        let requestModel = try #require(context.network.requests.first)
         #expect(requestModel.url == "https://example.com/data.json")
         #expect(requestModel.method == "GET")
         #expect(requestModel.status == 200)
@@ -278,7 +259,7 @@ final class ContractDataKitActor {
         #expect(requestModel.metrics?.encodedDataLength == 4)
         #expect(requestModel.metrics?.decodedBodyLength == 7)
         #expect(context.registeredRequest(for: requestModel.id) === requestModel)
-        #expect(requestController.snapshot.itemIDs == [requestModel.id])
+        #expect(context.network.requests.map(\.id) == [requestModel.id])
 
         await runtime.backend.enqueue(
             Network.Body(data: "{\"ok\":true}", base64Encoded: false),
@@ -311,12 +292,12 @@ final class ContractDataKitActor {
         #expect(evaluation.object.canRequestProperties)
     }
 
-    func consoleTransactions() -> AsyncStream<WebInspectorFetchedResultsTransaction<ConsoleMessage>> {
-        modelConsoleController().transactions
+    func consoleMessageChanges() -> AsyncStream<WebInspectorCollectionChange<ConsoleMessage>> {
+        modelContext().console.messageChanges
     }
 
     func containsConsoleMessage(text: String) -> Bool {
-        modelConsoleController().items.contains { $0.text == text }
+        modelContext().console.messages.contains { $0.text == text }
     }
 
     private func modelContext() -> WebInspectorContext {
@@ -326,16 +307,6 @@ final class ContractDataKitActor {
         let context = WebInspectorContext(inspectorContainer)
         self.context = context
         return context
-    }
-
-    private func modelConsoleController() -> WebInspectorFetchedResultsController<ConsoleMessage> {
-        if let consoleController {
-            return consoleController
-        }
-        let controller: WebInspectorFetchedResultsController<ConsoleMessage> =
-            modelContext().console.fetchedResultsController()
-        consoleController = controller
-        return controller
     }
 
     private func requirePersistentModel<Model: WebInspectorPersistentModel>(_ model: Model) {

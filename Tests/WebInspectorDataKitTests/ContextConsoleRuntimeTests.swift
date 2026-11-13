@@ -52,7 +52,6 @@ func consoleEnableReplayIsCapturedBeforeCommandReturns() async throws {
 
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
     try await waitForRecordedCommands(on: runtime.backend, expected: startupCommands)
 
     await runtime.backend.emit(
@@ -63,11 +62,11 @@ func consoleEnableReplayIsCapturedBeforeCommandReturns() async throws {
         )),
         target: target
     )
-    try await waitUntil { results.items.map(\.text) == ["replayed"] }
+    try await waitUntil { context.console.messages.map(\.text) == ["replayed"] }
 
     await enableGate.open()
     try await waitUntil(in: context) { context.state == .attached }
-    #expect(results.items.map(\.text) == ["replayed"])
+    #expect(context.console.messages.map(\.text) == ["replayed"])
 }
 
 @MainActor
@@ -81,7 +80,6 @@ func transportBackedStartupCapturesRuntimeAndConsoleReplayBeforeEnableReplies() 
     #expect(target.id == .currentPage)
     let container = WebInspectorContainer(proxy: proxy)
     let context = container.mainContext
-    let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
 
     try await replyTransportInspectorAndPageInitialization(backend, transport: transport, targetID: ProtocolTarget.ID("page-main"))
 
@@ -127,7 +125,7 @@ func transportBackedStartupCapturesRuntimeAndConsoleReplayBeforeEnableReplies() 
         method: "Console.messageAdded",
         params: #"{"message":{"source":"console-api","level":"warning","text":"replayed","repeatCount":1}}"#
     )
-    try await waitUntil { consoleResults.items.map(\.text) == ["replayed"] }
+    try await waitUntil { context.console.messages.map(\.text) == ["replayed"] }
     await receiveTransportTargetReply(
         transport,
         targetID: consoleEnable.targetIdentifier,
@@ -138,7 +136,7 @@ func transportBackedStartupCapturesRuntimeAndConsoleReplayBeforeEnableReplies() 
     try await waitUntil(in: context) { context.state == .attached }
     #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("1")))
     #expect(context.selectedContext?.id == RuntimeContext.ID(Runtime.ExecutionContext.ID("11")))
-    #expect(consoleResults.items.map(\.text) == ["replayed"])
+    #expect(context.console.messages.map(\.text) == ["replayed"])
 }
 
 @MainActor
@@ -153,7 +151,6 @@ func transportBackedFrameRuntimeAndConsoleEventsKeepTargetScope() async throws {
         documentID: "1",
         protocolProfile: .latest
     )
-    let consoleResults: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
     let startupMessageCount = await backend.sentTargetMessages().count
 
     await installTransportFrameTarget(
@@ -203,8 +200,8 @@ func transportBackedFrameRuntimeAndConsoleEventsKeepTargetScope() async throws {
         method: "Console.messageAdded",
         params: #"{"message":{"source":"console-api","level":"log","text":"frame log","networkRequestId":"frame-request-77","parameters":[{"type":"object","objectId":"frame-console-object","description":"console object"}],"repeatCount":1}}"#
     )
-    try await waitUntil { consoleResults.items.map(\.text) == ["frame log"] }
-    let consoleMessage = try #require(consoleResults.items.first)
+    try await waitUntil { context.console.messages.map(\.text) == ["frame log"] }
+    let consoleMessage = try #require(context.console.messages.first)
     #expect(consoleMessage.targetID == frameTarget)
     #expect(consoleMessage.networkRequestID == NetworkRequest.ID(
         Network.Request.ID("frame-request-77", scopedToTargetRawValue: frameTargetID.rawValue)
@@ -286,7 +283,6 @@ func restartClearsRuntimeContextsBeforeEnableReplay() async throws {
 func restartClearsConsoleMessagesBeforeConsoleReplay() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
     let enableGate = WebInspectorTestGate()
 
     await runtime.backend.emit(
@@ -297,7 +293,7 @@ func restartClearsConsoleMessagesBeforeConsoleReplay() async throws {
         )),
         target: target
     )
-    try await waitUntil { results.items.map(\.text) == ["old"] }
+    try await waitUntil { context.console.messages.map(\.text) == ["old"] }
 
     await runtime.backend.hold(domain: "Console", method: "enable", gate: enableGate)
     await enqueueDomainDisableReplies(on: runtime.backend)
@@ -308,7 +304,7 @@ func restartClearsConsoleMessagesBeforeConsoleReplay() async throws {
 
     context.start()
     try await waitForRecordedCommands(on: runtime.backend, expected: startupCommands + shutdownCommands + startupCommands)
-    #expect(results.items.isEmpty)
+    #expect(context.console.messages.isEmpty)
 
     await runtime.backend.emit(
         .messageAdded(Console.Message(
@@ -318,11 +314,11 @@ func restartClearsConsoleMessagesBeforeConsoleReplay() async throws {
         )),
         target: target
     )
-    try await waitUntil { results.items.map(\.text) == ["old"] }
+    try await waitUntil { context.console.messages.map(\.text) == ["old"] }
 
     await enableGate.open()
     try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
-    #expect(results.items.count == 1)
+    #expect(context.console.messages.count == 1)
 }
 
 @MainActor
@@ -332,7 +328,6 @@ func consoleEventsPopulateRepeatAndClearFetchedMessages() async throws {
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("request-1")
 
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
     await runtime.backend.emit(
         .messageAdded(Console.Message(
             source: Console.Source(rawValue: "console-api"),
@@ -349,8 +344,8 @@ func consoleEventsPopulateRepeatAndClearFetchedMessages() async throws {
         target: target
     )
 
-    try await waitUntil { results.items.count == 1 }
-    let message = try #require(results.items.first)
+    try await waitUntil { context.console.messages.count == 1 }
+    let message = try #require(context.console.messages.first)
     #expect(message.source == Console.Source(rawValue: "console-api"))
     #expect(message.level == Console.Level(rawValue: "warning"))
     #expect(message.kind == Console.Kind(rawValue: "log"))
@@ -368,7 +363,7 @@ func consoleEventsPopulateRepeatAndClearFetchedMessages() async throws {
         target: target
     )
     try await waitUntil { message.repeatCount == 3 }
-    #expect(results.items.first === message)
+    #expect(context.console.messages.first === message)
     #expect(message.timestamp == 2)
 
     await runtime.backend.emit(
@@ -379,14 +374,14 @@ func consoleEventsPopulateRepeatAndClearFetchedMessages() async throws {
         )),
         target: target
     )
-    try await waitUntil { results.items.count == 2 }
-    #expect(results.items.map(\.text) == ["hello", "second"])
+    try await waitUntil { context.console.messages.count == 2 }
+    #expect(context.console.messages.map(\.text) == ["hello", "second"])
 
     await runtime.backend.emit(
         .messagesCleared(reason: Console.ClearReason(rawValue: "console-api")),
         target: target
     )
-    try await waitUntil { results.items.isEmpty }
+    try await waitUntil { context.console.messages.isEmpty }
     #expect(context.registeredMessage(for: message.id) == nil)
 }
 
@@ -415,9 +410,8 @@ func consoleRepeatUpdatesStayWithinTheirTarget() throws {
         targetID: secondTargetID
     )
 
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
-    let first = try #require(results.items.first { $0.targetID == firstTargetID })
-    let second = try #require(results.items.first { $0.targetID == secondTargetID })
+    let first = try #require(context.console.messages.first { $0.targetID == firstTargetID })
+    let second = try #require(context.console.messages.first { $0.targetID == secondTargetID })
 
     context.apply(
         .messageRepeatCountUpdated(count: 3, timestamp: 3),
@@ -440,7 +434,6 @@ func consoleMessageParametersRegisterRuntimeObjects() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let objectID = Runtime.RemoteObject.ID("console-object")
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
 
     await runtime.backend.emit(
         .messageAdded(Console.Message(
@@ -453,8 +446,8 @@ func consoleMessageParametersRegisterRuntimeObjects() async throws {
         )),
         target: target
     )
-    try await waitUntil { results.items.count == 1 }
-    let firstMessage = try #require(results.items.first)
+    try await waitUntil { context.console.messages.count == 1 }
+    let firstMessage = try #require(context.console.messages.first)
     let firstParameter = try #require(firstMessage.parameters.first)
     #expect(firstParameter.description == "before")
 
@@ -469,8 +462,8 @@ func consoleMessageParametersRegisterRuntimeObjects() async throws {
         )),
         target: target
     )
-    try await waitUntil { results.items.count == 2 }
-    let secondMessage = try #require(results.items.last)
+    try await waitUntil { context.console.messages.count == 2 }
+    let secondMessage = try #require(context.console.messages.last)
     let secondParameter = try #require(secondMessage.parameters.first)
 
     #expect(firstParameter === secondParameter)
@@ -483,7 +476,6 @@ func consoleMessagesClearedInvalidatesRuntimeObjectsWithoutRuntimeCommand() asyn
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
     let objectID = Runtime.RemoteObject.ID("console-stale-object")
-    let results: WebInspectorFetchedResults<ConsoleMessage> = context.console.fetchedResults()
 
     await runtime.backend.emit(
         .messageAdded(Console.Message(
@@ -496,8 +488,8 @@ func consoleMessagesClearedInvalidatesRuntimeObjectsWithoutRuntimeCommand() asyn
         )),
         target: target
     )
-    try await waitUntil { results.items.count == 1 }
-    let message = try #require(results.items.first)
+    try await waitUntil { context.console.messages.count == 1 }
+    let message = try #require(context.console.messages.first)
     let parameter = try #require(message.parameters.first)
 
     let commandCountBeforeClear = await runtime.backend.recordedCommands().count
@@ -506,7 +498,7 @@ func consoleMessagesClearedInvalidatesRuntimeObjectsWithoutRuntimeCommand() asyn
         target: target
     )
 
-    try await waitUntil { results.items.isEmpty }
+    try await waitUntil { context.console.messages.isEmpty }
     #expect(parameter.canRequestProperties == false)
     do {
         _ = try await parameter.properties()

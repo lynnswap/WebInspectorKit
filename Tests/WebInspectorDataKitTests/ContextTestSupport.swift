@@ -806,7 +806,6 @@ func networkVisitsAcrossTopLevelCommit(
 ) async throws -> (provisional: NetworkNavigationVisit, committed: NetworkNavigationVisit) {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await emitOriginatedNetworkRequest(
         id: "commit-order-current",
@@ -824,8 +823,8 @@ func networkVisitsAcrossTopLevelCommit(
         target: target,
         backend: runtime.backend
     )
-    try await waitUntil { results.items.count == 2 }
-    let provisionalVisit = try #require(results.items[1].navigationVisit)
+    try await waitUntil { context.network.requests.count == 2 }
+    let provisionalVisit = try #require(context.network.requests[1].navigationVisit)
 
     switch order {
     case .targetThenFrame:
@@ -866,8 +865,8 @@ func networkVisitsAcrossTopLevelCommit(
         target: target,
         backend: runtime.backend
     )
-    try await waitUntil { results.items.count == 3 }
-    return (provisionalVisit, try #require(results.items[2].navigationVisit))
+    try await waitUntil { context.network.requests.count == 3 }
+    return (provisionalVisit, try #require(context.network.requests[2].navigationVisit))
 }
 
 @MainActor
@@ -1064,17 +1063,17 @@ final class DOMTreeRevealRequestRecorder {
 
 @MainActor
 @Observable
-final class FetchedResultsTransactionRecorder<Model: WebInspectorPersistentModel> {
-    private(set) var transactions: [WebInspectorFetchedResultsTransaction<Model>] = []
+final class CollectionChangeRecorder<Model: Hashable & Sendable> {
+    private(set) var changes: [WebInspectorCollectionChange<Model>] = []
 
     @ObservationIgnored private var task: Task<Void, Never>?
     private var hasStarted = false
 
-    init(stream: AsyncStream<WebInspectorFetchedResultsTransaction<Model>>) {
+    init(stream: AsyncStream<WebInspectorCollectionChange<Model>>) {
         task = Task { @MainActor [weak self] in
             self?.hasStarted = true
-            for await transaction in stream {
-                self?.transactions.append(transaction)
+            for await change in stream {
+                self?.changes.append(change)
             }
         }
     }
@@ -1083,8 +1082,13 @@ final class FetchedResultsTransactionRecorder<Model: WebInspectorPersistentModel
         try await waitUntil { self.hasStarted }
     }
 
-    func waitForTransactionCount(_ count: Int) async throws {
-        try await waitUntil { self.transactions.count >= count }
+    func waitForChangeCount(
+        _ count: Int,
+        timeout: Duration = .seconds(1)
+    ) async throws {
+        try await waitUntil(timeout: timeout) {
+            self.changes.count >= count
+        }
     }
 
     func cancel() {
@@ -1097,44 +1101,22 @@ final class FetchedResultsTransactionRecorder<Model: WebInspectorPersistentModel
     }
 }
 
+/// Returns the Network request changes that `changes` received since it was
+/// created. Clearing the requests publishes a reset, which ends the window.
 @MainActor
-@Observable
-final class FetchedResultsTransactionCounter<Model: WebInspectorPersistentModel> {
-    private(set) var transactionCount = 0
-
-    @ObservationIgnored private var task: Task<Void, Never>?
-    private var hasStarted = false
-
-    init(stream: AsyncStream<WebInspectorFetchedResultsTransaction<Model>>) {
-        task = Task { @MainActor [weak self] in
-            self?.hasStarted = true
-            for await _ in stream {
-                self?.transactionCount += 1
-            }
+func changesBeforeClearingRequests(
+    in context: WebInspectorContext,
+    _ changes: AsyncStream<WebInspectorCollectionChange<NetworkRequest>>
+) async -> [WebInspectorCollectionChange<NetworkRequest>] {
+    context.clearNetworkRequests()
+    var received: [WebInspectorCollectionChange<NetworkRequest>] = []
+    for await change in changes {
+        if change == .removedAll {
+            break
         }
+        received.append(change)
     }
-
-    func waitUntilStarted() async throws {
-        try await waitUntil { self.hasStarted }
-    }
-
-    func waitForTransactionCount(
-        _ count: Int,
-        timeout: Duration = .seconds(1)
-    ) async throws {
-        try await waitUntil(timeout: timeout) {
-            self.transactionCount >= count
-        }
-    }
-
-    func cancel() {
-        task?.cancel()
-        task = nil
-    }
-
-    deinit {
-        task?.cancel()
-    }
+    return received
 }
 
 @MainActor
@@ -1257,7 +1239,7 @@ func waitUntil(
     let observation = withPortableContinuousObservation { _ in
         _ = revision.value
         for context in contexts {
-            _ = context.networkRequestsCollectionState.registrations
+            _ = context.network.requests
         }
         _ = condition()
     }

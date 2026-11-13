@@ -73,7 +73,7 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
             }
             XCTAssertEqual(context.state, .attached)
             XCTAssertNil(context.networkResourceTreeError)
-            let requests = context.network.fetchedResults().items
+            let requests = context.network.requests
             for name in ["index.html", "style.css", "app.js", "child.html", "child.js"] {
                 let url = directory.appendingPathComponent(name).absoluteString
                 XCTAssertEqual(requests.filter { $0.url == url }.count, 1, "Missing or duplicated \(name)")
@@ -93,16 +93,14 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
                     == otherURL.absoluteString
             }
             XCTAssertEqual(context.rootNode?.documentURL, otherURL.absoluteString)
-            let networkResults = context.network.fetchedResults()
-            let networkController = WebInspectorFetchedResultsController(fetchedResults: networkResults)
-            let networkUpdates = networkController.transactions
+            let networkUpdates = context.network.requestChanges
             try await fixture.goBack()
             try await waitForUpdates(networkUpdates, description: "the restored stylesheet resource") {
-                networkResults.items.contains {
+                context.network.requests.contains {
                     $0 !== stylesheet && $0.url == stylesheet.url && $0.state == .finished
                 }
             }
-            let restored = try XCTUnwrap(networkResults.items.last { $0 !== stylesheet && $0.url == stylesheet.url })
+            let restored = try XCTUnwrap(context.network.requests.last { $0 !== stylesheet && $0.url == stylesheet.url })
             await restored.fetchResponseBody()
             XCTAssertEqual(restored.responseBody.phase, .loaded)
             await container.close()

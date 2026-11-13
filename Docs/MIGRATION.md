@@ -20,10 +20,50 @@ initializers remain synchronous after preparation. DataKit, ProxyKit, and
 WebKitRuntime consumers that do not use the built-in UIKit UI do not need this
 UI preparation step.
 
+### Queries and fetched results become ordered collections
+
+`NetworkRequestQuery`, `ConsoleMessageQuery`, `WebInspectorFetchedResults`,
+`WebInspectorFetchedResultsController`, and their snapshot, section, and
+transaction types are removed. DataKit no longer filters, sorts, sections, or
+windows requests and messages; that belongs to the code that presents them.
+
+| Before | After |
+| --- | --- |
+| `context.network.fetchedResults().items` | `context.network.requests` |
+| `context.console.fetchedResults().items` | `context.console.messages` |
+| `fetchedResultsController().transactions` | `context.network.requestChanges` or `context.console.messageChanges` |
+| A filter, sort, section, limit, or offset on a query | Apply it to the collection in your own model |
+
+Both collections are in arrival order and observable. A change stream reports
+the `inserted`, `updated`, and `removed` model objects and `removedAll`. Copy
+the collection when you subscribe and apply every change in order:
+
+```swift
+let changes = context.network.requestChanges
+var rows = context.network.requests
+for await change in changes {
+    switch change {
+    case .removedAll:
+        rows.removeAll()
+    case let .inserted(requests):
+        rows.append(contentsOf: requests)
+    case let .removed(requests):
+        rows.removeAll { requests.contains($0) }
+    case let .updated(requests):
+        reconfigure(requests)
+    }
+}
+```
+
+A change carries the objects themselves because a request identifier can be
+admitted again after a clear; the earlier change still names the earlier
+object.
+
+The v0.5.0 notes below describe the query API this replaces.
+
 ### WebInspectorDataKit is main-actor isolated
 
-`WebInspectorContext`, the domain controllers, the fetched-results types, and
-the model classes (`DOMNode`, `NetworkRequest`, `NetworkBody`,
+`WebInspectorContext`, the domain controllers, and the model classes (`DOMNode`, `NetworkRequest`, `NetworkBody`,
 `WebSocketState`, `ConsoleMessage`, `RuntimeContext`, `RuntimeObject`,
 `CSSStyles`) are now `@MainActor`. Their methods no longer take an
 `isolation:` parameter, and a call from another actor is a compile-time error
@@ -124,9 +164,6 @@ If a consumer-defined model used the removed `WebInspectorFetchableModel` for
 generic snapshots or transactions, conform it to `WebInspectorPersistentModel`
 instead. Custom models cannot be fetched from a context.
 
-See [Query Capabilities](../Sources/WebInspectorDataKit/WebInspectorDataKit.docc/QueryCapabilities.md)
-for the supported filters, sort orders, sections, and windowing behavior.
-
 ### 2. Update live queries with a throwing operation
 
 `WebInspectorFetchedResults` and `WebInspectorFetchedResultsController` now
@@ -178,7 +215,7 @@ preserve the current selection; passing `nil` still clears it.
 `DOMNode.requestChildren` also ignores a stale node.
 
 See [Model Registration Lifetimes](../Sources/WebInspectorDataKit/WebInspectorDataKit.docc/ModelRegistrationLifetimes.md)
-for the complete model and fetched-results lifetime contract.
+for the complete model lifetime contract.
 
 ## v0.4.0
 
