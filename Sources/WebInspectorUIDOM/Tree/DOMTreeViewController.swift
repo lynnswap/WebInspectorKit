@@ -19,36 +19,35 @@ package final class DOMTreeViewController: UIViewController {
                 guard let context else {
                     return false
                 }
-                do {
-                    try await context.dom.requestChildren(of: nodeID)
-                    return true
-                } catch {
-                    WebInspectorUIDOMLog.debug("DOM tree request children failed nodeID=\(String(describing: nodeID)): \(String(describing: error))")
+                guard let node = context.dom.node(for: nodeID) else {
+                    WebInspectorUIDOMLog.debug("DOM tree request children ignored an unregistered nodeID=\(String(describing: nodeID))")
                     return false
                 }
+                await context.dom.requestChildren(of: node)
+                return true
             },
             highlightNodeAction: { [weak context] nodeID, _ in
-                guard let context else {
+                guard let context, let node = context.dom.node(for: nodeID) else {
                     return
                 }
-                try await context.dom.highlight(nodeID)
+                try await context.dom.highlight(node)
             },
             restoreHighlightAction: { [weak context] in
                 guard let context else {
                     return
                 }
-                if let selectedNode = context.selectedNode {
-                    try await context.dom.highlight(selectedNode.id)
+                if let selectedNode = context.dom.selectedNode {
+                    try await context.dom.highlight(selectedNode)
                 } else {
                     try await context.dom.hideHighlight()
                 }
             },
             copyNodeTextAction: { [weak context] nodeID, kind in
-                guard let context else {
+                guard let context, let node = context.dom.node(for: nodeID) else {
                     return nil
                 }
                 do {
-                    return try await context.copyText(kind, for: nodeID)
+                    return try await context.dom.copyText(kind, of: node)
                 } catch {
                     WebInspectorUIDOMLog.debug("DOM tree copy text failed nodeID=\(String(describing: nodeID)): \(String(describing: error))")
                     return nil
@@ -98,11 +97,18 @@ package final class DOMTreeViewController: UIViewController {
         context: WebInspectorContext,
         undoManager: UndoManager?
     ) async -> Bool {
+        var nodes: [DOMNode] = []
+        for nodeID in nodeIDs {
+            guard let node = context.dom.node(for: nodeID) else {
+                WebInspectorUIDOMLog.debug("DOM tree delete ignored an unregistered nodeID=\(String(describing: nodeID))")
+                return false
+            }
+            nodes.append(node)
+        }
         let deletedNodeCount: Int
         let undoCommands: WebInspectorContext.DOMUndoRedoCommands
         do {
-            let result = try await context.dom.remove(nodeIDs)
-            deletedNodeCount = result.acceptedNodeIDs.count
+            deletedNodeCount = try await context.dom.remove(nodes).count
             undoCommands = try context.domUndoRedoCommands()
         } catch let error as WebInspectorContext.DOMDeletionPartialFailure {
             guard let partialUndoCommands = try? context.domUndoRedoCommands() else {

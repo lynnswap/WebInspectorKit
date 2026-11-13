@@ -285,14 +285,14 @@ public final class WebInspectorSession {
             return
         }
         do {
-            try await context.setElementPickerEnabled(false)
+            try await context.dom.setElementPickerEnabled(false)
         } catch {
             webInspectorSessionLifecycleLogger.error(
                 "Element picker cleanup failed: \(String(describing: error), privacy: .public)"
             )
         }
         do {
-            try await context.hideHighlight()
+            try await context.dom.hideHighlight()
         } catch {
             webInspectorSessionLifecycleLogger.error(
                 "DOM highlight cleanup failed: \(String(describing: error), privacy: .public)"

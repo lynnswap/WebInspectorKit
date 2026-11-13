@@ -241,16 +241,16 @@ package final class DOMNavigationItems: NSObject {
     }
 
     private func deleteSelectedNodeFromNavigation(undoManager: UndoManager?) async {
-        guard let selectedNode = context.selectedNode else {
+        guard let selectedNode = context.dom.selectedNode else {
             return
         }
         do {
-            let result = try await context.dom.remove([selectedNode.id])
+            let removedNodes = try await context.dom.remove([selectedNode])
             let undoCommands = try context.domUndoRedoCommands()
             DOMDeletionUndoRegistration.registerDeleteUndo(
                 on: undoManager,
                 commands: undoCommands,
-                deletedNodeCount: result.acceptedNodeIDs.count
+                deletedNodeCount: removedNodes.count
             )
         } catch {
             return
@@ -272,7 +272,7 @@ package final class DOMNavigationItems: NSObject {
                 return
             }
             do {
-                try await context.dom.toggleInspectMode()
+                try await context.dom.toggleElementPicker()
             } catch {
                 WebInspectorUIDOMLog.debug("DOM picker toggle failed: \(String(describing: error))")
             }

@@ -291,7 +291,7 @@ func loadEditableCSSFixture(
     target: WebInspectorTarget,
     context: WebInspectorContext
 ) async throws -> EditableCSSFixture {
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let elementID = DOM.Node.ID("authority-styled-node")
     await runtime.backend.emit(
         .setChildNodes(parent: document.id.proxyID, nodes: [
@@ -299,11 +299,11 @@ func loadEditableCSSFixture(
         ]),
         target: target
     )
-    try await waitUntil(in: context) { context.node(for: DOMNode.ID(elementID)) != nil }
-    let element = try #require(context.node(for: DOMNode.ID(elementID)))
+    try await waitUntil(in: context) { context.dom.node(for: DOMNode.ID(elementID)) != nil }
+    let element = try #require(context.dom.node(for: DOMNode.ID(elementID)))
 
     await enqueueCSSStyleReplies(on: runtime.backend)
-    context.select(element)
+    context.dom.select(element)
     let styles = try #require(element.elementStyles)
     try await waitUntil { styles.phase == .loaded }
     let propertyID = try #require(styles.sections.first?.style.properties.first?.id)
@@ -895,7 +895,7 @@ func emitTopLevelTargetCommit(
         target: target
     )
     try await waitUntil(in: context) {
-        context.rootNode?.id == DOMNode.ID(DOM.Node.ID(documentID))
+        context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID(documentID))
             && context.state == .attached
     }
 }
@@ -926,7 +926,7 @@ func emitTopLevelFrameCommit(
         target: target
     )
     try await waitUntil(in: context) {
-        context.rootNode?.id == DOMNode.ID(DOM.Node.ID(documentID))
+        context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID(documentID))
     }
 }
 
@@ -1122,7 +1122,7 @@ func changesBeforeClearingRequests(
 @MainActor
 func waitForChild(in context: WebInspectorContext) async throws -> DOMNode {
     try await waitUntil(in: context) {
-        guard let root = context.rootNode else {
+        guard let root = context.dom.rootNode else {
             return false
         }
         guard case let .loaded(children) = root.children else {
@@ -1131,7 +1131,7 @@ func waitForChild(in context: WebInspectorContext) async throws -> DOMNode {
         return children.isEmpty == false
     }
 
-    let root = try #require(context.rootNode)
+    let root = try #require(context.dom.rootNode)
     guard case let .loaded(children) = root.children else {
         Issue.record("Expected loaded root children.")
         throw TestFailure()

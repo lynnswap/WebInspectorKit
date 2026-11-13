@@ -52,15 +52,15 @@ struct DOMContainerTests {
     @Test
     func seedingDocumentRootDoesNotCreateSelectionForElementView() {
         let context = makeWebInspectorContext()
-        #expect(context.rootNode == nil)
+        #expect(context.dom.rootNode == nil)
         let viewController = makeElementViewController(context: context)
         let window = showInWindow(viewController)
         defer { window.isHidden = true }
 
         context.seedDOMDocument(documentNode())
 
-        #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("document")))
-        #expect(context.selectedNode == nil)
+        #expect(context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("document")))
+        #expect(context.dom.selectedNode == nil)
         #expect(viewController.placeholderModeForTesting == .noSelection)
         #expect(viewController.collectionView.numberOfSections == 0)
     }
@@ -286,7 +286,7 @@ struct DOMContainerTests {
         }
         #expect(didRenderBodyRows)
 
-        context.select(input)
+        context.dom.select(input)
         applyBodyStyles(
             to: context,
             selector: "input",
@@ -322,7 +322,7 @@ struct DOMContainerTests {
         window.layoutIfNeeded()
         #expect(didRenderBodyRows)
 
-        let body = try #require(context.selectedNode)
+        let body = try #require(context.dom.selectedNode)
         let input = try selectElement(named: "input", in: context)
         // Seed once to cancel the preview context's backend-less refresh
         // task, then hold the fresh selection in `.loading` so the pending
@@ -422,7 +422,7 @@ struct DOMContainerTests {
         let input = try selectElement(named: "input", in: context)
         #expect(input.elementStyles?.phase == .loading)
 
-        context.select(nil)
+        context.dom.select(nil)
 
         let didClearRows = await waitUntilRendered(in: viewController) {
             viewController.placeholderModeForTesting == .noSelection
@@ -869,8 +869,8 @@ struct DOMContainerTests {
     @Test
     func navigationDeleteRegistersDOMUndoRedoAfterSuccessfulBackendDelete() async throws {
         let fixture = try await makeLiveDOMContext()
-        let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
-        fixture.context.select(input)
+        let input = try #require(fixture.context.dom.node(for: DOMNode.ID(DOM.Node.ID("input"))))
+        fixture.context.dom.select(input)
         let undoManager = UndoManager()
         undoManager.groupsByEvent = false
         let navigationItems = DOMNavigationItems(context: fixture.context)
@@ -898,8 +898,8 @@ struct DOMContainerTests {
     @Test
     func navigationDeleteDoesNotRegisterUndoWhenBackendDeleteFails() async throws {
         let fixture = try await makeLiveDOMContext()
-        let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
-        fixture.context.select(input)
+        let input = try #require(fixture.context.dom.node(for: DOMNode.ID(DOM.Node.ID("input"))))
+        fixture.context.dom.select(input)
         let undoManager = UndoManager()
         undoManager.groupsByEvent = false
         let navigationItems = DOMNavigationItems(context: fixture.context)
@@ -914,8 +914,8 @@ struct DOMContainerTests {
     @Test
     func navigationUndoDoesNotRegisterRedoWhenBackendUndoFails() async throws {
         let fixture = try await makeLiveDOMContext()
-        let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
-        fixture.context.select(input)
+        let input = try #require(fixture.context.dom.node(for: DOMNode.ID(DOM.Node.ID("input"))))
+        fixture.context.dom.select(input)
         let undoManager = UndoManager()
         undoManager.groupsByEvent = false
         let navigationItems = DOMNavigationItems(context: fixture.context)
@@ -934,8 +934,8 @@ struct DOMContainerTests {
     @Test
     func navigationDOMRedoClearsWhenUndoManagerRegistersAnotherAction() async throws {
         let fixture = try await makeLiveDOMContext()
-        let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
-        fixture.context.select(input)
+        let input = try #require(fixture.context.dom.node(for: DOMNode.ID(DOM.Node.ID("input"))))
+        fixture.context.dom.select(input)
         let undoManager = UndoManager()
         undoManager.groupsByEvent = false
         let navigationItems = DOMNavigationItems(context: fixture.context)
@@ -965,8 +965,8 @@ struct DOMContainerTests {
     @Test
     func navigationPendingDOMRedoClearsWhenUndoManagerRegistersAnotherActionBeforeUndoCompletes() async throws {
         let fixture = try await makeLiveDOMContext()
-        let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
-        fixture.context.select(input)
+        let input = try #require(fixture.context.dom.node(for: DOMNode.ID(DOM.Node.ID("input"))))
+        fixture.context.dom.select(input)
         let undoManager = UndoManager()
         undoManager.groupsByEvent = false
         let navigationItems = DOMNavigationItems(context: fixture.context)
@@ -1003,8 +1003,8 @@ struct DOMContainerTests {
     @Test
     func navigationRedoDoesNotRegisterUndoWhenBackendRedoFails() async throws {
         let fixture = try await makeLiveDOMContext()
-        let input = try #require(fixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
-        fixture.context.select(input)
+        let input = try #require(fixture.context.dom.node(for: DOMNode.ID(DOM.Node.ID("input"))))
+        fixture.context.dom.select(input)
         let undoManager = UndoManager()
         undoManager.groupsByEvent = false
         let navigationItems = DOMNavigationItems(context: fixture.context)
@@ -1153,8 +1153,8 @@ struct DOMContainerTests {
         #expect(selectionHighlightNodeIDs.last == DOM.Node.ID("input"))
 
         let hoverFixture = try await makeLiveDOMContext()
-        let input = try #require(hoverFixture.context.node(for: DOMNode.ID(DOM.Node.ID("input"))))
-        hoverFixture.context.select(input)
+        let input = try #require(hoverFixture.context.dom.node(for: DOMNode.ID(DOM.Node.ID("input"))))
+        hoverFixture.context.dom.select(input)
         await hoverFixture.runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
         let hoverViewController = DOMTreeViewController(context: hoverFixture.context)
         let hoverWindow = showInWindow(hoverViewController, useUIKitVisibility: false)
@@ -1227,7 +1227,7 @@ struct DOMContainerTests {
             method: "highlightNode",
             count: 1
         )
-        #expect(await treeView.waitForObservedTreeRevisionForTesting(fixture.context.rootTreeController().revision))
+        #expect(await treeView.waitForObservedTreeRevisionForTesting(fixture.context.dom.treeController().revision))
         treeView.routeCurrentSelectionInvalidationForTesting()
         await treeView.waitForPageHighlightTaskForTesting()
 
@@ -1435,7 +1435,7 @@ struct DOMContainerTests {
 
     private func selectElement(named localName: String, in context: WebInspectorContext) throws -> DOMNode {
         let node = try #require(DOMPreviewFixtures.firstElement(named: localName, in: context))
-        context.select(node)
+        context.dom.select(node)
         return node
     }
 

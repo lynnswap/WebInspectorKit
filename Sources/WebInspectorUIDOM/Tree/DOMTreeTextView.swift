@@ -410,7 +410,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         if multiSelection.selectedCount > 1, multiSelection.contains(row.nodeID) {
             nodeIDs = multiSelectedNodeIDsInDisplayOrder()
         } else {
-            guard (try? context.requiredNode(for: row.nodeID)) != nil,
+            guard context.dom.node(for: row.nodeID) != nil,
                   select(row.nodeID) else {
                 return
             }
@@ -1016,7 +1016,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         let nextSelectedNodeID = currentTreeSnapshot.selectedNodeID
         let selectedNodeIDChanged = lastRoutedSelectedNodeID != nextSelectedNodeID
         lastRoutedSelectedNodeID = nextSelectedNodeID
-        let selectedNode = nextSelectedNodeID.flatMap { try? context.requiredNode(for: $0) }
+        let selectedNode = nextSelectedNodeID.flatMap { context.dom.node(for: $0) }
         let observation = selectionRevealState.observe(selectedNodeID: selectedNode?.id)
         reconcileMultiSelectionForRenderedSelection(
             selectedNodeID: observation.selectedNodeID,
@@ -1109,12 +1109,11 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 
     @discardableResult
     private func select(_ nodeID: DOMNode.ID) -> Bool {
-        do {
-            try context.dom.select(nodeID, reveal: .selectAndScroll)
-        } catch {
-            WebInspectorUIDOMLog.debug("DOM tree selection failed nodeID=\(String(describing: nodeID)): \(String(describing: error))")
+        guard let node = context.dom.node(for: nodeID) else {
+            WebInspectorUIDOMLog.debug("DOM tree selection ignored an unregistered nodeID=\(String(describing: nodeID))")
             return false
         }
+        context.dom.select(node, reveal: .selectAndScroll)
         multiSelection.notePrimarySelection(nodeID)
         setCurrentTreeSnapshot(treeController.snapshot)
         selectionRevision = currentTreeSnapshot.revision
@@ -1183,7 +1182,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 
     private func multiSelectedNodeIDsInDisplayOrder() -> [DOMNode.ID] {
         multiSelection.selectedNodeIDsInDisplayOrder(rowIndex: rowIndex).filter {
-            (try? context.requiredNode(for: $0)) != nil
+            context.dom.node(for: $0) != nil
         }
     }
 
@@ -1531,7 +1530,7 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
     private func uniqueNodeIDsInDisplayOrder(for rows: [DOMTreeRowRenderPlan]) -> [DOMNode.ID] {
         var seenNodeIDs: Set<DOMNode.ID> = []
         return rows.compactMap { row in
-            seenNodeIDs.insert(row.nodeID).inserted && (try? context.requiredNode(for: row.nodeID)) != nil ? row.nodeID : nil
+            seenNodeIDs.insert(row.nodeID).inserted && context.dom.node(for: row.nodeID) != nil ? row.nodeID : nil
         }
     }
 

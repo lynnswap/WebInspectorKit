@@ -1,46 +1,6 @@
 import Foundation
 import WebInspectorProxyKit
 
-/// Shared options for DataKit model mutations.
-public struct WebInspectorMutationOptions: Sendable, Hashable {
-    /// Default mutation behavior: participate in WebKit undo history and fail
-    /// on stale model references.
-    public static let automatic = WebInspectorMutationOptions(
-        undo: .automatic,
-        staleModel: .fail
-    )
-
-    /// The undo policy for the mutation.
-    public var undo: WebInspectorUndoPolicy
-
-    /// The stale-model handling policy for the mutation.
-    public var staleModel: WebInspectorStaleModelPolicy
-
-    /// Creates mutation options.
-    public init(
-        undo: WebInspectorUndoPolicy = .automatic,
-        staleModel: WebInspectorStaleModelPolicy = .fail
-    ) {
-        self.undo = undo
-        self.staleModel = staleModel
-    }
-}
-
-/// Controls whether a mutation participates in WebKit inspector undo history.
-public enum WebInspectorUndoPolicy: Sendable, Hashable {
-    /// Let DataKit record undoable WebKit DOM mutations where supported.
-    case automatic
-
-    /// Do not record an undo checkpoint for the mutation.
-    case disabled
-}
-
-/// Controls how DataKit handles stale model references.
-public enum WebInspectorStaleModelPolicy: Sendable, Hashable {
-    /// Fail when a model no longer belongs to the current context state.
-    case fail
-}
-
 /// Controls how DOM selection changes should be revealed to UI tree views.
 public enum DOMRevealPolicy: Sendable, Hashable {
     /// Do not reveal or select the node.
@@ -53,29 +13,13 @@ public enum DOMRevealPolicy: Sendable, Hashable {
     case selectAndScroll
 }
 
-/// The accepted subset of a requested DOM mutation.
-public struct DOMMutationResult: Sendable, Hashable {
-    /// Node identities requested by the caller.
-    public var requestedNodeIDs: [DOMNode.ID]
-
-    /// Node identities accepted by the backend mutation.
-    public var acceptedNodeIDs: [DOMNode.ID]
-
-    /// Creates a DOM mutation result.
-    public init(requestedNodeIDs: [DOMNode.ID], acceptedNodeIDs: [DOMNode.ID]) {
-        self.requestedNodeIDs = requestedNodeIDs
-        self.acceptedNodeIDs = acceptedNodeIDs
-    }
-}
-
-/// Domain operation surface for DOM model commands.
+/// The DOM of the inspected page: its nodes, the selection, the element
+/// picker, and the commands that read and edit nodes.
 ///
-/// Use this controller instead of dispatching ProxyKit DOM commands directly
-/// when working with DataKit-owned DOM nodes.
-///
-/// Node IDs address the currently registered model in this controller's
-/// context. They do not revive a retained ``DOMNode`` from an earlier document
-/// or from another context. See <doc:ModelRegistrationLifetimes>.
+/// Commands take the ``DOMNode`` they act on. A node that is no longer
+/// registered here, because its document was replaced or because it belongs
+/// to another inspection context, is never replaced by a later node with the
+/// same identifier. See <doc:ModelRegistrationLifetimes>.
 @MainActor
 public final class DOMModelController {
     private let context: WebInspectorContext
@@ -84,79 +28,156 @@ public final class DOMModelController {
         self.context = context
     }
 
-    /// Returns a live tree controller rooted at the current document.
+    /// The root node of the current document, if one is loaded.
+    public var rootNode: DOMNode? {
+        context.rootNode
+    }
+
+    /// The selected node.
+    public var selectedNode: DOMNode? {
+        context.selectedNode
+    }
+
+    /// A Boolean value indicating whether WebKit's element picker is on.
+    public var isElementPickerEnabled: Bool {
+        context.isElementPickerEnabled
+    }
+
+    /// Returns the registered node for an identifier, such as one read from
+    /// a ``DOMTreeSnapshot``.
+    public func node(for id: DOMNode.ID) -> DOMNode? {
+        context.node(for: id)
+    }
+
+    /// Returns a live tree controller that follows the current document.
     public func treeController() -> DOMTreeController {
         context.rootTreeController()
     }
 
-    /// Requests regular child nodes for a DOM node.
+    /// Returns a live tree controller rooted at a node.
+    ///
+    /// - Throws: `WebInspectorProxyError.disconnected` when the node is not
+    ///   registered in this context.
+    public func treeController(root: DOMNode) throws -> DOMTreeController {
+        try context.treeController(root: root)
+    }
+
+    /// Requests the regular child nodes of a node.
+    ///
+    /// The children arrive as updates to ``DOMNode/children``. A node that
+    /// is not registered in this context is ignored.
     public func requestChildren(
-        of nodeID: DOMNode.ID,
+        of node: DOMNode,
         depth: Int = 1
-    ) async throws {
-        try await context.requestChildren(for: nodeID, depth: depth)
+    ) async {
+        await context.requestChildren(for: node, depth: depth)
     }
 
-    /// Selects a DOM node and optionally asks tree views to reveal it.
+    /// Selects a node and optionally asks tree views to reveal it.
+    ///
+    /// Passing `nil` clears the selection. A node that is not registered in
+    /// this context is ignored, and the current selection is preserved.
     public func select(
-        _ nodeID: DOMNode.ID?,
+        _ node: DOMNode?,
         reveal: DOMRevealPolicy = .selectAndScroll
-    ) throws {
-        try context.selectNode(nodeID, reveal: reveal)
+    ) {
+        context.select(node, reveal: reveal)
     }
 
-    /// Sets an attribute value on a DOM node.
+    /// Sets an attribute value on a node.
+    ///
+    /// - Parameter registersUndo: Whether the edit joins WebKit's inspector
+    ///   undo history, which ``undo()`` and ``redo()`` step through.
     public func setAttribute(
         _ name: String,
         value: String,
-        on nodeID: DOMNode.ID,
-        options: WebInspectorMutationOptions = .automatic
+        on node: DOMNode,
+        registersUndo: Bool = true
     ) async throws {
-        try await context.setDOMAttribute(name, value: value, on: nodeID, options: options)
+        try await context.setDOMAttribute(name, value: value, on: node, registersUndo: registersUndo)
     }
 
-    /// Replaces a DOM node with the supplied outer HTML.
+    /// Replaces a node with the supplied outer HTML.
+    ///
+    /// - Parameter registersUndo: Whether the edit joins WebKit's inspector
+    ///   undo history, which ``undo()`` and ``redo()`` step through.
     public func setOuterHTML(
         _ html: String,
-        of nodeID: DOMNode.ID,
-        options: WebInspectorMutationOptions = .automatic
+        of node: DOMNode,
+        registersUndo: Bool = true
     ) async throws {
-        try await context.setDOMOuterHTML(html, of: nodeID, options: options)
+        try await context.setDOMOuterHTML(html, of: node, registersUndo: registersUndo)
     }
 
-    /// Removes DOM nodes from the inspected document.
+    /// Removes nodes from the inspected document and returns the removed
+    /// nodes.
+    ///
+    /// Nodes are removed deepest first, and a node listed twice is removed
+    /// once.
+    /// - Parameter registersUndo: Whether the edit joins WebKit's inspector
+    ///   undo history, which ``undo()`` and ``redo()`` step through.
+    @discardableResult
     public func remove(
-        _ nodeIDs: [DOMNode.ID],
-        options: WebInspectorMutationOptions = .automatic
-    ) async throws -> DOMMutationResult {
-        try await context.removeDOMNodes(nodeIDs, options: options)
+        _ nodes: [DOMNode],
+        registersUndo: Bool = true
+    ) async throws -> [DOMNode] {
+        try await context.removeDOMNodes(nodes, registersUndo: registersUndo)
     }
 
-    /// Highlights a DOM node in the inspected page.
-    public func highlight(
-        _ nodeID: DOMNode.ID
-    ) async throws {
-        try await context.highlightNode(for: nodeID)
+    /// Returns text for a node in the requested format.
+    public func copyText(
+        _ kind: DOMNode.CopyTextKind,
+        of node: DOMNode
+    ) async throws -> String {
+        try await context.copyText(kind, for: node)
     }
 
-    /// Clears the current DOM highlight.
+    /// Returns a CSS selector path for a node.
+    public func selectorPath(for node: DOMNode) throws -> String {
+        try context.selectorPath(for: node)
+    }
+
+    /// Returns an XPath expression for a node.
+    public func xPath(for node: DOMNode) throws -> String {
+        try context.xPath(for: node)
+    }
+
+    /// Highlights a node in the inspected page.
+    public func highlight(_ node: DOMNode) async throws {
+        try await context.highlight(node)
+    }
+
+    /// Clears the highlight in the inspected page.
     public func hideHighlight() async throws {
         try await context.hideHighlight()
     }
 
-    /// Enables or disables WebKit's element picker.
-    public func setInspectMode(
-        enabled: Bool
-    ) async throws {
-        try await context.setElementPickerEnabled(enabled)
+    /// Turns WebKit's element picker on or off.
+    ///
+    /// The latest call wins. A call made while a command is in flight
+    /// replaces the pending state, and every caller returns once the picker
+    /// matches the latest request. Cancelling the calling task after the
+    /// request is recorded neither cancels nor reverts it.
+    public func setElementPickerEnabled(_ isEnabled: Bool) async throws {
+        try await context.setElementPickerEnabled(isEnabled)
     }
 
-    package func toggleInspectMode() async throws {
+    package func toggleElementPicker() async throws {
         try await context.toggleElementPickerEnabled()
+    }
+
+    /// Undoes the most recent edit in WebKit's inspector undo history.
+    public func undo() async throws {
+        try await context.undoDOMChange()
+    }
+
+    /// Redoes the most recently undone edit.
+    public func redo() async throws {
+        try await context.redoDOMChange()
     }
 }
 
-/// Domain operation surface for CSS model commands.
+/// The CSS styles of DOM nodes and the commands that edit them.
 @MainActor
 public final class CSSModelController {
     private let context: WebInspectorContext
@@ -165,24 +186,25 @@ public final class CSSModelController {
         self.context = context
     }
 
-    /// Returns observable CSS styles for a DOM node.
-    public func styles(
-        for nodeID: DOMNode.ID
-    ) throws -> CSSStyles {
-        try context.styles(for: nodeID)
+    /// Returns the observable styles of an element, selecting it first.
+    ///
+    /// - Throws: An error when the node is not an element or is not
+    ///   registered in this context.
+    public func styles(for node: DOMNode) throws -> CSSStyles {
+        try context.styles(for: node)
     }
 
-    /// Requests a CSS style refresh for a DOM node.
-    public func refreshStyles(
-        for nodeID: DOMNode.ID
-    ) throws {
-        _ = try context.refreshStyles(for: nodeID)
+    /// Requests a fresh load of an element's styles, selecting it first.
+    public func refreshStyles(for node: DOMNode) throws {
+        try context.refreshStyles(for: node)
     }
 
-    /// Controls whether DataKit should hydrate CSS styles automatically.
-    public func setStyleHydrationActive(
-        _ active: Bool
-    ) {
+    /// Reports whether a style pane is visible.
+    ///
+    /// While active, stale styles of the selected node reload immediately.
+    /// While inactive, they stay stale until the next activation or
+    /// selection.
+    public func setStyleHydrationActive(_ active: Bool) {
         context.setStyleHydrationActive(active)
     }
 
@@ -190,46 +212,51 @@ public final class CSSModelController {
     public func setProperty(
         _ propertyID: CSSStyleProperty.ID,
         enabled: Bool,
-        options: WebInspectorMutationOptions = .automatic
+        registersUndo: Bool = true
     ) async throws {
-        try await context.setCSSProperty(propertyID, enabled: enabled, options: options)
+        try await context.setCSSProperty(propertyID, enabled: enabled, registersUndo: registersUndo)
     }
 
-    /// Starts an asynchronous CSS declaration toggle request.
+    /// Starts enabling or disabling a CSS declaration without waiting for
+    /// the command.
+    ///
+    /// Returns `false` without queuing a command when the property is not
+    /// editable in the styles last loaded, or when a toggle for the same
+    /// property is already running.
     @discardableResult
     public func requestSetProperty(
         _ propertyID: CSSStyleProperty.ID,
         enabled: Bool,
-        options: WebInspectorMutationOptions = .automatic
+        registersUndo: Bool = true
     ) -> Bool {
-        context.requestSetCSSProperty(propertyID, enabled: enabled, options: options)
+        context.requestSetCSSProperty(propertyID, enabled: enabled, registersUndo: registersUndo)
     }
 
     /// Replaces the declaration text for a CSS property.
     public func setDeclarationText(
         _ text: String,
         for propertyID: CSSStyleProperty.ID,
-        options: WebInspectorMutationOptions = .automatic
+        registersUndo: Bool = true
     ) async throws {
-        try await context.setCSSDeclarationText(text, for: propertyID, options: options)
+        try await context.setCSSDeclarationText(text, for: propertyID, registersUndo: registersUndo)
     }
 
     /// Replaces a CSS rule selector.
     public func setRuleSelector(
         _ selector: String,
         for ruleID: CSSStyleRule.ID,
-        options: WebInspectorMutationOptions = .automatic
+        registersUndo: Bool = true
     ) async throws {
-        try await context.setCSSRuleSelector(selector, for: ruleID, options: options)
+        try await context.setCSSRuleSelector(selector, for: ruleID, registersUndo: registersUndo)
     }
 
     /// Replaces the full text of a stylesheet.
     public func setStyleSheetText(
         _ text: String,
         for styleSheetID: CSS.StyleSheet.ID,
-        options: WebInspectorMutationOptions = .automatic
+        registersUndo: Bool = true
     ) async throws {
-        try await context.setCSSStyleSheetText(text, for: styleSheetID, options: options)
+        try await context.setCSSStyleSheetText(text, for: styleSheetID, registersUndo: registersUndo)
     }
 }
 
@@ -391,26 +418,6 @@ public final class ConsoleModelController {
     }
 }
 
-/// Undo/redo surface for edits recorded through DataKit model operations.
-@MainActor
-public final class WebInspectorEditHistory {
-    private let context: WebInspectorContext
-
-    package init(context: WebInspectorContext) {
-        self.context = context
-    }
-
-    /// Undoes the most recent edit recorded through DataKit.
-    public func undo() async throws {
-        try await context.undoDOMChange()
-    }
-
-    /// Redoes the most recent edit recorded through DataKit.
-    public func redo() async throws {
-        try await context.redoDOMChange()
-    }
-}
-
 public extension WebInspectorContext {
     /// DOM model operations for this context.
     var dom: DOMModelController {
@@ -440,10 +447,5 @@ public extension WebInspectorContext {
     /// Page-level operations for this context.
     var page: PageModelController {
         PageModelController(context: self)
-    }
-
-    /// Undo and redo operations for edits recorded by this context.
-    var editHistory: WebInspectorEditHistory {
-        WebInspectorEditHistory(context: self)
     }
 }

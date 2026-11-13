@@ -203,8 +203,8 @@ private func makeMenuFixture() throws -> DOMTreeMenuModelFixture {
     context.seedDOMDocument(menuFixtureDocument())
     let divID = DOMNode.ID(DOM.Node.ID("div"))
     let inputID = DOMNode.ID(DOM.Node.ID("input"))
-    _ = try #require(context.node(for: divID))
-    _ = try #require(context.node(for: inputID))
+    _ = try #require(context.dom.node(for: divID))
+    _ = try #require(context.dom.node(for: inputID))
     return DOMTreeMenuModelFixture(context: context, divID: divID, inputID: inputID)
 }
 

@@ -133,12 +133,12 @@ final class ContractDataKitActor {
         let _: AsyncStream<WebInspectorCollectionChange<ConsoleMessage>> = context.console.messageChanges
         #expect(context.state == .attached)
 
-        let root = try #require(context.rootNode)
+        let root = try #require(context.dom.rootNode)
         #expect(root.nodeName == "#document")
-        #expect(context.node(for: root.id) === root)
+        #expect(context.dom.node(for: root.id) === root)
         requirePersistentModel(root)
 
-        let treeController = try await context.treeController()
+        let treeController = context.dom.treeController()
         let treeSnapshot: DOMTreeSnapshot = treeController.snapshot
         #expect(treeSnapshot.rootNodeID == root.id)
         #expect(treeSnapshot.node(for: root.id)?.nodeName == "#document")
@@ -147,12 +147,12 @@ final class ContractDataKitActor {
         _ = treeController.updates
         _ = treeController.revealRequests
 
-        context.select(root)
-        #expect(context.selectedNode === root)
-        context.select(nil)
+        context.dom.select(root)
+        #expect(context.dom.selectedNode === root)
+        context.dom.select(nil)
         context.runtime.select(nil)
         context.network.clearRequests()
-        #expect(context.selectedNode == nil)
+        #expect(context.dom.selectedNode == nil)
         #expect(context.runtime.selectedContext == nil)
     }
 
@@ -164,7 +164,7 @@ final class ContractDataKitActor {
             childNodeCount: 1
         )
         let target = try await start(document: document)
-        let treeController = try await context.treeController()
+        let treeController = context.dom.treeController()
         var treeUpdates = treeController.updates.makeAsyncIterator()
         _ = try #require(await treeUpdates.next())
 
@@ -186,36 +186,36 @@ final class ContractDataKitActor {
         )
 
         _ = try #require(await treeUpdates.next())
-        let root = try #require(context.rootNode)
+        let root = try #require(context.dom.rootNode)
         guard case let .loaded(children) = root.children else {
             Issue.record("Expected the seeded document to load children.")
             return
         }
         let child = try #require(children.first)
-        #expect(context.node(for: child.id) === child)
+        #expect(context.dom.node(for: child.id) === child)
         #expect(child.attributeList.map(\.name) == ["data-contract", "data-second"])
 
         #expect(treeController.snapshot.selectorPath(for: child.id) == "main")
-        #expect(try context.selectorPath(for: child) == "main")
-        #expect(try context.xPath(for: child) == "/main")
+        #expect(try context.dom.selectorPath(for: child) == "main")
+        #expect(try context.dom.xPath(for: child) == "/main")
 
         await runtime.backend.enqueue("<main data-contract=\"dom\"></main>", for: "DOM", method: "getOuterHTML")
-        #expect(try await child.copyText(.html) == "<main data-contract=\"dom\"></main>")
-        #expect(try await child.copyText(.selectorPath) == "main")
+        #expect(try await context.dom.copyText(.html, of: child) == "<main data-contract=\"dom\"></main>")
+        #expect(try await context.dom.copyText(.selectorPath, of: child) == "main")
 
         await runtime.backend.enqueue((), for: "DOM", method: "highlightNode")
-        try await child.highlight()
+        try await context.dom.highlight(child)
         await runtime.backend.enqueue((), for: "DOM", method: "hideHighlight")
-        try await context.hideHighlight()
+        try await context.dom.hideHighlight()
         await runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
-        try await context.setElementPickerEnabled(true)
-        #expect(context.isElementPickerEnabled)
+        try await context.dom.setElementPickerEnabled(true)
+        #expect(context.dom.isElementPickerEnabled)
         await runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
-        try await context.setElementPickerEnabled(false)
-        #expect(context.isElementPickerEnabled == false)
+        try await context.dom.setElementPickerEnabled(false)
+        #expect(context.dom.isElementPickerEnabled == false)
         await runtime.backend.enqueue((), for: "DOM", method: "removeNode")
         await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
-        try await child.delete()
+        try await context.dom.remove([child])
         await runtime.backend.enqueue((), for: "Page", method: "reload")
         try await context.page.reload()
 

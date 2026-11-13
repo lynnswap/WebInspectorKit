@@ -78,7 +78,7 @@ func startBeginsFreshNetworkAttachmentEpoch() async throws {
 
     try await waitUntil { context.network.requests.isEmpty }
     try await waitUntil(in: context) {
-        context.rootNode?.id == DOMNode.ID(DOM.Node.ID("fresh-after-restart"))
+        context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("fresh-after-restart"))
             && context.state == .attached
     }
     #expect(context.network.requests.isEmpty)
@@ -120,7 +120,7 @@ func networkNavigationVisitIdentityDoesNotRepeatAcrossRestart() async throws {
     context.start()
     try await waitUntil { context.network.requests.isEmpty }
     try await waitUntil(in: context) {
-        context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restart-identity-root"))
+        context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("restart-identity-root"))
             && context.state == .attached
     }
 
@@ -881,7 +881,7 @@ func networkTargetCommitCommitsPendingNavigationVisit() async throws {
         target: target
     )
     try await waitUntil(in: context) {
-        context.rootNode?.id == DOMNode.ID(DOM.Node.ID("page-b-root"))
+        context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("page-b-root"))
             && context.state == .attached
     }
     await emitOriginatedNetworkRequest(
@@ -920,7 +920,7 @@ func networkTargetCommitCommitsPendingNavigationVisit() async throws {
         target: target
     )
     try await waitUntil(in: context) {
-        context.rootNode?.id == DOMNode.ID(DOM.Node.ID("page-a-return-root"))
+        context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("page-a-return-root"))
             && context.state == .attached
     }
     await emitOriginatedNetworkRequest(
@@ -3012,7 +3012,7 @@ func resourceTreeBackForwardVisitDoesNotDeduplicateAgainstHistoricalRequests() a
             newTarget: .init(id: .currentPage, kind: .page, frameID: FrameID("main-frame"), isProvisional: false, pageBindingID: rootID))))
         context.apply(.frameNavigated(.init(id: FrameID("main-frame"), parentID: nil, pageBindingID: rootID,
             loaderID: tree.frame.loaderId, name: nil, url: tree.frame.url, securityOrigin: nil, mimeType: "text/html")))
-        try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(DOM.Node.ID(rootID)) }
+        try await waitUntil(in: context) { context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID(rootID)) }
         #expect(context.network.resourceTreeError == nil)
     }
     let otherPage = try JSONDecoder().decode(Page.ResourceTree.self, from: Data(#"{"frame":{"id":"main-frame","loaderId":"other-loader","url":"https://example.test/other","mimeType":"text/html"},"resources":[]}"#.utf8))

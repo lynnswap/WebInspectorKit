@@ -16,7 +16,7 @@ func transportBackedStartupContinuesAfterResourceTreeFailureWithoutTimeouts() as
     )
 
     #expect(context.state == .attached)
-    #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("resource-tree-unavailable-root")))
+    #expect(context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("resource-tree-unavailable-root")))
     #expect(context.network.resourceTreeError == .commandFailed(
         domain: "Page",
         method: "Page.getResourceTree",
@@ -82,7 +82,7 @@ func malformedKnownOrderedEventFailsAttachedContext() async throws {
     await retargetTask.value
     #expect(context.currentPageRetargetTaskForTesting() == nil)
     #expect(context.currentPageForTesting?.id == target.id)
-    #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("decode-failure-root")))
+    #expect(context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("decode-failure-root")))
     let subscriptionAfterFailure = context.orderedEventSubscriptionStateForTesting
     #expect(subscriptionAfterFailure.generation == subscriptionBeforeFailure.generation + 1)
     #expect(subscriptionAfterFailure.sequence == subscriptionBeforeFailure.sequence)
@@ -196,7 +196,7 @@ func currentPageCommitBeforePageEnableAcquiresCommittedPageLease() async throws 
 
     try await waitUntil(in: context) {
         context.state == .attached
-            && context.rootNode?.id == DOMNode.ID(DOM.Node.ID("committed-root"))
+            && context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("committed-root"))
     }
     let commands = await runtime.backend.recordedCommands()
     #expect(commands.filter { $0 == RecordedCommand(domain: "Page", method: "enable") }.count == 1)
@@ -341,7 +341,7 @@ func currentPageCommitOnSameProtocolAgentRetainsRequiredDomainLeases() async thr
     )
 
     try await waitUntil(in: context) {
-        context.rootNode?.id == DOMNode.ID(DOM.Node.ID("same-agent-root"))
+        context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("same-agent-root"))
     }
     await emitOriginatedNetworkRequest(
         id: "same-agent-network",
@@ -386,7 +386,7 @@ func currentPageCommitInitializesNewAgentWithoutReenablingPage() async throws {
         target: target
     )
     try await waitUntil(in: context) {
-        context.rootNode?.id == DOMNode.ID(DOM.Node.ID("new-agent-root"))
+        context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("new-agent-root"))
     }
 
     await emitOriginatedNetworkRequest(
@@ -475,14 +475,14 @@ func documentUpdatedDuringCurrentPageRetargetUsesTheRetargetDocumentLoad() async
     await getDocumentGate.open()
 
     try await waitUntil(in: context) {
-        context.rootNode?.id == DOMNode.ID(currentDocumentID)
-            && context.rootNode?.attributes["data-buffered"] == "preserved"
+        context.dom.rootNode?.id == DOMNode.ID(currentDocumentID)
+            && context.dom.rootNode?.attributes["data-buffered"] == "preserved"
     }
     let commands = await runtime.backend.recordedCommands()
     #expect(commands.filter {
         $0 == RecordedCommand(domain: "DOM", method: "getDocument")
     }.count == 3)
-    #expect(context.node(for: DOMNode.ID(staleDocumentID)) == nil)
+    #expect(context.dom.node(for: DOMNode.ID(staleDocumentID)) == nil)
     #expect(context.state == .attached)
 }
 
@@ -638,7 +638,7 @@ func networkEnableFailureFailsStartupBeforeDocumentFetch() async throws {
         RecordedCommand(domain: "Page", method: "disable"),
         RecordedCommand(domain: "Inspector", method: "disable"),
     ])
-    #expect(context.rootNode == nil)
+    #expect(context.dom.rootNode == nil)
 }
 
 @MainActor
@@ -696,7 +696,7 @@ func consoleEnableFailureFailsStartupBeforeAttachingDocument() async throws {
         RecordedCommand(domain: "Page", method: "disable"),
         RecordedCommand(domain: "Inspector", method: "disable"),
     ])
-    #expect(context.rootNode == nil)
+    #expect(context.dom.rootNode == nil)
 }
 
 @MainActor
@@ -739,7 +739,7 @@ func runtimeEnableFailureFailsStartupBeforeConsoleNetworkAndDocumentFetch() asyn
         RecordedCommand(domain: "Page", method: "disable"),
         RecordedCommand(domain: "Inspector", method: "disable"),
     ])
-    #expect(context.rootNode == nil)
+    #expect(context.dom.rootNode == nil)
 }
 
 @MainActor
@@ -827,8 +827,8 @@ func closeAfterAttachedClearsAttachmentBackedModels() async throws {
 
     let request = try #require(context.network.requests.first)
     let message = try #require(context.console.messages.first)
-    #expect(context.rootNode?.id == DOMNode.ID(documentID))
-    #expect(context.node(for: DOMNode.ID(documentID)) != nil)
+    #expect(context.dom.rootNode?.id == DOMNode.ID(documentID))
+    #expect(context.dom.node(for: DOMNode.ID(documentID)) != nil)
     #expect(context.network.request(for: request.id) === request)
     #expect(context.console.message(for: message.id) === message)
 
@@ -836,8 +836,8 @@ func closeAfterAttachedClearsAttachmentBackedModels() async throws {
     await container.close()
 
     #expect(context.state == .detached)
-    #expect(context.rootNode == nil)
-    #expect(context.node(for: DOMNode.ID(documentID)) == nil)
+    #expect(context.dom.rootNode == nil)
+    #expect(context.dom.node(for: DOMNode.ID(documentID)) == nil)
     #expect(context.network.request(for: request.id) == nil)
     #expect(context.network.requests.isEmpty)
     #expect(request.security == requestSecurity)
@@ -885,7 +885,7 @@ func restartDisablesPreviousDomainTrackingBeforeReenable() async throws {
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("document-1")) }
+    try await waitUntil(in: context) { context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("document-1")) }
 
     await enqueueDomainDisableReplies(on: runtime.backend)
     await enqueueStartupReplies(
@@ -895,7 +895,7 @@ func restartDisablesPreviousDomainTrackingBeforeReenable() async throws {
 
     context.start()
 
-    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("document-2")) }
+    try await waitUntil(in: context) { context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("document-2")) }
 
     let commands = await runtime.backend.recordedCommands()
     #expect(commands == startupCommands + shutdownCommands + startupCommands)
@@ -931,7 +931,7 @@ func restartWaitsForPreviousStartupCleanupBeforeReenable() async throws {
     context.start()
 
     await enableGate.open()
-    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
+    try await waitUntil(in: context) { context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
 
     let commands = await runtime.backend.recordedCommands()
     #expect(commands == Array(startupCommands.prefix(5)) + [
@@ -1030,8 +1030,8 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
         count: 5
     ))
 
-    let oldElement = try #require(context.node(for: DOMNode.ID(oldElementID)))
-    context.select(oldElement)
+    let oldElement = try #require(context.dom.node(for: DOMNode.ID(oldElementID)))
+    context.dom.select(oldElement)
     context.seedSelectedNodeStyles(matchedStyles: CSS.MatchedStyles())
     let oldStyles = try #require(oldElement.elementStyles)
     let oldConsoleMessage = try #require(context.console.messages.first)
@@ -1126,8 +1126,8 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
     #expect(await runtime.backend.activeOrderedEventSubscriberCount(for: target) == 1)
     #expect(context.state == .attached)
 
-    let freshElement = try #require(context.node(for: DOMNode.ID(freshElementID)))
-    context.select(freshElement)
+    let freshElement = try #require(context.dom.node(for: DOMNode.ID(freshElementID)))
+    context.dom.select(freshElement)
     context.seedSelectedNodeStyles(matchedStyles: CSS.MatchedStyles())
     let freshStyles = try #require(freshElement.elementStyles)
     #expect(freshStyles.phase == .loaded)
@@ -1235,9 +1235,9 @@ func startupRefetchesDocumentWhenMainFrameNavigatesBeforeAttach() async throws {
     )
     await consoleGate.open()
 
-    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(freshDocumentID) }
+    try await waitUntil(in: context) { context.dom.rootNode?.id == DOMNode.ID(freshDocumentID) }
     #expect(context.state == .attached)
-    #expect(context.node(for: DOMNode.ID(staleDocumentID)) == nil)
+    #expect(context.dom.node(for: DOMNode.ID(staleDocumentID)) == nil)
     #expect(await runtime.backend.recordedCommands() == startupCommands + [
         RecordedCommand(domain: "DOM", method: "getDocument")
     ])
@@ -1256,7 +1256,7 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
         targetID: oldTargetID,
         documentID: "old-root"
     )
-    let domTreeController = try await context.treeController()
+    let domTreeController = context.dom.treeController()
     let domUpdates = DOMTreeUpdateRecorder(stream: domTreeController.updates)
     defer { domUpdates.cancel() }
     try await domUpdates.waitUntilStarted()
@@ -1264,8 +1264,8 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     let startupMessageCount = await backend.sentTargetMessages().count
 
     #expect(context.state == .attached)
-    #expect(context.rootNode?.id == oldRootID)
-    #expect(context.node(for: oldRootID) != nil)
+    #expect(context.dom.rootNode?.id == oldRootID)
+    #expect(context.dom.node(for: oldRootID) != nil)
     await receiveTransportTargetEvent(
         transport,
         targetID: oldTargetID,
@@ -1365,7 +1365,7 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
         result: "{}"
     )
 
-    try await waitUntil(in: context) { context.rootNode?.id == newRootID }
+    try await waitUntil(in: context) { context.dom.rootNode?.id == newRootID }
     try await waitUntil {
         domUpdates.updates.contains { update in
             guard case let .snapshot(snapshot, .pageChanged) = update else {
@@ -1388,8 +1388,8 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
     })
     #expect(resetUpdateIndex < pageChangedUpdateIndex)
     #expect(context.state == .attached)
-    #expect(context.node(for: oldRootID) == nil)
-    #expect(context.node(for: newRootID) != nil)
+    #expect(context.dom.node(for: oldRootID) == nil)
+    #expect(context.dom.node(for: newRootID) != nil)
     #expect(context.network.requests.map(\.id) == [NetworkRequest.ID(retainedRequestID)])
 
     let postCommitRequestID = Network.Request.ID("commit-post-request")
@@ -1451,7 +1451,7 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
         method: "DOM.attributeModified",
         params: #"{"nodeId":"new-root","name":"data-probe","value":"new"}"#
     )
-    try await waitUntil(in: context) { context.rootNode?.attributes["data-probe"] == "new" }
+    try await waitUntil(in: context) { context.dom.rootNode?.attributes["data-probe"] == "new" }
     try await waitUntil {
         domUpdates.updates.last == .delta(.nodeChanged(nodeID: newRootID))
     }
@@ -1461,8 +1461,8 @@ func currentPageCommitRetargetsDataKitStateToNewTransportTarget() async throws {
         }
         return true
     })
-    #expect(context.rootNode?.childNodeCount == 0)
-    #expect(context.node(for: oldRouteChildID) == nil)
+    #expect(context.dom.rootNode?.childNodeCount == 0)
+    #expect(context.dom.node(for: oldRouteChildID) == nil)
 }
 
 @MainActor
@@ -1478,7 +1478,7 @@ func currentPageProcessTerminationInterruptsPickerAndRetargetsWithoutClearingNet
     let startupMessageCount = await backend.sentTargetMessages().count
 
     #expect(context.state == .attached)
-    #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("destroyed-root")))
+    #expect(context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("destroyed-root")))
     await receiveTransportTargetEvent(
         transport,
         targetID: oldTargetID,
@@ -1499,7 +1499,7 @@ func currentPageProcessTerminationInterruptsPickerAndRetargetsWithoutClearingNet
 
     let interruptedPickerMessageCount = await backend.sentTargetMessages().count
     let interruptedPickerTask = Task { @MainActor in
-        try await context.setElementPickerEnabled(true)
+        try await context.dom.setElementPickerEnabled(true)
     }
     let interruptedInspectMode = try await waitForTransportTargetMessage(
         backend,
@@ -1515,8 +1515,8 @@ func currentPageProcessTerminationInterruptsPickerAndRetargetsWithoutClearingNet
     } catch {}
 
     #expect(context.state == .attached)
-    #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("destroyed-root")))
-    #expect(context.isElementPickerEnabled == false)
+    #expect(context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("destroyed-root")))
+    #expect(context.dom.isElementPickerEnabled == false)
     #expect(context.network.requests.map(\.id) == [NetworkRequest.ID(retainedRequestID)])
     #expect(context.network.requests.first === retainedRequest)
     #expect(retainedRequest.security?.connection?.tlsProtocol == "TLS 1.3")
@@ -1594,17 +1594,17 @@ func currentPageProcessTerminationInterruptsPickerAndRetargetsWithoutClearingNet
     )
 
     try await waitUntil(in: context) {
-        context.rootNode?.id == DOMNode.ID(DOM.Node.ID("reattached-root"))
+        context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("reattached-root"))
     }
     #expect(context.state == .attached)
-    #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("reattached-root")))
+    #expect(context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("reattached-root")))
     #expect(context.network.requests.map(\.id) == [NetworkRequest.ID(retainedRequestID)])
     #expect(context.network.requests.first === retainedRequest)
     #expect(retainedRequest.security?.certificate?.subject == "retained.example.test")
 
     let pickerMessageCount = await backend.sentTargetMessages().count
     let pickerTask = Task { @MainActor in
-        try await context.setElementPickerEnabled(true)
+        try await context.dom.setElementPickerEnabled(true)
     }
     let inspectMode = try await waitForTransportTargetMessage(
         backend,
@@ -1619,7 +1619,7 @@ func currentPageProcessTerminationInterruptsPickerAndRetargetsWithoutClearingNet
         result: "{}"
     )
     try await pickerTask.value
-    #expect(context.isElementPickerEnabled)
+    #expect(context.dom.isElementPickerEnabled)
 }
 
 @MainActor
@@ -1704,21 +1704,21 @@ func currentPageDestroyWithoutReplacementRegressesToAttachingAndRecovers() async
 
     let context = container.mainContext
     try await waitUntil(in: context, timeout: .seconds(5)) { context.state == .attached }
-    #expect(context.rootNode != nil)
+    #expect(context.dom.rootNode != nil)
 
     await transport.receiveRootMessage(
         #"{"method":"Target.targetDestroyed","params":{"targetId":"page-doomed"}}"#
     )
 
     try await waitUntil(in: context, timeout: .seconds(5)) {
-        context.state == .attaching && context.rootNode == nil
+        context.state == .attaching && context.dom.rootNode == nil
     }
 
     await installTransportPageTarget(in: transport, targetID: rebornTargetID, frameID: "reborn-frame")
 
     let rebornRootID = DOMNode.ID(DOM.Node.ID("reborn-root"))
     try await waitUntil(in: context, timeout: .seconds(5)) {
-        context.state == .attached && context.rootNode?.id == rebornRootID
+        context.state == .attached && context.dom.rootNode?.id == rebornRootID
     }
 }
 
@@ -1788,7 +1788,7 @@ func startCancelsInFlightCurrentPageRetargetBeforeRestarting() async throws {
     context.start()
     #expect(retargetTask.isCancelled)
     try await waitUntil(in: context, timeout: .seconds(5)) {
-        context.state == .attached && context.rootNode?.id == restartedRootID
+        context.state == .attached && context.dom.rootNode?.id == restartedRootID
     }
 
     await receiveTransportTargetReply(
@@ -1800,8 +1800,8 @@ func startCancelsInFlightCurrentPageRetargetBeforeRestarting() async throws {
     await retargetTask.value
 
     #expect(context.state == .attached)
-    #expect(context.rootNode?.id == restartedRootID)
-    #expect(context.node(for: staleRetargetRootID) == nil)
+    #expect(context.dom.rootNode?.id == restartedRootID)
+    #expect(context.dom.node(for: staleRetargetRootID) == nil)
 }
 
 @MainActor
@@ -1843,7 +1843,7 @@ func mainFrameNavigatedReloadsDOMAndClearsRuntimeContexts() async throws {
         result: transportDocumentResult(nodeID: "navigated-root")
     )
 
-    try await waitUntil(in: context) { context.rootNode?.id == navigatedRootID }
+    try await waitUntil(in: context) { context.dom.rootNode?.id == navigatedRootID }
     #expect(context.runtime.executionContexts.isEmpty)
     await receiveTransportTargetEvent(
         transport,
@@ -1890,7 +1890,7 @@ func closeDuringStartupKeepsContextDetached() async throws {
     await startupTask.value
 
     #expect(context.state == .detached)
-    #expect(context.rootNode == nil)
+    #expect(context.dom.rootNode == nil)
 
     let commands = await runtime.backend.recordedCommands()
     #expect(commands == Array(startupCommands.prefix(7)) + [

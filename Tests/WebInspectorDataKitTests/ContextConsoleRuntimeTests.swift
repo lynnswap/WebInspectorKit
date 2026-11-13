@@ -134,7 +134,7 @@ func transportBackedStartupCapturesRuntimeAndConsoleReplayBeforeEnableReplies() 
     )
 
     try await waitUntil(in: context) { context.state == .attached }
-    #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("1")))
+    #expect(context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("1")))
     #expect(context.runtime.selectedContext?.id == RuntimeContext.ID(Runtime.ExecutionContext.ID("11")))
     #expect(context.console.messages.map(\.text) == ["replayed"])
 }
@@ -274,7 +274,7 @@ func restartClearsRuntimeContextsBeforeEnableReplay() async throws {
     }
 
     await enableGate.open()
-    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
+    try await waitUntil(in: context) { context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
     #expect(context.runtime.selectedContext?.id == RuntimeContext.ID(replayID))
 }
 
@@ -317,7 +317,7 @@ func restartClearsConsoleMessagesBeforeConsoleReplay() async throws {
     try await waitUntil { context.console.messages.map(\.text) == ["old"] }
 
     await enableGate.open()
-    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
+    try await waitUntil(in: context) { context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
     #expect(context.console.messages.count == 1)
 }
 

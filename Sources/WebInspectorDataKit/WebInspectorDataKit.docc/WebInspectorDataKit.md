@@ -49,10 +49,10 @@ final class InspectorModel {
 Contexts and the models they vend are bound to the main actor.
 ``WebInspectorContainer/mainContext`` is the context to use from UIKit.
 
-Use the domain controllers on ``WebInspectorContext`` for high-level operations:
+Use the domain objects on ``WebInspectorContext`` for state and operations:
 
 ```swift
-try await context.dom.setInspectMode(enabled: true)
+try await context.dom.setElementPickerEnabled(true)
 try await context.page.reload()
 
 let result = try await context.runtime.evaluate("document.title")
@@ -105,4 +105,3 @@ access with no model layer.
 - ``RuntimeModelController``
 - ``CSSModelController``
 - ``PageModelController``
-- ``WebInspectorEditHistory``

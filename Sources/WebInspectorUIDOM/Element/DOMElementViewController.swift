@@ -181,13 +181,13 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func startObservingState() {
-        bindSelectedNode(context.selectedNode)
+        bindSelectedNode(context.dom.selectedNode)
         statusTask = Task { @MainActor [weak self, context] in
             for await status in context.statusUpdates {
                 guard let self else {
                     return
                 }
-                bindSelectedNode(status.selectedNodeID.flatMap { context.node(for: $0) })
+                bindSelectedNode(status.selectedNodeID.flatMap { context.dom.node(for: $0) })
             }
         }
     }
@@ -421,7 +421,7 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     package func renderCurrentStylesForTesting() {
-        guard let selectedNode = context.selectedNode else {
+        guard let selectedNode = context.dom.selectedNode else {
             applySnapshotUpdate(styleSnapshotCoordinator.updateNoSelection())
             return
         }

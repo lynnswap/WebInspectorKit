@@ -20,11 +20,13 @@ initializers remain synchronous after preparation. DataKit, ProxyKit, and
 WebKitRuntime consumers that do not use the built-in UIKit UI do not need this
 UI preparation step.
 
-### Network, Console, Runtime, and Page operations live on the domain objects
+### State and operations live on the domain objects
 
-`WebInspectorContext` no longer repeats the operations of `context.network`,
-`context.console`, `context.runtime`, and `context.page`, and
-`NetworkRequest` and `RuntimeObject` no longer start commands themselves.
+`WebInspectorContext` no longer repeats the state and operations of
+`context.dom`, `context.css`, `context.network`, `context.console`,
+`context.runtime`, and `context.page`. `DOMNode`, `NetworkRequest`, and
+`RuntimeObject` no longer start commands themselves, and DOM operations take
+the `DOMNode` instead of its ID.
 
 | Before | After |
 | --- | --- |
@@ -38,6 +40,25 @@ UI preparation step.
 | `context.evaluate(expression)` | `context.runtime.evaluate(expression)` |
 | `object.properties()`, `object.collectionEntries()` | `context.runtime.properties(of: object)`, `context.runtime.collectionEntries(of: object)` |
 | `context.reloadPage()` | `context.page.reload()` |
+| `context.rootNode`, `context.selectedNode`, `context.isElementPickerEnabled` | `context.dom.rootNode`, `context.dom.selectedNode`, `context.dom.isElementPickerEnabled` |
+| `context.node(for: id)` | `context.dom.node(for: id)` |
+| `context.select(node)`, `context.dom.select(id)` | `context.dom.select(node)` |
+| `node.requestChildren()`, `context.dom.requestChildren(of: id)` | `context.dom.requestChildren(of: node)` |
+| `node.highlight()`, `context.highlight(node)`, `context.dom.highlight(id)` | `context.dom.highlight(node)` |
+| `node.copyText(kind)`, `context.copyText(kind, for: node)` | `context.dom.copyText(kind, of: node)` |
+| `node.delete()`, `context.delete(nodes)`, `context.dom.remove(ids)` | `context.dom.remove(nodes)`, which returns the removed nodes |
+| `context.dom.setAttribute(_:value:on: id)`, `context.dom.setOuterHTML(_:of: id)` | The same methods with the node |
+| `context.selectorPath(for:)`, `context.xPath(for:)`, `context.hideHighlight()` | The same methods on `context.dom` |
+| `context.setElementPickerEnabled(_:)`, `context.dom.setInspectMode(enabled:)` | `context.dom.setElementPickerEnabled(_:)` |
+| `context.treeController()`, `context.treeController(root:)` | `context.dom.treeController()`, `context.dom.treeController(root:)` |
+| `context.editHistory.undo()`, `context.editHistory.redo()` | `context.dom.undo()`, `context.dom.redo()` |
+| `context.css.styles(for: id)`, `context.css.refreshStyles(for: id)` | The same methods with the node |
+| `context.setStyleHydrationActive(_:)`, `context.requestSetCSSProperty(_:enabled:options:)` | `context.css.setStyleHydrationActive(_:)`, `context.css.requestSetProperty(_:enabled:)` |
+| `options: WebInspectorMutationOptions(undo: .disabled)` | `registersUndo: false` |
+
+`WebInspectorMutationOptions`, `WebInspectorUndoPolicy`,
+`WebInspectorStaleModelPolicy`, `DOMMutationResult`, and
+`WebInspectorEditHistory` are removed.
 
 ### Queries and fetched results become ordered collections
 
