@@ -1,20 +1,21 @@
 # Model Registration Lifetimes
 
-Retain the last reported model state independently from the context registration
-that permits operations.
+Retain the last reported model state independently from the registration that
+permits operations.
 
 ## Model Objects and Current Registration
 
 DataKit model objects preserve identity and their last reported properties for as
 long as your code retains them. Their operational registration is shorter: a DOM
-document update, Runtime context destruction, or release of the originating
-``WebInspectorContext`` can end it.
+document update, Runtime context destruction, or the end of the attachment that
+produced them can end it. Attaching a ``WebInspector`` again starts with new
+models, even for the same web view.
 
-The context's current model registration is authoritative. DataKit never replaces
-a stale object with a different object that happens to have the same ID.
+The inspector's current registration is authoritative. DataKit never replaces a
+stale object with a different object that happens to have the same ID.
 Operations take the model object for that reason. An ID, such as one read from a
-``DOMTreeSnapshot``, resolves to the model currently registered in the context;
-it is not a generation-spanning model handle.
+``DOMTreeSnapshot``, resolves to the model currently registered; it is not a
+generation-spanning model handle.
 
 Operations use these stale semantics:
 
@@ -22,27 +23,31 @@ Operations use these stale semantics:
   sending a protocol command.
 - Nonthrowing selection operations ignore a stale or foreign non-`nil` model and
   preserve the current selection. Passing `nil` still clears the selection.
-- ``DOMModelController/requestChildren(of:depth:)`` ignores a stale node. It
+- ``DOMInspector/requestChildren(of:depth:)`` ignores a stale node. It
   never redirects the request to a same-ID node from a later document.
-- ``NetworkModelController/fetchResponseBody(for:)`` ignores a stale or
+- ``NetworkInspector/fetchResponseBody(for:)`` ignores a stale or
   foreign request and leaves its response body as it is.
 
-Resolve current models from the context or a current tree snapshot immediately
+Resolve current models from the inspector or a current tree snapshot immediately
 before an operation:
 
 ```swift
 if let nodeID = tree.snapshot.selectedNodeID,
-   let node = context.dom.node(for: nodeID) {
-    try await context.dom.highlight(node)
+   let node = inspector.dom.node(for: nodeID) {
+    try await inspector.dom.highlight(node)
 }
 ```
 
-## Collections After Context Release
+A ``DOMTreeController`` from ``DOMInspector/treeController()`` follows the
+inspector across attachments: it publishes a `reset` snapshot when the
+attachment changes and then shows the new page's document.
 
-The change streams from ``NetworkModelController/requestChanges`` and
-``ConsoleModelController/messageChanges`` do not retain the context. When the
-context is released, they finish.
+## Collection Changes Across Attachments
 
-Detaching, restarting, or failing an inspection context does not finish them
-while the context object remains alive. A restart or a clear publishes
-`removedAll`.
+The change streams from ``NetworkInspector/requestChanges`` and
+``ConsoleInspector/messageChanges`` continue across attachments. Detaching,
+attaching again, or clearing publishes `removedAll`, and a new attachment then
+publishes the models it starts with as `inserted`.
+
+The streams do not retain the inspector. They finish when the inspector and its
+domain objects are released.

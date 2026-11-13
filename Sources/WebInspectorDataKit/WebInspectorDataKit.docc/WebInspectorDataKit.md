@@ -9,53 +9,46 @@ models instead of sending protocol commands directly. DataKit owns DOM, Network,
 Console, Runtime, and CSS model state for one inspected page and keeps those
 models updated as WebKit emits protocol events.
 
-Attach a ``WebInspectorContainer`` to a `WKWebView`, then read the
-``WebInspectorContext`` for UI-bound model state:
+Create a ``WebInspector``, attach it to a `WKWebView`, and read its domain
+objects:
 
 ```swift
 import WebKit
 import WebInspectorDataKit
 
 @MainActor
-final class InspectorModel {
-    private var container: WebInspectorContainer?
-    private(set) var context: WebInspectorContext?
-    private var treeTask: Task<Void, Never>?
+final class RequestListModel {
+    let inspector = WebInspector()
+    private var changesTask: Task<Void, Never>?
 
-    func attach(to webView: WKWebView) async throws {
-        let container = try await WebInspectorContainer(attachingTo: webView)
-        let context = container.mainContext
-        let tree = context.dom.treeController()
-
-        treeTask = Task { @MainActor in
-            for await update in tree.updates {
-                render(update)
+    func inspect(_ webView: WKWebView) {
+        inspector.attach(to: webView)
+        let changes = inspector.network.requestChanges
+        var requests = inspector.network.requests
+        changesTask?.cancel()
+        changesTask = Task { @MainActor in
+            for await change in changes {
+                apply(change, to: &requests)
             }
         }
-
-        self.container = container
-        self.context = context
-    }
-
-    func close() async {
-        treeTask?.cancel()
-        await container?.close()
-        container = nil
-        context = nil
     }
 }
 ```
 
-Contexts and the models they vend are bound to the main actor.
-``WebInspectorContainer/mainContext`` is the context to use from UIKit.
+``WebInspector/attach(to:configuration:)`` and ``WebInspector/detach()`` return
+immediately, and ``WebInspector/state`` reports their progress. Attaching again
+replaces the current attachment, so the same call follows the user from one web
+view to another. The inspector and its models are bound to the main actor and
+are observable.
 
-Use the domain objects on ``WebInspectorContext`` for state and operations:
+Each domain object holds the state of its domain and the commands that act on
+its models:
 
 ```swift
-try await context.dom.setElementPickerEnabled(true)
-try await context.page.reload()
+try await inspector.dom.setElementPickerEnabled(true)
+try await inspector.page.reload()
 
-let result = try await context.runtime.evaluate("document.title")
+let result = try await inspector.runtime.evaluate("document.title")
 print(result.object.description ?? "")
 ```
 
@@ -70,10 +63,9 @@ access with no model layer.
 
 - <doc:ModelRegistrationLifetimes>
 
-### Creating a Model Context
+### Inspecting a Web View
 
-- ``WebInspectorContainer``
-- ``WebInspectorContext``
+- ``WebInspector``
 
 ### Reading DOM State
 
@@ -97,11 +89,11 @@ access with no model layer.
 - ``CSSStyleSection``
 - ``CSSStyleProperty``
 
-### Domain Operations
+### Domains
 
-- ``DOMModelController``
-- ``NetworkModelController``
-- ``ConsoleModelController``
-- ``RuntimeModelController``
-- ``CSSModelController``
-- ``PageModelController``
+- ``DOMInspector``
+- ``NetworkInspector``
+- ``ConsoleInspector``
+- ``RuntimeInspector``
+- ``CSSInspector``
+- ``PageInspector``

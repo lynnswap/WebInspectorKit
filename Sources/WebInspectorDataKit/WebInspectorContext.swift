@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import WebInspectorProxyKit
 
 /// The identity-preserving model context for an inspected page.
@@ -6,7 +7,7 @@ import WebInspectorProxyKit
 /// A context owns observable DOM, Network, Console, Runtime, and CSS models.
 /// It is bound to the main actor, like the models it vends.
 @MainActor
-public final class WebInspectorContext {
+package final class WebInspectorContext {
     @MainActor
     package struct DOMUndoRedoCommands {
         private weak var context: WebInspectorContext?
@@ -202,49 +203,50 @@ public final class WebInspectorContext {
     }
 #endif
 
-    /// The attachment state of a context.
-    public enum State: Equatable, Sendable {
-        /// The context is enabling domains and loading initial state.
-        case attaching
-
-        /// The context is attached and has started observing the page.
-        case attached
-
-        /// The context has been detached.
-        case detached
-
-        /// The context failed with an inspector error.
-        case failed(WebInspectorProxyError)
-    }
+    package typealias State = WebInspector.State
 
     /// A compact status value suitable for UI binding.
-    public struct Status: Equatable, Sendable {
+    package struct Status: Equatable, Sendable {
         /// The current attachment state.
-        public let state: State
+        package let state: State
 
         /// The currently selected DOM node identity.
-        public let selectedNodeID: DOMNode.ID?
+        package let selectedNodeID: DOMNode.ID?
 
         /// A Boolean value indicating whether WebKit inspect mode is enabled.
-        public let isElementPickerEnabled: Bool
+        package let isElementPickerEnabled: Bool
     }
 
     private(set) weak var container: WebInspectorContainer?
+    /// The state that a ``WebInspector`` republishes to observers.
+    @MainActor
+    @Observable
+    final class ObservedState {
+        var state: State = .attaching
+        var teardownError: WebInspectorProxyError?
+        var networkResourceTreeError: WebInspectorProxyError?
+        var rootNode: DOMNode?
+        var selectedNode: DOMNode?
+        var isElementPickerEnabled = false
+    }
+
+    private let observed = ObservedState()
     private let proxy: WebInspectorProxy
     private let domainEnablement: WebInspectorDomainEnablementRegistry
-    /// The current attachment state.
-    public private(set) var state: State {
-        didSet {
+    package private(set) var state: State {
+        get { observed.state }
+        set {
+            observed.state = newValue
             #if DEBUG
             stateChangesForTesting.yield(())
             #endif
         }
     }
 
-    /// The terminal teardown error, if the context failed or detached because
-    /// of an inspector error.
-    public private(set) var teardownError: WebInspectorProxyError? {
-        didSet {
+    package private(set) var teardownError: WebInspectorProxyError? {
+        get { observed.teardownError }
+        set {
+            observed.teardownError = newValue
             #if DEBUG
             stateChangesForTesting.yield(())
             #endif
@@ -252,7 +254,9 @@ public final class WebInspectorContext {
     }
 
     private(set) var networkResourceTreeError: WebInspectorProxyError? {
-        didSet {
+        get { observed.networkResourceTreeError }
+        set {
+            observed.networkResourceTreeError = newValue
             #if DEBUG
             stateChangesForTesting.yield(())
             #endif
@@ -260,7 +264,9 @@ public final class WebInspectorContext {
     }
 
     private(set) var rootNode: DOMNode? {
-        didSet {
+        get { observed.rootNode }
+        set {
+            observed.rootNode = newValue
             #if DEBUG
             stateChangesForTesting.yield(())
             #endif
@@ -268,7 +274,9 @@ public final class WebInspectorContext {
     }
 
     private(set) var selectedNode: DOMNode? {
-        didSet {
+        get { observed.selectedNode }
+        set {
+            observed.selectedNode = newValue
             #if DEBUG
             stateChangesForTesting.yield(())
             #endif
@@ -276,7 +284,9 @@ public final class WebInspectorContext {
     }
 
     private(set) var isElementPickerEnabled: Bool {
-        didSet {
+        get { observed.isElementPickerEnabled }
+        set {
+            observed.isElementPickerEnabled = newValue
             #if DEBUG
             stateChangesForTesting.yield(())
             #endif
@@ -361,17 +371,12 @@ public final class WebInspectorContext {
     private var nextPageHighlightOperationID: UInt64
 
     /// Creates a context for a container.
-    public init(_ container: WebInspectorContainer) {
+    package init(_ container: WebInspectorContainer) {
         self.container = container
         proxy = container.proxy
         domainEnablement = container.domainEnablement
-        state = .attaching
-        teardownError = nil
-        rootNode = nil
-        selectedNode = nil
         domEditHistoryTarget = nil
         didInvalidateDOMEditHistoryTarget = false
-        isElementPickerEnabled = false
         currentPage = nil
         currentPageGeneration = 0
         domDocumentGeneration = 0
@@ -463,7 +468,7 @@ public final class WebInspectorContext {
     }
 
     /// Starts observing the inspected page and rebuilding DataKit models.
-    public func start() {
+    package func start() {
         let previousStartupTask = startupTask
         let previousCurrentPageCleanupTask = currentPageCleanupTask
         previousStartupTask?.cancel()
@@ -1004,6 +1009,22 @@ public final class WebInspectorContext {
         return DOMTreeController(tree: tree)
     }
 
+    /// Hands the live tree states to the context that replaces this one, and
+    /// shows them that context's document.
+    func transferTreeStates(to context: WebInspectorContext) {
+        pruneReleasedTreeStates()
+        let transferred = treeStates
+        treeStates = []
+        context.treeStates.append(contentsOf: transferred)
+        for reference in transferred {
+            reference.tree?.applySnapshot(
+                rootNode: context.rootNode,
+                selectedNode: context.selectedNode,
+                reason: .reset
+            )
+        }
+    }
+
     func rootTreeController() -> DOMTreeController {
         let tree = DOMTreeState(rootNode: rootNode, selectedNode: selectedNode)
         treeStates.append(WeakDOMTreeState(tree))
@@ -1060,6 +1081,16 @@ public final class WebInspectorContext {
             object: registerClientRuntimeObject(result.object, authority: authority),
             isException: result.wasThrown
         )
+    }
+
+    /// Sends every Network and Console collection change to `requests` and
+    /// `messages` as well, or stops doing so when they are `nil`.
+    func setCollectionChangeMirrors(
+        requests: WebInspectorAsyncStreamRelay<WebInspectorCollectionChange<NetworkRequest>>?,
+        messages: WebInspectorAsyncStreamRelay<WebInspectorCollectionChange<ConsoleMessage>>?
+    ) {
+        networkRequestStore.changeMirror = requests
+        consoleStore.changeMirror = messages
     }
 
     package var networkRequests: [NetworkRequest] {
@@ -1311,7 +1342,7 @@ public final class WebInspectorContext {
     }
 
     /// Stops observing the inspected page and tears down context-owned state.
-    public func stop() async {
+    package func stop() async {
         await detach()
     }
 

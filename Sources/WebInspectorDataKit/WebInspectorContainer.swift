@@ -19,7 +19,7 @@ import WebInspectorProxyKit
 ///
 /// await container.close()
 /// ```
-public final class WebInspectorContainer: @unchecked Sendable {
+package final class WebInspectorContainer: @unchecked Sendable {
     let proxy: WebInspectorProxy
     let domainEnablement: WebInspectorDomainEnablementRegistry
 
@@ -29,7 +29,7 @@ public final class WebInspectorContainer: @unchecked Sendable {
     ///
     /// The context is created lazily and starts observing the inspected page
     /// when first accessed.
-    @MainActor public var mainContext: WebInspectorContext {
+    @MainActor package var mainContext: WebInspectorContext {
         if let context = _mainContext {
             return context
         }
@@ -40,14 +40,14 @@ public final class WebInspectorContainer: @unchecked Sendable {
     }
 
     /// Creates a container from an existing proxy connection.
-    public init(proxy: WebInspectorProxy) {
+    package init(proxy: WebInspectorProxy) {
         self.proxy = proxy
         domainEnablement = WebInspectorDomainEnablementRegistry()
     }
 
     /// Attaches to a web view and creates a container for the resulting proxy.
     @MainActor
-    public convenience init(
+    package convenience init(
         attachingTo webView: WKWebView,
         configuration: WebInspectorProxy.Configuration = .init()
     ) async throws {
@@ -56,7 +56,7 @@ public final class WebInspectorContainer: @unchecked Sendable {
     }
 
     /// Stops the main context and closes the underlying proxy connection.
-    public func close() async {
+    package func close() async {
         await stopMainContext()
         await proxy.close()
     }

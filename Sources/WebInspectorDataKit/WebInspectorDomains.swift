@@ -18,14 +18,18 @@ public enum DOMRevealPolicy: Sendable, Hashable {
 ///
 /// Commands take the ``DOMNode`` they act on. A node that is no longer
 /// registered here, because its document was replaced or because it belongs
-/// to another inspection context, is never replaced by a later node with the
+/// to another inspector, is never replaced by a later node with the
 /// same identifier. See <doc:ModelRegistrationLifetimes>.
 @MainActor
-public final class DOMModelController {
-    private let context: WebInspectorContext
+public final class DOMInspector {
+    private let attachment: WebInspectorAttachment
 
-    package init(context: WebInspectorContext) {
-        self.context = context
+    init(attachment: WebInspectorAttachment) {
+        self.attachment = attachment
+    }
+
+    private var context: WebInspectorContext {
+        attachment.context
     }
 
     /// The root node of the current document, if one is loaded.
@@ -57,7 +61,7 @@ public final class DOMModelController {
     /// Returns a live tree controller rooted at a node.
     ///
     /// - Throws: `WebInspectorProxyError.disconnected` when the node is not
-    ///   registered in this context.
+    ///   currently registered.
     public func treeController(root: DOMNode) throws -> DOMTreeController {
         try context.treeController(root: root)
     }
@@ -65,7 +69,7 @@ public final class DOMModelController {
     /// Requests the regular child nodes of a node.
     ///
     /// The children arrive as updates to ``DOMNode/children``. A node that
-    /// is not registered in this context is ignored.
+    /// is not currently registered is ignored.
     public func requestChildren(
         of node: DOMNode,
         depth: Int = 1
@@ -179,17 +183,21 @@ public final class DOMModelController {
 
 /// The CSS styles of DOM nodes and the commands that edit them.
 @MainActor
-public final class CSSModelController {
-    private let context: WebInspectorContext
+public final class CSSInspector {
+    private let attachment: WebInspectorAttachment
 
-    package init(context: WebInspectorContext) {
-        self.context = context
+    init(attachment: WebInspectorAttachment) {
+        self.attachment = attachment
+    }
+
+    private var context: WebInspectorContext {
+        attachment.context
     }
 
     /// Returns the observable styles of an element, selecting it first.
     ///
     /// - Throws: An error when the node is not an element or is not
-    ///   registered in this context.
+    ///   currently registered.
     public func styles(for node: DOMNode) throws -> CSSStyles {
         try context.styles(for: node)
     }
@@ -262,11 +270,15 @@ public final class CSSModelController {
 
 /// Domain operation surface for page-level commands.
 @MainActor
-public final class PageModelController {
-    private let context: WebInspectorContext
+public final class PageInspector {
+    private let attachment: WebInspectorAttachment
 
-    package init(context: WebInspectorContext) {
-        self.context = context
+    init(attachment: WebInspectorAttachment) {
+        self.attachment = attachment
+    }
+
+    private var context: WebInspectorContext {
+        attachment.context
     }
 
     /// Reloads the inspected page.
@@ -280,11 +292,15 @@ public final class PageModelController {
 /// The Runtime execution contexts of the inspected page and the commands
 /// that evaluate JavaScript and read remote objects.
 @MainActor
-public final class RuntimeModelController {
-    private let context: WebInspectorContext
+public final class RuntimeInspector {
+    private let attachment: WebInspectorAttachment
 
-    package init(context: WebInspectorContext) {
-        self.context = context
+    init(attachment: WebInspectorAttachment) {
+        self.attachment = attachment
+    }
+
+    private var context: WebInspectorContext {
+        attachment.context
     }
 
     /// The Runtime execution contexts known to the current page.
@@ -319,7 +335,7 @@ public final class RuntimeModelController {
     /// The result is empty for a value that has no remote handle, such as a
     /// primitive; see ``RuntimeObject/canRequestProperties``.
     /// - Throws: `WebInspectorProxyError.disconnected` when the object is no
-    ///   longer registered in this context.
+    ///   longer currently registered.
     public func properties(of object: RuntimeObject) async throws -> [RuntimeObject.Property] {
         try await context.properties(for: object)
     }
@@ -329,7 +345,7 @@ public final class RuntimeModelController {
     /// The result is empty for a value that has no remote handle, such as a
     /// primitive; see ``RuntimeObject/canRequestProperties``.
     /// - Throws: `WebInspectorProxyError.disconnected` when the object is no
-    ///   longer registered in this context.
+    ///   longer currently registered.
     public func collectionEntries(of object: RuntimeObject) async throws -> [RuntimeObject.Entry] {
         try await context.collectionEntries(for: object)
     }
@@ -337,11 +353,15 @@ public final class RuntimeModelController {
 
 /// Domain operation surface for Network model queries and commands.
 @MainActor
-public final class NetworkModelController {
-    private let context: WebInspectorContext
+public final class NetworkInspector {
+    private let attachment: WebInspectorAttachment
 
-    package init(context: WebInspectorContext) {
-        self.context = context
+    init(attachment: WebInspectorAttachment) {
+        self.attachment = attachment
+    }
+
+    private var context: WebInspectorContext {
+        attachment.context
     }
 
     /// The recorded network requests, in arrival order.
@@ -354,11 +374,15 @@ public final class NetworkModelController {
 
     /// The changes to ``requests``, starting from the moment of the call.
     ///
+    /// The stream continues across attachments. A new attachment is reported
+    /// as `removedAll`, followed by the insertion of the requests it starts
+    /// with.
+    ///
     /// An `updated` change reports that a Network event changed a request.
     /// Fetching a response body changes ``NetworkRequest/responseBody``
     /// without publishing a change; observe the request or its body for that.
     public var requestChanges: AsyncStream<WebInspectorCollectionChange<NetworkRequest>> {
-        context.networkRequestChanges
+        attachment.requestChanges
     }
 
     /// The failure from the latest initial resource-tree lookup, if any.
@@ -384,7 +408,7 @@ public final class NetworkModelController {
     /// The result is published on ``NetworkRequest/responseBody``. Concurrent
     /// callers join one protocol command. Cancelling a caller ends only that
     /// caller's wait and does not cancel the shared fetch. A request that is
-    /// not registered in this context is ignored.
+    /// not currently registered is ignored.
     public func fetchResponseBody(for request: NetworkRequest) async {
         await context.fetchResponseBody(for: request)
     }
@@ -392,11 +416,15 @@ public final class NetworkModelController {
 
 /// Domain operation surface for Console model queries and commands.
 @MainActor
-public final class ConsoleModelController {
-    private let context: WebInspectorContext
+public final class ConsoleInspector {
+    private let attachment: WebInspectorAttachment
 
-    package init(context: WebInspectorContext) {
-        self.context = context
+    init(attachment: WebInspectorAttachment) {
+        self.attachment = attachment
+    }
+
+    private var context: WebInspectorContext {
+        attachment.context
     }
 
     /// The recorded console messages, in arrival order.
@@ -408,8 +436,12 @@ public final class ConsoleModelController {
     }
 
     /// The changes to ``messages``, starting from the moment of the call.
+    ///
+    /// The stream continues across attachments. A new attachment is reported
+    /// as `removedAll`, followed by the insertion of the messages it starts
+    /// with.
     public var messageChanges: AsyncStream<WebInspectorCollectionChange<ConsoleMessage>> {
-        context.consoleMessageChanges
+        attachment.messageChanges
     }
 
     /// Returns the registered message for an identifier.
@@ -418,34 +450,34 @@ public final class ConsoleModelController {
     }
 }
 
-public extension WebInspectorContext {
-    /// DOM model operations for this context.
-    var dom: DOMModelController {
-        DOMModelController(context: self)
+package extension WebInspectorContext {
+    /// The DOM domain of this context.
+    var dom: DOMInspector {
+        DOMInspector(attachment: WebInspectorAttachment(context: self))
     }
 
-    /// CSS model operations for this context.
-    var css: CSSModelController {
-        CSSModelController(context: self)
+    /// The CSS domain of this context.
+    var css: CSSInspector {
+        CSSInspector(attachment: WebInspectorAttachment(context: self))
     }
 
-    /// Network model operations and fetch surfaces for this context.
-    var network: NetworkModelController {
-        NetworkModelController(context: self)
+    /// The Network domain of this context.
+    var network: NetworkInspector {
+        NetworkInspector(attachment: WebInspectorAttachment(context: self))
     }
 
-    /// Runtime model operations for this context.
-    var runtime: RuntimeModelController {
-        RuntimeModelController(context: self)
+    /// The Runtime domain of this context.
+    var runtime: RuntimeInspector {
+        RuntimeInspector(attachment: WebInspectorAttachment(context: self))
     }
 
-    /// Console model operations and fetch surfaces for this context.
-    var console: ConsoleModelController {
-        ConsoleModelController(context: self)
+    /// The Console domain of this context.
+    var console: ConsoleInspector {
+        ConsoleInspector(attachment: WebInspectorAttachment(context: self))
     }
 
-    /// Page-level operations for this context.
-    var page: PageModelController {
-        PageModelController(context: self)
+    /// The Page domain of this context.
+    var page: PageInspector {
+        PageInspector(attachment: WebInspectorAttachment(context: self))
     }
 }

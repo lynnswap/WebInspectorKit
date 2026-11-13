@@ -18,7 +18,7 @@ func dataKitLegacyNetworkResponseSnapshotInitializerFunctionReferenceRemainsUsab
 
 @MainActor
 private final class DataKitImportOnlyConsumer {
-    func consume(_ context: WebInspectorContext) async throws {
+    func consume(_ context: WebInspector) async throws {
         let requests = context.network.requests
         let messages = context.console.messages
         let requestChanges: AsyncStream<WebInspectorCollectionChange<NetworkRequest>> =

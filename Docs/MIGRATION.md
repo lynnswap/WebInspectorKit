@@ -20,6 +20,48 @@ initializers remain synchronous after preparation. DataKit, ProxyKit, and
 WebKitRuntime consumers that do not use the built-in UIKit UI do not need this
 UI preparation step.
 
+### `WebInspector` replaces `WebInspectorContainer` and `WebInspectorContext`
+
+`WebInspectorContainer` and `WebInspectorContext` are no longer public. Create
+a `WebInspector` and keep it for as long as you inspect; it owns the connection
+and replaces its models when the attachment changes.
+
+```swift
+// Before
+let container = try await WebInspectorContainer(attachingTo: webView)
+let context = container.mainContext
+// ...
+await container.close()
+
+// After
+let inspector = WebInspector()
+inspector.attach(to: webView)
+// ...
+inspector.detach()
+```
+
+- `attach(to:)` and `detach()` return immediately. Read `inspector.state` for
+  the progress and for an attachment failure.
+- Calling `attach(to:)` again replaces the current attachment. Remove code that
+  waits for a detach before attaching to another web view.
+- `inspector.dom`, `css`, `network`, `console`, `runtime`, and `page` replace
+  the same properties of the context. They stay valid across attachments, and
+  `requestChanges` and `messageChanges` continue across them.
+- The domain types are renamed: `DOMModelController` to `DOMInspector`,
+  `CSSModelController` to `CSSInspector`, `NetworkModelController` to
+  `NetworkInspector`, `ConsoleModelController` to `ConsoleInspector`,
+  `RuntimeModelController` to `RuntimeInspector`, and `PageModelController` to
+  `PageInspector`.
+- `context.state` becomes `inspector.state`, whose `failed` case carries the
+  error of a failed attachment. `context.teardownError` has no replacement: the
+  inspector closes the connection when an attachment ends and logs a domain
+  that could not be disabled first.
+- In tests, `startAndWaitForStartupForTesting()` becomes
+  `inspector.attachForTesting(to: proxy)`.
+
+The tables below use `context` for the object that carries the domains; read it
+as the inspector.
+
 ### State and operations live on the domain objects
 
 `WebInspectorContext` no longer repeats the state and operations of

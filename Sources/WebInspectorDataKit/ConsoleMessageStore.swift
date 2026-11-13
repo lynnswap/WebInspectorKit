@@ -18,9 +18,18 @@ final class ConsoleMessageStore {
     @ObservationIgnored private var lastMessageIDByTargetID: [WebInspectorTarget.ID: ConsoleMessage.ID] = [:]
     @ObservationIgnored private var nextMessageOrdinal = 0
     @ObservationIgnored private let changeRelay = WebInspectorAsyncStreamRelay<WebInspectorCollectionChange<ConsoleMessage>>()
+    /// A second relay that receives every change, in the same call that
+    /// publishes it. A ``WebInspector`` uses it to keep one change stream
+    /// across attachments.
+    @ObservationIgnored var changeMirror: WebInspectorAsyncStreamRelay<WebInspectorCollectionChange<ConsoleMessage>>?
 
     init(runtime: RuntimeModelStore) {
         self.runtime = runtime
+    }
+
+    private func publish(_ change: WebInspectorCollectionChange<ConsoleMessage>) {
+        changeRelay.yield(change)
+        changeMirror?.yield(change)
     }
 
     func message(for id: ConsoleMessage.ID) -> ConsoleMessage? {
@@ -63,7 +72,7 @@ final class ConsoleMessageStore {
                 return
             }
             message.updateRepeatCount(count, timestamp: timestamp)
-            changeRelay.yield(.updated([message]))
+            publish(.updated([message]))
         case .messagesCleared:
             // WebKit releases its "console" Runtime object group before
             // emitting this event. DataKit owns only the local registrations.
@@ -79,7 +88,7 @@ final class ConsoleMessageStore {
         guard let targetID else {
             removeAllMessages()
             runtime.unregisterObjects(owner: .console)
-            changeRelay.yield(.removedAll)
+            publish(.removedAll)
             return
         }
         let removedMessages = messages.filter { $0.targetID == targetID }
@@ -97,7 +106,7 @@ final class ConsoleMessageStore {
         }
         lastMessageIDByTargetID[targetID] = nil
         unregisterUnreferencedParameters(of: removedMessages)
-        changeRelay.yield(.removed(removedMessages))
+        publish(.removed(removedMessages))
     }
 
     /// Removes every message before WebKit replays the Console log. The
@@ -105,7 +114,7 @@ final class ConsoleMessageStore {
     /// left to unregister.
     func resetBeforeReplay() {
         removeAllMessages()
-        changeRelay.yield(.removedAll)
+        publish(.removedAll)
     }
 
     private func applyMessageAdded(
@@ -143,7 +152,7 @@ final class ConsoleMessageStore {
         if let targetID {
             lastMessageIDByTargetID[targetID] = id
         }
-        changeRelay.yield(.inserted([message]))
+        publish(.inserted([message]))
     }
 
     private func removeAllMessages() {

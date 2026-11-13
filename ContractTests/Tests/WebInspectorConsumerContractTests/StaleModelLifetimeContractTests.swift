@@ -1,25 +1,17 @@
 import Testing
 import WebInspectorDataKit
-import WebInspectorProxyKit
-import WebInspectorProxyKitTesting
 
 @MainActor
 @Test
-func collectionChangeStreamsFinishWhenContextIsReleasedFromConsumerPackage() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    var container: WebInspectorContainer? = WebInspectorContainer(proxy: runtime.proxy)
-    var context: WebInspectorContext? = WebInspectorContext(
-        try #require(container)
-    )
-    var requestChanges = try #require(context?.network.requestChanges).makeAsyncIterator()
-    var messageChanges = try #require(context?.console.messageChanges).makeAsyncIterator()
-    weak let releasedContext = context
+func collectionChangeStreamsFinishWhenInspectorIsReleasedFromConsumerPackage() async throws {
+    var inspector: WebInspector? = WebInspector()
+    var requestChanges = try #require(inspector?.network.requestChanges).makeAsyncIterator()
+    var messageChanges = try #require(inspector?.console.messageChanges).makeAsyncIterator()
+    weak let releasedInspector = inspector
 
-    context = nil
-    container = nil
+    inspector = nil
 
-    #expect(releasedContext == nil)
+    #expect(releasedInspector == nil)
     #expect(await requestChanges.next() == nil)
     #expect(await messageChanges.next() == nil)
-    await runtime.proxy.close()
 }
