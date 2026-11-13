@@ -1173,9 +1173,10 @@ public final class WebInspectorContext {
     ) async throws {
         requireOwner(isolation)
         try Task.checkCancellation()
-        let pageGeneration = currentPageGeneration
-        let documentGeneration = domDocumentGeneration
-        if elementPickerCommandTask == nil {
+        let callerDocumentEpoch = elementPickerDocumentEpoch
+        // A pending request can outlive its command for a moment, until the
+        // callers waiting on that command resume. Replace it as well.
+        if elementPickerCommandTask == nil, requestedElementPickerEnabled == nil {
             guard isEnabled != isElementPickerEnabled else {
                 return
             }
@@ -1219,8 +1220,7 @@ public final class WebInspectorContext {
                 outcome = await task.value
             }
 
-            let belongsToCurrentDocument = pageGeneration == currentPageGeneration
-                && documentGeneration == domDocumentGeneration
+            let belongsToCurrentDocument = callerDocumentEpoch == elementPickerDocumentEpoch
             switch outcome {
             case let .failed(failedState, error) where belongsToCurrentDocument && failedState == isEnabled:
                 throw error
