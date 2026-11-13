@@ -20,6 +20,15 @@ initializers remain synchronous after preparation. DataKit, ProxyKit, and
 WebKitRuntime consumers that do not use the built-in UIKit UI do not need this
 UI preparation step.
 
+### Element picker requests ignore caller cancellation
+
+`WebInspectorContext.setElementPickerEnabled(_:)` and
+`WebInspectorDOMController.setInspectMode(enabled:)` apply the latest requested
+state. Cancelling the calling task after the request is recorded no longer
+restores the earlier state or sends a compensating command, and the call
+returns normally once the picker matches the latest request. To undo a
+request, call the method again with the state you want.
+
 ### UIKit declarations move into WebInspectorKit
 
 Continue importing `WebInspectorKit` and using `WebInspectorSession`,

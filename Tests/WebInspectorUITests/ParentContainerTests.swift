@@ -1100,15 +1100,15 @@ struct ParentContainerTests {
                 method: "setInspectModeEnabled",
                 count: 1
             )
-            let enableDesiredStateID = try #require(context.elementPickerDesiredStateForTesting?.id)
-
             let raceResultPromise = ReplyPromise<PickerShutdownRaceResult>()
-            context.elementPickerDesiredStateDidChangeForTesting = { id, isEnabled in
-                if id != enableDesiredStateID, !isEnabled {
+            let stateChanges = context.stateChangeStreamForTesting()
+            let shutdownIntentObservation = Task { @MainActor in
+                for await _ in stateChanges where context.requestedElementPickerEnabledForTesting == false {
                     raceResultPromise.fulfill(.success(.shutdownIntentRegistered))
+                    return
                 }
             }
-            defer { context.elementPickerDesiredStateDidChangeForTesting = nil }
+            defer { shutdownIntentObservation.cancel() }
             retirementTask = Task { @MainActor in
                 await fixture.session.retireRootPresentation(detach: false)
                 raceResultPromise.fulfill(.success(.retirementCompleted))
