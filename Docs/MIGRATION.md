@@ -63,8 +63,10 @@ inspector.detach()
 - `attach(to:)` and `detach()` return immediately. Read `inspector.state` for
   the progress and for an attachment failure. After `detach()` the state is
   `detaching` until the connection is closed, and then `detached`.
-- Calling `attach(to:)` again replaces the current attachment. Releasing the
-  inspector ends it.
+- Calling `attach(to:)` with another web view replaces the current
+  attachment. Calling it with the web view that is already inspected does
+  nothing, and `inspector.inspectedWebView` names that web view. Releasing the
+  inspector ends the attachment.
 - `inspector.dom`, `css`, `network`, `console`, `runtime`, and `page` replace
   the same properties of the context. They stay valid across attachments.
 - The domain types are renamed: `DOMModelController` to `DOMInspector`,

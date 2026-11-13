@@ -15,10 +15,7 @@ import WebKit
 final class WebInspectorAttachment {
     private struct Request {
         enum Kind {
-            case attach(
-                webView: WKWebView?,
-                makeContainer: @MainActor () async throws -> WebInspectorContainer
-            )
+            case attach(@MainActor () async throws -> WebInspectorContainer)
             case detach
         }
 
@@ -27,7 +24,7 @@ final class WebInspectorAttachment {
     }
 
     private(set) var context: WebInspectorContext
-    /// The web view of the current attachment, when it was made to one.
+    /// The web view of the latest attach call, until a detach call.
     private(set) weak var inspectedWebView: WKWebView?
     /// The number of attach and detach calls made so far.
     @ObservationIgnored private(set) var requestCount: UInt64 = 0
@@ -96,11 +93,21 @@ final class WebInspectorAttachment {
 
     // MARK: Calls
 
+    /// Starts an attachment, unless the inspector is already attaching or
+    /// attached to `webView`.
     func attach(
         webView: WKWebView? = nil,
         makeContainer: @escaping @MainActor () async throws -> WebInspectorContainer
     ) {
-        submit(.attach(webView: webView, makeContainer: makeContainer))
+        if let webView, webView === inspectedWebView {
+            switch state {
+            case .attaching, .attached:
+                return
+            case .detaching, .detached, .failed:
+                break
+            }
+        }
+        submit(.attach(makeContainer), webView: webView)
     }
 
     func detach() {
@@ -124,7 +131,7 @@ final class WebInspectorAttachment {
     func attachAndWait(
         makeContainer: @escaping @MainActor () async throws -> WebInspectorContainer
     ) async throws -> Bool {
-        let id = submit(.attach(webView: nil, makeContainer: makeContainer))
+        let id = submit(.attach(makeContainer))
         await withTaskCancellationHandler {
             await waitUntilIdle()
         } onCancel: {
@@ -160,9 +167,10 @@ final class WebInspectorAttachment {
     }
 
     @discardableResult
-    private func submit(_ kind: Request.Kind) -> UInt64 {
+    private func submit(_ kind: Request.Kind, webView: WKWebView? = nil) -> UInt64 {
         requestCount += 1
         pendingRequest = Request(id: requestCount, kind: kind)
+        inspectedWebView = webView
         attachFailure = nil
         lastAttachError = nil
         switch kind {
@@ -196,7 +204,7 @@ final class WebInspectorAttachment {
             switch request.kind {
             case .detach:
                 replaceContext(.detached())
-            case let .attach(webView, makeContainer):
+            case let .attach(makeContainer):
                 guard pendingRequest == nil else {
                     continue
                 }
@@ -213,7 +221,7 @@ final class WebInspectorAttachment {
                         continue
                     }
                     self.container = container
-                    replaceContext(container.mainContext, webView: webView)
+                    replaceContext(container.mainContext)
                 case let .failure(error):
                     guard pendingRequest == nil else {
                         continue
@@ -261,14 +269,13 @@ final class WebInspectorAttachment {
     /// were inserted, so a consumer that applies every change stays in step
     /// with the collections. Live DOM tree controllers move to the new
     /// context and show its document.
-    func replaceContext(_ newContext: WebInspectorContext, webView: WKWebView? = nil) {
+    func replaceContext(_ newContext: WebInspectorContext) {
         guard newContext !== context else {
             return
         }
         let previousContext = context
         previousContext.setCollectionChangeMirrors(requests: nil, messages: nil)
         context = newContext
-        inspectedWebView = webView
         previousContext.transferTreeStates(to: newContext)
         if let spanningChanges {
             spanningChanges.requests.yield(.removedAll)

@@ -62,7 +62,8 @@ final class BrowserViewController: UIViewController {
 
 `attach(to:)` returns immediately, and the inspector fills in as the page's state
 arrives. To inspect another web view, call it again; the inspector ends the
-current attachment first. Dismissing the view controller detaches the inspector
+current attachment first. Calling it with the web view that is already
+inspected does nothing. Dismissing the view controller detaches the inspector
 unless `automaticallyDetachesOnDismiss` is `false`.
 
 To keep inspecting while the UI is off screen, keep the `WebInspector` yourself
