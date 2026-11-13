@@ -191,11 +191,12 @@ static TargetResolution resolveTarget(WKRuntimePageStorage *storage, ptrdiff_t c
 
 @end
 
-// Monocly uses these existing navigation callbacks to settle and persist history.
-@protocol WebInspectorNativeNavigationDelegateClient <WKNavigationDelegate>
+// WebKit reports a terminated web content process through this private
+// callback instead of `webViewWebContentProcessDidTerminate:` when the delegate
+// responds to it.
+@protocol WebInspectorNativeProcessTerminationDelegate <NSObject>
 @optional
-- (void)_webView:(WKWebView *)webView navigation:(nullable WKNavigation *)navigation didSameDocumentNavigation:(int64_t)navigationType;
-- (void)_webView:(WKWebView *)webView backForwardListItemAdded:(nullable WKBackForwardListItem *)itemAdded removed:(nullable NSArray<WKBackForwardListItem *> *)itemsRemoved;
+- (void)_webView:(WKWebView *)webView webContentProcessDidTerminateWithReason:(NSInteger)reason;
 @end
 
 @interface WebInspectorNativeNavigationDelegateProxy : NSObject <WKNavigationDelegate>
@@ -249,6 +250,10 @@ private:
     __weak WKWebView *_webView;
     __weak WebInspectorNativeBridge *_bridge;
     __weak id<WKNavigationDelegate> _client;
+    // Signatures of the client callbacks WebKit was told this proxy responds
+    // to, kept so that a callback that arrives after the client is released
+    // can still be received and dropped.
+    NSMutableDictionary<NSString *, NSMethodSignature *> *_forwardedSignatures;
     BOOL _isObservingNavigationDelegate;
     BOOL _isUpdatingNavigationDelegate;
 }
@@ -264,6 +269,7 @@ private:
     _webView = webView;
     _bridge = bridge;
     _client = client;
+    _forwardedSignatures = [NSMutableDictionary dictionary];
     return self;
 }
 
@@ -315,6 +321,7 @@ private:
         return;
 
     _client = webView.navigationDelegate;
+    [_forwardedSignatures removeAllObjects];
     _isUpdatingNavigationDelegate = YES;
     webView.navigationDelegate = self;
     _isUpdatingNavigationDelegate = NO;
@@ -328,26 +335,68 @@ private:
         || selector == @selector(webView:didFinishNavigation:))
         return YES;
 
+    if (![super respondsToSelector:selector])
+        return [self signatureForForwardingClientSelector:selector] != nil;
+
     if (protocol_getMethodDescription(@protocol(WKNavigationDelegate), selector, NO, YES).name
-        || protocol_getMethodDescription(@protocol(WebInspectorNativeNavigationDelegateClient), selector, NO, YES).name)
-        return [super respondsToSelector:selector] && [_client respondsToSelector:selector];
-    return [super respondsToSelector:selector];
+        || selector == @selector(_webView:webContentProcessDidTerminateWithReason:))
+        return [_client respondsToSelector:selector];
+    return YES;
 }
 
-// WebKit caches optional delegate capabilities when installing the delegate.
-// Keep concrete entry points for callbacks queued before the weak client disappears.
-- (void)_webView:(WKWebView *)webView navigation:(WKNavigation *)navigation didSameDocumentNavigation:(int64_t)navigationType
+// A callback this proxy does not implement, such as the private callbacks of
+// `WKNavigationDelegatePrivate`, goes to the client unchanged.
+//
+// WebKit caches which optional callbacks the delegate responds to when the
+// delegate is installed, so a callback can arrive after the weak client is
+// released. It is dropped then. A callback that takes a completion handler is
+// not forwarded for that reason: nothing could call the handler, and WebKit
+// raises an exception when a handler is never called. The public callbacks
+// with a completion handler have concrete entry points below that answer with
+// WebKit's default.
+- (nullable NSMethodSignature *)signatureForForwardingClientSelector:(SEL)selector
 {
-    id<WebInspectorNativeNavigationDelegateClient> client = (id)_client;
-    if ([client respondsToSelector:_cmd])
-        [client _webView:webView navigation:navigation didSameDocumentNavigation:navigationType];
+    id<WKNavigationDelegate> client = _client;
+    if (![client respondsToSelector:selector])
+        return nil;
+
+    NSMethodSignature *signature = [(NSObject *)client methodSignatureForSelector:selector];
+    if (!signature)
+        return nil;
+    for (NSUInteger index = 2; index < signature.numberOfArguments; index++) {
+        if (!strncmp([signature getArgumentTypeAtIndex:index], "@?", 2))
+            return nil;
+    }
+    _forwardedSignatures[NSStringFromSelector(selector)] = signature;
+    return signature;
 }
 
-- (void)_webView:(WKWebView *)webView backForwardListItemAdded:(WKBackForwardListItem *)itemAdded removed:(NSArray<WKBackForwardListItem *> *)itemsRemoved
+- (id)forwardingTargetForSelector:(SEL)selector
 {
-    id<WebInspectorNativeNavigationDelegateClient> client = (id)_client;
-    if ([client respondsToSelector:_cmd])
-        [client _webView:webView backForwardListItemAdded:itemAdded removed:itemsRemoved];
+    id<WKNavigationDelegate> client = _client;
+    if (_forwardedSignatures[NSStringFromSelector(selector)] && [client respondsToSelector:selector])
+        return client;
+    return [super forwardingTargetForSelector:selector];
+}
+
+- (NSMethodSignature *)methodSignatureForSelector:(SEL)selector
+{
+    return [super methodSignatureForSelector:selector] ?: _forwardedSignatures[NSStringFromSelector(selector)];
+}
+
+- (void)forwardInvocation:(NSInvocation *)invocation
+{
+    if (!_forwardedSignatures[NSStringFromSelector(invocation.selector)]) {
+        [super forwardInvocation:invocation];
+        return;
+    }
+
+    // The client is gone. Answer with zero where the callback returns a value.
+    NSUInteger returnLength = invocation.methodSignature.methodReturnLength;
+    if (returnLength) {
+        std::vector<uint8_t> zero(returnLength);
+        [invocation setReturnValue:zero.data()];
+    }
 }
 
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)action decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler
@@ -462,6 +511,15 @@ private:
     id<WKNavigationDelegate> client = _client;
     if ([client respondsToSelector:_cmd])
         [client webViewWebContentProcessDidTerminate:webView];
+}
+
+- (void)_webView:(WKWebView *)webView webContentProcessDidTerminateWithReason:(NSInteger)reason
+{
+    [_bridge handleWebContentProcessTermination];
+
+    id<WebInspectorNativeProcessTerminationDelegate> client = (id)_client;
+    if ([client respondsToSelector:_cmd])
+        [client _webView:webView webContentProcessDidTerminateWithReason:reason];
 }
 
 - (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation

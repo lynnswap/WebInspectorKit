@@ -205,6 +205,44 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testPrivateDelegateCallbackReachesClientWhileInspectorIsAttached() async throws {
+        let fixture = try HostedWebViewFixture(webView: Self.sharedAttachmentWebView)
+        defer { fixture.cleanup() }
+        try await fixture.loadHTMLString("<html><body>Initial page</body></html>")
+
+        let proxy = try await WebInspectorProxy(attachingTo: fixture.webView)
+        let gestureDidBegin = NSSelectorFromString("_webViewDidBeginNavigationGesture:")
+        let client = NavigationGestureProbe()
+        fixture.webView.navigationDelegate = client
+        let installedDelegate = try XCTUnwrap(fixture.webView.navigationDelegate as? NSObject)
+        XCTAssertFalse(installedDelegate === client)
+        XCTAssertTrue(installedDelegate.responds(to: gestureDidBegin))
+        // A private callback with a completion handler is not forwarded: no
+        // one could call the handler after the client is released.
+        XCTAssertFalse(installedDelegate.responds(to: NSSelectorFromString(
+            "_webView:decidePolicyForNavigationAction:preferences:userInfo:decisionHandler:"
+        )))
+
+        installedDelegate.perform(gestureDidBegin, with: fixture.webView)
+        XCTAssertEqual(client.gestureBeginCount, 1)
+
+        // WebKit keeps calling a callback it saw the delegate respond to. It
+        // is dropped once the client is released.
+        weak var weakClient: NavigationGestureProbe?
+        autoreleasepool {
+            let releasedClient = NavigationGestureProbe()
+            weakClient = releasedClient
+            fixture.webView.navigationDelegate = releasedClient
+            XCTAssertTrue(installedDelegate.responds(to: gestureDidBegin))
+        }
+        XCTAssertNil(weakClient)
+        installedDelegate.perform(gestureDidBegin, with: fixture.webView)
+
+        await proxy.close()
+        XCTAssertNil(fixture.webView.navigationDelegate)
+    }
+
+    @MainActor
     func testClientPreferencesPolicyTakesPrecedenceOverLegacyPolicy() async throws {
         let fixture = try HostedWebViewFixture(webView: Self.sharedAttachmentWebView)
         defer { fixture.cleanup() }
@@ -244,6 +282,24 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
 
     @MainActor
     func testNativeInspectorReconnectsAfterWebContentProcessTermination() async throws {
+        try await assertNativeInspectorReconnectsAfterWebContentProcessTermination(
+            delegate: WebContentProcessNavigationProbe()
+        )
+    }
+
+    /// WebKit calls the private termination callback instead of the public
+    /// one when the delegate implements it.
+    @MainActor
+    func testNativeInspectorReconnectsWhenDelegateTakesTerminationReason() async throws {
+        try await assertNativeInspectorReconnectsAfterWebContentProcessTermination(
+            delegate: WebContentProcessTerminationReasonProbe()
+        )
+    }
+
+    @MainActor
+    private func assertNativeInspectorReconnectsAfterWebContentProcessTermination(
+        delegate replacementDelegate: WebContentProcessNavigationProbe
+    ) async throws {
         let fixture = try HostedWebViewFixture()
         defer { fixture.cleanup() }
 
@@ -257,7 +313,6 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
             let initialDocument = try await initialPage.dom.getDocument()
             XCTAssertEqual(initialDocument.nodeName, "#document")
 
-            let replacementDelegate = WebContentProcessNavigationProbe()
             fixture.webView.navigationDelegate = replacementDelegate
             let lifecycleEvents = initialPage.lifecycleEvents
             try await withIntegrationTimeout("the lifecycle event subscription to register") {
@@ -368,6 +423,35 @@ private final class NavigationPolicyProbe: NSObject, WKNavigationDelegate {
         decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void
     ) {
         decisionHandler(.allow)
+    }
+}
+
+@MainActor
+private final class WebContentProcessTerminationReasonProbe: WebContentProcessNavigationProbe {
+    @objc(_webView:webContentProcessDidTerminateWithReason:)
+    func webView(_ webView: WKWebView, webContentProcessDidTerminateWithReason reason: Int) {
+        webViewWebContentProcessDidTerminate(webView)
+    }
+}
+
+@MainActor
+private final class NavigationGestureProbe: NSObject, WKNavigationDelegate {
+    var gestureBeginCount = 0
+
+    @objc(_webViewDidBeginNavigationGesture:)
+    func webViewDidBeginNavigationGesture(_ webView: WKWebView) {
+        gestureBeginCount += 1
+    }
+
+    @objc(_webView:decidePolicyForNavigationAction:preferences:userInfo:decisionHandler:)
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        preferences: WKWebpagePreferences,
+        userInfo: Any?,
+        decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void
+    ) {
+        decisionHandler(.allow, preferences)
     }
 }
 
@@ -546,7 +630,7 @@ private enum WebContentProcessHarnessError: Error {
 }
 
 @MainActor
-private final class WebContentProcessNavigationProbe: NSObject, WKNavigationDelegate {
+private class WebContentProcessNavigationProbe: NSObject, WKNavigationDelegate {
     private struct NavigationOperation {
         let navigation: WKNavigation
         let continuation: CheckedContinuation<Void, any Error>

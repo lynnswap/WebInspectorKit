@@ -23,6 +23,7 @@ UIKit Web Inspector for `WKWebView`.
 
 - The current implementation targets UIKit on iOS.
 - AppKit support is planned to be rebuilt separately.
+- While an inspector is attached, `WKWebView.navigationDelegate` returns a WebInspectorKit object that forwards the callbacks to your delegate. Set the delegate as usual, and keep your own reference to it instead of reading it back from the web view. Private delegate callbacks are forwarded too, except those that take a completion handler.
 
 ## Products
 
