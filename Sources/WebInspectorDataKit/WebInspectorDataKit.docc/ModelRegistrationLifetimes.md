@@ -11,9 +11,10 @@ document update, Runtime context destruction, or release of the originating
 ``WebInspectorContext`` can end it.
 
 The context's current model registration is authoritative. DataKit never replaces
-a stale object with a different object that happens to have the same ID. An ID
-passed to a domain controller addresses the model currently registered in that
-controller's context; it is not a generation-spanning model handle.
+a stale object with a different object that happens to have the same ID.
+Operations take the model object for that reason. An ID, such as one read from a
+``DOMTreeSnapshot``, resolves to the model currently registered in the context;
+it is not a generation-spanning model handle.
 
 Operations use these stale semantics:
 
@@ -21,8 +22,8 @@ Operations use these stale semantics:
   sending a protocol command.
 - Nonthrowing selection operations ignore a stale or foreign non-`nil` model and
   preserve the current selection. Passing `nil` still clears the selection.
-- ``DOMNode/requestChildren(depth:)`` ignores a stale node. It never
-  redirects the request to a same-ID node from a later document.
+- ``DOMModelController/requestChildren(of:depth:)`` ignores a stale node. It
+  never redirects the request to a same-ID node from a later document.
 - ``NetworkModelController/fetchResponseBody(for:)`` ignores a stale or
   foreign request and leaves its response body as it is.
 
@@ -31,8 +32,8 @@ before an operation:
 
 ```swift
 if let nodeID = tree.snapshot.selectedNodeID,
-   let node = context.node(for: nodeID) {
-    try await node.highlight()
+   let node = context.dom.node(for: nodeID) {
+    try await context.dom.highlight(node)
 }
 ```
 

@@ -67,7 +67,7 @@ func transportBackedStyleSheetTextEditRoutesToFrameTargetAndMarksUndo() async th
 func selectingDOMNodeLoadsCSSStylesAndComputedProperties() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let elementID = DOM.Node.ID("styled-node")
 
     await runtime.backend.emit(
@@ -86,7 +86,7 @@ func selectingDOMNodeLoadsCSSStylesAndComputedProperties() async throws {
 
     await enqueueCSSStyleReplies(on: runtime.backend)
 
-    context.select(element)
+    context.dom.select(element)
 
     let styles = try #require(element.elementStyles)
     #expect(styles.phase == .loading)
@@ -108,7 +108,7 @@ func selectingDOMNodeLoadsCSSStylesAndComputedProperties() async throws {
 func selectingDOMNodeDoesNotRetryFailedCSSStyleRead() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let elementID = DOM.Node.ID("styled-node")
 
     await runtime.backend.emit(
@@ -134,7 +134,7 @@ func selectingDOMNodeDoesNotRetryFailedCSSStyleRead() async throws {
         for: "CSS",
         method: "getMatchedStylesForNode"
     )
-    context.select(element)
+    context.dom.select(element)
 
     let styles = try #require(element.elementStyles)
     try await waitUntil {
@@ -165,7 +165,7 @@ func failedStyleLeasePreservesPageLifecycleUntilContextStops() async throws {
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     try await waitForStartupSubscribers(runtime: runtime, target: target)
-    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(initialDocument.id) }
+    try await waitUntil(in: context) { context.dom.rootNode?.id == DOMNode.ID(initialDocument.id) }
 
     await runtime.backend.emit(
         .setChildNodes(parent: initialDocument.id, nodes: [
@@ -185,7 +185,7 @@ func failedStyleLeasePreservesPageLifecycleUntilContextStops() async throws {
         for: "CSS",
         method: "enable"
     )
-    context.select(element)
+    context.dom.select(element)
     let styles = try #require(element.elementStyles)
     try await waitUntil {
         if case .failed = styles.phase {
@@ -211,7 +211,7 @@ func failedStyleLeasePreservesPageLifecycleUntilContextStops() async throws {
         )),
         target: target
     )
-    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(navigatedDocument.id) }
+    try await waitUntil(in: context) { context.dom.rootNode?.id == DOMNode.ID(navigatedDocument.id) }
 
     await enqueueDomainDisableReplies(on: runtime.backend)
     await context.stop()
@@ -228,7 +228,7 @@ func failedStyleLeasePreservesPageLifecycleUntilContextStops() async throws {
 func changingSelectionDuringStyleLeaseAcquisitionEnablesDomainsOnce() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let firstID = DOM.Node.ID("styled-node-1")
     let secondID = DOM.Node.ID("styled-node-2")
 
@@ -240,18 +240,18 @@ func changingSelectionDuringStyleLeaseAcquisitionEnablesDomainsOnce() async thro
         target: target
     )
     try await waitUntil(in: context) {
-        context.node(for: DOMNode.ID(firstID)) != nil
-            && context.node(for: DOMNode.ID(secondID)) != nil
+        context.dom.node(for: DOMNode.ID(firstID)) != nil
+            && context.dom.node(for: DOMNode.ID(secondID)) != nil
     }
-    let first = try #require(context.node(for: DOMNode.ID(firstID)))
-    let second = try #require(context.node(for: DOMNode.ID(secondID)))
+    let first = try #require(context.dom.node(for: DOMNode.ID(firstID)))
+    let second = try #require(context.dom.node(for: DOMNode.ID(secondID)))
     let cssEnableGate = WebInspectorTestGate()
     await runtime.backend.hold(domain: "CSS", method: "enable", gate: cssEnableGate)
 
-    context.select(first)
+    context.dom.select(first)
     _ = await runtime.backend.waitForRecordedCommands(domain: "CSS", method: "enable", count: 1)
 
-    context.select(second)
+    context.dom.select(second)
     await enqueueCSSStyleReplies(on: runtime.backend)
     await cssEnableGate.open()
 
@@ -271,7 +271,7 @@ func changingSelectionDuringStyleLeaseAcquisitionEnablesDomainsOnce() async thro
 func stoppingContextReleasesSelectedStyleLeaseInReverseDependencyOrder() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
 
     await runtime.backend.emit(
         .setChildNodes(parent: document.id.proxyID, nodes: [
@@ -287,7 +287,7 @@ func stoppingContextReleasesSelectedStyleLeaseInReverseDependencyOrder() async t
     )
     let element = try await waitForChild(in: context)
     await enqueueCSSStyleReplies(on: runtime.backend)
-    context.select(element)
+    context.dom.select(element)
     let styles = try #require(element.elementStyles)
     try await waitUntil { styles.phase == .loaded }
 
@@ -319,7 +319,7 @@ func restartingContextReacquiresSelectedStyleLease() async throws {
     )
 
     func selectStyledChild(id: DOM.Node.ID) async throws {
-        let document = try #require(context.rootNode)
+        let document = try #require(context.dom.rootNode)
         await runtime.backend.emit(
             .setChildNodes(parent: document.id.proxyID, nodes: [
                 DOM.Node(
@@ -334,7 +334,7 @@ func restartingContextReacquiresSelectedStyleLease() async throws {
         )
         let element = try await waitForChild(in: context)
         await enqueueCSSStyleReplies(on: runtime.backend)
-        context.select(element)
+        context.dom.select(element)
         let styles = try #require(element.elementStyles)
         try await waitUntil { styles.phase == .loaded }
     }
@@ -349,7 +349,7 @@ func restartingContextReacquiresSelectedStyleLease() async throws {
         document: DOM.Node(id: DOM.Node.ID("document-2"), nodeType: 9, nodeName: "#document")
     )
     context.start()
-    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("document-2")) }
+    try await waitUntil(in: context) { context.dom.rootNode?.id == DOMNode.ID(DOM.Node.ID("document-2")) }
 
     try await selectStyledChild(id: DOM.Node.ID("styled-node-2"))
 
@@ -372,7 +372,7 @@ func restartingContextReacquiresSelectedStyleLease() async throws {
 func selectingFrameScopedDOMNodeEnablesOnlyFrameCSSBeforeStyleRead() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let frameTargetRawValue = "frame-css-agent"
     let elementID = DOM.Node.ID("frame-styled-node", scopedToTargetRawValue: frameTargetRawValue)
 
@@ -393,7 +393,7 @@ func selectingFrameScopedDOMNodeEnablesOnlyFrameCSSBeforeStyleRead() async throw
     await runtime.backend.enqueue((), for: "CSS", method: "enable")
     await enqueueCSSStyleReplies(on: runtime.backend)
 
-    context.select(element)
+    context.dom.select(element)
 
     let styles = try #require(element.elementStyles)
     try await waitUntil { styles.phase == .loaded }
@@ -415,7 +415,7 @@ func selectingFrameScopedDOMNodeEnablesOnlyFrameCSSBeforeStyleRead() async throw
 func destroyingFrameDiscardsOnlyFrameCSSLease() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let pageElementID = DOM.Node.ID("page-styled-node")
     let frameTargetRawValue = "frame-css-agent"
     let frameTargetID = WebInspectorTarget.ID(frameTargetRawValue)
@@ -429,20 +429,20 @@ func destroyingFrameDiscardsOnlyFrameCSSLease() async throws {
         target: target
     )
     try await waitUntil(in: context) {
-        context.node(for: DOMNode.ID(pageElementID)) != nil
-            && context.node(for: DOMNode.ID(frameElementID)) != nil
+        context.dom.node(for: DOMNode.ID(pageElementID)) != nil
+            && context.dom.node(for: DOMNode.ID(frameElementID)) != nil
     }
-    let pageElement = try #require(context.node(for: DOMNode.ID(pageElementID)))
-    let frameElement = try #require(context.node(for: DOMNode.ID(frameElementID)))
+    let pageElement = try #require(context.dom.node(for: DOMNode.ID(pageElementID)))
+    let frameElement = try #require(context.dom.node(for: DOMNode.ID(frameElementID)))
 
     await enqueueCSSStyleReplies(on: runtime.backend)
-    context.select(pageElement)
+    context.dom.select(pageElement)
     let pageStyles = try #require(pageElement.elementStyles)
     try await waitUntil { pageStyles.phase == .loaded }
 
     await runtime.backend.enqueue((), for: "CSS", method: "enable")
     await enqueueCSSStyleReplies(on: runtime.backend)
-    context.select(frameElement)
+    context.dom.select(frameElement)
     let frameStyles = try #require(frameElement.elementStyles)
     try await waitUntil { frameStyles.phase == .loaded }
 
@@ -483,7 +483,7 @@ func destroyingFrameDiscardsOnlyFrameCSSLease() async throws {
 func destroyingFrameDuringCSSAcquisitionMakesSelectedStylesUnavailable() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let frameTargetRawValue = "pending-frame-css-agent"
     let frameTargetID = WebInspectorTarget.ID(frameTargetRawValue)
     let frameElementID = DOM.Node.ID("frame-styled-node", scopedToTargetRawValue: frameTargetRawValue)
@@ -504,7 +504,7 @@ func destroyingFrameDuringCSSAcquisitionMakesSelectedStylesUnavailable() async t
     let cssEnableGate = WebInspectorTestGate()
     await runtime.backend.hold(domain: "CSS", method: "enable", gate: cssEnableGate)
 
-    context.select(frameElement)
+    context.dom.select(frameElement)
     let styles = try #require(frameElement.elementStyles)
     _ = await runtime.backend.waitForRecordedCommands(domain: "CSS", method: "enable", count: 1)
 
@@ -528,9 +528,9 @@ func destroyingFrameDuringCSSAcquisitionMakesSelectedStylesUnavailable() async t
 func selectingNonElementDOMNodeDoesNotRequestCSSStyles() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (_, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
 
-    context.select(document)
+    context.dom.select(document)
 
     #expect(document.elementStyles == nil)
     let commands = await runtime.backend.recordedCommands()
@@ -543,7 +543,7 @@ func selectingNonElementDOMNodeDoesNotRequestCSSStyles() async throws {
 func cssEventsAndSelectedDOMMutationsMarkSelectedStylesStale() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let selectedID = DOM.Node.ID("selected")
     let otherID = DOM.Node.ID("other")
 
@@ -567,13 +567,13 @@ func cssEventsAndSelectedDOMMutationsMarkSelectedStylesStale() async throws {
     let selected = try #require(children.first { $0.id == DOMNode.ID(selectedID) })
 
     await enqueueCSSStyleReplies(on: runtime.backend)
-    context.select(selected)
+    context.dom.select(selected)
     let styles = try #require(selected.elementStyles)
     try await waitUntil { styles.phase == .loaded }
 
     func reloadSelectedStyles() async throws {
         await enqueueCSSStyleReplies(on: runtime.backend)
-        context.select(selected)
+        context.dom.select(selected)
         try await waitUntil { styles.phase == .loaded }
     }
 
@@ -633,7 +633,7 @@ func cssEventsAndSelectedDOMMutationsMarkSelectedStylesStale() async throws {
 func cssInvalidationDuringStyleFetchIsNotOverwrittenByStaleResult() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let elementID = DOM.Node.ID("styled-node")
     let computedGate = WebInspectorTestGate()
 
@@ -664,7 +664,7 @@ func cssInvalidationDuringStyleFetchIsNotOverwrittenByStaleResult() async throws
         method: "getComputedStyleForNode"
     )
 
-    context.select(element)
+    context.dom.select(element)
     let styles = try #require(element.elementStyles)
     _ = try await runtime.backend.waitForRecordedCommandsForTesting(domain: "CSS", method: "getComputedStyleForNode", count: 1)
 
@@ -681,14 +681,8 @@ func cssInvalidationDuringStyleFetchIsNotOverwrittenByStaleResult() async throws
 @Test
 func cssInspectorBaselineIsSharedAcrossNodesAndSurvivesStaleLoads() throws {
     let context = WebInspectorContext.preview()
-    let firstStyles = CSSStyles(
-        nodeID: DOMNode.ID(DOM.Node.ID("shared-baseline-first")),
-        modelContext: context
-    )
-    let secondStyles = CSSStyles(
-        nodeID: DOMNode.ID(DOM.Node.ID("shared-baseline-second")),
-        modelContext: context
-    )
+    let firstStyles = CSSStyles(nodeID: DOMNode.ID(DOM.Node.ID("shared-baseline-first")), inspectorBaselineStore: context.cssInspectorBaselineStore)
+    let secondStyles = CSSStyles(nodeID: DOMNode.ID(DOM.Node.ID("shared-baseline-second")), inspectorBaselineStore: context.cssInspectorBaselineStore)
     let initialStyle = cssBaselineStyle(
         id: CSS.Style.ID("shared-baseline-style"),
         properties: [("color", "red")]
@@ -734,10 +728,7 @@ func cssInspectorBaselineIsSharedAcrossNodesAndSurvivesStaleLoads() throws {
 @Test
 func cssInspectorBaselineRekeysOnlyToUniqueSemanticDeclarationAfterInsertion() throws {
     let context = WebInspectorContext.preview()
-    let styles = CSSStyles(
-        nodeID: DOMNode.ID(DOM.Node.ID("topology-baseline-node")),
-        modelContext: context
-    )
+    let styles = CSSStyles(nodeID: DOMNode.ID(DOM.Node.ID("topology-baseline-node")), inspectorBaselineStore: context.cssInspectorBaselineStore)
     let initialStyle = cssBaselineStyle(
         id: CSS.Style.ID("topology-baseline-style"),
         properties: [("inset", "0"), ("height", "100%")]
@@ -779,10 +770,7 @@ func cssInspectorBaselineRekeysOnlyToUniqueSemanticDeclarationAfterInsertion() t
 @Test
 func cssInspectorBaselineDoesNotRekeyAmbiguousDuplicateDeclarations() throws {
     let context = WebInspectorContext.preview()
-    let styles = CSSStyles(
-        nodeID: DOMNode.ID(DOM.Node.ID("duplicate-baseline-node")),
-        modelContext: context
-    )
+    let styles = CSSStyles(nodeID: DOMNode.ID(DOM.Node.ID("duplicate-baseline-node")), inspectorBaselineStore: context.cssInspectorBaselineStore)
     let initialStyle = cssBaselineStyle(
         id: CSS.Style.ID("duplicate-baseline-style"),
         properties: [("color", "red"), ("color", "green")]
@@ -809,10 +797,7 @@ func cssInspectorBaselineDoesNotRekeyAmbiguousDuplicateDeclarations() throws {
 @Test
 func cssInspectorBaselineDoesNotCrossDocumentOrTargetLifetime() throws {
     let context = WebInspectorContext.preview()
-    let pageStyles = CSSStyles(
-        nodeID: DOMNode.ID(DOM.Node.ID("page-baseline-node")),
-        modelContext: context
-    )
+    let pageStyles = CSSStyles(nodeID: DOMNode.ID(DOM.Node.ID("page-baseline-node")), inspectorBaselineStore: context.cssInspectorBaselineStore)
     let pageInitial = cssBaselineStyle(
         id: CSS.Style.ID("page-baseline-style"),
         properties: [("color", "red")]
@@ -838,10 +823,7 @@ func cssInspectorBaselineDoesNotCrossDocumentOrTargetLifetime() throws {
     #expect(pageStyles.sections.first?.style.properties.first?.isModifiedByInspector == false)
 
     let frameTargetID = WebInspectorTarget.ID("baseline-frame")
-    let frameStyles = CSSStyles(
-        nodeID: DOMNode.ID(DOM.Node.ID("frame-baseline-node")),
-        modelContext: context
-    )
+    let frameStyles = CSSStyles(nodeID: DOMNode.ID(DOM.Node.ID("frame-baseline-node")), inspectorBaselineStore: context.cssInspectorBaselineStore)
     let frameInitial = cssBaselineStyle(
         id: CSS.Style.ID("frame-baseline-style", scopedToTargetRawValue: frameTargetID.rawValue),
         properties: [("display", "block")]
@@ -872,7 +854,7 @@ func cssInspectorBaselineDoesNotCrossDocumentOrTargetLifetime() throws {
 func changingSelectionCancelsCSSLoadWithoutLeavingPriorResourceLoading() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let firstID = DOM.Node.ID("cancelled-style-first")
     let secondID = DOM.Node.ID("cancelled-style-second")
     await runtime.backend.emit(
@@ -883,11 +865,11 @@ func changingSelectionCancelsCSSLoadWithoutLeavingPriorResourceLoading() async t
         target: target
     )
     try await waitUntil(in: context) {
-        context.node(for: DOMNode.ID(firstID)) != nil
-            && context.node(for: DOMNode.ID(secondID)) != nil
+        context.dom.node(for: DOMNode.ID(firstID)) != nil
+            && context.dom.node(for: DOMNode.ID(secondID)) != nil
     }
-    let first = try #require(context.node(for: DOMNode.ID(firstID)))
-    let second = try #require(context.node(for: DOMNode.ID(secondID)))
+    let first = try #require(context.dom.node(for: DOMNode.ID(firstID)))
+    let second = try #require(context.dom.node(for: DOMNode.ID(secondID)))
     let matchedGate = WebInspectorTestGate()
     await runtime.backend.hold(
         domain: "CSS",
@@ -897,7 +879,7 @@ func changingSelectionCancelsCSSLoadWithoutLeavingPriorResourceLoading() async t
     await enqueueCSSStyleReplies(on: runtime.backend)
     await enqueueCSSStyleReplies(on: runtime.backend)
 
-    context.select(first)
+    context.dom.select(first)
     let firstStyles = try #require(first.elementStyles)
     _ = await runtime.backend.waitForRecordedCommands(
         domain: "CSS",
@@ -905,7 +887,7 @@ func changingSelectionCancelsCSSLoadWithoutLeavingPriorResourceLoading() async t
         count: 1
     )
 
-    context.select(second)
+    context.dom.select(second)
     let secondStyles = try #require(second.elementStyles)
     await matchedGate.open()
 
@@ -918,7 +900,7 @@ func changingSelectionCancelsCSSLoadWithoutLeavingPriorResourceLoading() async t
 func cancellingCSSMutationDoesNotWaitForBlockedStyleRefresh() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let elementID = DOM.Node.ID("cancelled-style-mutation")
     await runtime.backend.emit(
         .setChildNodes(parent: document.id.proxyID, nodes: [
@@ -931,7 +913,7 @@ func cancellingCSSMutationDoesNotWaitForBlockedStyleRefresh() async throws {
         cssToggleStyle(margin: "0", paddingStatus: .active),
         on: runtime.backend
     )
-    context.select(element)
+    context.dom.select(element)
     let styles = try #require(element.elementStyles)
     try await waitUntil { styles.phase == .loaded }
     let paddingID = try #require(
@@ -948,7 +930,7 @@ func cancellingCSSMutationDoesNotWaitForBlockedStyleRefresh() async throws {
         cssToggleStyle(margin: "0", paddingStatus: .active),
         on: runtime.backend
     )
-    try context.css.refreshStyles(for: element.id)
+    try context.css.refreshStyles(for: element)
     _ = await runtime.backend.waitForRecordedCommands(
         domain: "CSS",
         method: "getMatchedStylesForNode",
@@ -963,7 +945,7 @@ func cancellingCSSMutationDoesNotWaitForBlockedStyleRefresh() async throws {
         try await context.css.setProperty(
             paddingID,
             enabled: false,
-            options: WebInspectorMutationOptions(undo: .disabled)
+            registersUndo: false
         )
     }
     try await context.waitForQueuedCSSOperationCountForTesting(1, for: target)
@@ -981,7 +963,7 @@ func cancellingCSSMutationDoesNotWaitForBlockedStyleRefresh() async throws {
 func cssToggleQueuedBehindRefreshUsesRefreshedStyleText() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let elementID = DOM.Node.ID("queued-style-mutation")
     await runtime.backend.emit(
         .setChildNodes(parent: document.id.proxyID, nodes: [
@@ -992,7 +974,7 @@ func cssToggleQueuedBehindRefreshUsesRefreshedStyleText() async throws {
     let element = try await waitForChild(in: context)
     let initialStyle = cssToggleStyle(margin: "0", paddingStatus: .active)
     await enqueueCSSStyleReplies(initialStyle, on: runtime.backend)
-    context.select(element)
+    context.dom.select(element)
     let styles = try #require(element.elementStyles)
     try await waitUntil { styles.phase == .loaded }
     let paddingID = try #require(
@@ -1010,7 +992,7 @@ func cssToggleQueuedBehindRefreshUsesRefreshedStyleText() async throws {
     let disabledStyle = cssToggleStyle(margin: "4px", paddingStatus: .disabled)
     await runtime.backend.enqueue(disabledStyle, for: "CSS", method: "setStyleText")
 
-    try context.css.refreshStyles(for: element.id)
+    try context.css.refreshStyles(for: element)
     _ = await runtime.backend.waitForRecordedCommands(
         domain: "CSS",
         method: "getMatchedStylesForNode",
@@ -1020,7 +1002,7 @@ func cssToggleQueuedBehindRefreshUsesRefreshedStyleText() async throws {
     let accepted = context.css.requestSetProperty(
         paddingID,
         enabled: false,
-        options: WebInspectorMutationOptions(undo: .disabled)
+        registersUndo: false
     )
     #expect(accepted)
     guard accepted else {
@@ -1048,7 +1030,7 @@ func cssToggleQueuedBehindRefreshUsesRefreshedStyleText() async throws {
 func concurrentCSSMutationsSerializeAndRefreshBeforeRewriting() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let elementID = DOM.Node.ID("serialized-style-mutation")
     await runtime.backend.emit(
         .setChildNodes(parent: document.id.proxyID, nodes: [
@@ -1059,7 +1041,7 @@ func concurrentCSSMutationsSerializeAndRefreshBeforeRewriting() async throws {
     let element = try await waitForChild(in: context)
     let initialStyle = cssToggleStyle(margin: "0", paddingStatus: .active)
     await enqueueCSSStyleReplies(initialStyle, on: runtime.backend)
-    context.select(element)
+    context.dom.select(element)
     let styles = try #require(element.elementStyles)
     try await waitUntil { styles.phase == .loaded }
     let marginID = try #require(
@@ -1089,7 +1071,7 @@ func concurrentCSSMutationsSerializeAndRefreshBeforeRewriting() async throws {
         try await context.css.setProperty(
             marginID,
             enabled: false,
-            options: WebInspectorMutationOptions(undo: .disabled)
+            registersUndo: false
         )
     }
     _ = await runtime.backend.waitForRecordedCommands(
@@ -1101,7 +1083,7 @@ func concurrentCSSMutationsSerializeAndRefreshBeforeRewriting() async throws {
         try await context.css.setProperty(
             paddingID,
             enabled: false,
-            options: WebInspectorMutationOptions(undo: .disabled)
+            registersUndo: false
         )
     }
     try await context.waitForQueuedCSSOperationCountForTesting(1, for: target)
@@ -1128,7 +1110,7 @@ func concurrentCSSMutationsSerializeAndRefreshBeforeRewriting() async throws {
 func cssMutationRejectsReusedPositionalPropertyIDAfterTopologyChange() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let elementID = DOM.Node.ID("shifted-style-mutation")
     await runtime.backend.emit(
         .setChildNodes(parent: document.id.proxyID, nodes: [
@@ -1141,7 +1123,7 @@ func cssMutationRejectsReusedPositionalPropertyIDAfterTopologyChange() async thr
         cssToggleStyle(margin: "0", paddingStatus: .active),
         on: runtime.backend
     )
-    context.select(element)
+    context.dom.select(element)
     let styles = try #require(element.elementStyles)
     try await waitUntil { styles.phase == .loaded }
     let paddingID = try #require(
@@ -1162,7 +1144,7 @@ func cssMutationRejectsReusedPositionalPropertyIDAfterTopologyChange() async thr
         try await context.css.setProperty(
             paddingID,
             enabled: false,
-            options: WebInspectorMutationOptions(undo: .disabled)
+            registersUndo: false
         )
     }
     let commands = await runtime.backend.recordedCommands()
@@ -1174,7 +1156,7 @@ func cssMutationRejectsReusedPositionalPropertyIDAfterTopologyChange() async thr
 func cssMutationRejectsReusedStyleIDAfterRuleInsertion() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let elementID = DOM.Node.ID("shifted-rule-mutation")
     await runtime.backend.emit(
         .setChildNodes(parent: document.id.proxyID, nodes: [
@@ -1192,7 +1174,7 @@ func cssMutationRejectsReusedStyleIDAfterRuleInsertion() async throws {
         CSS.MatchedStyles(matchedRules: [cssRule(selector: ".original", style: submittedStyle)]),
         on: runtime.backend
     )
-    context.select(element)
+    context.dom.select(element)
     let styles = try #require(element.elementStyles)
     try await waitUntil { styles.phase == .loaded }
     let colorID = try #require(styles.sections.first?.style.properties.first?.id)
@@ -1226,7 +1208,7 @@ func cssMutationRejectsReusedStyleIDAfterRuleInsertion() async throws {
         try await context.css.setProperty(
             colorID,
             enabled: false,
-            options: WebInspectorMutationOptions(undo: .disabled)
+            registersUndo: false
         )
     }
     let commands = await runtime.backend.recordedCommands()
@@ -1238,7 +1220,7 @@ func cssMutationRejectsReusedStyleIDAfterRuleInsertion() async throws {
 func selectingDOMNodeLoadsInlineAndAttributesStyleSections() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let elementID = DOM.Node.ID("styled-node")
 
     await runtime.backend.emit(
@@ -1292,7 +1274,7 @@ func selectingDOMNodeLoadsInlineAndAttributesStyleSections() async throws {
         method: "getComputedStyleForNode"
     )
 
-    context.select(element)
+    context.dom.select(element)
 
     let styles = try #require(element.elementStyles)
     try await waitUntil { styles.phase == .loaded }
@@ -1306,7 +1288,7 @@ func selectingDOMNodeLoadsInlineAndAttributesStyleSections() async throws {
 func styleSheetChangedWhileHydrationActiveTriggersImmediateRefetch() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let elementID = DOM.Node.ID("styled-node")
 
     await runtime.backend.emit(
@@ -1319,7 +1301,7 @@ func styleSheetChangedWhileHydrationActiveTriggersImmediateRefetch() async throw
 
     context.css.setStyleHydrationActive(true)
     await enqueueCSSStyleReplies(on: runtime.backend)
-    context.select(element)
+    context.dom.select(element)
     let styles = try #require(element.elementStyles)
     try await waitUntil { styles.phase == .loaded }
 
@@ -1335,7 +1317,7 @@ func styleSheetChangedWhileHydrationActiveTriggersImmediateRefetch() async throw
 func styleSheetChangedWhileHydrationInactiveDefersRefetchUntilActivation() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let elementID = DOM.Node.ID("styled-node")
 
     await runtime.backend.emit(
@@ -1347,7 +1329,7 @@ func styleSheetChangedWhileHydrationInactiveDefersRefetchUntilActivation() async
     let element = try await waitForChild(in: context)
 
     await enqueueCSSStyleReplies(on: runtime.backend)
-    context.select(element)
+    context.dom.select(element)
     let styles = try #require(element.elementStyles)
     try await waitUntil { styles.phase == .loaded }
 
@@ -1368,7 +1350,7 @@ func styleSheetChangedWhileHydrationInactiveDefersRefetchUntilActivation() async
 func requestSetCSSPropertyTogglesDeclarationAndRefreshesStyles() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let elementID = DOM.Node.ID("styled-node")
 
     await runtime.backend.emit(
@@ -1381,7 +1363,7 @@ func requestSetCSSPropertyTogglesDeclarationAndRefreshesStyles() async throws {
 
     context.css.setStyleHydrationActive(true)
     await enqueueCSSStyleReplies(on: runtime.backend)
-    context.select(element)
+    context.dom.select(element)
     let styles = try #require(element.elementStyles)
     try await waitUntil { styles.phase == .loaded }
 
@@ -1445,7 +1427,7 @@ func requestSetCSSPropertyTogglesDeclarationAndRefreshesStyles() async throws {
 func setCSSDeclarationTextRewritesStyleTextAndMarksUndoableState() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let elementID = DOM.Node.ID("styled-node")
 
     await runtime.backend.emit(
@@ -1457,7 +1439,7 @@ func setCSSDeclarationTextRewritesStyleTextAndMarksUndoableState() async throws 
     let element = try await waitForChild(in: context)
 
     await enqueueCSSStyleReplies(on: runtime.backend)
-    context.select(element)
+    context.dom.select(element)
     let styles = try #require(element.elementStyles)
     try await waitUntil { styles.phase == .loaded }
 
@@ -1536,7 +1518,7 @@ func cssRuleSelectorEditsMarkUndoableStateOnOwningTarget() async throws {
 func requestSetCSSPropertyRefusesNonEditableAndRefreshesStaleProperties() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let elementID = DOM.Node.ID("styled-node")
 
     await runtime.backend.emit(
@@ -1595,7 +1577,7 @@ func requestSetCSSPropertyRefusesNonEditableAndRefreshesStaleProperties() async 
         for: "CSS",
         method: "getComputedStyleForNode"
     )
-    context.select(element)
+    context.dom.select(element)
     let styles = try #require(element.elementStyles)
     try await waitUntil { styles.phase == .loaded }
 
@@ -1632,7 +1614,7 @@ func requestSetCSSPropertyRefusesNonEditableAndRefreshesStaleProperties() async 
     #expect(context.css.requestSetProperty(
         editablePropertyID,
         enabled: false,
-        options: WebInspectorMutationOptions(undo: .disabled)
+        registersUndo: false
     ))
     _ = await runtime.backend.waitForCompletedCommands(
         domain: "CSS",
@@ -1682,13 +1664,13 @@ func lateCSSPropertyReplyDoesNotApplyToReplacementDocument() async throws {
         method: "getDocument"
     )
     context.apply(DOM.Event.documentUpdated)
-    try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(replacementDocumentID) }
+    try await waitUntil(in: context) { context.dom.rootNode?.id == DOMNode.ID(replacementDocumentID) }
     await mutationGate.open()
 
     await #expect(throws: WebInspectorProxyError.disconnected("CSS mutation no longer belongs to the current document.")) {
         try await mutationTask.value
     }
-    #expect(context.selectedNode == nil)
+    #expect(context.dom.selectedNode == nil)
     #expect(fixture.styles.sections.first?.style.properties.first?.status == .active)
     let commands = await runtime.backend.recordedCommands()
     #expect(commands.contains(RecordedCommand(domain: "DOM", method: "markUndoableState")) == false)
@@ -1724,7 +1706,7 @@ func lateCSSDeclarationReplyDoesNotApplyToReplacementStyles() async throws {
     }
     _ = await runtime.backend.waitForRecordedCommands(domain: "CSS", method: "setStyleText", count: 1)
 
-    context.select(nil)
+    context.dom.select(nil)
     await mutationGate.open()
 
     await #expect(throws: WebInspectorProxyError.disconnected("CSS mutation no longer belongs to the current document.")) {
@@ -2040,7 +2022,7 @@ func removedAndReusedStyleSheetIDRejectsPriorMutationReply() async throws {
         try await context.css.setStyleSheetText(
             "body { color: orange; }",
             for: styleSheetID,
-            options: WebInspectorMutationOptions(undo: .disabled)
+            registersUndo: false
         )
     }
     let frameTarget = runtime.proxy.frameTarget(id: frameTargetID)
@@ -2049,7 +2031,7 @@ func removedAndReusedStyleSheetIDRejectsPriorMutationReply() async throws {
         try await context.css.setRuleSelector(
             ".updated",
             for: ruleID,
-            options: WebInspectorMutationOptions(undo: .disabled)
+            registersUndo: false
         )
     }
     try await context.waitForQueuedCSSOperationCountForTesting(2, for: frameTarget)
@@ -2124,7 +2106,7 @@ func queuedRuleSelectorRejectsPositionalIDAfterStyleSheetReplacement() async thr
         try await context.css.setStyleSheetText(
             ".inserted {} .original {}",
             for: styleSheetID,
-            options: WebInspectorMutationOptions(undo: .disabled)
+            registersUndo: false
         )
     }
     _ = await runtime.backend.waitForRecordedCommands(
@@ -2137,7 +2119,7 @@ func queuedRuleSelectorRejectsPositionalIDAfterStyleSheetReplacement() async thr
         try await context.css.setRuleSelector(
             ".updated",
             for: ruleID,
-            options: WebInspectorMutationOptions(undo: .disabled)
+            registersUndo: false
         )
     }
     try await context.waitForQueuedCSSOperationCountForTesting(1, for: target)
@@ -2198,7 +2180,7 @@ func ruleSelectorAcceptsItsOwnStyleSheetChangedEventBeforeReply() async throws {
 func queuedDeclarationRefreshesAfterStyleSheetReplacement() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let document = try #require(context.rootNode)
+    let document = try #require(context.dom.rootNode)
     let elementID = DOM.Node.ID("queued-after-sheet-replacement")
     await runtime.backend.emit(
         .setChildNodes(parent: document.id.proxyID, nodes: [
@@ -2211,7 +2193,7 @@ func queuedDeclarationRefreshesAfterStyleSheetReplacement() async throws {
         cssToggleStyle(margin: "0", paddingStatus: .active),
         on: runtime.backend
     )
-    context.select(element)
+    context.dom.select(element)
     let styles = try #require(element.elementStyles)
     try await waitUntil { styles.phase == .loaded }
     let paddingID = try #require(
@@ -2225,7 +2207,7 @@ func queuedDeclarationRefreshesAfterStyleSheetReplacement() async throws {
         try await context.css.setStyleSheetText(
             "color: red; margin: 0; padding: 8px;",
             for: CSS.StyleSheet.ID("queued-toggle-style"),
-            options: WebInspectorMutationOptions(undo: .disabled)
+            registersUndo: false
         )
     }
     _ = await runtime.backend.waitForRecordedCommands(
@@ -2244,7 +2226,7 @@ func queuedDeclarationRefreshesAfterStyleSheetReplacement() async throws {
         try await context.css.setProperty(
             paddingID,
             enabled: false,
-            options: WebInspectorMutationOptions(undo: .disabled)
+            registersUndo: false
         )
     }
     try await context.waitForQueuedCSSOperationCountForTesting(1, for: target)

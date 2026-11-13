@@ -863,11 +863,11 @@ struct ParentContainerTests {
         var statusUpdates = fixture.context.statusUpdates.makeAsyncIterator()
 
         navigationItems.performToggleElementPickerCommand()
-        while fixture.context.isElementPickerEnabled == false,
+        while fixture.context.dom.isElementPickerEnabled == false,
               let status = await statusUpdates.next(),
               status.isElementPickerEnabled == false {}
 
-        #expect(fixture.context.isElementPickerEnabled)
+        #expect(fixture.context.dom.isElementPickerEnabled)
         #expect(presenter.presentedViewController === viewController)
         #expect(fixture.session.detachCountForTesting == 0)
     }
@@ -1090,7 +1090,7 @@ struct ParentContainerTests {
         await fixture.runtime.backend.enqueue((), for: "DOM", method: "hideHighlight")
 
         let enableTask = Task { @MainActor in
-            try await context.setElementPickerEnabled(true)
+            try await context.dom.setElementPickerEnabled(true)
         }
         var retirementTask: Task<Void, Never>?
         let raceResult: PickerShutdownRaceResult
@@ -1142,7 +1142,7 @@ struct ParentContainerTests {
         #expect(pickerCommands.compactMap {
             $0.payload.cast(as: DOM.SetInspectModeEnabledPayload.self)?.enabled
         } == [true, false])
-        #expect(context.isElementPickerEnabled == false)
+        #expect(context.dom.isElementPickerEnabled == false)
     }
 
     @Test
@@ -1156,7 +1156,7 @@ struct ParentContainerTests {
             $0.domain == "DOM" && $0.method == "setInspectModeEnabled"
         }
         #expect(pickerCommands.isEmpty)
-        #expect(fixture.context.isElementPickerEnabled == false)
+        #expect(fixture.context.dom.isElementPickerEnabled == false)
     }
 
     @Test

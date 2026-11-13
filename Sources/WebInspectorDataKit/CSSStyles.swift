@@ -261,20 +261,18 @@ public final class CSSStyles: WebInspectorPersistentModel {
     /// Computed properties for the element.
     public private(set) var computedProperties: [CSSComputedProperty]
 
-    @ObservationIgnored weak var modelContext: WebInspectorContext?
     @ObservationIgnored private let inspectorBaselineStore: CSSInspectorBaselineStore
     @ObservationIgnored private var activeLoadGeneration: Int?
     @ObservationIgnored private var hasCompletedLoad: Bool
 
-    init(nodeID: DOMNode.ID, modelContext: WebInspectorContext) {
+    init(nodeID: DOMNode.ID, inspectorBaselineStore: CSSInspectorBaselineStore) {
         id = ID(nodeID: nodeID)
         phase = .loading
         sections = []
         computedProperties = []
-        inspectorBaselineStore = modelContext.cssInspectorBaselineStore
+        self.inspectorBaselineStore = inspectorBaselineStore
         activeLoadGeneration = nil
         hasCompletedLoad = false
-        self.modelContext = modelContext
     }
 
     func markLoading() {

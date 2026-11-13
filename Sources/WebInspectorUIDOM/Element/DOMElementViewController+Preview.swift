@@ -18,7 +18,7 @@ private enum DOMElementViewControllerPreview {
     static func makeViewController() -> UINavigationController {
         let context = DOMPreviewFixtures.makeWebInspectorContext()
         if let body = DOMPreviewFixtures.firstElement(named: "body", in: context) {
-            context.select(body)
+            context.dom.select(body)
             context.seedSelectedNodeStyles(matchedStyles: previewMatchedStyles())
         }
         return UINavigationController(rootViewController: DOMElementViewController(context: context))

@@ -30,7 +30,7 @@ package enum DOMPreviewFixtures {
     }
 
     package static func firstElement(named localName: String, in context: WebInspectorContext) -> DOMNode? {
-        guard let rootNode = context.rootNode else {
+        guard let rootNode = context.dom.rootNode else {
             return nil
         }
         var stack = [rootNode]

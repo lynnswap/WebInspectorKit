@@ -32,15 +32,15 @@ private final class DataKitImportOnlyConsumer {
         _ = WebInspectorCollectionChange<NetworkRequest>.updated([])
 
         _ = context.state
-        _ = context.rootNode?.children
-        _ = context.selectedNode?.attributes
-        _ = context.selectedNode?.attributeList.first?.name
-        _ = context.selectedNode?.elementStyles?.sections.first?.rule?.selectorText
-        _ = context.selectedNode?.elementStyles?.sections.first?.style.properties.first?.name
-        _ = context.selectedNode?.elementStyles?.computedProperties.first?.value
-        _ = context.isElementPickerEnabled
+        _ = context.dom.rootNode?.children
+        _ = context.dom.selectedNode?.attributes
+        _ = context.dom.selectedNode?.attributeList.first?.name
+        _ = context.dom.selectedNode?.elementStyles?.sections.first?.rule?.selectorText
+        _ = context.dom.selectedNode?.elementStyles?.sections.first?.style.properties.first?.name
+        _ = context.dom.selectedNode?.elementStyles?.computedProperties.first?.value
+        _ = context.dom.isElementPickerEnabled
         context.network.clearRequests()
-        let treeController = try await context.treeController()
+        let treeController = context.dom.treeController()
         let treeSnapshot: DOMTreeSnapshot = treeController.snapshot
         _ = treeSnapshot.rootNodeID
         _ = treeSnapshot.nodesByID.values.first?.attributeList.first?.value
@@ -50,15 +50,15 @@ private final class DataKitImportOnlyConsumer {
         _ = treeController.selectedNodeID
         _ = treeController.updates
         _ = treeController.revealRequests
-        if let selectedNode = context.selectedNode {
-            _ = try context.selectorPath(for: selectedNode)
-            _ = try context.xPath(for: selectedNode)
-            _ = try await selectedNode.copyText(.selectorPath)
-            try await selectedNode.highlight()
-            try await selectedNode.delete()
+        if let selectedNode = context.dom.selectedNode {
+            _ = try context.dom.selectorPath(for: selectedNode)
+            _ = try context.dom.xPath(for: selectedNode)
+            _ = try await context.dom.copyText(.selectorPath, of: selectedNode)
+            try await context.dom.highlight(selectedNode)
+            try await context.dom.remove([selectedNode])
         }
-        try await context.hideHighlight()
-        try await context.setElementPickerEnabled(false)
+        try await context.dom.hideHighlight()
+        try await context.dom.setElementPickerEnabled(false)
         try await context.page.reload()
         _ = requests.first?.url
         _ = requests.first?.state

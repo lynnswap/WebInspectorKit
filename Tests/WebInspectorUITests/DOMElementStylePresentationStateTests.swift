@@ -10,7 +10,7 @@ extension WebInspectorUIRenderingTests {
 @MainActor
 @Suite
 struct DOMElementStyleSnapshotCoordinatorTests {
-    /// Keeps the weak `CSSStyles.modelContext` alive for the test lifetime.
+    /// Provides the inspector baseline store that the styles under test share.
     private let modelContext = WebInspectorContext.preview()
 
     @Test
@@ -344,10 +344,7 @@ struct DOMElementStyleSnapshotCoordinatorTests {
     }
 
     private func makeStyles(nodeID: String = "node-1") -> CSSStyles {
-        CSSStyles(
-            nodeID: DOMNode.ID(DOM.Node.ID(nodeID)),
-            modelContext: modelContext
-        )
+        CSSStyles(nodeID: DOMNode.ID(DOM.Node.ID(nodeID)), inspectorBaselineStore: modelContext.cssInspectorBaselineStore)
     }
 
     private func load(_ styles: CSSStyles, with matchedStyles: CSS.MatchedStyles) {

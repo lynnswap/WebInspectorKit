@@ -83,7 +83,7 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
             XCTAssertNil(stylesheet.status)
             await context.network.fetchResponseBody(for: stylesheet)
             XCTAssertEqual(stylesheet.responseBody.phase, .loaded)
-            let tree = context.rootTreeController()
+            let tree = context.dom.treeController()
             let documentUpdates = tree.updates
             let otherURL = directory.appendingPathComponent("other.html")
             try await fixture.loadFileURL(otherURL)
@@ -92,7 +92,7 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
                 return snapshot.rootNodeID.flatMap { snapshot.node(for: $0)?.documentURL }
                     == otherURL.absoluteString
             }
-            XCTAssertEqual(context.rootNode?.documentURL, otherURL.absoluteString)
+            XCTAssertEqual(context.dom.rootNode?.documentURL, otherURL.absoluteString)
             let networkUpdates = context.network.requestChanges
             try await fixture.goBack()
             try await waitForUpdates(networkUpdates, description: "the restored stylesheet resource") {

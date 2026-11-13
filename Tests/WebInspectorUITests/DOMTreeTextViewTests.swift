@@ -1713,15 +1713,15 @@ private final class DOMTreeTestFixture {
         let context = WebInspectorContext.preview()
         context.seedDOMDocument(root)
         self.context = context
-        self.treeController = context.rootTreeController()
+        self.treeController = context.dom.treeController()
     }
 
     var currentPageRootNode: DOMNode? {
-        context.rootNode
+        context.dom.rootNode
     }
 
     var selectedNode: DOMNode? {
-        context.selectedNode
+        context.dom.selectedNode
     }
 
     var treeRevision: UInt64 {
@@ -1734,7 +1734,7 @@ private final class DOMTreeTestFixture {
 
     var isSelectingElement: Bool {
         get {
-            context.isElementPickerEnabled
+            context.dom.isElementPickerEnabled
         }
         set {
             context.seedElementPickerEnabled(newValue)
@@ -1746,11 +1746,14 @@ private final class DOMTreeTestFixture {
     }
 
     func node(for id: DOMNode.ID) -> DOMNode? {
-        try? context.requiredNode(for: id)
+        context.dom.node(for: id)
     }
 
     func selectNode(_ id: DOMNode.ID) {
-        try? context.selectNode(id)
+        guard let node = context.dom.node(for: id) else {
+            return
+        }
+        context.dom.select(node)
     }
 
     func applyAttributeModified(_ id: DOMNode.ID, name: String, value: String) {

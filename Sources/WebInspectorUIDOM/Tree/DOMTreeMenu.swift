@@ -51,7 +51,7 @@ final class DOMTreeMenuModel {
     }
 
     var availableNodeIDs: [DOMNode.ID] {
-        nodeIDs.filter { (try? context.requiredNode(for: $0)) != nil }
+        nodeIDs.filter { context.dom.node(for: $0) != nil }
     }
 
     var showsSelectedTextCopy: Bool {
@@ -121,7 +121,7 @@ final class DOMTreeMenuModel {
     private var singleNodeID: DOMNode.ID? {
         guard !isMultiNodeMenu,
               let nodeID = nodeIDs.first,
-              (try? context.requiredNode(for: nodeID)) != nil else {
+              context.dom.node(for: nodeID) != nil else {
             return nil
         }
         return nodeID
@@ -180,19 +180,19 @@ final class DOMTreeMenuModel {
     }
 
     func canCopyText(_ kind: DOMNode.CopyTextKind, for nodeID: DOMNode.ID) -> Bool {
-        guard (try? context.requiredNode(for: nodeID)) != nil else {
+        guard context.dom.node(for: nodeID) != nil else {
             return false
         }
         switch kind {
         case .html:
             return copyNodeTextAction != nil || !(localMarkupTextByNodeID[nodeID]?.isEmpty ?? true)
         case .selectorPath:
-            guard let path = try? context.selectorPath(for: nodeID) else {
+            guard let path = selectorPath(for: nodeID) else {
                 return false
             }
             return !path.isEmpty
         case .xPath:
-            guard let path = try? context.xPath(for: nodeID) else {
+            guard let path = xPath(for: nodeID) else {
                 return false
             }
             return !path.isEmpty
@@ -207,10 +207,18 @@ final class DOMTreeMenuModel {
         case .html:
             return localMarkupTextByNodeID[nodeID]
         case .selectorPath:
-            return try? context.selectorPath(for: nodeID)
+            return selectorPath(for: nodeID)
         case .xPath:
-            return try? context.xPath(for: nodeID)
+            return xPath(for: nodeID)
         }
+    }
+
+    private func selectorPath(for nodeID: DOMNode.ID) -> String? {
+        context.dom.node(for: nodeID).flatMap { try? context.dom.selectorPath(for: $0) }
+    }
+
+    private func xPath(for nodeID: DOMNode.ID) -> String? {
+        context.dom.node(for: nodeID).flatMap { try? context.dom.xPath(for: $0) }
     }
 
     private func uniqueNodeIDsInOrder(_ nodeIDs: [DOMNode.ID]) -> [DOMNode.ID] {

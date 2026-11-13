@@ -259,8 +259,7 @@ public final class WebInspectorContext {
         }
     }
 
-    /// The current root DOM node, if a document is loaded.
-    public private(set) var rootNode: DOMNode? {
+    private(set) var rootNode: DOMNode? {
         didSet {
             #if DEBUG
             stateChangesForTesting.yield(())
@@ -268,8 +267,7 @@ public final class WebInspectorContext {
         }
     }
 
-    /// The currently selected DOM node.
-    public private(set) var selectedNode: DOMNode? {
+    private(set) var selectedNode: DOMNode? {
         didSet {
             #if DEBUG
             stateChangesForTesting.yield(())
@@ -277,8 +275,7 @@ public final class WebInspectorContext {
         }
     }
 
-    /// A Boolean value indicating whether WebKit inspect mode is enabled.
-    public private(set) var isElementPickerEnabled: Bool {
+    private(set) var isElementPickerEnabled: Bool {
         didSet {
             #if DEBUG
             stateChangesForTesting.yield(())
@@ -522,16 +519,8 @@ public final class WebInspectorContext {
         statusRelay.makeStream(initialElement: status)
     }
 
-    /// Returns the registered DOM node for an identifier.
-    public func node(for id: DOMNode.ID) -> DOMNode? {
+    func node(for id: DOMNode.ID) -> DOMNode? {
         return nodesByID[id]
-    }
-
-    package func requiredNode(for id: DOMNode.ID) throws -> DOMNode {
-        guard let node = nodesByID[id] else {
-            throw WebInspectorProxyError.disconnected("DOMNode is not registered in this WebInspectorContext.")
-        }
-        return node
     }
 
     func registeredRequest(
@@ -563,18 +552,9 @@ public final class WebInspectorContext {
         return consoleStore.message(for: id)
     }
 
-    /// Selects a DOM node and reveals it in registered tree controllers.
-    ///
-    /// Passing `nil` clears the selection. Passing a node that is no longer
-    /// registered in this context, including a node from another context, does
-    /// nothing and preserves the current selection.
-    public func select(_ node: DOMNode?) {
-        select(node, reveal: .selectAndScroll)
-    }
-
-    private func select(
+    func select(
         _ node: DOMNode?,
-        reveal: DOMRevealPolicy
+        reveal: DOMRevealPolicy = .selectAndScroll
     ) {
         if let node, nodesByID[node.id] !== node {
             return
@@ -592,142 +572,55 @@ public final class WebInspectorContext {
         refreshSelectedStyles()
     }
 
-    package func selectNode(_ id: DOMNode.ID) throws {
-        select(try requiredNode(for: id))
-    }
-
-    package func selectNode(
-        _ id: DOMNode.ID?,
-        reveal: DOMRevealPolicy
-    ) throws {
-        guard let id else {
-            select(nil, reveal: reveal)
-            return
-        }
-        select(try requiredNode(for: id), reveal: reveal)
-    }
-
-    package func requestChildren(
-        for id: DOMNode.ID,
-        depth: Int = 1
-    ) async throws {
-        try await requiredNode(for: id).requestChildren(depth: depth)
-    }
-
-    package func setDOMAttribute(
+    func setDOMAttribute(
         _ name: String,
         value: String,
-        on id: DOMNode.ID,
-        options: WebInspectorMutationOptions
+        on node: DOMNode,
+        registersUndo: Bool
     ) async throws {
-        let node = try requiredNode(for: id)
+        try registeredNode(node)
         let target = try domTarget(owning: node.id.proxyID)
         try await target.dom.setAttributeValue(node.id.proxyID, name: name, value: value)
-        recordDOMEditHistoryTarget(target, options: options)
-        try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
+        recordDOMEditHistoryTarget(target, registersUndo: registersUndo)
+        try await Self.markDOMUndoableStateIfNeeded(on: target, registersUndo: registersUndo)
     }
 
-    package func setDOMOuterHTML(
+    func setDOMOuterHTML(
         _ html: String,
-        of id: DOMNode.ID,
-        options: WebInspectorMutationOptions
+        of node: DOMNode,
+        registersUndo: Bool
     ) async throws {
-        let node = try requiredNode(for: id)
+        try registeredNode(node)
         let target = try domTarget(owning: node.id.proxyID)
         try await target.dom.setOuterHTML(node.id.proxyID, html: html)
-        recordDOMEditHistoryTarget(target, options: options)
-        try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
+        recordDOMEditHistoryTarget(target, registersUndo: registersUndo)
+        try await Self.markDOMUndoableStateIfNeeded(on: target, registersUndo: registersUndo)
     }
 
-    package func removeDOMNodes(
-        _ nodeIDs: [DOMNode.ID],
-        options: WebInspectorMutationOptions
-    ) async throws -> DOMMutationResult {
+    /// Removes `nodes`, deepest first, and returns the nodes that were removed.
+    ///
+    /// - Throws: `DOMDeletionPartialFailure` when a command fails after at
+    ///   least one node was removed.
+    @discardableResult
+    func removeDOMNodes(
+        _ nodes: [DOMNode],
+        registersUndo: Bool
+    ) async throws -> [DOMNode] {
         var seenNodeIDs: Set<DOMNode.ID> = []
-        let uniqueNodes = try nodeIDs
-            .map { try requiredNode(for: $0) }
+        let uniqueNodes = try nodes
+            .map { try registeredNode($0) }
             .filter { seenNodeIDs.insert($0.id).inserted }
         let snapshot = try currentDOMTreeSnapshot(containing: uniqueNodes)
         let sortedNodes = uniqueNodes.sorted {
             snapshot.ancestorNodeIDs(of: $0.id).count > snapshot.ancestorNodeIDs(of: $1.id).count
         }
         let deletionTargets = try validatedDeletionTargets(for: sortedNodes)
-        var acceptedNodeIDs: [DOMNode.ID] = []
-        for (node, target) in zip(sortedNodes, deletionTargets) {
-            do {
-                try await target.dom.removeNode(node.id.proxyID)
-                recordDOMEditHistoryTarget(target, options: options)
-                try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
-                acceptedNodeIDs.append(node.id)
-            } catch {
-                if acceptedNodeIDs.isEmpty == false {
-                    clearSelectionIfDeleted(acceptedNodeIDs, snapshot: snapshot)
-                    throw DOMDeletionPartialFailure(
-                        deletedNodeCount: acceptedNodeIDs.count,
-                        underlyingError: error
-                    )
-                }
-                throw error
-            }
-        }
-        clearSelectionIfDeleted(acceptedNodeIDs, snapshot: snapshot)
-        return DOMMutationResult(requestedNodeIDs: nodeIDs, acceptedNodeIDs: acceptedNodeIDs)
-    }
-
-    /// Returns copied text for a DOM node in the requested format.
-    public func copyText(
-        _ kind: DOMNode.CopyTextKind,
-        for node: DOMNode
-    ) async throws -> String {
-        try registeredNode(node)
-        switch kind {
-        case .html:
-            let page = try currentPageOrThrow()
-            return try await page.dom.outerHTML(of: node.id.proxyID)
-        case .selectorPath:
-            return try currentDOMTreeSnapshot(containing: [node]).selectorPath(for: node.id)
-        case .xPath:
-            return try currentDOMTreeSnapshot(containing: [node]).xPath(for: node.id)
-        }
-    }
-
-    package func copyText(
-        _ kind: DOMNode.CopyTextKind,
-        for id: DOMNode.ID
-    ) async throws -> String {
-        try await copyText(kind, for: try requiredNode(for: id))
-    }
-
-    /// Removes one DOM node from the inspected document.
-    public func delete(_ node: DOMNode) async throws {
-        try await delete([node])
-    }
-
-    /// Removes DOM nodes from the inspected document.
-    public func delete(_ nodes: [DOMNode]) async throws {
-        _ = try await deleteCountingRemovedNodes(nodes)
-    }
-
-    @discardableResult
-    private func deleteCountingRemovedNodes(
-        _ nodes: [DOMNode]
-    ) async throws -> Int {
-        var seenNodeIDs: Set<DOMNode.ID> = []
-        let uniqueNodes = try nodes
-            .map { try registeredNode($0) }
-            .filter { seenNodeIDs.insert($0.id).inserted }
-        let snapshot = try currentDOMTreeSnapshot(containing: uniqueNodes)
-        let sortedNodes = uniqueNodes
-            .sorted {
-                snapshot.ancestorNodeIDs(of: $0.id).count > snapshot.ancestorNodeIDs(of: $1.id).count
-            }
-        let deletionTargets = try validatedDeletionTargets(for: sortedNodes)
         var removedNodes: [DOMNode] = []
         for (node, target) in zip(sortedNodes, deletionTargets) {
             do {
                 try await target.dom.removeNode(node.id.proxyID)
-                recordDOMEditHistoryTarget(target, options: .init())
-                try await target.dom.markUndoableState()
+                recordDOMEditHistoryTarget(target, registersUndo: registersUndo)
+                try await Self.markDOMUndoableStateIfNeeded(on: target, registersUndo: registersUndo)
                 removedNodes.append(node)
             } catch {
                 if removedNodes.isEmpty == false {
@@ -741,22 +634,23 @@ public final class WebInspectorContext {
             }
         }
         clearSelectionIfDeleted(removedNodes.map(\.id), snapshot: snapshot)
-        return removedNodes.count
+        return removedNodes
     }
 
-    package func delete(nodeIDs: [DOMNode.ID]) async throws {
-        _ = try await deleteCountingRemovedNodes(nodeIDs: nodeIDs)
-    }
-
-    @discardableResult
-    package func deleteCountingRemovedNodes(
-        nodeIDs: [DOMNode.ID]
-    ) async throws -> Int {
-        var seenNodeIDs: Set<DOMNode.ID> = []
-        let nodes = try nodeIDs
-            .filter { seenNodeIDs.insert($0).inserted }
-            .map { try requiredNode(for: $0) }
-        return try await deleteCountingRemovedNodes(nodes)
+    func copyText(
+        _ kind: DOMNode.CopyTextKind,
+        for node: DOMNode
+    ) async throws -> String {
+        try registeredNode(node)
+        switch kind {
+        case .html:
+            let page = try currentPageOrThrow()
+            return try await page.dom.outerHTML(of: node.id.proxyID)
+        case .selectorPath:
+            return try currentDOMTreeSnapshot(containing: [node]).selectorPath(for: node.id)
+        case .xPath:
+            return try currentDOMTreeSnapshot(containing: [node]).xPath(for: node.id)
+        }
     }
 
     #if DEBUG
@@ -857,8 +751,7 @@ public final class WebInspectorContext {
     }
     #endif
 
-    /// Highlights a DOM node in the inspected page.
-    public func highlight(_ node: DOMNode) async throws {
+    func highlight(_ node: DOMNode) async throws {
         try registeredNode(node)
         let page = try currentPageOrThrow()
         guard node.id.proxyID.targetScopeRawValue == nil else {
@@ -918,12 +811,7 @@ public final class WebInspectorContext {
         return nextPageHighlightOperationID
     }
 
-    package func highlightNode(for id: DOMNode.ID) async throws {
-        try await highlight(try requiredNode(for: id))
-    }
-
-    /// Clears the current DOM highlight in the inspected page.
-    public func hideHighlight() async throws {
+    func hideHighlight() async throws {
         let page = try currentPageOrThrow()
         pageHighlightState = nil
         try await page.dom.hideHighlight()
@@ -937,21 +825,15 @@ public final class WebInspectorContext {
         )
     }
 
-    package func undoDOMChange() async throws {
+    func undoDOMChange() async throws {
         try await domUndoRedoCommands().undo()
     }
 
-    package func redoDOMChange() async throws {
+    func redoDOMChange() async throws {
         try await domUndoRedoCommands().redo()
     }
 
-    /// Enables or disables WebKit's element picker.
-    ///
-    /// The latest call wins. A call made while a command is in flight
-    /// replaces the pending state, and every caller returns once the picker
-    /// matches the latest request. Cancelling the calling task after the
-    /// request is recorded neither cancels nor reverts it.
-    public func setElementPickerEnabled(
+    func setElementPickerEnabled(
         _ isEnabled: Bool
     ) async throws {
         try Task.checkCancellation()
@@ -1017,7 +899,7 @@ public final class WebInspectorContext {
         }
     }
 
-    package func toggleElementPickerEnabled() async throws {
+    func toggleElementPickerEnabled() async throws {
         let isEnabled = requestedElementPickerEnabled ?? isElementPickerEnabled
         try await setElementPickerEnabled(!isEnabled)
     }
@@ -1100,60 +982,29 @@ public final class WebInspectorContext {
         try await page.page.reload(ignoringCache: ignoringCache)
     }
 
-    /// Returns a CSS selector path for a DOM node.
-    public func selectorPath(for node: DOMNode) throws -> String {
+    func selectorPath(for node: DOMNode) throws -> String {
         try registeredNode(node)
         return try currentDOMTreeSnapshot(containing: [node]).selectorPath(for: node.id)
     }
 
-    package func selectorPath(for id: DOMNode.ID) throws -> String {
-        try selectorPath(for: try requiredNode(for: id))
-    }
-
-    /// Returns an XPath expression for a DOM node.
-    public func xPath(for node: DOMNode) throws -> String {
+    func xPath(for node: DOMNode) throws -> String {
         try registeredNode(node)
         return try currentDOMTreeSnapshot(containing: [node]).xPath(for: node.id)
     }
 
-    package func xPath(for id: DOMNode.ID) throws -> String {
-        try xPath(for: try requiredNode(for: id))
-    }
-
-    /// Creates a live DOM tree controller rooted at a node or the document root.
-    ///
-    /// - Throws: `WebInspectorProxyError.disconnected` when an explicit
-    ///   root is no longer registered in this context or belongs to another
-    ///   context.
-    public func treeController(
-        root requestedRoot: DOMNode? = nil
-    ) async throws -> DOMTreeController {
-        let root: DOMNode
-        if let requestedRoot {
-            guard nodesByID[requestedRoot.id] === requestedRoot else {
-                throw WebInspectorProxyError.disconnected(
-                    "DOMTreeController root is not registered in this WebInspectorContext."
-                )
-            }
-            root = requestedRoot
-        } else {
-            guard let currentRoot = rootNode else {
-                throw WebInspectorProxyError.disconnected("WebInspectorDataKit has no DOM root node.")
-            }
-            precondition(
-                nodesByID[currentRoot.id] === currentRoot,
-                "The current DOM root must remain registered in its WebInspectorContext."
+    func treeController(root: DOMNode) throws -> DOMTreeController {
+        guard nodesByID[root.id] === root else {
+            throw WebInspectorProxyError.disconnected(
+                "DOMTreeController root is not registered in this WebInspectorContext."
             )
-            root = currentRoot
         }
-
         let tree = DOMTreeState(rootNode: root, selectedNode: selectedNode)
         treeStates.append(WeakDOMTreeState(tree))
         pruneReleasedTreeStates()
         return DOMTreeController(tree: tree)
     }
 
-    package func rootTreeController() -> DOMTreeController {
+    func rootTreeController() -> DOMTreeController {
         let tree = DOMTreeState(rootNode: rootNode, selectedNode: selectedNode)
         treeStates.append(WeakDOMTreeState(tree))
         pruneReleasedTreeStates()
@@ -2193,18 +2044,15 @@ public final class WebInspectorContext {
 
     private static func markDOMUndoableStateIfNeeded(
         on target: WebInspectorTarget,
-        options: WebInspectorMutationOptions
+        registersUndo: Bool
     ) async throws {
-        switch options.undo {
-        case .automatic:
+        if registersUndo {
             try await target.dom.markUndoableState()
-        case .disabled:
-            break
         }
     }
 
-    private func recordDOMEditHistoryTarget(_ target: WebInspectorTarget, options: WebInspectorMutationOptions) {
-        guard options.undo == .automatic else {
+    private func recordDOMEditHistoryTarget(_ target: WebInspectorTarget, registersUndo: Bool) {
+        guard registersUndo else {
             return
         }
         domEditHistoryTarget = target
@@ -2873,7 +2721,7 @@ extension WebInspectorContext {
         styleRefreshTask?.cancel()
         styleRefreshTask = nil
         styleRefreshGeneration += 1
-        let styles = selectedNode.elementStyles ?? CSSStyles(nodeID: selectedNode.id, modelContext: self)
+        let styles = selectedNode.elementStyles ?? CSSStyles(nodeID: selectedNode.id, inspectorBaselineStore: cssInspectorBaselineStore)
         selectedNode.setElementStyles(styles)
         styles.load(
             matchedStyles: matchedStyles,
@@ -3183,12 +3031,11 @@ extension WebInspectorContext {
             }
             previousAssociatedRoots = existing.associatedSubtreeRoots()
             existing.update(from: payload)
-            existing.setModelContext(self)
             node = existing
         } else {
             previousChildren = []
             previousAssociatedRoots = []
-            node = DOMNode(node: payload, modelContext: self)
+            node = DOMNode(node: payload)
             nodesByID[id] = node
         }
 
@@ -3596,7 +3443,7 @@ extension WebInspectorContext {
             return
         }
 
-        let styles = selectedNode.elementStyles ?? CSSStyles(nodeID: selectedNode.id, modelContext: self)
+        let styles = selectedNode.elementStyles ?? CSSStyles(nodeID: selectedNode.id, inspectorBaselineStore: cssInspectorBaselineStore)
         selectedNode.setElementStyles(styles)
         styleRefreshGeneration += 1
         let generation = styleRefreshGeneration
@@ -3719,10 +3566,7 @@ extension WebInspectorContext {
         Task.isCancelled == false && selectedNode === node && styleRefreshGeneration == generation
     }
 
-    /// Reports whether the style pane is visible. While active, stale
-    /// selected-node styles (`.needsRefresh`) re-fetch immediately; while
-    /// inactive they stay stale until the next activation or selection.
-    public func setStyleHydrationActive(_ active: Bool) {
+    func setStyleHydrationActive(_ active: Bool) {
         guard isStyleHydrationActive != active else {
             return
         }
@@ -3738,8 +3582,8 @@ extension WebInspectorContext {
         }
     }
 
-    package func styles(for nodeID: DOMNode.ID) throws -> CSSStyles {
-        let node = try requiredNode(for: nodeID)
+    func styles(for node: DOMNode) throws -> CSSStyles {
+        try registeredNode(node)
         guard node.nodeType == 1 else {
             throw WebInspectorProxyError.commandFailed(
                 domain: "CSS",
@@ -3756,16 +3600,17 @@ extension WebInspectorContext {
         return styles
     }
 
-    package func refreshStyles(for nodeID: DOMNode.ID) throws -> CSSStyles {
-        let styles = try styles(for: nodeID)
+    @discardableResult
+    func refreshStyles(for node: DOMNode) throws -> CSSStyles {
+        let styles = try styles(for: node)
         refreshSelectedStyles()
         return styles
     }
 
-    package func setCSSProperty(
+    func setCSSProperty(
         _ id: CSSStyleProperty.ID,
         enabled: Bool,
-        options: WebInspectorMutationOptions
+        registersUndo: Bool
     ) async throws {
         let mutation = CSSStyleTextMutation.setProperty(enabled: enabled)
         guard styleToggleOperations[id] == nil,
@@ -3802,14 +3647,14 @@ extension WebInspectorContext {
             target: target,
             submissionAuthority: submissionAuthority,
             operation: operation,
-            options: options
+            registersUndo: registersUndo
         )
     }
 
-    package func setCSSDeclarationText(
+    func setCSSDeclarationText(
         _ text: String,
         for id: CSSStyleProperty.ID,
-        options: WebInspectorMutationOptions
+        registersUndo: Bool
     ) async throws {
         let mutation = CSSStyleTextMutation.setDeclarationText(text)
         guard styleToggleOperations[id] == nil,
@@ -3846,14 +3691,14 @@ extension WebInspectorContext {
             target: target,
             submissionAuthority: submissionAuthority,
             operation: operation,
-            options: options
+            registersUndo: registersUndo
         )
     }
 
-    package func setCSSRuleSelector(
+    func setCSSRuleSelector(
         _ selector: String,
         for id: CSSStyleRule.ID,
-        options: WebInspectorMutationOptions
+        registersUndo: Bool
     ) async throws {
         let proxyID = id.proxyID
         let target = try cssTarget(owning: proxyID)
@@ -3870,17 +3715,17 @@ extension WebInspectorContext {
             )
             _ = try await target.css.setRuleSelector(proxyID, selector: selector)
             try validateCSSMutationAuthority(commandAuthority)
-            try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
+            try await Self.markDOMUndoableStateIfNeeded(on: target, registersUndo: registersUndo)
             try validateCSSMutationAuthority(commandAuthority)
-            recordDOMEditHistoryTarget(target, options: options)
+            recordDOMEditHistoryTarget(target, registersUndo: registersUndo)
         }
         refreshSelectedStylesIfHydrationActive()
     }
 
-    package func setCSSStyleSheetText(
+    func setCSSStyleSheetText(
         _ text: String,
         for id: CSS.StyleSheet.ID,
-        options: WebInspectorMutationOptions
+        registersUndo: Bool
     ) async throws {
         let target = try cssTarget(owning: id)
         let submissionAuthority = cssMutationAuthority(target: target, styleSheetID: id)
@@ -3891,22 +3736,17 @@ extension WebInspectorContext {
             try validateCSSMutationAuthority(commandAuthority)
             cssStyleSheets.advanceContentRevision(id)
             markSelectedStylesNeedsRefresh()
-            try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
+            try await Self.markDOMUndoableStateIfNeeded(on: target, registersUndo: registersUndo)
             try validateCSSMutationAuthority(commandAuthority)
-            recordDOMEditHistoryTarget(target, options: options)
+            recordDOMEditHistoryTarget(target, registersUndo: registersUndo)
         }
     }
 
-    /// Toggles a CSS declaration on or off by rewriting its owning style
-    /// text. Returns false without queuing a command when the property is not
-    /// editable in the last materialized styles, or when a toggle for the same
-    /// property is already in flight. A pending or stale refresh is completed
-    /// before the command text is rebuilt from current declarations.
     @discardableResult
-    public func requestSetCSSProperty(
+    func requestSetCSSProperty(
         _ id: CSSStyleProperty.ID,
         enabled: Bool,
-        options: WebInspectorMutationOptions
+        registersUndo: Bool
     ) -> Bool {
         let mutation = CSSStyleTextMutation.setProperty(enabled: enabled)
         guard styleToggleOperations[id] == nil,
@@ -3947,7 +3787,7 @@ extension WebInspectorContext {
                     target: target,
                     submissionAuthority: submissionAuthority,
                     operation: operation,
-                    options: options,
+                    registersUndo: registersUndo,
                     context: weakContext,
                     operationGate: operationGate
                 )
@@ -3994,7 +3834,7 @@ extension WebInspectorContext {
         target: WebInspectorTarget,
         submissionAuthority: CSSMutationAuthority,
         operation: StyleToggleOperation,
-        options: WebInspectorMutationOptions,
+        registersUndo: Bool,
         context: WeakContextReference,
         operationGate: CSSOperationGate
     ) async throws {
@@ -4039,11 +3879,11 @@ extension WebInspectorContext {
                 try context.validateCSSMutationAuthority(commandAuthority)
                 try context.validateStyleToggleOperation(propertyID, operation: operation)
             }
-            try await markDOMUndoableStateIfNeeded(on: target, options: options)
+            try await markDOMUndoableStateIfNeeded(on: target, registersUndo: registersUndo)
             try context.withContext { context in
                 try context.validateCSSMutationAuthority(commandAuthority)
                 try context.validateStyleToggleOperation(propertyID, operation: operation)
-                context.recordDOMEditHistoryTarget(target, options: options)
+                context.recordDOMEditHistoryTarget(target, registersUndo: registersUndo)
                 styles.applySetStyleText(result: result, for: propertyID)
                 context.refreshSelectedStylesIfHydrationActive()
             }
@@ -4142,7 +3982,7 @@ extension WebInspectorContext {
         target: WebInspectorTarget,
         submissionAuthority: CSSMutationAuthority,
         operation: StyleToggleOperation,
-        options: WebInspectorMutationOptions
+        registersUndo: Bool
     ) async throws {
         try await withExclusiveCSSOperation(on: target) {
             try validateCSSMutationAuthority(submissionAuthority)
@@ -4174,10 +4014,10 @@ extension WebInspectorContext {
             let result = try await target.css.setStyleText(intent.styleID, text: intent.text)
             try validateCSSMutationAuthority(commandAuthority)
             try validateStyleToggleOperation(propertyID, operation: operation)
-            try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
+            try await Self.markDOMUndoableStateIfNeeded(on: target, registersUndo: registersUndo)
             try validateCSSMutationAuthority(commandAuthority)
             try validateStyleToggleOperation(propertyID, operation: operation)
-            recordDOMEditHistoryTarget(target, options: options)
+            recordDOMEditHistoryTarget(target, registersUndo: registersUndo)
             styles.applySetStyleText(result: result, for: propertyID)
         }
         refreshSelectedStylesIfHydrationActive()
