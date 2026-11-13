@@ -58,14 +58,6 @@ public final class DOMInspector {
         context.rootTreeController()
     }
 
-    /// Returns a live tree controller rooted at a node.
-    ///
-    /// - Throws: `WebInspectorProxyError.disconnected` when the node is not
-    ///   currently registered.
-    public func treeController(root: DOMNode) throws -> DOMTreeController {
-        try context.treeController(root: root)
-    }
-
     /// Requests the regular child nodes of a node.
     ///
     /// The children arrive as updates to ``DOMNode/children``. A node that

@@ -117,22 +117,7 @@ func staleAndForeignDOMNodesNeverRebindToSameIDReplacement() async throws {
         try await context.dom.highlight(foreignNode)
     }
 
-    let staleRootError = WebInspectorProxyError.disconnected(
-        "DOMTreeController root is not registered in this WebInspectorContext."
-    )
-    #expect(context.domTreeRegistrationCountForTesting() == 1)
-    #expect(throws: staleRootError) {
-        _ = try context.dom.treeController(root: staleNode)
-    }
-    #expect(throws: staleRootError) {
-        _ = try context.dom.treeController(root: foreignDistinctNode)
-    }
-    #expect(context.domTreeRegistrationCountForTesting() == 1)
-
     #expect(try context.dom.selectorPath(for: freshNode) == "fresh")
-    let currentTree = try context.dom.treeController(root: freshNode)
-    #expect(currentTree.snapshot.rootNodeID == freshNode.id)
-    #expect(context.domTreeRegistrationCountForTesting() == 2)
     context.dom.select(nil)
     #expect(context.dom.selectedNode == nil)
     #expect(await runtime.backend.recordedCommands() == commandsBeforeStaleOperations)
