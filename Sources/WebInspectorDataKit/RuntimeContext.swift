@@ -4,6 +4,7 @@ import WebInspectorProxyKit
 
 /// Observable model for a Runtime execution context.
 @Observable
+@MainActor
 public final class RuntimeContext: WebInspectorPersistentModel {
     struct Authority {
         var targetID: WebInspectorTarget.ID
@@ -23,7 +24,7 @@ public final class RuntimeContext: WebInspectorPersistentModel {
     }
 
     /// The stable execution-context identity.
-    public let id: ID
+    public nonisolated let id: ID
 
     /// The display name for the execution context.
     public private(set) var name: String

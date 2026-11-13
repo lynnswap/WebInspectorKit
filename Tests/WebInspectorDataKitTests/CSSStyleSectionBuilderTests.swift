@@ -2,6 +2,7 @@ import Testing
 @testable import WebInspectorDataKit
 import WebInspectorProxyKit
 
+@MainActor
 @Test
 func sectionBuilderOrdersSectionsAcrossAllKinds() throws {
     let matched = CSS.MatchedStyles(
@@ -70,6 +71,7 @@ func sectionBuilderOrdersSectionsAcrossAllKinds() throws {
     #expect(sections.map(\.id.ordinal) == Array(0..<10))
 }
 
+@MainActor
 @Test
 func sectionBuilderKeepsRuleSectionsEditableExceptUserAgentRules() throws {
     let matched = CSS.MatchedStyles(matchedRules: [
@@ -91,6 +93,7 @@ func sectionBuilderKeepsRuleSectionsEditableExceptUserAgentRules() throws {
     #expect(userAgentSection.style.properties.map(\.isEditable) == [false])
 }
 
+@MainActor
 @Test
 func sectionBuilderKeepsAnonymousStylesNonEditable() throws {
     let inline = CSS.InlineStyles(
@@ -106,6 +109,7 @@ func sectionBuilderKeepsAnonymousStylesNonEditable() throws {
     #expect(sections.flatMap(\.style.properties).map(\.isEditable) == [false, false])
 }
 
+@MainActor
 @Test
 func sectionBuilderNormalizesPropertyRowEditability() throws {
     let style = CSS.Style(
@@ -135,6 +139,7 @@ func sectionBuilderNormalizesPropertyRowEditability() throws {
     #expect(section.style.properties.map(\.isEditable) == [true, false, true, true])
 }
 
+@MainActor
 @Test
 func sectionBuilderMakesNoSectionsWithoutInlineStyles() throws {
     let matched = CSS.MatchedStyles(matchedRules: [

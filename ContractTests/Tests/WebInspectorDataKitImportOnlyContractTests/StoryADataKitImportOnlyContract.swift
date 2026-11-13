@@ -1,9 +1,10 @@
 import Testing
 import WebInspectorDataKit
 
+@MainActor
 @Test
 func webInspectorDataKitBaseSurfaceDoesNotRequireProxyKitImport() {
-    _ = DataKitImportOnlyActor()
+    _ = DataKitImportOnlyConsumer()
 }
 
 @Test
@@ -15,7 +16,8 @@ func dataKitLegacyNetworkResponseSnapshotInitializerFunctionReferenceRemainsUsab
     #expect(response.security == nil)
 }
 
-private actor DataKitImportOnlyActor {
+@MainActor
+private final class DataKitImportOnlyConsumer {
     func consume(_ context: WebInspectorContext) async throws {
         let requests = context.network.fetchedResults()
         let messages = context.console.fetchedResults()

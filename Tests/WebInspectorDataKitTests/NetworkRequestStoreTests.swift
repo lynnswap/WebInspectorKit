@@ -146,8 +146,7 @@ private func insertStoreRequest(
                     context: context,
                     timestamp: timestamp
                 )
-            },
-            isolation: MainActor.shared
+            }
         ))
     guard case let .inserted(registration) = resolution else {
         Issue.record("Expected a new Network request registration.")
@@ -161,7 +160,7 @@ private struct NetworkRequestStoreTestFailure: Error {}
 @MainActor
 @Test
 func resourceTreeBatchPublishesOneProjectionForFilteredAndSectionedConsumers() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let store = context.networkRequestsCollectionState
     let filtered = context.network.fetchedResults(for: NetworkRequestQuery(filter: .method(equals: "GET")))
     let sectioned = context.network.fetchedResults(for: NetworkRequestQuery(sectionBy: .method))
@@ -187,7 +186,7 @@ func resourceTreeBatchPublishesOneProjectionForFilteredAndSectionedConsumers() a
 @MainActor
 @Test
 func everyNetworkInsertionSourceSharesStoreOrderAndDefaultProjection() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let store = context.networkRequestsCollectionState
     let firstResults = context.network.fetchedResults()
     let secondResults = context.network.fetchedResults()
@@ -289,7 +288,7 @@ func everyNetworkInsertionSourceSharesStoreOrderAndDefaultProjection() async thr
 @MainActor
 @Test
 func overlappingIndexCommitsBatchPendingUpdatesPerRegisteredResult() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let gate = NetworkRequestIndexClientGate()
     let client = gatedIndexClient(gate: gate)
     let store = NetworkRequestStore(indexFactory: { client })
@@ -309,7 +308,7 @@ func overlappingIndexCommitsBatchPendingUpdatesPerRegisteredResult() async throw
     await gate.holdNext(.deltas)
     first.request.applyDataReceived(dataLength: 1, encodedDataLength: 1, timestamp: 2)
     let firstCommit = Task { @MainActor in
-        await store.commitUpdate(first, isolation: MainActor.shared)
+        await store.commitUpdate(first)
     }
     await gate.waitUntilSuspended(.deltas)
 
@@ -375,7 +374,7 @@ func overlappingIndexCommitsBatchPendingUpdatesPerRegisteredResult() async throw
 @MainActor
 @Test
 func queryResetDropsSupersededPendingContentUpdates() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let gate = NetworkRequestIndexClientGate()
     let client = gatedIndexClient(gate: gate)
     let store = NetworkRequestStore(indexFactory: { client })
@@ -397,7 +396,7 @@ func queryResetDropsSupersededPendingContentUpdates() async throws {
     await gate.holdNext(.deltas)
     first.request.applyDataReceived(dataLength: 1, encodedDataLength: 1, timestamp: 3)
     let firstCommit = Task { @MainActor in
-        await store.commitUpdate(first, isolation: MainActor.shared)
+        await store.commitUpdate(first)
     }
     await gate.waitUntilSuspended(.deltas)
 
@@ -409,7 +408,7 @@ func queryResetDropsSupersededPendingContentUpdates() async throws {
     #expect(reset.isReset)
 
     second.request.applyDataReceived(dataLength: 2, encodedDataLength: 2, timestamp: 4)
-    await store.commitUpdate(second, isolation: MainActor.shared)
+    await store.commitUpdate(second)
     #expect(
         try #require(await transactions.next()).itemChanges == [
             .update(
@@ -425,7 +424,7 @@ func queryResetDropsSupersededPendingContentUpdates() async throws {
 @MainActor
 @Test
 func synchronousSeedSupersedesBlockedIndexedContentWithOneReset() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let gate = NetworkRequestIndexClientGate()
     let client = gatedIndexClient(gate: gate)
     let store = NetworkRequestStore(indexFactory: { client })
@@ -441,7 +440,7 @@ func synchronousSeedSupersedesBlockedIndexedContentWithOneReset() async throws {
     await gate.holdNext(.deltas)
     first.request.applyDataReceived(dataLength: 1, encodedDataLength: 1, timestamp: 2)
     let blockedCommit = Task { @MainActor in
-        await store.commitUpdate(first, isolation: MainActor.shared)
+        await store.commitUpdate(first)
     }
     await gate.waitUntilSuspended(.deltas)
 
@@ -475,7 +474,7 @@ func synchronousSeedSupersedesBlockedIndexedContentWithOneReset() async throws {
 @MainActor
 @Test
 func resetDuringBlockedInsertionRejectsTheStaleResolutionAndIndex() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let gate = NetworkRequestIndexClientGate()
     let firstClient = gatedIndexClient(gate: gate)
     let clients = Mutex([firstClient, NetworkRequestIndexClient.live()])
@@ -500,8 +499,7 @@ func resetDuringBlockedInsertionRejectsTheStaleResolutionAndIndex() async throws
             admission: .requestWillBeSent(hasRedirectResponse: false),
             create: {
                 makeStoreRequest(id: "blocked-reset", context: context)
-            },
-            isolation: MainActor.shared
+            }
         )
         return resolution == nil
     }
@@ -522,7 +520,7 @@ func resetDuringBlockedInsertionRejectsTheStaleResolutionAndIndex() async throws
 @MainActor
 @Test
 func userClearAndAttachmentResetApplyDistinctSameIDAdmissionPolicies() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let store = NetworkRequestStore()
     let first = try insertStoreRequestSynchronously(
         "reset-policy",
@@ -590,7 +588,7 @@ func userClearAndAttachmentResetApplyDistinctSameIDAdmissionPolicies() throws {
 @MainActor
 @Test
 func indexUsesRegistrationOrderAndBatchesShiftedStableUpdates() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let store = NetworkRequestStore()
     let first = try insertStoreRequestSynchronously("index-order-a", store: store, context: context)
     let second = try insertStoreRequestSynchronously(
@@ -662,7 +660,7 @@ func indexUsesRegistrationOrderAndBatchesShiftedStableUpdates() async throws {
 @MainActor
 @Test
 func defaultStoreProjectionKeepsTenThousandChangesOffTheQueryIndex() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let store = NetworkRequestStore()
     let results = store.makeFetchedResults(query: NetworkRequestQuery(), modelContext: context)
     let observationChanged = Mutex(false)
@@ -699,5 +697,5 @@ func defaultStoreProjectionKeepsTenThousandChangesOffTheQueryIndex() async throw
     #expect(results.items[5_000].decodedDataLength == 5_001)
     #expect(results.items[9_999].decodedDataLength == 10_000)
     #expect(results.networkFullMembershipVisitCountForTesting == 0)
-    #expect(await store.fullProjectionRecordVisitCount(isolation: MainActor.shared) == 0)
+    #expect(await store.fullProjectionRecordVisitCount() == 0)
 }

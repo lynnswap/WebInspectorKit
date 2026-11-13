@@ -208,7 +208,7 @@ func networkNavigationGroupsEachAtoBtoAFrameVisitSeparately() async throws {
 @MainActor
 @Test
 func ambiguousFrameCommitDoesNotGuessBetweenPendingNetworkTargets() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await applyOriginatedNetworkRequest(
@@ -270,7 +270,7 @@ func ambiguousFrameCommitDoesNotGuessBetweenPendingNetworkTargets() async throws
 @MainActor
 @Test
 func frameCommitUsesExactPageBindingForPendingNetworkTarget() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await applyOriginatedNetworkRequest(
@@ -616,7 +616,7 @@ func delayedNetworkConsumerUsesEventTimeTargetAfterFrameRetarget() async throws 
         return
     }
 
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     await context.apply(oldNetworkEvent)
     let newID = Network.Request.ID("event-time-new")
@@ -667,7 +667,7 @@ func workerInitiatedRequestSharesOwningFrameNavigationVisit() async throws {
         params: #"{"requestId":"worker-request","frameId":"main-frame","loaderId":"main-loader","documentURL":"https://example.test/","request":{"url":"https://example.test/worker-data","method":"GET"},"initiator":{"type":"script"},"timestamp":2,"targetId":"worker-1"}"#
     )
 
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     for _ in 0..<2 {
         let protocolEvent = try #require(await iterator.next())
@@ -1328,7 +1328,7 @@ func responseReceivedWithoutRequestWillBeSentCreatesRequest() async throws {
 @MainActor
 @Test
 func responseReceivedWithoutResourceTypePreservesRequestResourceType() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let requestID = Network.Request.ID("response-type-preserved-request")
     let modelID = NetworkRequest.ID(requestID)
 
@@ -1453,7 +1453,7 @@ func loadingFinishedClampsNegativeMetricTotals() async throws {
 @MainActor
 @Test
 func loadingFinishedWithoutSecurityConnectionPreservesResponseSecurity() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let requestID = Network.Request.ID("security-without-completion-connection")
     let security = Network.Security(
         connection: Network.Security.Connection(
@@ -1515,7 +1515,7 @@ func loadingFinishedWithoutSecurityConnectionPreservesResponseSecurity() throws 
     "http://example.com/security-not-reported",
 ])
 func networkSecurityDoesNotInferTransportStateFromURLScheme(_ url: String) throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let requestID = Network.Request.ID(url)
     let request = NetworkRequest(
         request: Network.Request(id: requestID, url: url, method: "GET"),
@@ -1538,7 +1538,7 @@ func networkSecurityDoesNotInferTransportStateFromURLScheme(_ url: String) throw
 @MainActor
 @Test
 func multipartContinuationPreservesFinishedLifecycleAcrossLaterParts() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let requestID = Network.Request.ID("multipart-continuation")
     let request = NetworkRequest(
         request: Network.Request(
@@ -1904,7 +1904,7 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
 @MainActor
 @Test
 func memoryCacheSecurityReplacesExistingResponseSummary() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let requestID = Network.Request.ID("memory-cache-security-replacement")
     let request = NetworkRequest(
         request: Network.Request(
@@ -2082,7 +2082,7 @@ func responseRequestHeadersRefreshRequestBodyHints() async throws {
 @MainActor
 @Test
 func responseMetadataAndRedirectPreserveResponseBodyIdentity() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let requestID = Network.Request.ID("stable-response-body")
     let request = NetworkRequest(
         request: Network.Request(
@@ -2570,7 +2570,7 @@ func fetchResponseBodyRejectsLateCompletionAfterNetworkClear() async throws {
 @MainActor
 @Test
 func networkRequestHeadersUseWholeSnapshotPrecedence() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let requestID = Network.Request.ID("cookie-header-precedence")
 
     await context.apply(.requestWillBeSent(
@@ -2660,7 +2660,7 @@ func networkRequestHeadersUseWholeSnapshotPrecedence() async throws {
 @MainActor
 @Test
 func networkRequestHeaderSourceResetsForReusedAndRedirectedLifecycles() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let requestID = Network.Request.ID("cookie-header-reset")
 
     await context.apply(.requestWillBeSent(
@@ -2729,7 +2729,7 @@ func networkRequestHeaderSourceResetsForReusedAndRedirectedLifecycles() async th
 @MainActor
 @Test
 func networkCookieRequestAvailabilityFollowsCaptureBoundary() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
 
     let responseFirstID = Network.Request.ID("cookie-response-first")
     await context.apply(.responseReceived(
@@ -2791,7 +2791,7 @@ func networkCookieRequestAvailabilityFollowsCaptureBoundary() async throws {
 @MainActor
 @Test
 func networkResponseCookieSectionDistinguishesLoadingNoResponseEmptyAndValues() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let requestID = Network.Request.ID("cookie-response-states")
 
     await context.apply(.requestWillBeSent(

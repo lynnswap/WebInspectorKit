@@ -21,10 +21,8 @@ Operations use these stale semantics:
   sending a protocol command.
 - Nonthrowing selection operations ignore a stale or foreign non-`nil` model and
   preserve the current selection. Passing `nil` still clears the selection.
-- ``DOMNode/requestChildren(depth:isolation:)`` ignores a stale node. It never
+- ``DOMNode/requestChildren(depth:)`` ignores a stale node. It never
   redirects the request to a same-ID node from a later document.
-- The actor-owner requirement on ``WebInspectorContext`` remains independent of
-  registration lifetime. Call a context only from its owning actor.
 
 Resolve current models from the context or a current tree snapshot immediately
 before an operation:

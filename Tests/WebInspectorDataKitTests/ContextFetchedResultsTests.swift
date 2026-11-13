@@ -11,7 +11,7 @@ import WebInspectorTestSupport
 @Test
 func unfilteredNetworkInsertionsDoNotVisitExistingQueryMembership() async throws {
     let eventCount = 257
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     let controller = WebInspectorFetchedResultsController(fetchedResults: results)
     let transactionRecorder = FetchedResultsTransactionRecorder(
@@ -341,7 +341,7 @@ func fetchedResultsControllerPublishesNetworkInsertAndContentUpdateTransactions(
 @MainActor
 @Test
 func unfilteredNetworkContentUpdateDoesNotVisitFullMembership() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     for index in 0..<2_305 {
         let requestID = Network.Request.ID("request-\(index)")
         await context.apply(.requestWillBeSent(
@@ -447,7 +447,7 @@ func sectionedNetworkResultsPublishTopologyWhenSectionKeyChanges() async throws 
 @MainActor
 @Test
 func sectionedNetworkResultsPublishItemMoveWhenSectionKeyChangesBetweenExistingSections() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let results = context.network.fetchedResults(
         for: NetworkRequestQuery(sectionBy: .resourceCategory)
     )
@@ -515,7 +515,7 @@ func sectionedNetworkResultsPublishItemMoveWhenSectionKeyChangesBetweenExistingS
 @MainActor
 @Test
 func networkQueryAppliesFilterSortAndLimit() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     await context.apply(.requestWillBeSent(
         id: Network.Request.ID("graphql-old"),
         request: Network.Request(id: Network.Request.ID("graphql-old"), url: "https://api.example.com/graphql?older", method: "POST"),
@@ -557,7 +557,7 @@ func networkQueryAppliesFilterSortAndLimit() async throws {
 @MainActor
 @Test
 func networkQueryCombinesURLAndMIMETypeFilters() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     await context.apply(.requestWillBeSent(
         id: Network.Request.ID("api"),
         request: Network.Request(id: Network.Request.ID("api"), url: "https://api.example.com/data.json", method: "GET"),
@@ -608,7 +608,7 @@ func networkQueryCombinesURLAndMIMETypeFilters() async throws {
 @MainActor
 @Test
 func clearNetworkRequestsResetsConfiguredQueryState() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let query = NetworkRequestQuery(
         sortBy: [.requestSentTimestamp(order: .forward)],
         fetchLimit: 2
@@ -683,7 +683,7 @@ func startResetsConfiguredNetworkQueryState() async throws {
 @MainActor
 @Test
 func networkQueryOrdersEqualTimestampsByNewestInsertionFirst() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let query = NetworkRequestQuery(
         sortBy: [.requestSentTimestamp(order: .reverse)]
     )
@@ -726,7 +726,7 @@ func networkQueryOrdersEqualTimestampsByNewestInsertionFirst() async throws {
 @MainActor
 @Test
 func networkQueryPublishesFilterEnterAndLeave() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let query = NetworkRequestQuery(
         filter: .statusCode(atLeast: 400)
     )
@@ -779,7 +779,7 @@ func networkQueryPublishesFilterEnterAndLeave() async throws {
 @MainActor
 @Test
 func networkQuerySupportsResourceCategorySets() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
 
     await context.apply(.requestWillBeSent(
         id: Network.Request.ID("pending-avatar"),
@@ -852,7 +852,7 @@ func networkQuerySupportsResourceCategorySets() async throws {
 @MainActor
 @Test
 func networkRequestResourceCategoryUsesResponseHeadersWithoutPendingURLInference() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let requestID = Network.Request.ID("header-avatar")
     await context.apply(.requestWillBeSent(
         id: requestID,
@@ -1222,7 +1222,7 @@ func consoleFetchedResultsHonorQueriesForInitialUpdatesAndQueryChanges() async t
 @MainActor
 @Test
 func consoleFetchedResultsPreserveTieOrderAndCustomComparators() {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     for text in ["item2", "item10"] {
         context.apply(.messageAdded(Console.Message(
             source: Console.Source(rawValue: "console-api"),

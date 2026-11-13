@@ -4,7 +4,7 @@ Create Network and Console result sets with concrete, closed query values.
 
 ## Query Network Requests
 
-Use ``NetworkModelController/fetchedResults(for:isolation:)`` with a
+Use ``NetworkModelController/fetchedResults(for:)`` with a
 ``NetworkRequestQuery``. A query atomically defines membership, ordering,
 sectioning, and its visible window:
 
@@ -38,7 +38,7 @@ WebKit has not reported a status. The default substitution is zero.
 
 ## Query Console Messages
 
-Use ``ConsoleModelController/fetchedResults(for:isolation:)`` with a
+Use ``ConsoleModelController/fetchedResults(for:)`` with a
 ``ConsoleMessageQuery``:
 
 ```swift

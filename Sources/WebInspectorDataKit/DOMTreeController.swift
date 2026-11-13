@@ -275,6 +275,7 @@ public struct DOMTreeRevealRequest: Hashable, Sendable {
 }
 
 /// Live controller for a DOM tree snapshot and its updates.
+@MainActor
 public final class DOMTreeController {
     /// The current snapshot.
     public var snapshot: DOMTreeSnapshot {
@@ -308,6 +309,7 @@ public final class DOMTreeController {
     }
 }
 
+@MainActor
 final class DOMTreeState {
     var snapshot: DOMTreeSnapshot {
         makeSnapshotFromIndex()
@@ -338,7 +340,7 @@ final class DOMTreeState {
         parentByNodeID = snapshot.parentByNodeID
     }
 
-    deinit {
+    isolated deinit {
         updateRelay.finish()
         revealRequestRelay.finish()
     }
@@ -576,6 +578,7 @@ final class DOMTreeState {
 }
 
 extension DOMTreeSnapshot {
+    @MainActor
     static func make(
         revision: UInt64,
         rootNode: DOMNode?,
@@ -604,6 +607,7 @@ extension DOMTreeSnapshot {
         )
     }
 
+    @MainActor
     private static func collectSnapshotNodes(
         _ node: DOMNode,
         parentID: DOMNode.ID?,
@@ -659,6 +663,7 @@ extension DOMTreeSnapshot {
 }
 
 extension DOMTreeSnapshot.Node {
+    @MainActor
     init(snapshotting node: DOMNode) {
         let children: Children
         switch node.children {
@@ -701,6 +706,7 @@ extension DOMTreeSnapshot.Node {
     }
 }
 
+@MainActor
 final class WeakDOMTreeState {
     weak var tree: DOMTreeState?
 

@@ -49,7 +49,7 @@ package enum NetworkPreviewFixtures {
     }
 
     package static func makeContext(mode: Mode) -> WebInspectorContext {
-        let context = WebInspectorContext.preview(isolation: MainActor.shared)
+        let context = WebInspectorContext.preview()
         applySampleData(to: context, mode: mode)
         return context
     }

@@ -14,11 +14,9 @@ public extension WebInspectorContext {
     ///
     /// This observes lifecycle state instead of using a wall-clock deadline.
     /// Cancellation ends the wait and remains owned by the calling test.
-    func startAndWaitForStartupForTesting(
-        isolation: isolated (any Actor) = #isolation
-    ) async throws {
+    func startAndWaitForStartupForTesting() async throws {
         let updates = statusUpdates
-        start(isolation: isolation)
+        start()
         for await status in updates {
             try Task.checkCancellation()
             switch status.state {

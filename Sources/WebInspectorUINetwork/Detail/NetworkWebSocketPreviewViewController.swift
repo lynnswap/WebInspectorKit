@@ -17,6 +17,7 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
         private let lifecycleRevision: UInt64
         private let webSocketInstance: ObjectIdentifier
 
+        @MainActor
         package init(request: NetworkRequest, webSocket: WebSocketState) {
             requestID = request.id
             requestInstance = ObjectIdentifier(request)

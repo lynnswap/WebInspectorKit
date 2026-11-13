@@ -615,6 +615,7 @@ package struct NetworkRequestHeadersContext: Hashable, Sendable {
     package let queryParameters: NetworkParameterParseReport?
     package let requestData: RequestData?
 
+    @MainActor
     fileprivate init(request: NetworkRequest) {
         switch request.state {
         case let .failed(errorText, canceled: true):
@@ -645,6 +646,7 @@ package struct NetworkRequestHeadersContext: Hashable, Sendable {
         )
     }
 
+    @MainActor
     static func makeRequestData(
         requestBody: NetworkBody?,
         requestHeaders: [String: String]

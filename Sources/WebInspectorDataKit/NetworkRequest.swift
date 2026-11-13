@@ -298,6 +298,7 @@ package struct WebSocketTimelineFrame: Equatable, Sendable {
 
 /// Observable WebSocket state attached to a network request.
 @Observable
+@MainActor
 public final class WebSocketState {
     /// WebSocket ready state tracked from network events.
     public enum ReadyState: Equatable, Sendable {
@@ -594,7 +595,7 @@ public final class WebSocketState {
         }
     }
 
-    private static func compatibilityFrame(for entry: WebSocketTimelineEntry) -> Frame? {
+    nonisolated private static func compatibilityFrame(for entry: WebSocketTimelineEntry) -> Frame? {
         switch entry.kind {
         case .handshakeResponse, .connectionEstablished, .connectionClosed:
             return nil
@@ -670,6 +671,7 @@ private extension WebSocketTimelineFrame.Kind {
 
 /// Observable request or response body state for a network request.
 @Observable
+@MainActor
 public final class NetworkBody {
     fileprivate final class ResponseFetchIdentity {}
 
@@ -850,7 +852,7 @@ public final class NetworkBody {
         refreshTextRepresentation()
     }
 
-    deinit {
+    isolated deinit {
         responseFetch?.lease.completion.fulfill(
             .failure(Self.invalidatedResponseFetchError)
         )
@@ -1029,7 +1031,7 @@ public final class NetworkBody {
         )
     }
 
-    static func bodyHints(
+    nonisolated static func bodyHints(
         mimeType: String?,
         headers: [String: String],
         url: String,
@@ -1073,7 +1075,7 @@ public final class NetworkBody {
         return (.binary, .plainText)
     }
 
-    private static func syntaxKind(forPathExtensionIn url: String) -> SyntaxKind {
+    nonisolated private static func syntaxKind(forPathExtensionIn url: String) -> SyntaxKind {
         switch URL(string: url)?.pathExtension.lowercased() {
         case "json":
             .json
@@ -1220,6 +1222,7 @@ package enum NetworkResponseCookieSection: Equatable, Sendable {
 
 /// Observable model for one network request.
 @Observable
+@MainActor
 public final class NetworkRequest: WebInspectorPersistentModel {
     /// Stable identity for a network request within a context.
     public struct ID: Hashable, Sendable {
@@ -1276,7 +1279,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
     }
 
     /// The stable request identity.
-    public let id: ID
+    public nonisolated let id: ID
 
     /// The request URL.
     public private(set) var url: String
@@ -1596,7 +1599,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
     ///
     /// Concurrent callers join one protocol command. Cancelling a caller ends
     /// only that caller's wait and does not cancel the shared response fetch.
-    public func fetchResponseBody(isolation: isolated (any Actor) = #isolation) async {
+    public func fetchResponseBody() async {
         guard state == .finished, hasResponseBody else {
             return
         }
@@ -1618,14 +1621,12 @@ public final class NetworkRequest: WebInspectorPersistentModel {
                 return
             }
             let task = Task { [weak self, weak body, weak modelContext] in
-                _ = isolation
                 let result: Result<Network.Body, WebInspectorProxyError>
                 if Task.isCancelled {
                     result = .failure(NetworkBody.invalidatedResponseFetchError)
                 } else if let self, let modelContext {
                     result = await modelContext.responseBodyResult(
-                        for: self,
-                        isolation: isolation
+                        for: self
                     )
                 } else {
                     result = .failure(NetworkBody.invalidatedResponseFetchError)
@@ -2084,7 +2085,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         refreshRequestBodyHints()
     }
 
-    private static func requestHeaderPrecedence(_ source: NetworkRequestHeaderSource) -> Int {
+    nonisolated private static func requestHeaderPrecedence(_ source: NetworkRequestHeaderSource) -> Int {
         switch source {
         case .unavailable:
             0
@@ -2111,7 +2112,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         requestBody.updateHints(kind: hints.kind, sourceSyntaxKind: hints.syntaxKind)
     }
 
-    package static func resourceCategory(
+    nonisolated package static func resourceCategory(
         resourceType: Network.ResourceType?,
         mimeType: String?,
         url: String,
@@ -2187,37 +2188,37 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         return .other
     }
 
-    package static func effectiveMIMEType(mimeType: String?, headers: [String: String]) -> String? {
+    nonisolated package static func effectiveMIMEType(mimeType: String?, headers: [String: String]) -> String? {
         NetworkContentTypeParser.effectiveMediaType(
             protocolMIMEType: mimeType,
             headers: headers
         )
     }
 
-    private static func normalizedMIMEType(_ mimeType: String?) -> String {
+    nonisolated private static func normalizedMIMEType(_ mimeType: String?) -> String {
         guard let mimeType else {
             return ""
         }
         return NetworkContentTypeParser.parse(mimeType).normalizedMediaType ?? ""
     }
 
-    private static func isMultipartMixedReplace(_ mimeType: String?) -> Bool {
+    nonisolated private static func isMultipartMixedReplace(_ mimeType: String?) -> Bool {
         normalizedMIMEType(mimeType) == "multipart/x-mixed-replace"
     }
 
-    private static func isPreviewableImage(mimeType: String, pathExtension: String) -> Bool {
+    nonisolated private static func isPreviewableImage(mimeType: String, pathExtension: String) -> Bool {
         knownPreviewableImageMIMETypes.contains(mimeType)
             || knownPreviewableImagePathExtensions.contains(pathExtension)
     }
 
-    private static func isPreviewableMedia(mimeType: String, pathExtension: String) -> Bool {
+    nonisolated private static func isPreviewableMedia(mimeType: String, pathExtension: String) -> Bool {
         isHLSMIMEType(mimeType)
             || knownPreviewableMediaMIMETypes.contains(mimeType)
             || pathExtension == "m3u8"
             || knownPreviewableMediaPathExtensions.contains(pathExtension)
     }
 
-    private static func isHLSMIMEType(_ mimeType: String) -> Bool {
+    nonisolated private static func isHLSMIMEType(_ mimeType: String) -> Bool {
         switch mimeType {
         case "application/vnd.apple.mpegurl", "application/x-mpegurl", "application/mpegurl",
              "audio/mpegurl", "audio/x-mpegurl":
@@ -2227,7 +2228,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         }
     }
 
-    package static func urlSearchText(_ rawURL: String) -> String {
+    nonisolated package static func urlSearchText(_ rawURL: String) -> String {
         guard rawURL.range(of: "data:", options: [.anchored, .caseInsensitive]) == nil,
               let components = URLComponents(string: rawURL, encodingInvalidCharacters: false)
                 ?? URLComponents(string: rawURL, encodingInvalidCharacters: true) else {
@@ -2241,7 +2242,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         .joined(separator: "\n")
     }
 
-    package static func pathExtension(in rawURL: String) -> String {
+    nonisolated package static func pathExtension(in rawURL: String) -> String {
         guard rawURL.range(of: "data:", options: [.anchored, .caseInsensitive]) == nil else {
             return ""
         }
@@ -2253,7 +2254,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         return URL(fileURLWithPath: rawURL).pathExtension.lowercased()
     }
 
-    private static let knownPreviewableImageMIMETypes: Set<String> = [
+    nonisolated private static let knownPreviewableImageMIMETypes: Set<String> = [
         "image/apng",
         "image/avif",
         "image/bmp",
@@ -2269,7 +2270,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         "image/x-png",
     ]
 
-    private static let knownPreviewableMediaMIMETypes: Set<String> = [
+    nonisolated private static let knownPreviewableMediaMIMETypes: Set<String> = [
         "audio/aac",
         "audio/aiff",
         "audio/mp3",
@@ -2284,7 +2285,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         "video/x-m4v",
     ]
 
-    private static let knownPreviewableImagePathExtensions: Set<String> = [
+    nonisolated private static let knownPreviewableImagePathExtensions: Set<String> = [
         "apng",
         "avif",
         "bmp",
@@ -2299,7 +2300,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         "webp",
     ]
 
-    private static let knownPreviewableMediaPathExtensions: Set<String> = [
+    nonisolated private static let knownPreviewableMediaPathExtensions: Set<String> = [
         "aac",
         "aif",
         "aiff",
@@ -2312,7 +2313,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         "wav",
     ]
 
-    package static func uniqueNonEmpty(_ values: [String?]) -> [String] {
+    nonisolated package static func uniqueNonEmpty(_ values: [String?]) -> [String] {
         var seen = Set<String>()
         var results: [String] = []
         for value in values {

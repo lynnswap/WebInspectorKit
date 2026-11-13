@@ -635,6 +635,7 @@ func webSocketRejectedHandshakePreservesResponseWithoutOpeningAndOrdersTerminalE
     #expect(webSocket.frames.map(\.direction) == [.error("upgrade failed")])
 }
 
+@MainActor
 @Test
 func webSocketHandshakeWithoutStatusIsUnreportedWithoutInventingMetadata() throws {
     let webSocket = WebSocketState()
@@ -664,6 +665,7 @@ func webSocketHandshakeWithoutStatusIsUnreportedWithoutInventingMetadata() throw
     #expect(webSocket.frames.isEmpty)
 }
 
+@MainActor
 @Test
 func webSocketSwitchingProtocolsResponseFollowedByErrorNeverClaimsEstablished() throws {
     let webSocket = WebSocketState()
@@ -765,6 +767,7 @@ func activeDuplicateWebSocketCreatedPreservesStateIdentityAndTimeline() async th
     #expect(request.state == .responded)
 }
 
+@MainActor
 @Test(arguments: [0, 1, 2, 8, 9, 10, 42])
 func webSocketTimelineMapsEveryOpcodeWithoutTreatingNonTextAsText(opcode: Int) throws {
     let webSocket = WebSocketState()
@@ -816,6 +819,7 @@ func webSocketTimelineMapsEveryOpcodeWithoutTreatingNonTextAsText(opcode: Int) t
     #expect(frame.isMasked)
 }
 
+@MainActor
 @Test
 func webSocketTimelineEntryLookupCoversLargeOrderedHistory() throws {
     let webSocket = WebSocketState()
@@ -854,6 +858,7 @@ func webSocketTimelineEntryLookupCoversLargeOrderedHistory() throws {
     )) == nil)
 }
 
+@MainActor
 @Test
 func webSocketCloseFrameAloneDoesNotConfirmEstablishedConnection() throws {
     let webSocket = WebSocketState()
@@ -1116,7 +1121,7 @@ func webSocketCreatedRestartsLifecycleClosedByErrorWithoutClosedEvent(
 @MainActor
 @Test
 func legacyWebSocketFramesProjectionPublishesTimelineChangesThroughObservation() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let requestID = Network.Request.ID("websocket-legacy-observation")
     let request = NetworkRequest(
         request: Network.Request(id: requestID, url: "wss://example.com/legacy", method: "GET"),
@@ -1153,6 +1158,7 @@ func legacyWebSocketFramesProjectionPublishesTimelineChangesThroughObservation()
     ])
 }
 
+@MainActor
 @Test
 func legacyWebSocketFramesProjectionObservesOnlyIncomingFrameAndErrorEntries() throws {
     let webSocket = WebSocketState()

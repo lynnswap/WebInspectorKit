@@ -4,6 +4,7 @@ import WebInspectorProxyKit
 
 /// Observable model for a Runtime remote object.
 @Observable
+@MainActor
 public final class RuntimeObject: WebInspectorPersistentModel {
     struct Authority: Equatable {
         struct Context: Equatable {
@@ -111,7 +112,7 @@ public final class RuntimeObject: WebInspectorPersistentModel {
     }
 
     /// The stable runtime object identity.
-    public let id: ID
+    public nonisolated let id: ID
 
     /// The primary JavaScript value kind.
     public private(set) var kind: Runtime.Kind
@@ -163,25 +164,25 @@ public final class RuntimeObject: WebInspectorPersistentModel {
     }
 
     /// Requests own property values for this object.
-    public func properties(isolation: isolated (any Actor) = #isolation) async throws -> [Property] {
+    public func properties() async throws -> [Property] {
         guard let modelContext else {
             throw WebInspectorProxyError.disconnected("RuntimeObject is not registered in this WebInspectorContext.")
         }
         guard canRequestProperties else {
             return []
         }
-        return try await modelContext.properties(for: self, isolation: isolation)
+        return try await modelContext.properties(for: self)
     }
 
     /// Requests collection entries for this object.
-    public func collectionEntries(isolation: isolated (any Actor) = #isolation) async throws -> [Entry] {
+    public func collectionEntries() async throws -> [Entry] {
         guard let modelContext else {
             throw WebInspectorProxyError.disconnected("RuntimeObject is not registered in this WebInspectorContext.")
         }
         guard canRequestProperties else {
             return []
         }
-        return try await modelContext.collectionEntries(for: self, isolation: isolation)
+        return try await modelContext.collectionEntries(for: self)
     }
 
     func invalidateRemoteHandle() {

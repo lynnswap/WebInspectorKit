@@ -2,6 +2,7 @@ import Testing
 @testable import WebInspectorDataKit
 import WebInspectorProxyKit
 
+@MainActor
 @Test
 func rewriterCommentsOutPropertyBySerializingStyleText() throws {
     let style = rewriterStyle(properties: [
@@ -14,6 +15,7 @@ func rewriterCommentsOutPropertyBySerializingStyleText() throws {
     #expect(rewritten == "/* margin: 0; */\nbox-sizing: border-box;")
 }
 
+@MainActor
 @Test
 func rewriterUncommentsDisabledPropertyText() throws {
     let style = rewriterStyle(properties: [
@@ -25,6 +27,7 @@ func rewriterUncommentsDisabledPropertyText() throws {
     #expect(rewritten == "margin: 0;")
 }
 
+@MainActor
 @Test
 func rewriterRewritesAuthoredStyleTextWithoutSerializingInactiveRows() throws {
     let style = rewriterStyle(
@@ -41,6 +44,7 @@ func rewriterRewritesAuthoredStyleTextWithoutSerializingInactiveRows() throws {
     #expect(rewritten == "font-family: sans-serif;\n/* font-size: 10pt; */")
 }
 
+@MainActor
 @Test
 func rewriterRewritesOnlyDeclarationMatchesOutsideStrings() throws {
     let style = rewriterStyle(
@@ -62,6 +66,7 @@ func rewriterRewritesOnlyDeclarationMatchesOutsideStrings() throws {
     """)
 }
 
+@MainActor
 @Test
 func rewriterTreatsCommentsAsDeclarationBoundaries() throws {
     let beforeCommentStyle = rewriterStyle(
@@ -99,6 +104,7 @@ func rewriterTreatsCommentsAsDeclarationBoundaries() throws {
     #expect(afterCommentRewritten == "/* color: red */ /* note */;")
 }
 
+@MainActor
 @Test
 func rewriterRewritesRepeatedAuthoredDeclarationByPropertyOccurrence() throws {
     let style = rewriterStyle(
@@ -125,6 +131,7 @@ func rewriterRewritesRepeatedAuthoredDeclarationByPropertyOccurrence() throws {
     """)
 }
 
+@MainActor
 @Test
 func rewriterResolvesStylesheetRelativeSourceRanges() throws {
     let style = rewriterStyle(
@@ -159,6 +166,7 @@ func rewriterResolvesStylesheetRelativeSourceRanges() throws {
     """)
 }
 
+@MainActor
 @Test
 func rewriterRefusesTogglesForMissingOrUntoggleableText() throws {
     #expect(CSSStyleTextRewriter.canTogglePropertyText(
@@ -181,6 +189,7 @@ func rewriterRefusesTogglesForMissingOrUntoggleableText() throws {
     ))
 }
 
+@MainActor
 @Test
 func rewriterDoesNotSynthesizeStyleTextWhenOtherPropertiesHaveNoAuthoredText() throws {
     let style = rewriterStyle(properties: [
@@ -192,6 +201,7 @@ func rewriterDoesNotSynthesizeStyleTextWhenOtherPropertiesHaveNoAuthoredText() t
     #expect(CSSStyleTextRewriter.rewrittenStyleText(style: style, propertyIndex: 0, enabled: false) == nil)
 }
 
+@MainActor
 @Test
 func rewriterRefusesUnsafeAuthoredStyleText() throws {
     let missingDeclarationStyle = rewriterStyle(

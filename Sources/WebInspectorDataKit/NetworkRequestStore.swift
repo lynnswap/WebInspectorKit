@@ -2,6 +2,7 @@ import Observation
 import WebInspectorProxyKit
 
 @Observable
+@MainActor
 package final class NetworkRequestStore {
     private struct ResourceTreeKey: Hashable {
         let frameID: FrameID
@@ -146,10 +147,8 @@ package final class NetworkRequestStore {
     func resolve(
         id: NetworkRequest.ID,
         admission: Admission,
-        create: () -> NetworkRequest,
-        isolation: isolated (any Actor)
+        create: () -> NetworkRequest
     ) async -> Resolution? {
-        _ = isolation
         guard prepareAdmission(for: id, admission: admission) else {
             return nil
         }
@@ -161,7 +160,7 @@ package final class NetworkRequestStore {
         let registration = register(request)
         let change = makeChange(registration, isInsertion: true)
         publishSynchronousPrefix(change)
-        await commitIndexed(change, isolation: isolation)
+        await commitIndexed(change)
         guard isCurrent(registration) else {
             return nil
         }
@@ -187,16 +186,14 @@ package final class NetworkRequestStore {
     }
 
     func commitUpdate(
-        _ registration: Registration,
-        isolation: isolated (any Actor)
+        _ registration: Registration
     ) async {
-        _ = isolation
         guard isCurrent(registration) else {
             return
         }
         let change = makeChange(registration, isInsertion: false)
         publishSynchronousPrefix(change)
-        await commitIndexed(change, isolation: isolation)
+        await commitIndexed(change)
     }
 
     func commitUpdateSynchronously(_ registration: Registration) {
@@ -292,10 +289,7 @@ package final class NetworkRequestStore {
     }
 
     #if DEBUG
-        func fullProjectionRecordVisitCount(
-            isolation: isolated (any Actor)
-        ) async -> Int {
-            _ = isolation
+        func fullProjectionRecordVisitCount() async -> Int {
             return await index.fullProjectionRecordVisitCount()
         }
 
@@ -503,10 +497,8 @@ package final class NetworkRequestStore {
     }
 
     private func commitIndexed(
-        _ change: Change,
-        isolation: isolated (any Actor)
+        _ change: Change
     ) async {
-        _ = isolation
         guard isCurrent(change.registration) else {
             return
         }

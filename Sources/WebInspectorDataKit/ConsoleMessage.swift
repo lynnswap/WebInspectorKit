@@ -4,6 +4,7 @@ import WebInspectorProxyKit
 
 /// Observable model for one console message.
 @Observable
+@MainActor
 public final class ConsoleMessage: WebInspectorPersistentModel {
     /// Stable identity for a console message within a context.
     public struct ID: Comparable, Hashable, Sendable {
@@ -20,7 +21,7 @@ public final class ConsoleMessage: WebInspectorPersistentModel {
     }
 
     /// The stable message identity.
-    public let id: ID
+    public nonisolated let id: ID
 
     /// The source that produced the message.
     public private(set) var source: Console.Source

@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import WebInspectorProxyKit
 
+@MainActor
 final class WeakWebInspectorFetchedResults<Model: WebInspectorPersistentModel> {
     weak var value: WebInspectorFetchedResults<Model>?
 
@@ -74,6 +75,7 @@ public struct WebInspectorFetchSection<Model: WebInspectorPersistentModel>: Iden
 /// The collection can outlive its registration in a
 /// ``WebInspectorContext``. See <doc:ModelRegistrationLifetimes>.
 @Observable
+@MainActor
 public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel> {
     private var queryStorage: WebInspectorQueryStorage
 
@@ -106,7 +108,7 @@ public final class WebInspectorFetchedResults<Model: WebInspectorPersistentModel
         networkProjection = nil
     }
 
-    deinit {
+    isolated deinit {
         transactionRelay.finish()
     }
 
@@ -284,15 +286,14 @@ public extension WebInspectorFetchedResults where Model == NetworkRequest {
     /// - Throws: `WebInspectorProxyError.disconnected` when these results are
     ///   no longer registered in their originating context.
     func updateQuery(
-        _ query: NetworkRequestQuery,
-        isolation: isolated (any Actor) = #isolation
+        _ query: NetworkRequestQuery
     ) throws {
         guard let modelContext else {
             throw WebInspectorProxyError.disconnected(
                 "WebInspectorFetchedResults is not registered in this WebInspectorContext."
             )
         }
-        try modelContext.updateNetworkQuery(query, for: self, isolation: isolation)
+        try modelContext.updateNetworkQuery(query, for: self)
     }
 }
 
@@ -310,15 +311,14 @@ public extension WebInspectorFetchedResults where Model == ConsoleMessage {
     /// - Throws: `WebInspectorProxyError.disconnected` when these results are
     ///   no longer registered in their originating context.
     func updateQuery(
-        _ query: ConsoleMessageQuery,
-        isolation: isolated (any Actor) = #isolation
+        _ query: ConsoleMessageQuery
     ) throws {
         guard let modelContext else {
             throw WebInspectorProxyError.disconnected(
                 "WebInspectorFetchedResults is not registered in this WebInspectorContext."
             )
         }
-        try modelContext.updateConsoleQuery(query, for: self, isolation: isolation)
+        try modelContext.updateConsoleQuery(query, for: self)
     }
 }
 

@@ -46,9 +46,8 @@ final class InspectorModel {
 }
 ```
 
-Contexts are actor-owned. Read and mutate context state from the same actor you
-used to create or obtain the context. For UIKit clients, ``WebInspectorContainer``
-provides ``WebInspectorContainer/mainContext`` as a main-actor context.
+Contexts and the models they vend are bound to the main actor.
+``WebInspectorContainer/mainContext`` is the context to use from UIKit.
 
 Use the domain controllers on ``WebInspectorContext`` for high-level operations:
 

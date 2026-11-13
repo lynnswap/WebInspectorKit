@@ -1396,7 +1396,7 @@ struct ParentContainerTests {
     }
 
     private func makeContext() -> WebInspectorContext {
-        WebInspectorContext.preview(isolation: MainActor.shared)
+        WebInspectorContext.preview()
     }
 
     @discardableResult

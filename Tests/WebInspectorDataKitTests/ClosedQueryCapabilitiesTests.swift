@@ -8,7 +8,7 @@ import WebInspectorProxyKit
 @MainActor
 @Test
 func networkFilterFactoriesMatchTheirDocumentedCapabilities() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let id = context.seedNetworkRequest(
         requestID: "closed-network-filter",
         url: "https://api.example.test/graphql",
@@ -76,7 +76,7 @@ func networkFilterFactoriesMatchTheirDocumentedCapabilities() async throws {
 @MainActor
 @Test
 func consoleFilterFactoriesAndSortsMatchTheirDocumentedCapabilities() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     context.apply(
         .messageAdded(
             Console.Message(
@@ -131,7 +131,7 @@ func consoleFilterFactoriesAndSortsMatchTheirDocumentedCapabilities() throws {
 @MainActor
 @Test
 func everyClosedSectionCapabilityProducesCurrentSections() {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     context.seedNetworkRequest(
         requestID: "closed-section-request",
         url: "https://example.test/image.png",
@@ -175,7 +175,7 @@ func everyClosedSectionCapabilityProducesCurrentSections() {
 @MainActor
 @Test
 func closedNetworkQueryPublishesOnlyVisibleContentUpdatesExactlyOnce() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let results = context.network.fetchedResults(
         for: NetworkRequestQuery(
             filter: .method(equals: "GET"),
@@ -328,7 +328,7 @@ func closedNetworkQueryPublishesOnlyVisibleContentUpdatesExactlyOnce() async thr
 @MainActor
 @Test
 func contentOnlyNetworkDeltaKeepsMaterializedTopologyAndLookupWorkUnchanged() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let visibleID = context.seedNetworkRequest(
         requestID: "closed-index-visible",
         url: "https://example.test/visible",
@@ -412,7 +412,7 @@ func contentOnlyNetworkDeltaKeepsMaterializedTopologyAndLookupWorkUnchanged() as
 @MainActor
 @Test
 func closedConsoleQueryPublishesOnlyVisibleContentUpdatesExactlyOnce() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let warning = Console.Level(rawValue: "warning")
     let log = Console.Level(rawValue: "log")
     let results = context.console.fetchedResults(
@@ -490,7 +490,7 @@ func closedConsoleQueryPublishesOnlyVisibleContentUpdatesExactlyOnce() async thr
 @MainActor
 @Test
 func maximumQueryWindowsCannotOverflowNetworkOrConsoleBounds() {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     for index in 0..<3 {
         context.seedNetworkRequest(
             requestID: "closed-window-\(index)",
@@ -551,7 +551,7 @@ func maximumQueryWindowsCannotOverflowNetworkOrConsoleBounds() {
 @MainActor
 @Test
 func maximumNetworkWindowCannotOverflowTheRecordIndexPath() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     var inputs: [NetworkRequestRecordInput] = []
     for index in 0..<3 {
         let id = context.seedNetworkRequest(
@@ -589,7 +589,7 @@ func maximumNetworkWindowCannotOverflowTheRecordIndexPath() async throws {
 @MainActor
 @Test
 func updateQueryAppliesFilterSortSectionAndWindowAtomically() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     for (index, method) in ["GET", "POST", "GET"].enumerated() {
         context.seedNetworkRequest(
             requestID: "closed-update-\(index)",
@@ -639,7 +639,7 @@ func updateQueryAppliesFilterSortSectionAndWindowAtomically() async throws {
 @MainActor
 @Test
 func queryOnlyUpdateInvalidatesObservedQueryWhenMembershipDoesNotChange() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     context.seedNetworkRequest(
         requestID: "closed-query-observation",
         url: "https://example.test/observed",

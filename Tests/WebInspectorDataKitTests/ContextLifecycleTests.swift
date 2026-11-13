@@ -1666,7 +1666,7 @@ func sharedContainerContextsInitializeCommittedTargetWithoutReenablingPage() asy
     defer { autoReplier.cancel() }
 
     let contextA = container.mainContext
-    let contextB = WebInspectorContext(container, isolation: MainActor.shared)
+    let contextB = WebInspectorContext(container)
     contextB.start()
     try await waitUntil(in: contextA, contextB, timeout: .seconds(5)) {
         contextA.state == .attached && contextB.state == .attached
