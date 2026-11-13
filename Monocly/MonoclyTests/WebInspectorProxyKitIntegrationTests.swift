@@ -56,20 +56,21 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
         let container = try await WebInspectorContainer(attachingTo: fixture.webView)
         do {
             let context = container.mainContext
-            try await waitForUpdates(
-                context.statusUpdates,
-                description: "inspector startup"
-            ) {
-                switch context.state {
-                case .attaching:
-                    return false
-                case .attached:
-                    return true
-                case .failed(let error):
-                    throw error
-                case .detached:
-                    throw WebContentProcessHarnessError.contextDetached
-                }
+            let startupStates = withPortableContinuousObservation { _ in
+                _ = context.state
+            }
+            defer { startupStates.cancel() }
+            let observedStates = await startupStates.values { context.state }
+            defer { observedStates.cancel() }
+            switch await observedStates.waitUntil(timeout: .seconds(10), { $0 != .attaching }) {
+            case .attached:
+                break
+            case .failed(let error):
+                throw error
+            case .detached:
+                throw WebContentProcessHarnessError.contextDetached
+            case .attaching, nil:
+                throw WebContentProcessHarnessError.timedOut("inspector startup")
             }
             XCTAssertEqual(context.state, .attached)
             XCTAssertNil(context.network.resourceTreeError)

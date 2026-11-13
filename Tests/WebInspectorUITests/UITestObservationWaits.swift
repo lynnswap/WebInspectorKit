@@ -54,6 +54,28 @@ func waitForObservedCondition(
     return didObserveMatch || sample()
 }
 
+/// Waits until the observable value that `sample` reads satisfies
+/// `predicate`, and returns that value.
+@MainActor
+func waitForObservedValue<Value: Sendable>(
+    _ sample: @escaping @MainActor @Sendable () -> Value,
+    until predicate: @escaping @Sendable (Value) -> Bool
+) async -> Value? {
+    let observation = withPortableContinuousObservation { _ in
+        _ = sample()
+    }
+    defer {
+        observation.cancel()
+    }
+    let observedValues = await observation.values {
+        sample()
+    }
+    defer {
+        observedValues.cancel()
+    }
+    return await observedValues.waitUntil(predicate)
+}
+
 @MainActor
 func waitForNetworkBodyPhase(
     in body: NetworkBody,

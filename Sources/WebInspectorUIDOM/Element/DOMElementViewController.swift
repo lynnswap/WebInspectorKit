@@ -8,7 +8,7 @@ import UIKit
 @MainActor
 package final class DOMElementViewController: UICollectionViewController {
     private let context: WebInspectorContext
-    private var statusTask: Task<Void, Never>?
+    private var selectionObservation: PortableObservationTracking.Token?
     private var selectedStylesObservation: PortableObservationTracking.Token?
     private var observedSelectedNodeObjectID: ObjectIdentifier?
     private var hasBoundSelectedNode = false
@@ -46,7 +46,7 @@ package final class DOMElementViewController: UICollectionViewController {
         resolveStyleRenderWaitersForTesting(result: false)
 #endif
         context.css.setStyleHydrationActive(false)
-        statusTask?.cancel()
+        selectionObservation?.cancel()
         selectedStylesObservation?.cancel()
     }
 
@@ -181,14 +181,11 @@ package final class DOMElementViewController: UICollectionViewController {
     }
 
     private func startObservingState() {
-        bindSelectedNode(context.dom.selectedNode)
-        statusTask = Task { @MainActor [weak self, context] in
-            for await status in context.statusUpdates {
-                guard let self else {
-                    return
-                }
-                bindSelectedNode(status.selectedNodeID.flatMap { context.dom.node(for: $0) })
+        selectionObservation = withPortableContinuousObservation { [weak self] _ in
+            guard let self else {
+                return
             }
+            bindSelectedNode(context.dom.selectedNode)
         }
     }
 
