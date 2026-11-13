@@ -40,28 +40,28 @@ let package = Package(
     ],
     dependencies: [
         .package(
-            url: "https://github.com/lynnswap/WebKitScreenTimeWorkaround.git",
-            exact: "0.3.0"
+            url: "https://github.com/lynnswap/WebKitTestWorkarounds.git",
+            exact: "0.4.0"
         ),
         .package(
             url: "https://github.com/lynnswap/ObservationBridge.git",
-            exact: "0.15.9"
+            exact: "0.15.12"
         ),
         .package(
             url: "https://github.com/lynnswap/ScrollableTabBar.git",
-            exact: "0.2.11"
+            exact: "0.2.12"
         ),
         .package(
             url: "https://github.com/lynnswap/UIHostingMenu.git",
-            exact: "0.5.12"
+            exact: "0.5.13"
         ),
         .package(
             url: "https://github.com/lynnswap/SyntaxEditorUI.git",
-            exact: "0.19.5"
+            exact: "0.19.6"
         ),
         .package(
             url: "https://github.com/lynnswap/ABIBridge.git",
-            exact: "0.17.0"
+            exact: "0.19.1"
         ),
         .package(
             url: "https://github.com/swiftlang/swift-docc-plugin",
@@ -196,7 +196,7 @@ let package = Package(
             name: "WebInspectorNativeBridgeTests",
             dependencies: [
                 "WebInspectorNativeBridge", "WebInspectorNativeSymbolFixtures", "WebKitRuntime",
-                .product(name: "WebKitScreenTimeWorkaround", package: "WebKitScreenTimeWorkaround")
+                .product(name: "WebKitTestWorkarounds", package: "WebKitTestWorkarounds")
             ],
             path: "Tests/WebInspectorNativeBridgeTests",
             swiftSettings: strictSwiftSettings
@@ -234,7 +234,7 @@ let package = Package(
                 "WebInspectorUINetwork",
                 "WebInspectorKit",
                 "WebInspectorTestSupport",
-                .product(name: "WebKitScreenTimeWorkaround", package: "WebKitScreenTimeWorkaround"),
+                .product(name: "WebKitTestWorkarounds", package: "WebKitTestWorkarounds"),
                 .product(name: "SyntaxEditorUI", package: "SyntaxEditorUI", condition: .when(platforms: [.iOS]))
             ],
             path: "Tests/WebInspectorUITests",

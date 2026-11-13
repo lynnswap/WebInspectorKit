@@ -6,7 +6,7 @@ import Testing
 #if os(iOS)
 import UIKit
 import WebKit
-import WebKitScreenTimeWorkaround
+import WebKitTestWorkarounds
 
 @MainActor
 private func configuredInspectorFixtureURL() -> String? {
