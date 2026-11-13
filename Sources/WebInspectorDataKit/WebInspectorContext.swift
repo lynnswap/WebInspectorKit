@@ -362,15 +362,8 @@ package final class WebInspectorContext {
     /// The target each current-page domain lease was acquired on. CSS leases
     /// are tracked per style target in `styleTrackingLeases`.
     private var domainTrackingTargets: [WebInspectorEnabledDomain: WebInspectorTarget]
-    private var nodesByID: [DOMNode.ID: DOMNode] {
-        didSet {
-            #if DEBUG
-            stateChangesForTesting.yield(())
-            #endif
-        }
-    }
-    private var frameDocumentProjectionIndex: FrameDocumentProjectionIndex
-    private var treeStates: [WeakDOMTreeState]
+    private let domNodes = DOMNodeIndex()
+    private let domTrees = DOMTreeStateRegistry()
     private let statusRelay: WebInspectorAsyncStreamRelay<Status>
     private let networkRecorder: NetworkEventRecorder
     private var networkRequestStore: NetworkRequestStore {
@@ -427,9 +420,6 @@ package final class WebInspectorContext {
         nextEventPumpAppliedWaiterIDForTesting = 0
 #endif
         domainTrackingTargets = [:]
-        nodesByID = [:]
-        frameDocumentProjectionIndex = FrameDocumentProjectionIndex()
-        treeStates = []
         statusRelay = WebInspectorAsyncStreamRelay()
         networkRecorder = NetworkEventRecorder()
         let runtimeStore = RuntimeModelStore()
@@ -439,8 +429,14 @@ package final class WebInspectorContext {
         pendingInspectedNodeID = nil
         pageHighlightState = nil
         nextPageHighlightOperationID = 0
+        domNodes.didRemoveNodes = { [weak self] removedIDs in
+            self?.domNodesDidLeaveIndex(removedIDs)
+        }
         #if DEBUG
         runtimeStore.stateDidChangeForTesting = { [stateChangesForTesting] in
+            stateChangesForTesting.yield(())
+        }
+        domNodes.didChangeForTesting = { [stateChangesForTesting] in
             stateChangesForTesting.yield(())
         }
         #endif
@@ -538,7 +534,7 @@ package final class WebInspectorContext {
     }
 
     func node(for id: DOMNode.ID) -> DOMNode? {
-        return nodesByID[id]
+        return domNodes[id]
     }
 
     func registeredRequest(
@@ -567,7 +563,7 @@ package final class WebInspectorContext {
         _ node: DOMNode?,
         reveal: DOMRevealPolicy = .selectAndScroll
     ) {
-        if let node, nodesByID[node.id] !== node {
+        if let node, domNodes[node.id] !== node {
             return
         }
         pendingInspectedNodeID = nil
@@ -578,7 +574,7 @@ package final class WebInspectorContext {
         pageHighlightMaintenanceTask?.cancel()
         pageHighlightMaintenanceTask = nil
         selectedNode = node
-        notifyDOMTreeSelectionChanged(node, reveal: reveal)
+        domTrees.selectionChanged(node, reveal: reveal)
         notifyStatusChanged()
         refreshSelectedStyles()
     }
@@ -1006,24 +1002,15 @@ package final class WebInspectorContext {
     /// Hands the live tree states to the context that replaces this one, and
     /// shows them that context's document.
     func transferTreeStates(to context: WebInspectorContext) {
-        pruneReleasedTreeStates()
-        let transferred = treeStates
-        treeStates = []
-        context.treeStates.append(contentsOf: transferred)
-        for reference in transferred {
-            reference.tree?.applySnapshot(
-                rootNode: context.rootNode,
-                selectedNode: context.selectedNode,
-                reason: .reset
-            )
-        }
+        domTrees.transfer(
+            to: context.domTrees,
+            rootNode: context.rootNode,
+            selectedNode: context.selectedNode
+        )
     }
 
     func rootTreeController() -> DOMTreeController {
-        let tree = DOMTreeState(rootNode: rootNode, selectedNode: selectedNode)
-        treeStates.append(WeakDOMTreeState(tree))
-        pruneReleasedTreeStates()
-        return DOMTreeController(tree: tree)
+        domTrees.makeController(rootNode: rootNode, selectedNode: selectedNode)
     }
 
     func selectContext(_ context: RuntimeContext?) {
@@ -1164,7 +1151,7 @@ package final class WebInspectorContext {
         for node: DOMNode,
         depth: Int
     ) async {
-        guard nodesByID[node.id] === node else {
+        guard domNodes[node.id] === node else {
             skipEvent("requestChildren ignored a DOMNode from a previous document generation")
             return
         }
@@ -1940,67 +1927,6 @@ package final class WebInspectorContext {
         #endif
     }
 
-    private func notifyDOMTreeSnapshot(
-        reason: DOMTreeSnapshotReason
-    ) {
-        pruneReleasedTreeStates()
-        for reference in treeStates {
-            reference.tree?.applySnapshot(rootNode: rootNode, selectedNode: selectedNode, reason: reason)
-        }
-    }
-
-    private func notifyDOMTreeChildrenReplaced(parent: DOMNode) {
-        pruneReleasedTreeStates()
-        for reference in treeStates {
-            reference.tree?.applyChildrenReplaced(parent: parent)
-        }
-    }
-
-    private func notifyDOMTreeChildInserted(
-        parent: DOMNode,
-        node: DOMNode,
-        previousSiblingID: DOMNode.ID?
-    ) {
-        pruneReleasedTreeStates()
-        for reference in treeStates {
-            reference.tree?.applyChildInserted(parent: parent, node: node, previousSiblingID: previousSiblingID)
-        }
-    }
-
-    private func notifyDOMTreeChildRemoved(
-        parent: DOMNode,
-        nodeID: DOMNode.ID
-    ) {
-        pruneReleasedTreeStates()
-        for reference in treeStates {
-            reference.tree?.applyChildRemoved(parent: parent, nodeID: nodeID)
-        }
-    }
-
-    private func notifyDOMTreeChildCountChanged(node: DOMNode) {
-        pruneReleasedTreeStates()
-        for reference in treeStates {
-            reference.tree?.applyChildCountChanged(node: node)
-        }
-    }
-
-    private func notifyDOMTreeNodeChanged(_ node: DOMNode) {
-        pruneReleasedTreeStates()
-        for reference in treeStates {
-            reference.tree?.applyNodeChanged(node)
-        }
-    }
-
-    private func notifyDOMTreeSelectionChanged(
-        _ node: DOMNode?,
-        reveal: DOMRevealPolicy = .selectAndScroll
-    ) {
-        pruneReleasedTreeStates()
-        for reference in treeStates {
-            reference.tree?.applySelectionChanged(nodeID: node?.id, reveal: reveal)
-        }
-    }
-
     private func clearSelectionIfDeleted(
         _ deletedRootIDs: [DOMNode.ID],
         snapshot: DOMTreeSnapshot
@@ -2020,13 +1946,13 @@ package final class WebInspectorContext {
         styleRefreshGeneration += 1
         selectedNode.setElementStyles(nil)
         self.selectedNode = nil
-        notifyDOMTreeSelectionChanged(nil)
+        domTrees.selectionChanged(nil)
         notifyStatusChanged()
     }
 
     @discardableResult
     private func registeredNode(_ node: DOMNode) throws -> DOMNode {
-        guard nodesByID[node.id] === node else {
+        guard domNodes[node.id] === node else {
             throw WebInspectorProxyError.disconnected("DOMNode is not registered in this WebInspectorContext.")
         }
         return node
@@ -2184,10 +2110,6 @@ package final class WebInspectorContext {
         domDocumentLoad?.bootstrap = nil
         domDocumentGeneration += 1
         return domDocumentGeneration
-    }
-
-    private func pruneReleasedTreeStates() {
-        treeStates.removeAll { $0.tree == nil }
     }
 
     private func fail(_ error: WebInspectorProxyError) {
@@ -2462,7 +2384,7 @@ extension WebInspectorContext {
         }
         guard frame.parentID == nil || frame.id == currentPage.frameID else {
             cssStyleSheets.invalidate(frameID: frame.id)
-            detachProjectedFrameDocument(forFrameID: frame.id)
+            detachFrameDocuments(forFrameID: frame.id)
             runtimeStore.clearExecutionContexts(frameID: frame.id, page: currentPage)
             return
         }
@@ -2479,7 +2401,7 @@ extension WebInspectorContext {
         _ frameID: FrameID
     ) {
         cssStyleSheets.invalidate(frameID: frameID)
-        detachProjectedFrameDocument(forFrameID: frameID)
+        detachFrameDocuments(forFrameID: frameID)
         runtimeStore.clearExecutionContexts(frameID: frameID, page: currentPage)
     }
 
@@ -2605,16 +2527,16 @@ extension WebInspectorContext {
         case let .childNodeRemoved(parent, node):
             applyChildNodeRemoved(parent: parent, node: node)
         case let .childNodeCountUpdated(id, count):
-            guard let node = nodesByID[DOMNode.ID(id)] else {
+            guard let node = domNodes[DOMNode.ID(id)] else {
                 let nodeID = DOMNode.ID(id)
                 loadFrameDocumentIfNeeded(forNodeID: nodeID, reason: "DOM.childNodeCountUpdated")
                 ignoreExpectedDOMMaterializationGap()
                 return
             }
             node.updateChildNodeCount(count)
-            notifyDOMTreeChildCountChanged(node: node)
+            domTrees.childCountChanged(node: node)
         case let .attributeModified(id, name, value):
-            guard let node = nodesByID[DOMNode.ID(id)] else {
+            guard let node = domNodes[DOMNode.ID(id)] else {
                 let nodeID = DOMNode.ID(id)
                 loadFrameDocumentIfNeeded(forNodeID: nodeID, reason: "DOM.attributeModified")
                 ignoreExpectedDOMMaterializationGap()
@@ -2622,9 +2544,9 @@ extension WebInspectorContext {
             }
             node.setAttribute(name: name, value: value)
             markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
-            notifyDOMTreeNodeChanged(node)
+            domTrees.nodeChanged(node)
         case let .attributeRemoved(id, name):
-            guard let node = nodesByID[DOMNode.ID(id)] else {
+            guard let node = domNodes[DOMNode.ID(id)] else {
                 let nodeID = DOMNode.ID(id)
                 loadFrameDocumentIfNeeded(forNodeID: nodeID, reason: "DOM.attributeRemoved")
                 ignoreExpectedDOMMaterializationGap()
@@ -2632,7 +2554,7 @@ extension WebInspectorContext {
             }
             node.removeAttribute(name: name)
             markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
-            notifyDOMTreeNodeChanged(node)
+            domTrees.nodeChanged(node)
         case let .inlineStyleInvalidated(ids):
             if ids.isEmpty {
                 markSelectedStylesNeedsRefresh()
@@ -2642,7 +2564,7 @@ extension WebInspectorContext {
                 }
             }
         case let .characterDataModified(id, value):
-            guard let node = nodesByID[DOMNode.ID(id)] else {
+            guard let node = domNodes[DOMNode.ID(id)] else {
                 let nodeID = DOMNode.ID(id)
                 loadFrameDocumentIfNeeded(forNodeID: nodeID, reason: "DOM.characterDataModified")
                 ignoreExpectedDOMMaterializationGap()
@@ -2650,7 +2572,7 @@ extension WebInspectorContext {
             }
             node.setNodeValue(value)
             markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
-            notifyDOMTreeNodeChanged(node)
+            domTrees.nodeChanged(node)
         case let .inspect(id):
             if let command = elementPickerCommand {
                 guard command.documentEpoch == elementPickerDocumentEpoch else {
@@ -2664,7 +2586,7 @@ extension WebInspectorContext {
             pageHighlightState = nil
             notifyStatusChanged()
             let inspectedNodeID = DOMNode.ID(id)
-            guard let node = nodesByID[inspectedNodeID] else {
+            guard let node = domNodes[inspectedNodeID] else {
                 loadFrameDocumentIfNeeded(forNodeID: inspectedNodeID, reason: "DOM.inspect")
                 WebInspectorDataKitLog.debug(
                     "DOM.inspect pending nodeID=\(String(describing: inspectedNodeID)) materialized=false root=\(String(describing: rootNode?.id))"
@@ -2709,10 +2631,8 @@ extension WebInspectorContext {
         _ node: DOM.Node,
         reason: DOMTreeSnapshotReason = .initialDocument
     ) {
-        var materializedPayloadIDs = Set<DOMNode.ID>()
-        collectMaterializedPayloadIDs(node, into: &materializedPayloadIDs)
-        rootNode = model(for: node, preserving: materializedPayloadIDs)
-        notifyDOMTreeSnapshot(reason: reason)
+        rootNode = domNodes.materialize(node).node
+        domTrees.replaceSnapshot(rootNode: rootNode, selectedNode: selectedNode, reason: reason)
         resolvePendingInspectedNode(requestSubtreeIfNeeded: true)
     }
 
@@ -2779,9 +2699,8 @@ extension WebInspectorContext {
         domEditHistoryTarget = nil
         isElementPickerEnabled = false
         pendingInspectedNodeID = nil
-        nodesByID = [:]
-        frameDocumentProjectionIndex.removeAll()
-        notifyDOMTreeSnapshot(reason: .reset)
+        domNodes.removeAll()
+        domTrees.replaceSnapshot(rootNode: rootNode, selectedNode: selectedNode, reason: .reset)
         notifyStatusChanged()
     }
 
@@ -2819,7 +2738,7 @@ extension WebInspectorContext {
         parent: DOM.Node.ID,
         nodes: [DOM.Node]
     ) {
-        guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
+        guard let parentNode = domNodes[DOMNode.ID(parent)] else {
             let parentID = DOMNode.ID(parent)
             loadFrameDocumentIfNeeded(forNodeID: parentID, reason: "DOM.setChildNodes")
             ignoreExpectedDOMMaterializationGap()
@@ -2831,17 +2750,13 @@ extension WebInspectorContext {
         } else {
             previousChildren = []
         }
-        var newSubtreeIDs = Set<DOMNode.ID>()
-        for node in nodes {
-            collectMaterializedPayloadIDs(node, into: &newSubtreeIDs)
-        }
-        let newChildren = nodes.map { model(for: $0, preserving: newSubtreeIDs) }
+        let (newChildren, newSubtreeIDs) = domNodes.materialize(nodes)
         let newChildIDs = Set(newChildren.map(\.id))
         for previousChild in previousChildren where newChildIDs.contains(previousChild.id) == false {
-            removeSubtreeFromIndex(previousChild, preserving: newSubtreeIDs)
+            domNodes.removeSubtree(previousChild, preserving: newSubtreeIDs)
         }
         parentNode.setChildren(newChildren)
-        notifyDOMTreeChildrenReplaced(parent: parentNode)
+        domTrees.childrenReplaced(parent: parentNode)
         resolvePendingInspectedNode(requestSubtreeIfNeeded: false)
     }
 
@@ -2850,7 +2765,7 @@ extension WebInspectorContext {
         previous: DOM.Node.ID?,
         node: DOM.Node
     ) {
-        guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
+        guard let parentNode = domNodes[DOMNode.ID(parent)] else {
             let parentID = DOMNode.ID(parent)
             loadFrameDocumentIfNeeded(forNodeID: parentID, reason: "DOM.childNodeInserted")
             ignoreExpectedDOMMaterializationGap()
@@ -2861,23 +2776,21 @@ extension WebInspectorContext {
         switch parentNode.children {
         case let .unrequested(count) where count > 0:
             parentNode.updateChildNodeCount(parentNode.childNodeCount + 1)
-            notifyDOMTreeChildCountChanged(node: parentNode)
+            domTrees.childCountChanged(node: parentNode)
             return
         case .unrequested:
             children = []
         case let .loaded(loadedChildren):
             children = loadedChildren
         }
-        var materializedPayloadIDs = Set<DOMNode.ID>()
-        collectMaterializedPayloadIDs(node, into: &materializedPayloadIDs)
-        let inserted = model(for: node, preserving: materializedPayloadIDs)
+        let inserted = domNodes.materialize(node).node
         if let previous, let index = children.firstIndex(where: { $0.id == DOMNode.ID(previous) }) {
             children.insert(inserted, at: children.index(after: index))
         } else {
             children.insert(inserted, at: 0)
         }
         parentNode.setChildren(children)
-        notifyDOMTreeChildInserted(
+        domTrees.childInserted(
             parent: parentNode,
             node: inserted,
             previousSiblingID: previous.map(DOMNode.ID.init)
@@ -2889,7 +2802,7 @@ extension WebInspectorContext {
         parent: DOM.Node.ID,
         node: DOM.Node.ID
     ) {
-        guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
+        guard let parentNode = domNodes[DOMNode.ID(parent)] else {
             let parentID = DOMNode.ID(parent)
             loadFrameDocumentIfNeeded(forNodeID: parentID, reason: "DOM.childNodeRemoved")
             ignoreExpectedDOMMaterializationGap()
@@ -2897,38 +2810,36 @@ extension WebInspectorContext {
         }
 
         let removedID = DOMNode.ID(node)
-        guard let removedNode = nodesByID[removedID] else {
+        guard let removedNode = domNodes[removedID] else {
             loadFrameDocumentIfNeeded(forNodeID: removedID, reason: "DOM.childNodeRemoved")
             ignoreExpectedDOMMaterializationGap()
             return
         }
-        removeSubtreeFromIndex(removedNode)
+        domNodes.removeSubtree(removedNode)
 
         guard case let .loaded(children) = parentNode.children else {
             parentNode.updateChildNodeCount(max(0, parentNode.childNodeCount - 1))
-            notifyDOMTreeChildCountChanged(node: parentNode)
+            domTrees.childCountChanged(node: parentNode)
             return
         }
         parentNode.setChildren(children.filter { $0.id != removedID })
-        notifyDOMTreeChildRemoved(parent: parentNode, nodeID: removedID)
+        domTrees.childRemoved(parent: parentNode, nodeID: removedID)
     }
 
     private func applyShadowRootPushed(
         host: DOM.Node.ID,
         root payload: DOM.Node
     ) {
-        guard let hostNode = nodesByID[DOMNode.ID(host)] else {
+        guard let hostNode = domNodes[DOMNode.ID(host)] else {
             let hostID = DOMNode.ID(host)
             loadFrameDocumentIfNeeded(forNodeID: hostID, reason: "DOM.shadowRootPushed")
             ignoreExpectedDOMMaterializationGap()
             return
         }
 
-        var materializedPayloadIDs = Set<DOMNode.ID>()
-        collectMaterializedPayloadIDs(payload, into: &materializedPayloadIDs)
-        let rootNode = model(for: payload, preserving: materializedPayloadIDs)
+        let rootNode = domNodes.materialize(payload).node
         hostNode.appendShadowRoot(rootNode)
-        notifyDOMTreeChildrenReplaced(parent: hostNode)
+        domTrees.childrenReplaced(parent: hostNode)
         resolvePendingInspectedNode(requestSubtreeIfNeeded: false)
     }
 
@@ -2936,7 +2847,7 @@ extension WebInspectorContext {
         host: DOM.Node.ID,
         root: DOM.Node.ID
     ) {
-        guard let hostNode = nodesByID[DOMNode.ID(host)] else {
+        guard let hostNode = domNodes[DOMNode.ID(host)] else {
             let hostID = DOMNode.ID(host)
             loadFrameDocumentIfNeeded(forNodeID: hostID, reason: "DOM.shadowRootPopped")
             ignoreExpectedDOMMaterializationGap()
@@ -2944,32 +2855,30 @@ extension WebInspectorContext {
         }
 
         let rootID = DOMNode.ID(root)
-        guard let removedRoot = hostNode.removeShadowRoot(id: rootID) ?? nodesByID[rootID] else {
+        guard let removedRoot = hostNode.removeShadowRoot(id: rootID) ?? domNodes[rootID] else {
             ignoreExpectedDOMMaterializationGap()
             return
         }
-        removeSubtreeFromIndex(removedRoot)
-        notifyDOMTreeChildrenReplaced(parent: hostNode)
+        domNodes.removeSubtree(removedRoot)
+        domTrees.childrenReplaced(parent: hostNode)
     }
 
     private func applyPseudoElementAdded(
         parent: DOM.Node.ID,
         element payload: DOM.Node
     ) {
-        guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
+        guard let parentNode = domNodes[DOMNode.ID(parent)] else {
             let parentID = DOMNode.ID(parent)
             loadFrameDocumentIfNeeded(forNodeID: parentID, reason: "DOM.pseudoElementAdded")
             ignoreExpectedDOMMaterializationGap()
             return
         }
 
-        var materializedPayloadIDs = Set<DOMNode.ID>()
-        collectMaterializedPayloadIDs(payload, into: &materializedPayloadIDs)
-        let pseudoElement = model(for: payload, preserving: materializedPayloadIDs)
+        let (pseudoElement, materializedPayloadIDs) = domNodes.materialize(payload)
         if let replacedElement = parentNode.setPseudoElement(pseudoElement) {
-            removeSubtreeFromIndex(replacedElement, preserving: materializedPayloadIDs)
+            domNodes.removeSubtree(replacedElement, preserving: materializedPayloadIDs)
         }
-        notifyDOMTreeChildrenReplaced(parent: parentNode)
+        domTrees.childrenReplaced(parent: parentNode)
         resolvePendingInspectedNode(requestSubtreeIfNeeded: false)
     }
 
@@ -2977,7 +2886,7 @@ extension WebInspectorContext {
         parent: DOM.Node.ID,
         element: DOM.Node.ID
     ) {
-        guard let parentNode = nodesByID[DOMNode.ID(parent)] else {
+        guard let parentNode = domNodes[DOMNode.ID(parent)] else {
             let parentID = DOMNode.ID(parent)
             loadFrameDocumentIfNeeded(forNodeID: parentID, reason: "DOM.pseudoElementRemoved")
             ignoreExpectedDOMMaterializationGap()
@@ -2985,210 +2894,24 @@ extension WebInspectorContext {
         }
 
         let elementID = DOMNode.ID(element)
-        guard let removedElement = parentNode.removePseudoElement(id: elementID) ?? nodesByID[elementID] else {
+        guard let removedElement = parentNode.removePseudoElement(id: elementID) ?? domNodes[elementID] else {
             ignoreExpectedDOMMaterializationGap()
             return
         }
-        removeSubtreeFromIndex(removedElement)
-        notifyDOMTreeChildrenReplaced(parent: parentNode)
-    }
-
-    @discardableResult
-    private func removeSubtreeFromIndex(
-        _ root: DOMNode,
-        preserving preservedIDs: Set<DOMNode.ID> = []
-    ) -> Bool {
-        var removedIDs = Set<DOMNode.ID>()
-        collectSubtreeIDs(root, into: &removedIDs)
-        removedIDs.subtract(preservedIDs)
-        frameDocumentProjectionIndex.removeProjections(containing: removedIDs)
-        for id in removedIDs {
-            nodesByID[id] = nil
-        }
-        if let selectedNode, removedIDs.contains(selectedNode.id) {
-            styleRefreshTask?.cancel()
-            styleRefreshTask = nil
-            styleRefreshGeneration += 1
-            self.selectedNode = nil
-            notifyDOMTreeSelectionChanged(nil)
-            notifyStatusChanged()
-            return true
-        }
-        return false
-    }
-
-    private func collectSubtreeIDs(_ node: DOMNode, into ids: inout Set<DOMNode.ID>) {
-        ids.insert(node.id)
-        for associatedRoot in node.associatedSubtreeRoots() {
-            collectSubtreeIDs(associatedRoot, into: &ids)
-        }
-        guard case let .loaded(children) = node.children else {
-            return
-        }
-        for child in children {
-            collectSubtreeIDs(child, into: &ids)
-        }
-    }
-
-    private func collectMaterializedPayloadIDs(_ node: DOM.Node, into ids: inout Set<DOMNode.ID>) {
-        ids.insert(DOMNode.ID(node.id))
-        for associatedNode in associatedPayloadNodes(for: node) {
-            collectMaterializedPayloadIDs(associatedNode, into: &ids)
-        }
-        for child in node.children ?? [] {
-            collectMaterializedPayloadIDs(child, into: &ids)
-        }
-    }
-
-    private func model(
-        for payload: DOM.Node,
-        preserving materializedPayloadIDs: Set<DOMNode.ID>
-    ) -> DOMNode {
-        let id = DOMNode.ID(payload.id)
-        let node: DOMNode
-        let previousChildren: [DOMNode]
-        let previousAssociatedRoots: [DOMNode]
-        if let existing = nodesByID[id] {
-            if case let .loaded(children) = existing.children {
-                previousChildren = children
-            } else {
-                previousChildren = []
-            }
-            previousAssociatedRoots = existing.associatedSubtreeRoots()
-            existing.update(from: payload)
-            node = existing
-        } else {
-            previousChildren = []
-            previousAssociatedRoots = []
-            node = DOMNode(node: payload)
-            nodesByID[id] = node
-        }
-
-        let payloadContentDocument = payload.contentDocument.map {
-            model(for: $0, preserving: materializedPayloadIDs)
-        }
-        let shadowRoots = payload.shadowRoots.map {
-            model(for: $0, preserving: materializedPayloadIDs)
-        }
-        let templateContent = payload.templateContent.map {
-            model(for: $0, preserving: materializedPayloadIDs)
-        }
-        let beforePseudoElement = payload.beforePseudoElement.map {
-            model(for: $0, preserving: materializedPayloadIDs)
-        }
-        let otherPseudoElements = payload.otherPseudoElements.map {
-            model(for: $0, preserving: materializedPayloadIDs)
-        }
-        let afterPseudoElement = payload.afterPseudoElement.map {
-            model(for: $0, preserving: materializedPayloadIDs)
-        }
-        let contentDocument = projectedFrameDocument(for: node, payloadContentDocument: payloadContentDocument)
-        node.setAssociatedNodes(
-            contentDocument: contentDocument,
-            shadowRoots: shadowRoots,
-            templateContent: templateContent,
-            beforePseudoElement: beforePseudoElement,
-            otherPseudoElements: otherPseudoElements,
-            afterPseudoElement: afterPseudoElement
-        )
-        let associatedIDs = Set(node.associatedSubtreeRoots().map(\.id))
-        for previousRoot in previousAssociatedRoots where associatedIDs.contains(previousRoot.id) == false {
-            removeSubtreeFromIndex(previousRoot, preserving: materializedPayloadIDs)
-        }
-
-        if let children = payload.children {
-            let newChildren = children.map { model(for: $0, preserving: materializedPayloadIDs) }
-            let newChildIDs = Set(newChildren.map(\.id))
-            for previousChild in previousChildren where newChildIDs.contains(previousChild.id) == false {
-                removeSubtreeFromIndex(previousChild, preserving: materializedPayloadIDs)
-            }
-            node.setChildren(newChildren)
-        } else if payload.childNodeCount == 0 && previousChildren.isEmpty == false {
-            for previousChild in previousChildren {
-                removeSubtreeFromIndex(previousChild, preserving: materializedPayloadIDs)
-            }
-            node.setChildrenUnrequested(count: payload.childNodeCount)
-        } else {
-            node.updateChildNodeCount(payload.childNodeCount)
-        }
-        return node
-    }
-
-    private func associatedPayloadNodes(for node: DOM.Node) -> [DOM.Node] {
-        [node.contentDocument]
-            .compactMap { $0 }
-            + node.shadowRoots
-            + [node.templateContent, node.beforePseudoElement]
-            .compactMap { $0 }
-            + node.otherPseudoElements
-            + [node.afterPseudoElement]
-            .compactMap { $0 }
-    }
-
-    private func projectedFrameDocument(
-        for owner: DOMNode,
-        payloadContentDocument: DOMNode?
-    ) -> DOMNode? {
-        guard owner.isFrameOwner else {
-            return payloadContentDocument
-        }
-
-        if let attachedRootID = frameDocumentProjectionIndex.projectedFrameDocumentRootID(forOwnerNodeID: owner.id) {
-            guard let attachedRoot = nodesByID[attachedRootID],
-                  frameOwner(owner, matchesFrameDocumentRoot: attachedRoot) else {
-                frameDocumentProjectionIndex.detachProjection(attachedTo: owner.id)
-                return payloadContentDocument
-            }
-            return attachedRoot
-        }
-
-        guard let frameTargetID = frameTargetIDForFrameDocument(matching: owner),
-              let rootID = frameDocumentProjectionIndex.frameDocumentRootID(for: frameTargetID),
-              let root = nodesByID[rootID] else {
-            return payloadContentDocument
-        }
-        frameDocumentProjectionIndex.attach(frameTargetID: frameTargetID, to: owner.id)
-        return root
-    }
-
-    private func frameTargetIDForFrameDocument(matching owner: DOMNode) -> WebInspectorTarget.ID? {
-        let matches = frameDocumentProjectionIndex.frameTargetIDs.filter { frameTargetID in
-            guard frameDocumentProjectionIndex.ownerNodeID(for: frameTargetID) == nil,
-                  let rootID = frameDocumentProjectionIndex.frameDocumentRootID(for: frameTargetID),
-                  let root = nodesByID[rootID] else {
-                return false
-            }
-            return frameOwner(owner, matchesFrameDocumentRoot: root)
-        }
-        guard matches.count <= 1 else {
-            WebInspectorDataKitLog.debug(
-                "frame document projection ambiguous owner=\(String(describing: owner.id))"
-            )
-            return nil
-        }
-        return matches.first
-    }
-
-    private func frameOwner(_ owner: DOMNode, matchesFrameDocumentRoot root: DOMNode) -> Bool {
-        guard owner.isFrameOwner,
-              let ownerFrameID = owner.frameID,
-              let rootFrameID = root.frameID else {
-            return false
-        }
-        return ownerFrameID == rootFrameID
+        domNodes.removeSubtree(removedElement)
+        domTrees.childrenReplaced(parent: parentNode)
     }
 
     private func loadFrameDocumentIfNeeded(
         forNodeID nodeID: DOMNode.ID,
         reason: String
     ) {
-        guard let frameTargetID = frameTargetID(for: nodeID) else {
+        guard let frameTargetID = DOMNodeIndex.frameTargetID(for: nodeID) else {
             return
         }
-        if let rootID = frameDocumentProjectionIndex.frameDocumentRootID(for: frameTargetID),
-           let root = nodesByID[rootID] {
-            if let owner = attachProjectedFrameDocumentRoot(root, frameTargetID: frameTargetID) {
-                notifyDOMTreeChildrenReplaced(parent: owner)
+        if let root = domNodes.frameDocumentRoot(for: frameTargetID) {
+            if let owner = domNodes.attachFrameDocumentRoot(root, frameTargetID: frameTargetID) {
+                domTrees.childrenReplaced(parent: owner)
             }
             return
         }
@@ -3233,118 +2956,30 @@ extension WebInspectorContext {
         _ document: DOM.Node,
         frameTargetID: WebInspectorTarget.ID
     ) {
-        let scopedDocument = scopedFrameDocument(document, to: frameTargetID)
-        var materializedPayloadIDs = Set<DOMNode.ID>()
-        collectMaterializedPayloadIDs(scopedDocument, into: &materializedPayloadIDs)
-        let previousRootID = frameDocumentProjectionIndex.setFrameDocumentRootID(
-            DOMNode.ID(scopedDocument.id),
-            for: frameTargetID
-        )
-        let frameRoot = model(for: scopedDocument, preserving: materializedPayloadIDs)
-        if let previousRootID,
-           previousRootID != frameRoot.id,
-           let previousRoot = nodesByID[previousRootID] {
-            removeSubtreeFromIndex(previousRoot, preserving: materializedPayloadIDs)
-        }
-
-        if let owner = attachProjectedFrameDocumentRoot(frameRoot, frameTargetID: frameTargetID) {
-            notifyDOMTreeChildrenReplaced(parent: owner)
+        let frameRoot = domNodes.setFrameDocument(document, for: frameTargetID)
+        if let owner = domNodes.attachFrameDocumentRoot(frameRoot, frameTargetID: frameTargetID) {
+            domTrees.childrenReplaced(parent: owner)
         }
         resolvePendingInspectedNode(requestSubtreeIfNeeded: true)
     }
 
-    private func attachProjectedFrameDocumentRoot(
-        _ frameRoot: DOMNode,
-        frameTargetID: WebInspectorTarget.ID
-    ) -> DOMNode? {
-        guard let owner = frameOwner(forFrameDocumentRoot: frameRoot, frameTargetID: frameTargetID) else {
-            frameDocumentProjectionIndex.detach(frameTargetID: frameTargetID)
-            return nil
-        }
-        frameDocumentProjectionIndex.attach(frameTargetID: frameTargetID, to: owner.id)
-        owner.setContentDocument(frameRoot)
-        return owner
-    }
-
-    private func frameOwner(
-        forFrameDocumentRoot frameRoot: DOMNode,
-        frameTargetID: WebInspectorTarget.ID
-    ) -> DOMNode? {
-        if let ownerID = frameDocumentProjectionIndex.ownerNodeID(for: frameTargetID),
-           let owner = nodesByID[ownerID],
-           frameOwner(owner, matchesFrameDocumentRoot: frameRoot) {
-            return owner
-        }
-        let candidates = nodesByID.values.filter { node in
-            guard frameOwner(node, matchesFrameDocumentRoot: frameRoot) else {
-                return false
-            }
-            guard let attachedRootID = frameDocumentProjectionIndex.projectedFrameDocumentRootID(forOwnerNodeID: node.id) else {
-                return true
-            }
-            return attachedRootID == frameRoot.id
-        }
-        guard candidates.count <= 1 else {
-            WebInspectorDataKitLog.debug(
-                "frame document projection ambiguous frameID=\(String(describing: frameRoot.frameID))"
-            )
-            return nil
-        }
-        return candidates.first
-    }
-
-    private func detachProjectedFrameDocument(
-        forFrameID frameID: FrameID
-    ) {
-        let owners = nodesByID.values.filter { $0.isFrameOwner && $0.frameID == frameID }
-        for owner in owners {
-            guard let rootID = frameDocumentProjectionIndex.projectedFrameDocumentRootID(forOwnerNodeID: owner.id) else {
-                continue
-            }
-            let root = nodesByID[rootID]
-            frameDocumentProjectionIndex.detachProjection(attachedTo: owner.id)
-            owner.setContentDocument(nil)
-            if let root {
-                removeSubtreeFromIndex(root)
-            }
-            notifyDOMTreeChildrenReplaced(parent: owner)
+    private func detachFrameDocuments(forFrameID frameID: FrameID) {
+        domNodes.detachFrameDocuments(forFrameID: frameID) { owner in
+            domTrees.childrenReplaced(parent: owner)
         }
     }
 
-    private func frameTargetID(for nodeID: DOMNode.ID) -> WebInspectorTarget.ID? {
-        nodeID.proxyID.targetScopeRawValue.map(WebInspectorTarget.ID.init)
-    }
-
-    private func scopedFrameDocument(_ node: DOM.Node, to frameTargetID: WebInspectorTarget.ID) -> DOM.Node {
-        DOM.Node(
-            id: scopedNodeID(node.id, to: frameTargetID),
-            nodeType: node.nodeType,
-            nodeName: node.nodeName,
-            localName: node.localName,
-            nodeValue: node.nodeValue,
-            frameID: node.frameID,
-            documentURL: node.documentURL,
-            baseURL: node.baseURL,
-            attributes: node.attributes,
-            attributeList: node.attributeList,
-            childNodeCount: node.childNodeCount,
-            children: node.children?.map { scopedFrameDocument($0, to: frameTargetID) },
-            contentDocument: node.contentDocument.map { scopedFrameDocument($0, to: frameTargetID) },
-            shadowRoots: node.shadowRoots.map { scopedFrameDocument($0, to: frameTargetID) },
-            templateContent: node.templateContent.map { scopedFrameDocument($0, to: frameTargetID) },
-            beforePseudoElement: node.beforePseudoElement.map { scopedFrameDocument($0, to: frameTargetID) },
-            otherPseudoElements: node.otherPseudoElements.map { scopedFrameDocument($0, to: frameTargetID) },
-            afterPseudoElement: node.afterPseudoElement.map { scopedFrameDocument($0, to: frameTargetID) },
-            pseudoType: node.pseudoType,
-            shadowRootType: node.shadowRootType
-        )
-    }
-
-    private func scopedNodeID(_ id: DOM.Node.ID, to frameTargetID: WebInspectorTarget.ID) -> DOM.Node.ID {
-        guard id.targetScopeRawValue == nil else {
-            return id
+    /// Drops the selection when the selected node leaves the index.
+    private func domNodesDidLeaveIndex(_ removedIDs: Set<DOMNode.ID>) {
+        guard let selectedNode, removedIDs.contains(selectedNode.id) else {
+            return
         }
-        return DOM.Node.ID(id.rawValue, scopedToTargetRawValue: frameTargetID.rawValue)
+        styleRefreshTask?.cancel()
+        styleRefreshTask = nil
+        styleRefreshGeneration += 1
+        self.selectedNode = nil
+        domTrees.selectionChanged(nil)
+        notifyStatusChanged()
     }
 
     private func cancelFrameDocumentLoadTasks() {
@@ -3360,7 +2995,7 @@ extension WebInspectorContext {
         guard let pendingInspectedNodeID else {
             return
         }
-        guard let inspectedNode = nodesByID[pendingInspectedNodeID] else {
+        guard let inspectedNode = domNodes[pendingInspectedNodeID] else {
             if requestSubtreeIfNeeded {
                 requestMaterializationForPendingInspectedNode(pendingInspectedNodeID)
             }
@@ -3384,14 +3019,13 @@ extension WebInspectorContext {
     private func requestMaterializationForPendingInspectedNode(
         _ nodeID: DOMNode.ID
     ) {
-        if let frameTargetID = frameTargetID(for: nodeID) {
-            if let rootID = frameDocumentProjectionIndex.frameDocumentRootID(for: frameTargetID),
-               let frameRoot = nodesByID[rootID] {
+        if let frameTargetID = DOMNodeIndex.frameTargetID(for: nodeID) {
+            if let frameRoot = domNodes.frameDocumentRoot(for: frameTargetID) {
                 WebInspectorDataKitLog.debug(
                     "DOM.inspect unresolved nodeID=\(String(describing: nodeID)); reattaching frame document root"
                 )
-                if let owner = attachProjectedFrameDocumentRoot(frameRoot, frameTargetID: frameTargetID) {
-                    notifyDOMTreeChildrenReplaced(parent: owner)
+                if let owner = domNodes.attachFrameDocumentRoot(frameRoot, frameTargetID: frameTargetID) {
+                    domTrees.childrenReplaced(parent: owner)
                 }
             } else {
                 loadFrameDocumentIfNeeded(forFrameTargetID: frameTargetID, reason: "DOM.inspect")
@@ -3415,7 +3049,7 @@ extension WebInspectorContext {
                   self.isCurrentPageGeneration(pageGeneration),
                   self.isDOMDocumentGeneration(documentGeneration),
                   self.selectedNode?.id == nodeID,
-                  let selectedNode = self.nodesByID[nodeID] else {
+                  let selectedNode = self.domNodes[nodeID] else {
                 return
             }
             do {
@@ -4193,7 +3827,7 @@ extension WebInspectorContext {
         }
         if let node = authority.node,
            let styles = authority.styles {
-            guard nodesByID[node.id] === node,
+            guard domNodes[node.id] === node,
                   selectedNode === node,
                   node.elementStyles === styles else {
                 throw Self.staleCSSMutationError

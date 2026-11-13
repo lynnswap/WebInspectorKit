@@ -706,11 +706,70 @@ extension DOMTreeSnapshot.Node {
     }
 }
 
+/// The tree states that the controllers of one context show, kept only for
+/// as long as their controllers are.
 @MainActor
-final class WeakDOMTreeState {
-    weak var tree: DOMTreeState?
+final class DOMTreeStateRegistry {
+    private final class WeakTree {
+        weak var tree: DOMTreeState?
 
-    init(_ tree: DOMTreeState) {
-        self.tree = tree
+        init(_ tree: DOMTreeState) {
+            self.tree = tree
+        }
+    }
+
+    private var references: [WeakTree] = []
+
+    func makeController(rootNode: DOMNode?, selectedNode: DOMNode?) -> DOMTreeController {
+        let tree = DOMTreeState(rootNode: rootNode, selectedNode: selectedNode)
+        references.append(WeakTree(tree))
+        return DOMTreeController(tree: tree)
+    }
+
+    /// Moves the live trees to `registry` and shows them its document.
+    func transfer(to registry: DOMTreeStateRegistry, rootNode: DOMNode?, selectedNode: DOMNode?) {
+        let transferred = references.filter { $0.tree != nil }
+        references = []
+        registry.references.append(contentsOf: transferred)
+        for reference in transferred {
+            reference.tree?.applySnapshot(rootNode: rootNode, selectedNode: selectedNode, reason: .reset)
+        }
+    }
+
+    func replaceSnapshot(rootNode: DOMNode?, selectedNode: DOMNode?, reason: DOMTreeSnapshotReason) {
+        forEachTree { $0.applySnapshot(rootNode: rootNode, selectedNode: selectedNode, reason: reason) }
+    }
+
+    func childrenReplaced(parent: DOMNode) {
+        forEachTree { $0.applyChildrenReplaced(parent: parent) }
+    }
+
+    func childInserted(parent: DOMNode, node: DOMNode, previousSiblingID: DOMNode.ID?) {
+        forEachTree { $0.applyChildInserted(parent: parent, node: node, previousSiblingID: previousSiblingID) }
+    }
+
+    func childRemoved(parent: DOMNode, nodeID: DOMNode.ID) {
+        forEachTree { $0.applyChildRemoved(parent: parent, nodeID: nodeID) }
+    }
+
+    func childCountChanged(node: DOMNode) {
+        forEachTree { $0.applyChildCountChanged(node: node) }
+    }
+
+    func nodeChanged(_ node: DOMNode) {
+        forEachTree { $0.applyNodeChanged(node) }
+    }
+
+    func selectionChanged(_ node: DOMNode?, reveal: DOMRevealPolicy = .selectAndScroll) {
+        forEachTree { $0.applySelectionChanged(nodeID: node?.id, reveal: reveal) }
+    }
+
+    private func forEachTree(_ body: (DOMTreeState) -> Void) {
+        references.removeAll { $0.tree == nil }
+        for reference in references {
+            if let tree = reference.tree {
+                body(tree)
+            }
+        }
     }
 }
