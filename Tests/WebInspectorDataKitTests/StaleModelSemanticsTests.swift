@@ -162,7 +162,7 @@ func staleAndForeignRuntimeContextsPreserveTheCurrentSelection() async throws {
                 name: "Old",
                 kind: .normal
             )))
-    let staleContext = try #require(context.executionContexts.first)
+    let staleContext = try #require(context.runtime.executionContexts.first)
     context.apply(.executionContextDestroyed(sharedID))
     context.apply(
         .executionContextCreated(
@@ -178,29 +178,86 @@ func staleAndForeignRuntimeContextsPreserveTheCurrentSelection() async throws {
                 name: "Foreign",
                 kind: .normal
             )))
-    let freshContext = try #require(context.executionContexts.first)
-    let foreignRuntimeContext = try #require(foreignContext.executionContexts.first)
+    let freshContext = try #require(context.runtime.executionContexts.first)
+    let foreignRuntimeContext = try #require(foreignContext.runtime.executionContexts.first)
     #expect(freshContext !== staleContext)
     #expect(freshContext.id == staleContext.id)
 
-    context.selectContext(freshContext)
-    context.selectContext(staleContext)
-    context.selectContext(foreignRuntimeContext)
+    context.runtime.select(freshContext)
+    context.runtime.select(staleContext)
+    context.runtime.select(foreignRuntimeContext)
 
-    #expect(context.selectedContext === freshContext)
+    #expect(context.runtime.selectedContext === freshContext)
     let error = WebInspectorProxyError.disconnected(
         "RuntimeContext is not registered in this WebInspectorContext."
     )
     await #expect(throws: error) {
-        _ = try await context.evaluate("1", in: staleContext)
+        _ = try await context.runtime.evaluate("1", in: staleContext)
     }
     await #expect(throws: error) {
-        _ = try await context.evaluate("1", in: foreignRuntimeContext)
+        _ = try await context.runtime.evaluate("1", in: foreignRuntimeContext)
     }
-    #expect(context.selectedContext === freshContext)
-    context.selectContext(nil)
-    #expect(context.selectedContext == nil)
+    #expect(context.runtime.selectedContext === freshContext)
+    context.runtime.select(nil)
+    #expect(context.runtime.selectedContext == nil)
     #expect(context.state == .attached)
+}
+
+@MainActor
+@Test
+func foreignNetworkRequestKeepsItsResponseBodyFetchable() async throws {
+    let context = WebInspectorContext.preview()
+    let foreignContext = WebInspectorContext.preview()
+    let requestID = Network.Request.ID("foreign-body")
+    foreignContext.apply(
+        .requestWillBeSent(
+            id: requestID,
+            request: Network.Request(id: requestID, url: "https://example.com/body", method: "GET"),
+            resourceType: .fetch,
+            redirectResponse: nil,
+            timestamp: 1
+        ))
+    foreignContext.apply(
+        .responseReceived(
+            id: requestID,
+            response: Network.Response(status: 200, mimeType: "text/plain"),
+            resourceType: .fetch,
+            timestamp: 2
+        ))
+    foreignContext.apply(.loadingFinished(id: requestID, timestamp: 3, sourceMapURL: nil, metrics: nil))
+    let foreignRequest = try #require(foreignContext.network.requests.first)
+    #expect(foreignRequest.canFetchResponseBody)
+
+    await context.network.fetchResponseBody(for: foreignRequest)
+
+    #expect(foreignRequest.responseBody.phase == .available)
+    #expect(foreignRequest.canFetchResponseBody)
+}
+
+@MainActor
+@Test
+func retainedRuntimeObjectAfterContextReleaseHasNoRemoteHandle() async throws {
+    var context: WebInspectorContext? = WebInspectorContext.preview()
+    context?.apply(
+        .messageAdded(Console.Message(
+            source: Console.Source(rawValue: "console-api"),
+            level: Console.Level(rawValue: "log"),
+            text: "retained",
+            parameters: [
+                Runtime.RemoteObject(
+                    id: Runtime.RemoteObject.ID("retained-object"),
+                    kind: .object,
+                    description: "retained object"
+                )
+            ]
+        )))
+    let object = try #require(context?.console.messages.first?.parameters.first)
+    #expect(object.canRequestProperties)
+
+    context = nil
+
+    #expect(object.description == "retained object")
+    #expect(object.canRequestProperties == false)
 }
 
 @MainActor

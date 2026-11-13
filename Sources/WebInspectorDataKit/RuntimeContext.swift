@@ -36,20 +36,17 @@ public final class RuntimeContext: WebInspectorPersistentModel {
     public private(set) var kind: Runtime.ContextKind
 
     @ObservationIgnored let authority: Authority
-    @ObservationIgnored weak var modelContext: WebInspectorContext?
 
     init(
         context: Runtime.ExecutionContext,
         targetID: WebInspectorTarget.ID,
-        targetRevision: UInt64,
-        modelContext: WebInspectorContext
+        targetRevision: UInt64
     ) {
         id = ID(context.id)
         name = context.name
         frameID = context.frameID
         kind = context.kind
         authority = Authority(targetID: targetID, targetRevision: targetRevision)
-        self.modelContext = modelContext
     }
 
     func update(from context: Runtime.ExecutionContext) {

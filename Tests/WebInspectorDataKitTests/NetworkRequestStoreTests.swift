@@ -16,8 +16,7 @@ private func makeStoreRequest(
         ),
         initiator: nil,
         resourceType: .fetch,
-        timestamp: timestamp,
-        modelContext: context
+        timestamp: timestamp
     )
 }
 

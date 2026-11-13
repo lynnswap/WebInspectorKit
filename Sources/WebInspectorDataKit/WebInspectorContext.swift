@@ -251,9 +251,7 @@ public final class WebInspectorContext {
         }
     }
 
-    /// The failure from the latest initial resource-tree lookup, if any.
-    /// Live Network events remain available when only this lookup fails.
-    public private(set) var networkResourceTreeError: WebInspectorProxyError? {
+    private(set) var networkResourceTreeError: WebInspectorProxyError? {
         didSet {
             #if DEBUG
             stateChangesForTesting.yield(())
@@ -288,13 +286,11 @@ public final class WebInspectorContext {
         }
     }
 
-    /// Runtime execution contexts known to the current page.
-    public var executionContexts: [RuntimeContext] {
+    var executionContexts: [RuntimeContext] {
         runtimeStore.executionContexts
     }
 
-    /// The selected Runtime execution context.
-    public var selectedContext: RuntimeContext? {
+    var selectedContext: RuntimeContext? {
         runtimeStore.selectedContext
     }
 
@@ -538,8 +534,7 @@ public final class WebInspectorContext {
         return node
     }
 
-    /// Returns the registered Network request for an identifier.
-    public func registeredRequest(
+    func registeredRequest(
         for id: NetworkRequest.ID
     ) -> NetworkRequest? {
         return networkRequestStore.registration(for: id)?.request
@@ -558,13 +553,11 @@ public final class WebInspectorContext {
     }
 #endif
 
-    /// Clears retained Network requests and emits reset transactions.
-    public func clearNetworkRequests() {
+    func clearNetworkRequests() {
         networkRecorder.clearRequests()
     }
 
-    /// Returns the registered Console message for an identifier.
-    public func registeredMessage(
+    func registeredMessage(
         for id: ConsoleMessage.ID
     ) -> ConsoleMessage? {
         return consoleStore.message(for: id)
@@ -1100,8 +1093,7 @@ public final class WebInspectorContext {
         requestedElementPickerEnabled = nil
     }
 
-    /// Reloads the inspected page.
-    public func reloadPage(
+    func reloadPage(
         ignoringCache: Bool = false
     ) async throws {
         let page = try currentPageOrThrow()
@@ -1168,17 +1160,11 @@ public final class WebInspectorContext {
         return DOMTreeController(tree: tree)
     }
 
-    /// Selects the Runtime execution context used by default evaluation calls.
-    ///
-    /// Passing `nil` clears the selection. Passing a Runtime context that is no
-    /// longer registered in this context, including one from another context,
-    /// does nothing and preserves the current selection.
-    public func selectContext(_ context: RuntimeContext?) {
+    func selectContext(_ context: RuntimeContext?) {
         runtimeStore.select(context)
     }
 
-    /// Evaluates JavaScript in the selected or supplied Runtime context.
-    public func evaluate(
+    func evaluate(
         _ expression: String,
         in context: RuntimeContext? = nil
     ) async throws -> RuntimeEvaluation {
@@ -1241,7 +1227,21 @@ public final class WebInspectorContext {
         consoleStore.changes
     }
 
-    func responseBodyResult(
+    func fetchResponseBody(for request: NetworkRequest) async {
+        // The fetch changes the body's phase, so a request that another
+        // context owns must not get as far as starting one.
+        guard networkRequestStore.isCurrent(request) else {
+            return
+        }
+        await request.fetchResponseBody { [weak self] request in
+            guard let self else {
+                return .failure(NetworkBody.invalidatedResponseFetchError)
+            }
+            return await responseBodyResult(for: request)
+        }
+    }
+
+    private func responseBodyResult(
         for request: NetworkRequest
     ) async -> Result<Network.Body, WebInspectorProxyError> {
         guard networkRequestStore.isCurrent(request) else {
@@ -1374,7 +1374,7 @@ public final class WebInspectorContext {
         _ payload: Runtime.RemoteObject,
         authority: RuntimeObject.Authority
     ) -> RuntimeObject {
-        runtimeStore.registerObject(payload, owner: .client, authority: authority, modelContext: self)
+        runtimeStore.registerObject(payload, owner: .client, authority: authority)
     }
 
     private func validateRuntimeCommandResult(
@@ -1659,7 +1659,7 @@ public final class WebInspectorContext {
             guard networkRequestStore.generation == storeGeneration else { return }
             // Navigation can replace a frame while its resource snapshot is in flight.
             guard revision == networkRecorder.resourceTreeRevision else { continue }
-            networkRecorder.applyResourceTree(reply.value, modelContext: self)
+            networkRecorder.applyResourceTree(reply.value)
             networkResourceTreeError = nil
             return
         }
@@ -4412,8 +4412,7 @@ extension WebInspectorContext {
             event,
             targetID: targetID,
             page: currentPage,
-            pageGeneration: currentPageGeneration,
-            modelContext: self
+            pageGeneration: currentPageGeneration
         )
     }
 
@@ -4421,7 +4420,7 @@ extension WebInspectorContext {
         _ event: Runtime.Event,
         targetID: WebInspectorTarget.ID? = nil
     ) {
-        runtimeStore.apply(event, targetID: targetID, page: currentPage, modelContext: self)
+        runtimeStore.apply(event, targetID: targetID, page: currentPage)
     }
 }
 
@@ -4455,8 +4454,7 @@ extension WebInspectorContext {
             responseHeaders: responseHeaders,
             responseBody: responseBody,
             timestamp: timestamp,
-            encodedBodyLength: encodedBodyLength,
-            modelContext: self
+            encodedBodyLength: encodedBodyLength
         )
     }
 
@@ -4477,6 +4475,6 @@ extension WebInspectorContext {
     }
 
     package func apply(_ event: Network.Event) {
-        networkRecorder.apply(event, modelContext: self)
+        networkRecorder.apply(event)
     }
 }

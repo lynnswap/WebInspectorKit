@@ -567,7 +567,7 @@ func latestRootNetworkBurstIsConservedThroughDataKitInFIFOOrder() async throws {
         Double($0) + 0.25
     })
     #expect(requests.allSatisfy { request in
-        context.registeredRequest(for: request.id) === request
+        context.network.request(for: request.id) === request
     })
 }
 
@@ -978,13 +978,13 @@ func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
     try await recorder.waitForChangeCount(2)
     #expect(context.network.requests.map(\.id) == [firstModelID, secondModelID])
 
-    context.clearNetworkRequests()
+    context.network.clearRequests()
 
     try await recorder.waitForChangeCount(3)
     #expect(recorder.changes.last == .removedAll)
     #expect(context.network.requests.isEmpty)
-    #expect(context.registeredRequest(for: firstModelID) == nil)
-    #expect(context.registeredRequest(for: secondModelID) == nil)
+    #expect(context.network.request(for: firstModelID) == nil)
+    #expect(context.network.request(for: secondModelID) == nil)
 
     let clearedEventBaseline = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(
@@ -1038,7 +1038,7 @@ func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
     #expect(didProcessRedirectedEvent)
     #expect(context.network.requests.isEmpty)
     #expect(recorder.changes.count == 3)
-    #expect(context.registeredRequest(for: firstModelID) == nil)
+    #expect(context.network.request(for: firstModelID) == nil)
 
     await runtime.backend.emit(
         .requestWillBeSent(
@@ -1059,7 +1059,7 @@ func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
     let reusedRequest = try #require(context.network.requests.first)
     #expect(reusedRequest.id == firstModelID)
     #expect(reusedRequest.url == "https://example.com/reused")
-    #expect(context.registeredRequest(for: firstModelID) === reusedRequest)
+    #expect(context.network.request(for: firstModelID) === reusedRequest)
 }
 
 @MainActor
@@ -1098,7 +1098,7 @@ func clearNetworkRequestsPreservesRetainedSecurityWithoutLeakingIntoReusedID() a
     try await waitUntil { context.network.requests.first?.security == initialSecurity }
     let retainedRequest = try #require(context.network.requests.first)
 
-    context.clearNetworkRequests()
+    context.network.clearRequests()
     #expect(context.network.requests.isEmpty)
     #expect(retainedRequest.security == initialSecurity)
 
@@ -1233,7 +1233,7 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
     #expect(request.security?.connection?.tlsProtocol == "TLS 1.3")
     #expect(request.security?.connection?.cipher == "AES_128_GCM_SHA256")
     #expect(request.security?.certificate == certificate)
-    #expect(context.registeredRequest(for: request.id) === request)
+    #expect(context.network.request(for: request.id) === request)
 }
 
 @MainActor
@@ -1319,7 +1319,7 @@ func responseReceivedWithoutResourceTypePreservesRequestResourceType() async thr
         timestamp: 2
     ))
 
-    let request = try #require(context.registeredRequest(for: modelID))
+    let request = try #require(context.network.request(for: modelID))
     #expect(request.resourceType == .image)
     #expect(request.responseReceivedTimestamp == 2)
 }
@@ -1436,8 +1436,7 @@ func loadingFinishedWithoutSecurityConnectionPreservesResponseSecurity() throws 
         ),
         initiator: nil,
         resourceType: .fetch,
-        timestamp: 1,
-        modelContext: context
+        timestamp: 1
     )
 
     request.applyResponse(
@@ -1458,8 +1457,7 @@ func loadingFinishedWithoutSecurityConnectionPreservesResponseSecurity() throws 
         ),
         initiator: nil,
         resourceType: .fetch,
-        timestamp: 4,
-        modelContext: context
+        timestamp: 4
     )
     emptyCompletionRequest.finish(
         timestamp: 5,
@@ -1487,8 +1485,7 @@ func networkSecurityDoesNotInferTransportStateFromURLScheme(_ url: String) throw
         request: Network.Request(id: requestID, url: url, method: "GET"),
         initiator: nil,
         resourceType: .fetch,
-        timestamp: 1,
-        modelContext: context
+        timestamp: 1
     )
 
     #expect(request.security == nil)
@@ -1514,8 +1511,7 @@ func multipartContinuationPreservesFinishedLifecycleAcrossLaterParts() throws {
         ),
         initiator: nil,
         resourceType: .image,
-        timestamp: 1,
-        modelContext: context
+        timestamp: 1
     )
     let responseBody = request.responseBody
     let firstSecurity = Network.Security(
@@ -1859,7 +1855,7 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
     #expect(request.security == security)
     #expect(request.responseBody.phase == .available)
     #expect(request.initiator?.nodeID == DOM.Node.ID("23"))
-    #expect(context.registeredRequest(for: request.id) === request)
+    #expect(context.network.request(for: request.id) === request)
 }
 
 @MainActor
@@ -1875,8 +1871,7 @@ func memoryCacheSecurityReplacesExistingResponseSummary() throws {
         ),
         initiator: nil,
         resourceType: .stylesheet,
-        timestamp: 1,
-        modelContext: context
+        timestamp: 1
     )
     request.applyResponse(
         Network.Response(
@@ -2050,8 +2045,7 @@ func responseMetadataAndRedirectPreserveResponseBodyIdentity() throws {
         ),
         initiator: nil,
         resourceType: .fetch,
-        timestamp: 1,
-        modelContext: context
+        timestamp: 1
     )
     let body = request.responseBody
 
@@ -2126,14 +2120,14 @@ func staleResponseBodyFetchCompletionCannotMutateNewerRevision(
 
     await emitFinishedRequest(id: requestID, target: target, backend: runtime.backend)
     try await waitUntil(in: context) {
-        context.registeredRequest(for: NetworkRequest.ID(requestID))?.state == .finished
+        context.network.request(for: NetworkRequest.ID(requestID))?.state == .finished
     }
-    let request = try #require(context.registeredRequest(for: NetworkRequest.ID(requestID)))
+    let request = try #require(context.network.request(for: NetworkRequest.ID(requestID)))
     let body = request.responseBody
     await runtime.backend.hold(domain: "Network", method: "getResponseBody", gate: gate)
 
     let fetchTask = Task {
-        await request.fetchResponseBody()
+        await context.network.fetchResponseBody(for: request)
     }
     _ = try await runtime.backend.waitForRecordedCommandsForTesting(domain: "Network", method: "getResponseBody", count: 1)
 
@@ -2237,7 +2231,7 @@ func responseBodyPublishesHintsAndFetchLifecycle() async throws {
         method: "getResponseBody"
     )
 
-    await request.fetchResponseBody()
+    await context.network.fetchResponseBody(for: request)
     #expect(body.phase == .loaded)
     #expect(body.full == #"{"ok":true}"#)
     #expect(body.text == #"{"ok":true}"#)
@@ -2249,7 +2243,7 @@ func responseBodyPublishesHintsAndFetchLifecycle() async throws {
     #expect(request.canFetchResponseBody == false)
 
     let commandsBeforeSecondFetch = await runtime.backend.recordedCommands()
-    await request.fetchResponseBody()
+    await context.network.fetchResponseBody(for: request)
     let commandsAfterSecondFetch = await runtime.backend.recordedCommands()
     #expect(commandsAfterSecondFetch == commandsBeforeSecondFetch)
 }
@@ -2277,12 +2271,12 @@ func fetchResponseBodyStoresLoadedAndFailedPhases() async throws {
         method: "getResponseBody"
     )
 
-    await loadedRequest.fetchResponseBody()
+    await context.network.fetchResponseBody(for: loadedRequest)
     #expect(loadedRequest.responseBody.phase == .loaded)
     #expect(loadedRequest.responseBody.text == "hello")
     #expect(loadedRequest.responseBody.isBase64Encoded == false)
 
-    await failedRequest.fetchResponseBody()
+    await context.network.fetchResponseBody(for: failedRequest)
     guard case let .failed(error) = failedRequest.responseBody.phase else {
         Issue.record("Expected failed response body phase.")
         return
@@ -2306,9 +2300,9 @@ func concurrentResponseBodyCallersShareCompletionAcrossCallerCancellation() asyn
 
     await emitFinishedRequest(id: requestID, target: target, backend: runtime.backend)
     try await waitUntil(in: context) {
-        context.registeredRequest(for: NetworkRequest.ID(requestID))?.state == .finished
+        context.network.request(for: NetworkRequest.ID(requestID))?.state == .finished
     }
-    let request = try #require(context.registeredRequest(for: NetworkRequest.ID(requestID)))
+    let request = try #require(context.network.request(for: NetworkRequest.ID(requestID)))
     let body = request.responseBody
     await runtime.backend.hold(domain: "Network", method: "getResponseBody", gate: gate)
     await runtime.backend.enqueue(
@@ -2318,7 +2312,7 @@ func concurrentResponseBodyCallersShareCompletionAcrossCallerCancellation() asyn
     )
 
     let first = Task { @MainActor in
-        await request.fetchResponseBody()
+        await context.network.fetchResponseBody(for: request)
     }
     _ = await runtime.backend.waitForRecordedCommands(
         domain: "Network",
@@ -2326,7 +2320,7 @@ func concurrentResponseBodyCallersShareCompletionAcrossCallerCancellation() asyn
         count: 1
     )
     let second = Task { @MainActor in
-        await request.fetchResponseBody()
+        await context.network.fetchResponseBody(for: request)
     }
     try await waitForResponseBodyWaiters(in: body, count: 2)
 
@@ -2357,9 +2351,9 @@ func responseReplacementResolvesEveryJoinedResponseBodyWaiter() async throws {
 
     await emitFinishedRequest(id: requestID, target: target, backend: runtime.backend)
     try await waitUntil(in: context) {
-        context.registeredRequest(for: NetworkRequest.ID(requestID))?.state == .finished
+        context.network.request(for: NetworkRequest.ID(requestID))?.state == .finished
     }
-    let request = try #require(context.registeredRequest(for: NetworkRequest.ID(requestID)))
+    let request = try #require(context.network.request(for: NetworkRequest.ID(requestID)))
     let body = request.responseBody
     await runtime.backend.hold(domain: "Network", method: "getResponseBody", gate: gate)
     await runtime.backend.enqueue(
@@ -2370,7 +2364,7 @@ func responseReplacementResolvesEveryJoinedResponseBodyWaiter() async throws {
     let firstProbe = ResponseBodyFetchCompletionProbe()
     let secondProbe = ResponseBodyFetchCompletionProbe()
     let first = Task { @MainActor in
-        await request.fetchResponseBody()
+        await context.network.fetchResponseBody(for: request)
         firstProbe.finish()
     }
     _ = await runtime.backend.waitForRecordedCommands(
@@ -2379,7 +2373,7 @@ func responseReplacementResolvesEveryJoinedResponseBodyWaiter() async throws {
         count: 1
     )
     let second = Task { @MainActor in
-        await request.fetchResponseBody()
+        await context.network.fetchResponseBody(for: request)
         secondProbe.finish()
     }
     try await waitForResponseBodyWaiters(in: body, count: 2)
@@ -2431,9 +2425,9 @@ func clearingNetworkResolvesEveryJoinedResponseBodyWaiter() async throws {
 
     await emitFinishedRequest(id: requestID, target: target, backend: runtime.backend)
     try await waitUntil(in: context) {
-        context.registeredRequest(for: NetworkRequest.ID(requestID))?.state == .finished
+        context.network.request(for: NetworkRequest.ID(requestID))?.state == .finished
     }
-    let request = try #require(context.registeredRequest(for: NetworkRequest.ID(requestID)))
+    let request = try #require(context.network.request(for: NetworkRequest.ID(requestID)))
     let body = request.responseBody
     await runtime.backend.hold(domain: "Network", method: "getResponseBody", gate: gate)
     await runtime.backend.enqueue(
@@ -2444,7 +2438,7 @@ func clearingNetworkResolvesEveryJoinedResponseBodyWaiter() async throws {
     let firstProbe = ResponseBodyFetchCompletionProbe()
     let secondProbe = ResponseBodyFetchCompletionProbe()
     let first = Task { @MainActor in
-        await request.fetchResponseBody()
+        await context.network.fetchResponseBody(for: request)
         firstProbe.finish()
     }
     _ = await runtime.backend.waitForRecordedCommands(
@@ -2453,13 +2447,13 @@ func clearingNetworkResolvesEveryJoinedResponseBodyWaiter() async throws {
         count: 1
     )
     let second = Task { @MainActor in
-        await request.fetchResponseBody()
+        await context.network.fetchResponseBody(for: request)
         secondProbe.finish()
     }
     try await waitForResponseBodyWaiters(in: body, count: 2)
 
-    context.clearNetworkRequests()
-    #expect(context.registeredRequest(for: NetworkRequest.ID(requestID)) == nil)
+    context.network.clearRequests()
+    #expect(context.network.request(for: NetworkRequest.ID(requestID)) == nil)
 
     do {
         try await waitUntil {
@@ -2494,19 +2488,19 @@ func fetchResponseBodyRejectsLateCompletionAfterNetworkClear() async throws {
 
     await emitFinishedRequest(id: requestID, target: target, backend: runtime.backend)
     try await waitUntil(in: context) {
-        context.registeredRequest(for: NetworkRequest.ID(requestID))?.state == .finished
+        context.network.request(for: NetworkRequest.ID(requestID))?.state == .finished
     }
-    let request = try #require(context.registeredRequest(for: NetworkRequest.ID(requestID)))
+    let request = try #require(context.network.request(for: NetworkRequest.ID(requestID)))
     let body = request.responseBody
     await runtime.backend.hold(domain: "Network", method: "getResponseBody", gate: gate)
 
     let fetchTask = Task {
-        await request.fetchResponseBody()
+        await context.network.fetchResponseBody(for: request)
     }
     _ = try await runtime.backend.waitForRecordedCommandsForTesting(domain: "Network", method: "getResponseBody", count: 1)
 
-    context.clearNetworkRequests()
-    #expect(context.registeredRequest(for: NetworkRequest.ID(requestID)) == nil)
+    context.network.clearRequests()
+    #expect(context.network.request(for: NetworkRequest.ID(requestID)) == nil)
     await runtime.backend.enqueue(
         Network.Body(data: "stale-body", base64Encoded: false),
         for: "Network",
@@ -2815,7 +2809,7 @@ func resourceTreeRestoresLoadedResourcesAndFetchesTheirContent() async throws {
     await runtime.backend.enqueue(try loadedResourceTree(), for: "Page", method: "getResourceTree")
     let (_, context) = try await startContext(runtime: runtime)
     let requests = context.network.requests
-    #expect(context.networkResourceTreeError == nil)
+    #expect(context.network.resourceTreeError == nil)
     #expect(requests.map(\.url) == [
         "https://example.test/", "https://example.test/child", "https://example.test/child.js",
         "https://example.test/loaded.css", "https://example.test/broken.png"
@@ -2829,7 +2823,7 @@ func resourceTreeRestoresLoadedResourcesAndFetchesTheirContent() async throws {
     #expect(stylesheet.sourceMapURL == "https://example.test/loaded.css.map")
     #expect(requests.last?.state == .failed(errorText: "", canceled: true))
     await runtime.backend.enqueue(Network.Body(data: "body { color: red; }", base64Encoded: false), for: "Page", method: "getResourceContent")
-    await stylesheet.fetchResponseBody()
+    await context.network.fetchResponseBody(for: stylesheet)
     #expect(stylesheet.responseBody.phase == .loaded)
     let command = try #require(await runtime.backend.recordedCommands().last)
     #expect(command.method == "getResourceContent")
@@ -2857,7 +2851,7 @@ func resourceTreeResponseKeepsIdentityAndDoesNotMergeLaterRequestsForSameURL() a
     #expect(original.status == 200)
     #expect(original.resourceContentFrameID == nil)
     await runtime.backend.enqueue(Network.Body(data: "live", base64Encoded: false), for: "Network", method: "getResponseBody")
-    await original.fetchResponseBody()
+    await context.network.fetchResponseBody(for: original)
     let bodyCommand = try #require(await runtime.backend.recordedCommands().last)
     #expect(bodyCommand.payload.cast(as: Network.GetResponseBodyPayload.self)?.id == id)
     await runtime.backend.emit(.requestWillBeSent(
@@ -2867,7 +2861,7 @@ func resourceTreeResponseKeepsIdentityAndDoesNotMergeLaterRequestsForSameURL() a
     ), target: target)
     try await waitUntil { context.network.requests.count == 6 }
     #expect(context.network.requests.filter { $0.url == original.url }.count == 2)
-    context.clearNetworkRequests()
+    context.network.clearRequests()
     await context.apply(.responseReceived(id: id, response: response, resourceType: .stylesheet, timestamp: 5))
     #expect(context.network.requests.isEmpty)
 }
@@ -2913,7 +2907,7 @@ func resourceTreeDoesNotUndoUserClearWhileLookupIsInFlight() async throws {
     let container = WebInspectorContainer(proxy: runtime.proxy)
     let context = container.mainContext
     _ = await runtime.backend.waitForRecordedCommands(domain: "Page", method: "getResourceTree", count: 1)
-    context.clearNetworkRequests()
+    context.network.clearRequests()
     await gate.open()
     try await waitUntil(in: context) { context.state == .attached }
     #expect(context.network.requests.isEmpty)
@@ -2926,7 +2920,7 @@ func resourceTreeFailurePreservesLiveNetworkCollectionAndReportsError() async th
     let failure = WebInspectorProxyError.commandFailed(domain: "Page", method: "getResourceTree", message: "Unavailable")
     await runtime.backend.enqueueFailure(failure, for: "Page", method: "getResourceTree")
     let (_, context) = try await startContext(runtime: runtime)
-    #expect(context.networkResourceTreeError == failure)
+    #expect(context.network.resourceTreeError == failure)
     #expect(context.state == .attached)
     let id = Network.Request.ID("after-tree-failure")
     await context.apply(.requestWillBeSent(id: id,
@@ -2967,10 +2961,10 @@ func resourceTreeContentExpiresOnlyForDetachedFrameAndRetainsLoadedBodies() asyn
     let childDocument = try #require(requests.first { $0.url.hasSuffix("/child") })
     let stylesheet = try #require(requests.first { $0.resourceType == .stylesheet })
     await runtime.backend.enqueue(Network.Body(data: "loaded child", base64Encoded: false), for: "Page", method: "getResourceContent")
-    await childDocument.fetchResponseBody()
+    await context.network.fetchResponseBody(for: childDocument)
     context.apply(.frameDetached(frameID: FrameID("child-frame")))
     let commandCount = await runtime.backend.recordedCommands().count
-    await childScript.fetchResponseBody()
+    await context.network.fetchResponseBody(for: childScript)
     #expect(await runtime.backend.recordedCommands().count == commandCount)
     #expect(childScript.canFetchResponseBody == false)
     #expect(childDocument.responseBody.phase == .loaded)
@@ -2983,7 +2977,7 @@ func clearingResourceTreeDoesNotResurrectUnknownResponseButAllowsNewRequests() a
     let runtime = try await WebInspectorProxyTestRuntime.start()
     await runtime.backend.enqueue(try loadedResourceTree(), for: "Page", method: "getResourceTree")
     let (_, context) = try await startContext(runtime: runtime)
-    context.clearNetworkRequests()
+    context.network.clearRequests()
     let response = Network.Response(url: "https://example.test/loaded.css", status: 200, security: nil,
         origin: .init(frameID: FrameID("main-frame"), loaderID: "main-loader", targetID: nil))
     await context.apply(.responseReceived(id: Network.Request.ID("old"), response: response, resourceType: .stylesheet, timestamp: 1))
@@ -3019,7 +3013,7 @@ func resourceTreeBackForwardVisitDoesNotDeduplicateAgainstHistoricalRequests() a
         context.apply(.frameNavigated(.init(id: FrameID("main-frame"), parentID: nil, pageBindingID: rootID,
             loaderID: tree.frame.loaderId, name: nil, url: tree.frame.url, securityOrigin: nil, mimeType: "text/html")))
         try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(DOM.Node.ID(rootID)) }
-        #expect(context.networkResourceTreeError == nil)
+        #expect(context.network.resourceTreeError == nil)
     }
     let otherPage = try JSONDecoder().decode(Page.ResourceTree.self, from: Data(#"{"frame":{"id":"main-frame","loaderId":"other-loader","url":"https://example.test/other","mimeType":"text/html"},"resources":[]}"#.utf8))
     try await navigate(tree: otherPage, rootID: "other-root")
@@ -3031,7 +3025,7 @@ func resourceTreeBackForwardVisitDoesNotDeduplicateAgainstHistoricalRequests() a
     #expect(restored.navigationVisit != original.navigationVisit)
     #expect(restored.canFetchResponseBody)
     await runtime.backend.enqueue(Network.Body(data: "returned body", base64Encoded: false), for: "Page", method: "getResourceContent")
-    await restored.fetchResponseBody()
+    await context.network.fetchResponseBody(for: restored)
     #expect(restored.responseBody.phase == .loaded)
 }
 
@@ -3047,7 +3041,7 @@ func laterRequestCannotReplaceUnfetchedResourceTreeContent() async throws {
         request: Network.Request(id: id, url: original.url, method: "GET", origin: original.origin),
         initiator: .init(kind: "other"), resourceType: .stylesheet, redirectResponse: nil, timestamp: 1))
     let commandCount = await runtime.backend.recordedCommands().count
-    await original.fetchResponseBody()
+    await context.network.fetchResponseBody(for: original)
     #expect(await runtime.backend.recordedCommands().count == commandCount)
     #expect(!original.canFetchResponseBody)
     #expect(context.registeredRequest(forProxyID: id) !== original)
@@ -3070,7 +3064,7 @@ func resourceTreeContentReplyCannotOutliveFrameDetachment() async throws {
     let gate = WebInspectorTestGate()
     await runtime.backend.hold(domain: "Page", method: "getResourceContent", gate: gate)
     await runtime.backend.enqueue(Network.Body(data: "replacement document", base64Encoded: false), for: "Page", method: "getResourceContent")
-    let task = Task { await request.fetchResponseBody() }
+    let task = Task { await context.network.fetchResponseBody(for: request) }
     _ = await runtime.backend.waitForRecordedCommands(domain: "Page", method: "getResourceContent", count: 1)
     await runtime.backend.emit(.frameDetached(frameID: FrameID("child-frame")), target: target)
     await gate.open()

@@ -135,20 +135,18 @@ public final class RuntimeObject: WebInspectorPersistentModel {
     /// A compact preview for the value, if included in the payload.
     public private(set) var preview: Runtime.ObjectPreview?
 
-    @ObservationIgnored weak var modelContext: WebInspectorContext?
     var proxyID: Runtime.RemoteObject.ID?
     @ObservationIgnored var authority: Authority
 
     /// A Boolean value indicating whether this object has a live remote handle.
     public var canRequestProperties: Bool {
-        proxyID != nil && modelContext != nil
+        proxyID != nil
     }
 
     init(
         id: ID,
         remoteObject: Runtime.RemoteObject,
-        authority: Authority,
-        modelContext: WebInspectorContext
+        authority: Authority
     ) {
         self.id = id
         kind = remoteObject.kind
@@ -160,34 +158,10 @@ public final class RuntimeObject: WebInspectorPersistentModel {
         preview = remoteObject.preview
         proxyID = remoteObject.id
         self.authority = authority
-        self.modelContext = modelContext
-    }
-
-    /// Requests own property values for this object.
-    public func properties() async throws -> [Property] {
-        guard let modelContext else {
-            throw WebInspectorProxyError.disconnected("RuntimeObject is not registered in this WebInspectorContext.")
-        }
-        guard canRequestProperties else {
-            return []
-        }
-        return try await modelContext.properties(for: self)
-    }
-
-    /// Requests collection entries for this object.
-    public func collectionEntries() async throws -> [Entry] {
-        guard let modelContext else {
-            throw WebInspectorProxyError.disconnected("RuntimeObject is not registered in this WebInspectorContext.")
-        }
-        guard canRequestProperties else {
-            return []
-        }
-        return try await modelContext.collectionEntries(for: self)
     }
 
     func invalidateRemoteHandle() {
         proxyID = nil
-        modelContext = nil
     }
 
     func update(from remoteObject: Runtime.RemoteObject) {

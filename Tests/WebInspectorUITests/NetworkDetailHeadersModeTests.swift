@@ -697,7 +697,7 @@ struct NetworkDetailHeadersModeTests: NetworkDetailTestSupport {
 
         let proxyID = Network.Request.ID("headers-request-data-instance")
         let reregistrationTransactionBaseline = model.rawTransactionDeliveryCountForTesting
-        context.clearNetworkRequests()
+        context.network.clearRequests()
         let reregistered = try #require(
             await applyRequestWithoutResponse(
                 to: context,

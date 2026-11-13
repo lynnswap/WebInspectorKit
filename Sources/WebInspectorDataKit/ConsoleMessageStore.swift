@@ -38,8 +38,7 @@ final class ConsoleMessageStore {
         _ event: Console.Event,
         targetID: WebInspectorTarget.ID?,
         page: WebInspectorTarget?,
-        pageGeneration: Int,
-        modelContext: WebInspectorContext
+        pageGeneration: Int
     ) {
         switch event {
         case let .messageAdded(message):
@@ -47,8 +46,7 @@ final class ConsoleMessageStore {
                 message,
                 targetID: targetID,
                 page: page,
-                pageGeneration: pageGeneration,
-                modelContext: modelContext
+                pageGeneration: pageGeneration
             )
         case let .messageRepeatCountUpdated(count, timestamp):
             let repeatedMessageID: ConsoleMessage.ID?
@@ -114,8 +112,7 @@ final class ConsoleMessageStore {
         _ payload: Console.Message,
         targetID: WebInspectorTarget.ID?,
         page: WebInspectorTarget?,
-        pageGeneration: Int,
-        modelContext: WebInspectorContext
+        pageGeneration: Int
     ) {
         let id = ConsoleMessage.ID(nextMessageOrdinal)
         nextMessageOrdinal += 1
@@ -131,16 +128,14 @@ final class ConsoleMessageStore {
             return runtime.registerObject(
                 parameter,
                 owner: .console,
-                authority: authority,
-                modelContext: modelContext
+                authority: authority
             )
         }
         let message = ConsoleMessage(
             id: id,
             message: payload,
             parameters: parameters,
-            targetID: targetID,
-            modelContext: modelContext
+            targetID: targetID
         )
         messagesByID[id] = message
         messages.append(message)

@@ -327,8 +327,7 @@ func networkSecuritySummaryTracksRedirectReuseAndMemoryCacheLifecycles() {
         ),
         initiator: nil,
         resourceType: .fetch,
-        timestamp: 1,
-        modelContext: context
+        timestamp: 1
     )
     request.applyResponse(
         Network.Response(status: 302).reporting(security: responseSecurity),
@@ -543,7 +542,6 @@ private func makeSecurityRequest(
         ),
         initiator: nil,
         resourceType: resourceType,
-        timestamp: 1,
-        modelContext: WebInspectorContext.preview()
+        timestamp: 1
     )
 }

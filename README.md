@@ -76,7 +76,7 @@ Attaching to a loaded page populates Network with the page and frame resources
 that WebKit still retains, then continues recording live requests. Restored
 resources may have no HTTP status, headers, or timing information. This matches
 Web Inspector's resource-tree snapshot; it does not recover every past request.
-If the snapshot fails, `WebInspectorContext.networkResourceTreeError` reports
+If the snapshot fails, `context.network.resourceTreeError` reports
 the failure while live Network recording continues.
 
 ## Tabs

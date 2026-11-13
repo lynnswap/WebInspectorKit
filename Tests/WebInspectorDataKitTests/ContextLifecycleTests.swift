@@ -17,7 +17,7 @@ func transportBackedStartupContinuesAfterResourceTreeFailureWithoutTimeouts() as
 
     #expect(context.state == .attached)
     #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("resource-tree-unavailable-root")))
-    #expect(context.networkResourceTreeError == .commandFailed(
+    #expect(context.network.resourceTreeError == .commandFailed(
         domain: "Page",
         method: "Page.getResourceTree",
         message: "Resource tree unavailable in this fixture."
@@ -234,7 +234,7 @@ func unresolvedInspectorInspectDoesNotBlockOrderedModelEvents() async throws {
         target: target
     )
     try await waitUntil(in: context) {
-        context.executionContexts.map(\.id) == [RuntimeContext.ID(executionContextID)]
+        context.runtime.executionContexts.map(\.id) == [RuntimeContext.ID(executionContextID)]
     }
     await gate.open()
 }
@@ -572,7 +572,7 @@ func frameNavigationAndRuntimeContextApplyInSourceOrder() async throws {
     )
 
     try await waitUntil(in: context) {
-        context.executionContexts.map(\.id) == [RuntimeContext.ID(executionContextID)]
+        context.runtime.executionContexts.map(\.id) == [RuntimeContext.ID(executionContextID)]
     }
     #expect(context.state == .attached)
 }
@@ -822,15 +822,15 @@ func closeAfterAttachedClearsAttachmentBackedModels() async throws {
         context.network.requests.count == 1
             && context.network.requests.first?.security == requestSecurity
             && context.console.messages.count == 1
-            && context.executionContexts.count == 1
+            && context.runtime.executionContexts.count == 1
     }
 
     let request = try #require(context.network.requests.first)
     let message = try #require(context.console.messages.first)
     #expect(context.rootNode?.id == DOMNode.ID(documentID))
     #expect(context.node(for: DOMNode.ID(documentID)) != nil)
-    #expect(context.registeredRequest(for: request.id) === request)
-    #expect(context.registeredMessage(for: message.id) === message)
+    #expect(context.network.request(for: request.id) === request)
+    #expect(context.console.message(for: message.id) === message)
 
     await enqueueDomainDisableReplies(on: runtime.backend)
     await container.close()
@@ -838,13 +838,13 @@ func closeAfterAttachedClearsAttachmentBackedModels() async throws {
     #expect(context.state == .detached)
     #expect(context.rootNode == nil)
     #expect(context.node(for: DOMNode.ID(documentID)) == nil)
-    #expect(context.registeredRequest(for: request.id) == nil)
+    #expect(context.network.request(for: request.id) == nil)
     #expect(context.network.requests.isEmpty)
     #expect(request.security == requestSecurity)
-    #expect(context.registeredMessage(for: message.id) == nil)
+    #expect(context.console.message(for: message.id) == nil)
     #expect(context.console.messages.isEmpty)
-    #expect(context.executionContexts.isEmpty)
-    #expect(context.selectedContext == nil)
+    #expect(context.runtime.executionContexts.isEmpty)
+    #expect(context.runtime.selectedContext == nil)
 }
 
 @MainActor
@@ -1035,7 +1035,7 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
     context.seedSelectedNodeStyles(matchedStyles: CSS.MatchedStyles())
     let oldStyles = try #require(oldElement.elementStyles)
     let oldConsoleMessage = try #require(context.console.messages.first)
-    let oldRuntimeContext = try #require(context.executionContexts.first)
+    let oldRuntimeContext = try #require(context.runtime.executionContexts.first)
     #expect(oldStyles.phase == .loaded)
     let oldRequest = try #require(context.registeredRequest(forProxyID: oldRequestID))
     #expect(context.network.requests == [oldRequest])
@@ -1117,8 +1117,8 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
     #expect(oldStyles.phase == .loaded)
     #expect(context.console.messages.first === oldConsoleMessage)
     #expect(context.console.messages.map(\.text) == ["old-console"])
-    #expect(context.executionContexts.first === oldRuntimeContext)
-    #expect(context.executionContexts.map(\.id) == [RuntimeContext.ID(oldRuntimeID)])
+    #expect(context.runtime.executionContexts.first === oldRuntimeContext)
+    #expect(context.runtime.executionContexts.map(\.id) == [RuntimeContext.ID(oldRuntimeID)])
 
     await disableGate.open()
     await restartTask.value
@@ -1187,7 +1187,7 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
     #expect(freshElement.attributes["data-generation"] == "fresh")
     #expect(freshStyles.phase == .needsRefresh)
     #expect(context.console.messages.map(\.text) == ["fresh-console"])
-    #expect(context.executionContexts.map(\.id) == [RuntimeContext.ID(freshRuntimeID)])
+    #expect(context.runtime.executionContexts.map(\.id) == [RuntimeContext.ID(freshRuntimeID)])
 }
 
 @MainActor
@@ -1823,7 +1823,7 @@ func mainFrameNavigatedReloadsDOMAndClearsRuntimeContexts() async throws {
         method: "Runtime.executionContextCreated",
         params: #"{"context":{"id":21,"name":"Main","frameId":"main-frame","type":"normal"}}"#
     )
-    try await waitUntil(in: context) { context.executionContexts.map(\.id) == [RuntimeContext.ID(Runtime.ExecutionContext.ID("21"))] }
+    try await waitUntil(in: context) { context.runtime.executionContexts.map(\.id) == [RuntimeContext.ID(Runtime.ExecutionContext.ID("21"))] }
 
     await transport.receiveRootMessage(
         #"{"method":"Page.frameNavigated","params":{"frame":{"id":"main-frame","loaderId":"loader-2","name":"Main","url":"https://example.test/next","securityOrigin":"https://example.test","mimeType":"text/html"}}}"#
@@ -1835,7 +1835,7 @@ func mainFrameNavigatedReloadsDOMAndClearsRuntimeContexts() async throws {
         after: startupMessageCount
     )
     #expect(getDocument.targetIdentifier == targetID)
-    #expect(context.executionContexts.isEmpty)
+    #expect(context.runtime.executionContexts.isEmpty)
     await receiveTransportTargetReply(
         transport,
         targetID: getDocument.targetIdentifier,
@@ -1844,7 +1844,7 @@ func mainFrameNavigatedReloadsDOMAndClearsRuntimeContexts() async throws {
     )
 
     try await waitUntil(in: context) { context.rootNode?.id == navigatedRootID }
-    #expect(context.executionContexts.isEmpty)
+    #expect(context.runtime.executionContexts.isEmpty)
     await receiveTransportTargetEvent(
         transport,
         targetID: targetID,

@@ -626,8 +626,8 @@ package final class NetworkPanelModel {
               request.canFetchResponseBody else {
             return false
         }
-        Task { @MainActor in
-            await request.fetchResponseBody()
+        Task { @MainActor [context] in
+            await context.network.fetchResponseBody(for: request)
         }
         return true
     }

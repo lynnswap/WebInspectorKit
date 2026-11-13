@@ -1108,7 +1108,7 @@ func changesBeforeClearingRequests(
     in context: WebInspectorContext,
     _ changes: AsyncStream<WebInspectorCollectionChange<NetworkRequest>>
 ) async -> [WebInspectorCollectionChange<NetworkRequest>] {
-    context.clearNetworkRequests()
+    context.network.clearRequests()
     var received: [WebInspectorCollectionChange<NetworkRequest>] = []
     for await change in changes {
         if change == .removedAll {

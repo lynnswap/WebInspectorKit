@@ -32,12 +32,12 @@ func runtimeEnableReplayIsCapturedBeforeCommandReturns() async throws {
         target: target
     )
     try await waitUntil(in: context) {
-        context.executionContexts.first?.id == RuntimeContext.ID(contextID)
+        context.runtime.executionContexts.first?.id == RuntimeContext.ID(contextID)
     }
 
     await enableGate.open()
     try await waitUntil(in: context) { context.state == .attached }
-    #expect(context.selectedContext?.id == RuntimeContext.ID(contextID))
+    #expect(context.runtime.selectedContext?.id == RuntimeContext.ID(contextID))
 }
 
 @MainActor
@@ -91,7 +91,7 @@ func transportBackedStartupCapturesRuntimeAndConsoleReplayBeforeEnableReplies() 
         params: #"{"context":{"id":11,"name":"Main","frameId":"main-frame","type":"normal"}}"#
     )
     try await waitUntil(in: context) {
-        context.executionContexts.first?.id == RuntimeContext.ID(Runtime.ExecutionContext.ID("11"))
+        context.runtime.executionContexts.first?.id == RuntimeContext.ID(Runtime.ExecutionContext.ID("11"))
     }
     await receiveTransportTargetReply(
         transport,
@@ -135,7 +135,7 @@ func transportBackedStartupCapturesRuntimeAndConsoleReplayBeforeEnableReplies() 
 
     try await waitUntil(in: context) { context.state == .attached }
     #expect(context.rootNode?.id == DOMNode.ID(DOM.Node.ID("1")))
-    #expect(context.selectedContext?.id == RuntimeContext.ID(Runtime.ExecutionContext.ID("11")))
+    #expect(context.runtime.selectedContext?.id == RuntimeContext.ID(Runtime.ExecutionContext.ID("11")))
     #expect(context.console.messages.map(\.text) == ["replayed"])
 }
 
@@ -167,9 +167,9 @@ func transportBackedFrameRuntimeAndConsoleEventsKeepTargetScope() async throws {
         params: #"{"context":{"id":7,"name":"Frame","frameId":"frame-7.42","type":"normal"}}"#
     )
     try await waitUntil(in: context) {
-        context.executionContexts.contains { $0.id == RuntimeContext.ID(scopedContextID) }
+        context.runtime.executionContexts.contains { $0.id == RuntimeContext.ID(scopedContextID) }
     }
-    let frameContext = try #require(context.executionContexts.first { $0.id == RuntimeContext.ID(scopedContextID) })
+    let frameContext = try #require(context.runtime.executionContexts.first { $0.id == RuntimeContext.ID(scopedContextID) })
 
     var capturedEvaluation: RuntimeEvaluation?
     let evaluationTask = Task { @MainActor in
@@ -245,7 +245,7 @@ func restartClearsRuntimeContextsBeforeEnableReplay() async throws {
         target: target
     )
     try await waitUntil(in: context) {
-        context.executionContexts.first?.id == RuntimeContext.ID(staleID)
+        context.runtime.executionContexts.first?.id == RuntimeContext.ID(staleID)
     }
 
     await runtime.backend.hold(domain: "Runtime", method: "enable", gate: enableGate)
@@ -262,20 +262,20 @@ func restartClearsRuntimeContextsBeforeEnableReplay() async throws {
             RecordedCommand(domain: "Page", method: "enable"),
             RecordedCommand(domain: "Runtime", method: "enable"),
         ])
-    #expect(context.executionContexts.isEmpty)
-    #expect(context.selectedContext == nil)
+    #expect(context.runtime.executionContexts.isEmpty)
+    #expect(context.runtime.selectedContext == nil)
 
     await runtime.backend.emit(
         .executionContextCreated(Runtime.ExecutionContext(id: replayID, name: "Replayed", kind: .normal)),
         target: target
     )
     try await waitUntil(in: context) {
-        context.executionContexts.map(\.id) == [RuntimeContext.ID(replayID)]
+        context.runtime.executionContexts.map(\.id) == [RuntimeContext.ID(replayID)]
     }
 
     await enableGate.open()
     try await waitUntil(in: context) { context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restarted-document")) }
-    #expect(context.selectedContext?.id == RuntimeContext.ID(replayID))
+    #expect(context.runtime.selectedContext?.id == RuntimeContext.ID(replayID))
 }
 
 @MainActor
@@ -356,7 +356,7 @@ func consoleEventsPopulateRepeatAndClearFetchedMessages() async throws {
     #expect(message.repeatCount == 1)
     #expect(message.networkRequestID == NetworkRequest.ID(requestID))
     #expect(message.timestamp == 1)
-    #expect(context.registeredMessage(for: message.id) === message)
+    #expect(context.console.message(for: message.id) === message)
 
     await runtime.backend.emit(
         .messageRepeatCountUpdated(count: 3, timestamp: 2),
@@ -382,7 +382,7 @@ func consoleEventsPopulateRepeatAndClearFetchedMessages() async throws {
         target: target
     )
     try await waitUntil { context.console.messages.isEmpty }
-    #expect(context.registeredMessage(for: message.id) == nil)
+    #expect(context.console.message(for: message.id) == nil)
 }
 
 @MainActor
@@ -501,7 +501,7 @@ func consoleMessagesClearedInvalidatesRuntimeObjectsWithoutRuntimeCommand() asyn
     try await waitUntil { context.console.messages.isEmpty }
     #expect(parameter.canRequestProperties == false)
     do {
-        _ = try await parameter.properties()
+        _ = try await context.runtime.properties(of: parameter)
         Issue.record("Expected cleared console RuntimeObject to be stale.")
     } catch let error as WebInspectorProxyError {
         #expect(error == .disconnected("RuntimeObject is not registered in this WebInspectorContext."))
@@ -527,9 +527,9 @@ func evaluateRegistersRuntimeObjectInSelectedContext() async throws {
         )),
         target: target
     )
-    try await waitUntil(in: context) { context.executionContexts.count == 1 }
-    let runtimeContext = try #require(context.executionContexts.first)
-    context.selectContext(runtimeContext)
+    try await waitUntil(in: context) { context.runtime.executionContexts.count == 1 }
+    let runtimeContext = try #require(context.runtime.executionContexts.first)
+    context.runtime.select(runtimeContext)
 
     await runtime.backend.enqueue(
         Runtime.EvaluationResult(
@@ -546,7 +546,7 @@ func evaluateRegistersRuntimeObjectInSelectedContext() async throws {
         method: "evaluate"
     )
 
-    let result = try await context.evaluate("throw 'hello'", in: runtimeContext)
+    let result = try await context.runtime.evaluate("throw 'hello'", in: runtimeContext)
     #expect(result.isException)
     #expect(result.object.kind == .string)
     #expect(result.object.value == .string("hello"))
@@ -575,7 +575,7 @@ func runtimeObjectPropertiesAndCollectionEntriesUseRuntimeCommands() async throw
         for: "Runtime",
         method: "evaluate"
     )
-    let evaluation = try await context.evaluate("window")
+    let evaluation = try await context.runtime.evaluate("window")
 
     await runtime.backend.enqueue(
         [
@@ -592,7 +592,7 @@ func runtimeObjectPropertiesAndCollectionEntriesUseRuntimeCommands() async throw
         method: "getProperties"
     )
 
-    let properties = try await evaluation.object.properties()
+    let properties = try await context.runtime.properties(of: evaluation.object)
     #expect(properties.count == 2)
     #expect(properties[0].name == "answer")
     #expect(properties[0].value == "42")
@@ -611,7 +611,7 @@ func runtimeObjectPropertiesAndCollectionEntriesUseRuntimeCommands() async throw
         method: "getCollectionEntries"
     )
 
-    let entries = try await evaluation.object.collectionEntries()
+    let entries = try await context.runtime.collectionEntries(of: evaluation.object)
     #expect(entries.count == 1)
     #expect(entries[0].key?.value == .string("key"))
     #expect(entries[0].value?.description == "entry value")
@@ -637,7 +637,7 @@ func staleRuntimeObjectThrowsWithoutFailingContext() async throws {
         )),
         target: target
     )
-    try await waitUntil(in: context) { context.executionContexts.count == 1 }
+    try await waitUntil(in: context) { context.runtime.executionContexts.count == 1 }
 
     await runtime.backend.enqueue(
         Runtime.EvaluationResult(
@@ -646,16 +646,16 @@ func staleRuntimeObjectThrowsWithoutFailingContext() async throws {
         for: "Runtime",
         method: "evaluate"
     )
-    let evaluation = try await context.evaluate("window")
+    let evaluation = try await context.runtime.evaluate("window")
 
     await runtime.backend.emit(.executionContextsCleared(target: target.id), target: target)
     try await waitUntil(in: context) {
-        context.executionContexts.isEmpty && context.selectedContext == nil
+        context.runtime.executionContexts.isEmpty && context.runtime.selectedContext == nil
     }
     #expect(evaluation.object.canRequestProperties == false)
 
     do {
-        _ = try await evaluation.object.properties()
+        _ = try await context.runtime.properties(of: evaluation.object)
         Issue.record("Expected stale runtime object to throw.")
     } catch let error as WebInspectorProxyError {
         #expect(error == .disconnected("RuntimeObject is not registered in this WebInspectorContext."))
@@ -680,8 +680,8 @@ func lateEvaluateReplyDoesNotRegisterObjectAfterContextDestruction() async throw
         )),
         target: target
     )
-    try await waitUntil(in: context) { context.executionContexts.count == 1 }
-    let runtimeContext = try #require(context.executionContexts.first)
+    try await waitUntil(in: context) { context.runtime.executionContexts.count == 1 }
+    let runtimeContext = try #require(context.runtime.executionContexts.first)
 
     await runtime.backend.hold(domain: "Runtime", method: "evaluate", gate: evaluationGate)
     await runtime.backend.enqueue(
@@ -700,7 +700,7 @@ func lateEvaluateReplyDoesNotRegisterObjectAfterContextDestruction() async throw
     var evaluationError: WebInspectorProxyError?
     let evaluationTask = Task { @MainActor in
         do {
-            _ = try await context.evaluate("window", in: runtimeContext)
+            _ = try await context.runtime.evaluate("window", in: runtimeContext)
         } catch {
             evaluationError = error as? WebInspectorProxyError
         }
@@ -708,7 +708,7 @@ func lateEvaluateReplyDoesNotRegisterObjectAfterContextDestruction() async throw
     _ = await runtime.backend.waitForRecordedCommands(domain: "Runtime", method: "evaluate", count: 1)
 
     await runtime.backend.emit(.executionContextDestroyed(contextID), target: target)
-    try await waitUntil(in: context) { context.executionContexts.isEmpty }
+    try await waitUntil(in: context) { context.runtime.executionContexts.isEmpty }
     await evaluationGate.open()
 
     await evaluationTask.value
@@ -750,7 +750,7 @@ func evaluateRejectsAndReleasesReplyObjectScopedToDifferentTarget() async throws
         )),
         targetID: frameTargetID
     )
-    let frameContext = try #require(context.executionContexts.first)
+    let frameContext = try #require(context.runtime.executionContexts.first)
 
     // Live replies take their object scope from the reply route, so this
     // foreign scope can only come from a substituted backend.
@@ -764,7 +764,7 @@ func evaluateRejectsAndReleasesReplyObjectScopedToDifferentTarget() async throws
     await runtime.backend.enqueue((), for: "Runtime", method: "releaseObject")
 
     do {
-        _ = try await context.evaluate("window", in: frameContext)
+        _ = try await context.runtime.evaluate("window", in: frameContext)
         Issue.record("Expected an evaluation result from another target to be rejected.")
     } catch let error as WebInspectorProxyError {
         #expect(error == .disconnected("Runtime command result is no longer current."))
@@ -797,7 +797,7 @@ func evaluateRejectsAndReleasesReplyObjectScopedToDifferentTarget() async throws
         for: "Runtime",
         method: "evaluate"
     )
-    let evaluation = try await context.evaluate("window", in: frameContext)
+    let evaluation = try await context.runtime.evaluate("window", in: frameContext)
     #expect(evaluation.object.canRequestProperties)
 }
 
@@ -822,7 +822,7 @@ func propertiesRejectAndReleaseReplyAccessorScopedToDifferentTarget() async thro
         )),
         targetID: frameTargetID
     )
-    let frameContext = try #require(context.executionContexts.first)
+    let frameContext = try #require(context.runtime.executionContexts.first)
     let rootObjectID = Runtime.RemoteObject.ID(
         "property-root",
         scopedToTargetRawValue: frameTargetID.rawValue
@@ -834,7 +834,7 @@ func propertiesRejectAndReleaseReplyAccessorScopedToDifferentTarget() async thro
         for: "Runtime",
         method: "evaluate"
     )
-    let root = try await context.evaluate("window", in: frameContext).object
+    let root = try await context.runtime.evaluate("window", in: frameContext).object
 
     let foreignAccessorID = Runtime.RemoteObject.ID(
         "foreign-getter",
@@ -855,7 +855,7 @@ func propertiesRejectAndReleaseReplyAccessorScopedToDifferentTarget() async thro
     await runtime.backend.enqueue((), for: "Runtime", method: "releaseObject")
 
     do {
-        _ = try await root.properties()
+        _ = try await context.runtime.properties(of: root)
         Issue.record("Expected a property accessor from another target to be rejected.")
     } catch let error as WebInspectorProxyError {
         #expect(error == .disconnected("Runtime command result is no longer current."))
@@ -907,8 +907,8 @@ func childFrameNavigationAndDetachClearOnlyChildRuntimeAuthority() async throws 
         )),
         target: target
     )
-    try await waitUntil(in: context) { context.executionContexts.count == 2 }
-    let childContext = try #require(context.executionContexts.first {
+    try await waitUntil(in: context) { context.runtime.executionContexts.count == 2 }
+    let childContext = try #require(context.runtime.executionContexts.first {
         $0.id == RuntimeContext.ID(childContextID)
     })
 
@@ -923,7 +923,7 @@ func childFrameNavigationAndDetachClearOnlyChildRuntimeAuthority() async throws 
         for: "Runtime",
         method: "evaluate"
     )
-    let childWindow = try await context.evaluate("window", in: childContext).object
+    let childWindow = try await context.runtime.evaluate("window", in: childContext).object
 
     await runtime.backend.hold(domain: "Runtime", method: "getProperties", gate: propertiesGate)
     await runtime.backend.enqueue(
@@ -942,7 +942,7 @@ func childFrameNavigationAndDetachClearOnlyChildRuntimeAuthority() async throws 
     var propertiesError: WebInspectorProxyError?
     let propertiesTask = Task { @MainActor in
         do {
-            _ = try await childWindow.properties()
+            _ = try await context.runtime.properties(of: childWindow)
         } catch {
             propertiesError = error as? WebInspectorProxyError
         }
@@ -963,12 +963,12 @@ func childFrameNavigationAndDetachClearOnlyChildRuntimeAuthority() async throws 
         target: target
     )
     #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: lifecycleBaseline))
-    #expect(context.executionContexts.map(\.id) == [RuntimeContext.ID(mainContextID)])
+    #expect(context.runtime.executionContexts.map(\.id) == [RuntimeContext.ID(mainContextID)])
 
     await propertiesGate.open()
     await propertiesTask.value
     #expect(propertiesError == .disconnected("Runtime command result is no longer current."))
-    #expect(context.executionContexts.map(\.id) == [RuntimeContext.ID(mainContextID)])
+    #expect(context.runtime.executionContexts.map(\.id) == [RuntimeContext.ID(mainContextID)])
 
     let detachedContextID = Runtime.ExecutionContext.ID("detached-child-context")
     await runtime.backend.emit(
@@ -980,11 +980,11 @@ func childFrameNavigationAndDetachClearOnlyChildRuntimeAuthority() async throws 
         )),
         target: target
     )
-    try await waitUntil(in: context) { context.executionContexts.count == 2 }
+    try await waitUntil(in: context) { context.runtime.executionContexts.count == 2 }
     let detachBaseline = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(.frameDetached(frameID: childFrameID), target: target)
     #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: detachBaseline))
-    #expect(context.executionContexts.map(\.id) == [RuntimeContext.ID(mainContextID)])
+    #expect(context.runtime.executionContexts.map(\.id) == [RuntimeContext.ID(mainContextID)])
 }
 
 @MainActor
@@ -1025,7 +1025,7 @@ func newNormalFrameContextReplacesPriorTargetContextsAndObjects() async throws {
         )),
         targetID: frameTargetID
     )
-    let firstContext = try #require(context.executionContexts.first {
+    let firstContext = try #require(context.runtime.executionContexts.first {
         $0.id == RuntimeContext.ID(firstContextID)
     })
 
@@ -1042,14 +1042,14 @@ func newNormalFrameContextReplacesPriorTargetContextsAndObjects() async throws {
         for: "Runtime",
         method: "evaluate"
     )
-    let oldObject = try await context.evaluate("window", in: firstContext).object
+    let oldObject = try await context.runtime.evaluate("window", in: firstContext).object
 
     await runtime.backend.enqueue(
         [Runtime.PropertyDescriptor(name: "frameProperty")],
         for: "Runtime",
         method: "getProperties"
     )
-    _ = try await oldObject.properties()
+    _ = try await context.runtime.properties(of: oldObject)
 
     context.apply(
         .executionContextCreated(Runtime.ExecutionContext(
@@ -1060,7 +1060,7 @@ func newNormalFrameContextReplacesPriorTargetContextsAndObjects() async throws {
         )),
         targetID: frameTargetID
     )
-    #expect(context.executionContexts.first { $0.id == firstContext.id } === firstContext)
+    #expect(context.runtime.executionContexts.first { $0.id == firstContext.id } === firstContext)
     #expect(firstContext.name == "First Updated")
     #expect(oldObject.canRequestProperties)
 
@@ -1079,10 +1079,10 @@ func newNormalFrameContextReplacesPriorTargetContextsAndObjects() async throws {
         targetID: frameTargetID
     )
 
-    #expect(context.executionContexts.map(\.id) == [RuntimeContext.ID(replacementContextID)])
+    #expect(context.runtime.executionContexts.map(\.id) == [RuntimeContext.ID(replacementContextID)])
     #expect(oldObject.canRequestProperties == false)
     do {
-        _ = try await oldObject.properties()
+        _ = try await context.runtime.properties(of: oldObject)
         Issue.record("Expected the replaced frame RuntimeObject to be stale.")
     } catch let error as WebInspectorProxyError {
         #expect(error == .disconnected("RuntimeObject is not registered in this WebInspectorContext."))
@@ -1110,7 +1110,7 @@ func destroyedTargetRejectsLateCollectionEntriesReply() async throws {
         )),
         targetID: frameTargetID
     )
-    let frameContext = try #require(context.executionContexts.first)
+    let frameContext = try #require(context.runtime.executionContexts.first)
     await runtime.backend.enqueue(
         Runtime.EvaluationResult(
             object: Runtime.RemoteObject(
@@ -1124,7 +1124,7 @@ func destroyedTargetRejectsLateCollectionEntriesReply() async throws {
         for: "Runtime",
         method: "evaluate"
     )
-    let collection = try await context.evaluate("new Map", in: frameContext).object
+    let collection = try await context.runtime.evaluate("new Map", in: frameContext).object
 
     await runtime.backend.hold(domain: "Runtime", method: "getCollectionEntries", gate: collectionGate)
     await runtime.backend.enqueue(
@@ -1146,7 +1146,7 @@ func destroyedTargetRejectsLateCollectionEntriesReply() async throws {
     var entriesError: WebInspectorProxyError?
     let entriesTask = Task { @MainActor in
         do {
-            _ = try await collection.collectionEntries()
+            _ = try await context.runtime.collectionEntries(of: collection)
         } catch {
             entriesError = error as? WebInspectorProxyError
         }
@@ -1164,7 +1164,7 @@ func destroyedTargetRejectsLateCollectionEntriesReply() async throws {
     let lifecycleBaseline = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(.targetDestroyed(targetID: frameTargetID), target: pageTarget)
     #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: lifecycleBaseline))
-    #expect(context.executionContexts.isEmpty)
+    #expect(context.runtime.executionContexts.isEmpty)
     #expect(collection.canRequestProperties == false)
     await collectionGate.open()
 
@@ -1217,10 +1217,10 @@ func childScopedExecutionContextsClearedPreservesMainRuntimeAuthority() async th
         )),
         targetID: frameTargetID
     )
-    let mainContext = try #require(context.executionContexts.first {
+    let mainContext = try #require(context.runtime.executionContexts.first {
         $0.id == RuntimeContext.ID(mainContextID)
     })
-    let childContext = try #require(context.executionContexts.first {
+    let childContext = try #require(context.runtime.executionContexts.first {
         $0.id == RuntimeContext.ID(childContextID)
     })
 
@@ -1234,7 +1234,7 @@ func childScopedExecutionContextsClearedPreservesMainRuntimeAuthority() async th
         for: "Runtime",
         method: "evaluate"
     )
-    let mainObject = try await context.evaluate("window", in: mainContext).object
+    let mainObject = try await context.runtime.evaluate("window", in: mainContext).object
     await runtime.backend.enqueue(
         Runtime.EvaluationResult(
             object: Runtime.RemoteObject(
@@ -1248,15 +1248,15 @@ func childScopedExecutionContextsClearedPreservesMainRuntimeAuthority() async th
         for: "Runtime",
         method: "evaluate"
     )
-    let childObject = try await context.evaluate("window", in: childContext).object
+    let childObject = try await context.runtime.evaluate("window", in: childContext).object
 
     context.apply(
         .executionContextsCleared(target: frameTargetID),
         targetID: pageTarget.id
     )
 
-    #expect(context.executionContexts.map(\.id) == [RuntimeContext.ID(mainContextID)])
-    #expect(context.selectedContext === mainContext)
+    #expect(context.runtime.executionContexts.map(\.id) == [RuntimeContext.ID(mainContextID)])
+    #expect(context.runtime.selectedContext === mainContext)
     #expect(mainObject.canRequestProperties)
     #expect(childObject.canRequestProperties == false)
 }
@@ -1277,9 +1277,9 @@ func runtimeEventsPopulateContextsAndFallbackSelection() async throws {
         )),
         target: target
     )
-    try await waitUntil(in: context) { context.executionContexts.count == 1 }
-    let mainContext = try #require(context.executionContexts.first)
-    #expect(context.selectedContext === mainContext)
+    try await waitUntil(in: context) { context.runtime.executionContexts.count == 1 }
+    let mainContext = try #require(context.runtime.executionContexts.first)
+    #expect(context.runtime.selectedContext === mainContext)
     #expect(mainContext.name == "Main")
     #expect(mainContext.kind == .normal)
 
@@ -1292,7 +1292,7 @@ func runtimeEventsPopulateContextsAndFallbackSelection() async throws {
         target: target
     )
     try await waitUntil { mainContext.name == "Main Updated" }
-    #expect(context.executionContexts.first === mainContext)
+    #expect(context.runtime.executionContexts.first === mainContext)
 
     await runtime.backend.emit(
         .executionContextCreated(Runtime.ExecutionContext(
@@ -1302,27 +1302,27 @@ func runtimeEventsPopulateContextsAndFallbackSelection() async throws {
         )),
         target: target
     )
-    try await waitUntil(in: context) { context.executionContexts.count == 2 }
-    let utilityContext = try #require(context.executionContexts.first { $0.id == RuntimeContext.ID(utilityID) })
-    #expect(context.selectedContext === mainContext)
+    try await waitUntil(in: context) { context.runtime.executionContexts.count == 2 }
+    let utilityContext = try #require(context.runtime.executionContexts.first { $0.id == RuntimeContext.ID(utilityID) })
+    #expect(context.runtime.selectedContext === mainContext)
 
-    context.selectContext(utilityContext)
-    #expect(context.selectedContext === utilityContext)
+    context.runtime.select(utilityContext)
+    #expect(context.runtime.selectedContext === utilityContext)
 
     await runtime.backend.emit(
         .executionContextDestroyed(utilityID),
         target: target
     )
     try await waitUntil(in: context) {
-        context.executionContexts.count == 1 && context.selectedContext === mainContext
+        context.runtime.executionContexts.count == 1 && context.runtime.selectedContext === mainContext
     }
-    #expect(context.executionContexts.first === mainContext)
+    #expect(context.runtime.executionContexts.first === mainContext)
 
     await runtime.backend.emit(
         .executionContextsCleared(target: target.id),
         target: target
     )
     try await waitUntil(in: context) {
-        context.executionContexts.isEmpty && context.selectedContext == nil
+        context.runtime.executionContexts.isEmpty && context.runtime.selectedContext == nil
     }
 }

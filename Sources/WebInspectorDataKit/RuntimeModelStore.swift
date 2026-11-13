@@ -141,16 +141,14 @@ final class RuntimeModelStore {
     func apply(
         _ event: Runtime.Event,
         targetID: WebInspectorTarget.ID?,
-        page: WebInspectorTarget?,
-        modelContext: WebInspectorContext
+        page: WebInspectorTarget?
     ) {
         switch event {
         case let .executionContextCreated(context):
             applyExecutionContextCreated(
                 context,
                 eventTargetID: targetID,
-                page: page,
-                modelContext: modelContext
+                page: page
             )
         case let .executionContextDestroyed(id):
             applyExecutionContextDestroyed(id)
@@ -219,8 +217,7 @@ final class RuntimeModelStore {
     private func applyExecutionContextCreated(
         _ payload: Runtime.ExecutionContext,
         eventTargetID: WebInspectorTarget.ID?,
-        page: WebInspectorTarget?,
-        modelContext: WebInspectorContext
+        page: WebInspectorTarget?
     ) {
         let id = RuntimeContext.ID(payload.id)
         let wireTargetID = payload.id.targetScopeRawValue.map(WebInspectorTarget.ID.init)
@@ -244,8 +241,7 @@ final class RuntimeModelStore {
             let context = RuntimeContext(
                 context: payload,
                 targetID: resolvedTargetID,
-                targetRevision: targetRevision(for: resolvedTargetID),
-                modelContext: modelContext
+                targetRevision: targetRevision(for: resolvedTargetID)
             )
             contextsByID[id] = context
             orderedContextIDs.append(id)
@@ -309,8 +305,7 @@ final class RuntimeModelStore {
     func registerObject(
         _ payload: Runtime.RemoteObject,
         owner: ObjectOwner,
-        authority: RuntimeObject.Authority,
-        modelContext: WebInspectorContext
+        authority: RuntimeObject.Authority
     ) -> RuntimeObject {
         if let proxyID = payload.id,
            let id = objectIDsByProxyID[proxyID],
@@ -336,8 +331,7 @@ final class RuntimeModelStore {
         let object = RuntimeObject(
             id: id,
             remoteObject: payload,
-            authority: authority,
-            modelContext: modelContext
+            authority: authority
         )
         objectsByID[id] = object
         objectOwnersByID[id] = [owner]
@@ -371,6 +365,13 @@ final class RuntimeModelStore {
         }
         objectOwnersByID.removeValue(forKey: object.id)
         removeObject(id: object.id, object: object)
+    }
+
+    isolated deinit {
+        // An object that outlives the store has no command route left.
+        for object in objectsByID.values {
+            object.invalidateRemoteHandle()
+        }
     }
 
     private func removeAllObjects() {

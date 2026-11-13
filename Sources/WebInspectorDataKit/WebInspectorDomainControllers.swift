@@ -250,7 +250,8 @@ public final class PageModelController {
     }
 }
 
-/// Domain operation surface for Runtime model commands.
+/// The Runtime execution contexts of the inspected page and the commands
+/// that evaluate JavaScript and read remote objects.
 @MainActor
 public final class RuntimeModelController {
     private let context: WebInspectorContext
@@ -259,12 +260,51 @@ public final class RuntimeModelController {
         self.context = context
     }
 
+    /// The Runtime execution contexts known to the current page.
+    public var executionContexts: [RuntimeContext] {
+        context.executionContexts
+    }
+
+    /// The execution context that ``evaluate(_:in:)`` uses by default.
+    public var selectedContext: RuntimeContext? {
+        context.selectedContext
+    }
+
+    /// Selects the execution context that ``evaluate(_:in:)`` uses by default.
+    ///
+    /// Passing `nil` clears the selection. Passing an execution context that
+    /// is no longer registered, including one from another inspection
+    /// context, does nothing and preserves the current selection.
+    public func select(_ runtimeContext: RuntimeContext?) {
+        context.selectContext(runtimeContext)
+    }
+
     /// Evaluates JavaScript in the selected or supplied Runtime context.
     public func evaluate(
         _ expression: String,
         in runtimeContext: RuntimeContext? = nil
     ) async throws -> RuntimeEvaluation {
         try await context.evaluate(expression, in: runtimeContext)
+    }
+
+    /// Requests the own properties of a remote object.
+    ///
+    /// The result is empty for a value that has no remote handle, such as a
+    /// primitive; see ``RuntimeObject/canRequestProperties``.
+    /// - Throws: `WebInspectorProxyError.disconnected` when the object is no
+    ///   longer registered in this context.
+    public func properties(of object: RuntimeObject) async throws -> [RuntimeObject.Property] {
+        try await context.properties(for: object)
+    }
+
+    /// Requests the entries of a remote collection object.
+    ///
+    /// The result is empty for a value that has no remote handle, such as a
+    /// primitive; see ``RuntimeObject/canRequestProperties``.
+    /// - Throws: `WebInspectorProxyError.disconnected` when the object is no
+    ///   longer registered in this context.
+    public func collectionEntries(of object: RuntimeObject) async throws -> [RuntimeObject.Entry] {
+        try await context.collectionEntries(for: object)
     }
 }
 
@@ -294,9 +334,32 @@ public final class NetworkModelController {
         context.networkRequestChanges
     }
 
+    /// The failure from the latest initial resource-tree lookup, if any.
+    ///
+    /// Live Network events remain available when only this lookup fails.
+    public var resourceTreeError: WebInspectorProxyError? {
+        context.networkResourceTreeError
+    }
+
+    /// Returns the registered request for an identifier.
+    public func request(for id: NetworkRequest.ID) -> NetworkRequest? {
+        context.registeredRequest(for: id)
+    }
+
     /// Clears recorded network requests.
     public func clearRequests() {
         context.clearNetworkRequests()
+    }
+
+    /// Fetches the response body of a finished request when it is available
+    /// and not already loaded.
+    ///
+    /// The result is published on ``NetworkRequest/responseBody``. Concurrent
+    /// callers join one protocol command. Cancelling a caller ends only that
+    /// caller's wait and does not cancel the shared fetch. A request that is
+    /// not registered in this context is ignored.
+    public func fetchResponseBody(for request: NetworkRequest) async {
+        await context.fetchResponseBody(for: request)
     }
 }
 
@@ -320,6 +383,11 @@ public final class ConsoleModelController {
     /// The changes to ``messages``, starting from the moment of the call.
     public var messageChanges: AsyncStream<WebInspectorCollectionChange<ConsoleMessage>> {
         context.consoleMessageChanges
+    }
+
+    /// Returns the registered message for an identifier.
+    public func message(for id: ConsoleMessage.ID) -> ConsoleMessage? {
+        context.registeredMessage(for: id)
     }
 }
 

@@ -60,14 +60,12 @@ public final class ConsoleMessage: WebInspectorPersistentModel {
     public private(set) var timestamp: Double?
     let targetID: WebInspectorTarget.ID?
 
-    @ObservationIgnored weak var modelContext: WebInspectorContext?
 
     init(
         id: ID,
         message: Console.Message,
         parameters: [RuntimeObject],
-        targetID: WebInspectorTarget.ID?,
-        modelContext: WebInspectorContext
+        targetID: WebInspectorTarget.ID?
     ) {
         self.id = id
         source = message.source
@@ -83,7 +81,6 @@ public final class ConsoleMessage: WebInspectorPersistentModel {
         networkRequestID = message.networkRequestID.map(NetworkRequest.ID.init)
         timestamp = message.timestamp
         self.targetID = targetID
-        self.modelContext = modelContext
     }
 
     func updateRepeatCount(_ count: Int, timestamp: Double?) {

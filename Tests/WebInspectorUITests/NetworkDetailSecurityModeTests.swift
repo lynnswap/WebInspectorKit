@@ -354,7 +354,7 @@ struct NetworkDetailSecurityModeTests: NetworkDetailTestSupport {
         #expect(securityController.currentEpochForTesting == originalEpoch)
 
         let reregistrationTransactionBaseline = model.rawTransactionDeliveryCountForTesting
-        context.clearNetworkRequests()
+        context.network.clearRequests()
         await context.apply(.requestWillBeSent(
             id: proxyID,
             request: Network.Request(
@@ -437,7 +437,7 @@ struct NetworkDetailSecurityModeTests: NetworkDetailTestSupport {
                 })
         })
 
-        context.clearNetworkRequests()
+        context.network.clearRequests()
         #expect(await waitUntilRendered(in: viewController) {
             securityController.snapshotForTesting.itemIdentifiers.isEmpty
                 && securityController.expandedListsForTesting.isEmpty

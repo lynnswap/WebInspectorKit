@@ -150,10 +150,10 @@ final class ContractDataKitActor {
         context.select(root)
         #expect(context.selectedNode === root)
         context.select(nil)
-        context.selectContext(nil)
-        context.clearNetworkRequests()
+        context.runtime.select(nil)
+        context.network.clearRequests()
         #expect(context.selectedNode == nil)
-        #expect(context.selectedContext == nil)
+        #expect(context.runtime.selectedContext == nil)
     }
 
     func assertFakeBackendDrivesDOMNetworkAndRuntimeContracts() async throws {
@@ -217,7 +217,7 @@ final class ContractDataKitActor {
         await runtime.backend.enqueue((), for: "DOM", method: "markUndoableState")
         try await child.delete()
         await runtime.backend.enqueue((), for: "Page", method: "reload")
-        try await context.reloadPage()
+        try await context.page.reload()
 
         let domCommands = await runtime.backend.recordedCommands()
         #expect(domCommands.contains(RecordedCommand(domain: "DOM", method: "getOuterHTML")))
@@ -258,7 +258,7 @@ final class ContractDataKitActor {
         #expect(requestModel.metrics?.remoteAddress == "203.0.113.30:443")
         #expect(requestModel.metrics?.encodedDataLength == 4)
         #expect(requestModel.metrics?.decodedBodyLength == 7)
-        #expect(context.registeredRequest(for: requestModel.id) === requestModel)
+        #expect(context.network.request(for: requestModel.id) === requestModel)
         #expect(context.network.requests.map(\.id) == [requestModel.id])
 
         await runtime.backend.enqueue(
@@ -266,7 +266,7 @@ final class ContractDataKitActor {
             for: "Network",
             method: "getResponseBody"
         )
-        await requestModel.fetchResponseBody()
+        await context.network.fetchResponseBody(for: requestModel)
         #expect(requestModel.responseBody.phase == .loaded)
         #expect(requestModel.responseBody.text == "{\"ok\":true}")
         #expect(requestModel.responseBody.isBase64Encoded == false)
@@ -284,7 +284,7 @@ final class ContractDataKitActor {
             method: "evaluate"
         )
 
-        let evaluation = try await context.evaluate("document.title")
+        let evaluation = try await context.runtime.evaluate("document.title")
         #expect(evaluation.isException == false)
         #expect(evaluation.object.kind == .string)
         #expect(evaluation.object.value == .string("contract"))

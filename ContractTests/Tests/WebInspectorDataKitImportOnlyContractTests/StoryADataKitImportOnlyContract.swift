@@ -39,7 +39,7 @@ private final class DataKitImportOnlyConsumer {
         _ = context.selectedNode?.elementStyles?.sections.first?.style.properties.first?.name
         _ = context.selectedNode?.elementStyles?.computedProperties.first?.value
         _ = context.isElementPickerEnabled
-        context.clearNetworkRequests()
+        context.network.clearRequests()
         let treeController = try await context.treeController()
         let treeSnapshot: DOMTreeSnapshot = treeController.snapshot
         _ = treeSnapshot.rootNodeID
@@ -59,7 +59,7 @@ private final class DataKitImportOnlyConsumer {
         }
         try await context.hideHighlight()
         try await context.setElementPickerEnabled(false)
-        try await context.reloadPage()
+        try await context.page.reload()
         _ = requests.first?.url
         _ = requests.first?.state
         _ = requests.first?.hasResponse
@@ -69,7 +69,7 @@ private final class DataKitImportOnlyConsumer {
         _ = requests.first?.security?.certificate?.dnsNames
         _ = messages.first?.text
         _ = messages.first?.parameters.first?.description
-        _ = try await context.evaluate("1 + 1").object.description
+        _ = try await context.runtime.evaluate("1 + 1").object.description
 
         let request = NetworkRequestSnapshot(url: "https://example.com", method: "GET")
         let response = NetworkResponseSnapshot(status: 200, mimeType: "text/html")

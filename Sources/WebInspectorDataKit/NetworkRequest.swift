@@ -1375,7 +1375,6 @@ public final class NetworkRequest: WebInspectorPersistentModel {
     /// Response body state. Its identity is stable for this request model.
     public let responseBody: NetworkBody
 
-    @ObservationIgnored weak var modelContext: WebInspectorContext?
     @ObservationIgnored private var currentRequest: Network.Request
     @ObservationIgnored private var allowsMultipartContinuation: Bool
     enum ResourceContentLocation: Equatable {
@@ -1418,8 +1417,7 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         resourceType: Network.ResourceType?,
         timestamp: Double?,
         chronologySequence: UInt64 = 0,
-        requestHeaderSource: NetworkRequestHeaderSource = .requestWillBeSent,
-        modelContext: WebInspectorContext
+        requestHeaderSource: NetworkRequestHeaderSource = .requestWillBeSent
     ) {
         id = ID(request.id)
         url = request.url
@@ -1454,7 +1452,6 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         let responseBody = NetworkBody()
         responseBody.resetForResponse(fallbackURL: request.url)
         self.responseBody = responseBody
-        self.modelContext = modelContext
         currentRequest = request
         allowsMultipartContinuation = false
     }
@@ -1595,11 +1592,11 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         status
     }
 
-    /// Fetches the response body when it is available and not already loaded.
-    ///
-    /// Concurrent callers join one protocol command. Cancelling a caller ends
-    /// only that caller's wait and does not cancel the shared response fetch.
-    public func fetchResponseBody() async {
+    /// Loads the response body with `fetch` when it is available and neither
+    /// loaded nor failed. Concurrent callers join the fetch that is running.
+    func fetchResponseBody(
+        using fetch: @escaping @MainActor (NetworkRequest) async -> Result<Network.Body, WebInspectorProxyError>
+    ) async {
         guard state == .finished, hasResponseBody else {
             return
         }
@@ -1613,21 +1610,12 @@ public final class NetworkRequest: WebInspectorPersistentModel {
             lease = existingLease
         case let .owner(newLease):
             lease = newLease
-            guard let modelContext else {
-                body.finishResponseFetch(
-                    .failure(.disconnected("NetworkRequest is not registered in a WebInspectorContext.")),
-                    for: newLease
-                )
-                return
-            }
-            let task = Task { [weak self, weak body, weak modelContext] in
+            let task = Task { [weak self, weak body] in
                 let result: Result<Network.Body, WebInspectorProxyError>
                 if Task.isCancelled {
                     result = .failure(NetworkBody.invalidatedResponseFetchError)
-                } else if let self, let modelContext {
-                    result = await modelContext.responseBodyResult(
-                        for: self
-                    )
+                } else if let self {
+                    result = await fetch(self)
                 } else {
                     result = .failure(NetworkBody.invalidatedResponseFetchError)
                 }
