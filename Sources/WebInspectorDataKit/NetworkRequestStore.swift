@@ -26,28 +26,8 @@ package final class NetworkRequestStore {
             self.generation = generation
         }
 
-        fileprivate func belongs(to generation: ProjectionGeneration) -> Bool {
-            self.generation == generation.id
-        }
-    }
-
-    struct Change {
-        let registration: Registration
-        let projectionGeneration: ProjectionGeneration
-        let isInsertion: Bool
-
-        fileprivate init(
-            registration: Registration,
-            projectionGeneration: ProjectionGeneration,
-            isInsertion: Bool
-        ) {
-            self.registration = registration
-            self.projectionGeneration = projectionGeneration
-            self.isInsertion = isInsertion
-        }
-
-        var publishesContentUpdate: Bool {
-            isInsertion == false
+        fileprivate func belongs(to generation: UInt64) -> Bool {
+            self.generation == generation
         }
     }
 
@@ -74,66 +54,26 @@ package final class NetworkRequestStore {
         case newAttachment
     }
 
-    struct ProjectionGeneration {
-        let id: UInt64
-        let ledger: WebInspectorFetchedResultsSingleSectionSnapshotLedger<NetworkRequest.ID>
-    }
-
-    private struct IndexedResultCommit {
-        let registrationID: UInt64
-        let results: WebInspectorFetchedResults<NetworkRequest>
-        let plan: NetworkRequestQueryPlan
-        let sectionBy: NetworkRequestQuery.Section?
-        let oldSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID>
-        let topologyRevision: Int
-        let changedIDs: Set<NetworkRequest.ID>
-
-        var input: NetworkResultProjectionInput {
-            NetworkResultProjectionInput(
-                plan: plan,
-                sectionBy: sectionBy,
-                oldSnapshot: oldSnapshot,
-                changedIDs: changedIDs
-            )
-        }
-    }
-
-    private struct FetchedResultRegistration {
-        let id: UInt64
-        let weakReference: WeakWebInspectorFetchedResults<NetworkRequest>
-    }
-
     private var orderedRegistrations: [Registration]
     @ObservationIgnored private var registrationsByID: [NetworkRequest.ID: Registration]
     @ObservationIgnored private var requestAliases: [NetworkRequest.ID: NetworkRequest.ID] = [:]
     @ObservationIgnored private var clearedResourceTreeKeys: Set<ResourceTreeKey> = []
     @ObservationIgnored private var pendingResourceTreeRequests: [ResourceTreeKey: NetworkRequest.ID] = [:]
     @ObservationIgnored private var tombstonedIDs: Set<NetworkRequest.ID>
-    @ObservationIgnored private var generation: UInt64
-    @ObservationIgnored private var ledger: WebInspectorFetchedResultsSingleSectionSnapshotLedger<NetworkRequest.ID>
-    @ObservationIgnored private var index: NetworkRequestIndexClient
-    @ObservationIgnored private let indexFactory: () -> NetworkRequestIndexClient
-    @ObservationIgnored private var indexSequence: UInt64
-    @ObservationIgnored private var indexNeedsRebuild: Bool
-    @ObservationIgnored private var activeIndexSequences: Set<UInt64>
-    @ObservationIgnored private var pendingChangedIDsByResult: [UInt64: Set<NetworkRequest.ID>]
-    @ObservationIgnored private var fetchedResults: [FetchedResultRegistration]
-    @ObservationIgnored private var nextFetchedResultRegistrationID: UInt64
+    /// Advances whenever the collection is reset.
+    @ObservationIgnored private(set) var generation: UInt64
+    @ObservationIgnored private let changeRelay = WebInspectorAsyncStreamRelay<WebInspectorCollectionChange<NetworkRequest.ID>>()
 
-    init(indexFactory: @escaping () -> NetworkRequestIndexClient = { .live() }) {
+    init() {
         orderedRegistrations = []
         registrationsByID = [:]
         tombstonedIDs = []
         generation = 0
-        ledger = WebInspectorFetchedResultsSingleSectionSnapshotLedger(itemIDs: [])
-        self.indexFactory = indexFactory
-        index = indexFactory()
-        indexSequence = 0
-        indexNeedsRebuild = false
-        activeIndexSequences = []
-        pendingChangedIDsByResult = [:]
-        fetchedResults = []
-        nextFetchedResultRegistrationID = 0
+    }
+
+    /// The changes to `requests`, starting from the moment of the call.
+    var changes: AsyncStream<WebInspectorCollectionChange<NetworkRequest.ID>> {
+        changeRelay.makeStream()
     }
 
     package var hasRequests: Bool {
@@ -144,30 +84,9 @@ package final class NetworkRequestStore {
         orderedRegistrations.count
     }
 
+    /// Returns the registration for `id`, creating the request when the
+    /// identifier is admitted and not yet registered.
     func resolve(
-        id: NetworkRequest.ID,
-        admission: Admission,
-        create: () -> NetworkRequest
-    ) async -> Resolution? {
-        guard prepareAdmission(for: id, admission: admission) else {
-            return nil
-        }
-        if let registration = registration(for: id) {
-            return .existing(registration)
-        }
-        let request = create()
-        precondition(request.id == id, "A Network request must be registered under its own ID.")
-        let registration = register(request)
-        let change = makeChange(registration, isInsertion: true)
-        publishSynchronousPrefix(change)
-        await commitIndexed(change)
-        guard isCurrent(registration) else {
-            return nil
-        }
-        return .inserted(registration)
-    }
-
-    func resolveSynchronously(
         id: NetworkRequest.ID,
         admission: Admission,
         create: () -> NetworkRequest
@@ -181,44 +100,22 @@ package final class NetworkRequestStore {
         let request = create()
         precondition(request.id == id, "A Network request must be registered under its own ID.")
         let registration = register(request)
-        commitSynchronously(makeChange(registration, isInsertion: true))
+        changeRelay.yield(.inserted([request.id]))
         return .inserted(registration)
     }
 
-    func commitUpdate(
-        _ registration: Registration
-    ) async {
+    /// Publishes that a registered request changed.
+    func commitUpdate(_ registration: Registration) {
         guard isCurrent(registration) else {
             return
         }
-        let change = makeChange(registration, isInsertion: false)
-        publishSynchronousPrefix(change)
-        await commitIndexed(change)
-    }
-
-    func commitUpdateSynchronously(_ registration: Registration) {
-        guard isCurrent(registration) else {
-            return
-        }
-        commitSynchronously(makeChange(registration, isInsertion: false))
+        changeRelay.yield(.updated([registration.request.id]))
     }
 
     func insertResourceTreeRequests(_ newRequests: [NetworkRequest]) {
         guard !newRequests.isEmpty else { return }
-        let supersedesIndexedWork = !activeIndexSequences.isEmpty || !pendingChangedIDsByResult.isEmpty
         for request in newRequests { _ = register(request) }
-        indexNeedsRebuild = true
-        nextIndexSequence()
-        pendingChangedIDsByResult.removeAll(keepingCapacity: true)
-        pruneFetchedResults()
-        let allRequests = requests
-        for results in fetchedResults.compactMap(\.weakReference.value) {
-            if supersedesIndexedWork, !results.usesUnfilteredNetworkProjection {
-                results.resetSynchronousIndexedNetworkItems(allRequests)
-            } else {
-                results.setNetworkItems(allRequests, plan: results.currentNetworkQueryPlan(), generation: projectionGeneration)
-            }
-        }
+        changeRelay.yield(.inserted(newRequests.map(\.id)))
     }
 
     func invalidateResourceTreeContent(replacedBy request: Network.Request) {
@@ -238,76 +135,8 @@ package final class NetworkRequestStore {
         }
     }
 
-    func makeFetchedResults(
-        query: NetworkRequestQuery,
-        modelContext: WebInspectorContext
-    ) -> WebInspectorFetchedResults<NetworkRequest> {
-        let results = WebInspectorFetchedResults<NetworkRequest>(
-            query: query,
-            generation: projectionGeneration,
-            modelContext: modelContext
-        )
-        let plan = NetworkRequestQueryPlan(query: query)
-        results.setNetworkItems(
-            requests,
-            plan: plan,
-            generation: projectionGeneration
-        )
-        let registrationID = takeFetchedResultRegistrationID()
-        fetchedResults.append(
-            FetchedResultRegistration(
-                id: registrationID,
-                weakReference: WeakWebInspectorFetchedResults(results)
-            ))
-        return results
-    }
-
-    func updateQuery(
-        _ query: NetworkRequestQuery,
-        for results: WebInspectorFetchedResults<NetworkRequest>
-    ) {
-        if let registration = fetchedResults.first(where: {
-            $0.weakReference.value === results
-        }) {
-            pendingChangedIDsByResult[registration.id] = nil
-        }
-        let plan = NetworkRequestQueryPlan(query: query)
-        results.applyNetworkQuery(
-            query,
-            plan: plan,
-            requests: requests,
-            generation: projectionGeneration
-        )
-    }
-
-    func invalidateFetchedResultsRegistrations() {
-        let results = fetchedResults.compactMap(\.weakReference.value)
-        fetchedResults.removeAll(keepingCapacity: false)
-        for results in results {
-            results.invalidateRegistration()
-        }
-    }
-
-    #if DEBUG
-        func fullProjectionRecordVisitCount() async -> Int {
-            return await index.fullProjectionRecordVisitCount()
-        }
-
-        var indexSequenceForTesting: UInt64 {
-            indexSequence
-        }
-    #endif
-
-    var projectionGeneration: ProjectionGeneration {
-        ProjectionGeneration(id: generation, ledger: ledger)
-    }
-
     var requests: [NetworkRequest] {
         orderedRegistrations.map(\.request)
-    }
-
-    var registrations: [Registration] {
-        orderedRegistrations
     }
 
     func registration(for id: NetworkRequest.ID) -> Registration? {
@@ -355,7 +184,6 @@ package final class NetworkRequestStore {
             orderIndex: orderedRegistrations.count,
             generation: generation
         )
-        _ = ledger.append(request.id, expectedCount: registration.orderIndex)
         registrationsByID[request.id] = registration
         orderedRegistrations.append(registration)
         if request.resourceContentFrameID != nil, let origin = request.origin {
@@ -367,7 +195,7 @@ package final class NetworkRequestStore {
     }
 
     func isCurrent(_ registration: Registration) -> Bool {
-        guard registration.belongs(to: projectionGeneration),
+        guard registration.belongs(to: generation),
             orderedRegistrations.indices.contains(registration.orderIndex)
         else {
             return false
@@ -386,8 +214,7 @@ package final class NetworkRequestStore {
         tombstonedIDs.contains(id)
     }
 
-    @discardableResult
-    func reset(for reason: ResetReason) -> ProjectionGeneration {
+    func reset(for reason: ResetReason) {
         switch reason {
         case .userClear:
             tombstonedIDs.formUnion(orderedRegistrations.map { $0.request.id })
@@ -410,18 +237,7 @@ package final class NetworkRequestStore {
         registrationsByID = [:]
         requestAliases = [:]
         pendingResourceTreeRequests = [:]
-        ledger = WebInspectorFetchedResultsSingleSectionSnapshotLedger(itemIDs: [])
-        indexNeedsRebuild = true
-        nextIndexSequence()
-        index = indexFactory()
-        activeIndexSequences.removeAll(keepingCapacity: false)
-        pendingChangedIDsByResult.removeAll(keepingCapacity: false)
-        pruneFetchedResults()
-        let currentGeneration = projectionGeneration
-        for results in fetchedResults.compactMap(\.weakReference.value) {
-            results.resetNetworkItems(to: currentGeneration)
-        }
-        return projectionGeneration
+        changeRelay.yield(.reset)
     }
 
     private func prepareAdmission(for id: NetworkRequest.ID, admission: Admission) -> Bool {
@@ -441,172 +257,5 @@ package final class NetworkRequestStore {
             tombstonedIDs.remove(id)
             return true
         }
-    }
-
-    private func makeChange(_ registration: Registration, isInsertion: Bool) -> Change {
-        Change(
-            registration: registration,
-            projectionGeneration: projectionGeneration,
-            isInsertion: isInsertion
-        )
-    }
-
-    private func commitSynchronously(_ change: Change) {
-        guard isCurrent(change.registration) else {
-            return
-        }
-        let supersedesIndexedWork =
-            activeIndexSequences.isEmpty == false
-            || pendingChangedIDsByResult.isEmpty == false
-        indexNeedsRebuild = true
-        nextIndexSequence()
-        publishSynchronousPrefix(change)
-        pruneFetchedResults()
-        var indexedResults: [WebInspectorFetchedResults<NetworkRequest>] = []
-        for results in fetchedResults.compactMap(\.weakReference.value) {
-            if results.usesUnfilteredNetworkProjection == false {
-                indexedResults.append(results)
-            }
-        }
-        guard indexedResults.isEmpty == false else {
-            pendingChangedIDsByResult.removeAll(keepingCapacity: true)
-            return
-        }
-        let allRequests = requests
-        for results in indexedResults {
-            if supersedesIndexedWork {
-                results.resetSynchronousIndexedNetworkItems(allRequests)
-            } else {
-                results.applySynchronousIndexedNetworkChange(
-                    change,
-                    allRequests: allRequests
-                )
-            }
-        }
-        if supersedesIndexedWork {
-            pendingChangedIDsByResult.removeAll(keepingCapacity: true)
-        }
-    }
-
-    private func publishSynchronousPrefix(_ change: Change) {
-        pruneFetchedResults()
-        for results in fetchedResults.compactMap(\.weakReference.value)
-        where results.usesUnfilteredNetworkProjection {
-            results.applyUnfilteredNetworkChange(change)
-        }
-    }
-
-    private func commitIndexed(
-        _ change: Change
-    ) async {
-        guard isCurrent(change.registration) else {
-            return
-        }
-        pruneFetchedResults()
-        let indexedResults = fetchedResults.compactMap { registration in
-            registration.weakReference.value.map { (registration.id, $0) }
-        }.filter {
-            $0.1.usesUnfilteredNetworkProjection == false
-        }
-        guard indexedResults.isEmpty == false else {
-            indexNeedsRebuild = true
-            nextIndexSequence()
-            pendingChangedIDsByResult.removeAll(keepingCapacity: true)
-            return
-        }
-        let resultCommits = indexedResults.map { registrationID, results in
-            pendingChangedIDsByResult[registrationID, default: []].insert(
-                change.registration.request.id
-            )
-            return IndexedResultCommit(
-                registrationID: registrationID,
-                results: results,
-                plan: results.currentNetworkQueryPlan(),
-                sectionBy: results.networkQuery.sectionBy,
-                oldSnapshot: results.networkSnapshotForDelta,
-                topologyRevision: results.topologyRevision,
-                changedIDs: pendingChangedIDsByResult[registrationID] ?? []
-            )
-        }
-        let currentIndex = index
-        let requiresReplacement = indexNeedsRebuild || activeIndexSequences.isEmpty == false
-        let replacementInputs =
-            requiresReplacement
-            ? registrations.map(NetworkRequestRecordInput.init)
-            : []
-        let sequence = nextIndexSequence()
-        activeIndexSequences.insert(sequence)
-        if requiresReplacement {
-            indexNeedsRebuild = false
-            await currentIndex.replace(with: replacementInputs, sequence: sequence)
-        } else {
-            await currentIndex.upsert(
-                NetworkRequestRecordInput(registration: change.registration),
-                sequence: sequence
-            )
-        }
-        guard currentIndex.identity === index.identity,
-            indexSequence == sequence,
-            isCurrent(change.registration)
-        else {
-            activeIndexSequences.remove(sequence)
-            return
-        }
-        let deltas = await currentIndex.deltas(
-            for: resultCommits.map(\.input),
-            sequence: sequence
-        )
-        activeIndexSequences.remove(sequence)
-        guard currentIndex.identity === index.identity,
-            indexSequence == sequence,
-            isCurrent(change.registration),
-            let deltas
-        else {
-            return
-        }
-        for (commit, delta) in zip(resultCommits, deltas) {
-            defer {
-                pendingChangedIDsByResult[commit.registrationID]?.subtract(commit.changedIDs)
-                if pendingChangedIDsByResult[commit.registrationID]?.isEmpty == true {
-                    pendingChangedIDsByResult[commit.registrationID] = nil
-                }
-            }
-            guard commit.results.usesUnfilteredNetworkProjection == false,
-                commit.results.topologyRevision == commit.topologyRevision,
-                commit.results.networkSnapshotForDelta == commit.oldSnapshot
-            else {
-                continue
-            }
-            guard let delta else {
-                continue
-            }
-            commit.results.applyNetworkDelta(delta, lookup: requiredRequest(for:))
-        }
-    }
-
-    private func requiredRequest(for id: NetworkRequest.ID) -> NetworkRequest {
-        guard let request = registrationsByID[id]?.request else {
-            preconditionFailure("An indexed Network result must reference a registered request.")
-        }
-        return request
-    }
-
-    private func pruneFetchedResults() {
-        fetchedResults.removeAll { $0.weakReference.value == nil }
-        let retainedResultIDs = Set(fetchedResults.map(\.id))
-        pendingChangedIDsByResult = pendingChangedIDsByResult.filter { resultID, _ in
-            retainedResultIDs.contains(resultID)
-        }
-    }
-
-    private func takeFetchedResultRegistrationID() -> UInt64 {
-        defer { nextFetchedResultRegistrationID += 1 }
-        return nextFetchedResultRegistrationID
-    }
-
-    @discardableResult
-    private func nextIndexSequence() -> UInt64 {
-        indexSequence += 1
-        return indexSequence
     }
 }

@@ -271,11 +271,9 @@ struct NetworkDetailRequestPickerTests: NetworkDetailTestSupport {
                 && picker.renderedEntryForTesting !== entry
         }
         defer { reboundEntry.cancel() }
-        let resetBaseline = model.rawTransactionDeliveryCountForTesting
 
-        try model.requests.updateQuery(NetworkRequestQuery())
+        model.rebuildEntriesForTesting()
 
-        #expect(await model.waitForRawTransactionDeliveryForTesting(after: resetBaseline))
         #expect(await reboundEntry.waitUntilValue(true))
         #expect(picker.isObservingModelForTesting)
         #expect(picker.renderedIntentIDForTesting == initialSubject.intentID)

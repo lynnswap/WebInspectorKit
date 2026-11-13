@@ -12,7 +12,6 @@ import WebInspectorTestSupport
 func frameNavigationPrecedesFollowingNetworkRequestInSourceOrder() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await emitOriginatedNetworkRequest(
         id: "before-navigation",
@@ -22,8 +21,8 @@ func frameNavigationPrecedesFollowingNetworkRequestInSourceOrder() async throws 
         target: target,
         backend: runtime.backend
     )
-    try await waitUntil { results.items.count == 1 }
-    let previousVisit = try #require(results.items[0].navigationVisit)
+    try await waitUntil { context.network.requests.count == 1 }
+    let previousVisit = try #require(context.network.requests[0].navigationVisit)
 
     await runtime.backend.enqueue(
         DOM.Node(id: DOM.Node.ID("network-navigation-root"), nodeType: 9, nodeName: "#document"),
@@ -51,8 +50,8 @@ func frameNavigationPrecedesFollowingNetworkRequestInSourceOrder() async throws 
         backend: runtime.backend
     )
 
-    try await waitUntil { results.items.count == 2 }
-    let currentVisit = try #require(results.items[1].navigationVisit)
+    try await waitUntil { context.network.requests.count == 2 }
+    let currentVisit = try #require(context.network.requests[1].navigationVisit)
     #expect(currentVisit != previousVisit)
     #expect(context.state == .attached)
 }
@@ -62,12 +61,11 @@ func frameNavigationPrecedesFollowingNetworkRequestInSourceOrder() async throws 
 func startBeginsFreshNetworkAttachmentEpoch() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     let staleRequestID = Network.Request.ID("stale-before-restart")
 
     await emitFinishedRequest(id: staleRequestID, target: target, backend: runtime.backend)
     try await waitUntil {
-        networkResults.items.map(\.id) == [NetworkRequest.ID(staleRequestID)]
+        context.network.requests.map(\.id) == [NetworkRequest.ID(staleRequestID)]
     }
 
     await enqueueDomainDisableReplies(on: runtime.backend)
@@ -78,12 +76,12 @@ func startBeginsFreshNetworkAttachmentEpoch() async throws {
 
     context.start()
 
-    try await waitUntil { networkResults.items.isEmpty }
+    try await waitUntil { context.network.requests.isEmpty }
     try await waitUntil(in: context) {
         context.rootNode?.id == DOMNode.ID(DOM.Node.ID("fresh-after-restart"))
             && context.state == .attached
     }
-    #expect(networkResults.items.isEmpty)
+    #expect(context.network.requests.isEmpty)
 }
 
 @MainActor
@@ -91,7 +89,6 @@ func startBeginsFreshNetworkAttachmentEpoch() async throws {
 func networkNavigationVisitIdentityDoesNotRepeatAcrossRestart() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let networkResults: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await runtime.backend.emit(
         .requestWillBeSent(
@@ -112,8 +109,8 @@ func networkNavigationVisitIdentityDoesNotRepeatAcrossRestart() async throws {
         ),
         target: target
     )
-    try await waitUntil { networkResults.items.count == 1 }
-    let retainedVisit = try #require(networkResults.items.first?.navigationVisit)
+    try await waitUntil { context.network.requests.count == 1 }
+    let retainedVisit = try #require(context.network.requests.first?.navigationVisit)
 
     await enqueueDomainDisableReplies(on: runtime.backend)
     await enqueueStartupReplies(
@@ -121,7 +118,7 @@ func networkNavigationVisitIdentityDoesNotRepeatAcrossRestart() async throws {
         document: DOM.Node(id: DOM.Node.ID("restart-identity-root"), nodeType: 9, nodeName: "#document")
     )
     context.start()
-    try await waitUntil { networkResults.items.isEmpty }
+    try await waitUntil { context.network.requests.isEmpty }
     try await waitUntil(in: context) {
         context.rootNode?.id == DOMNode.ID(DOM.Node.ID("restart-identity-root"))
             && context.state == .attached
@@ -146,8 +143,8 @@ func networkNavigationVisitIdentityDoesNotRepeatAcrossRestart() async throws {
         ),
         target: target
     )
-    try await waitUntil { networkResults.items.count == 1 }
-    let restartedVisit = try #require(networkResults.items.first?.navigationVisit)
+    try await waitUntil { context.network.requests.count == 1 }
+    let restartedVisit = try #require(context.network.requests.first?.navigationVisit)
     #expect(restartedVisit != retainedVisit)
 }
 
@@ -159,7 +156,6 @@ func networkNavigationGroupsEachAtoBtoAFrameVisitSeparately() async throws {
         targetID: targetID,
         documentID: "navigation-visit-root"
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     for (index, visit) in [
         ("loader-a", "a-first", 1.0),
@@ -175,7 +171,7 @@ func networkNavigationGroupsEachAtoBtoAFrameVisitSeparately() async throws {
             targetID: targetID,
             transport: transport
         )
-        try await waitUntil { results.items.count == index * 2 + 1 }
+        try await waitUntil { context.network.requests.count == index * 2 + 1 }
 
         await emitTransportFrameNavigated(
             frameID: "child-frame",
@@ -191,10 +187,10 @@ func networkNavigationGroupsEachAtoBtoAFrameVisitSeparately() async throws {
             targetID: targetID,
             transport: transport
         )
-        try await waitUntil { results.items.count == (index + 1) * 2 }
+        try await waitUntil { context.network.requests.count == (index + 1) * 2 }
     }
 
-    let visits = try results.items.map { request in
+    let visits = try context.network.requests.map { request in
         try #require(request.navigationVisit)
     }
     #expect(visits.count == 6)
@@ -209,7 +205,6 @@ func networkNavigationGroupsEachAtoBtoAFrameVisitSeparately() async throws {
 @Test
 func ambiguousFrameCommitDoesNotGuessBetweenPendingNetworkTargets() async throws {
     let context = WebInspectorContext.preview()
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await applyOriginatedNetworkRequest(
         id: "ambiguous-current",
@@ -232,8 +227,8 @@ func ambiguousFrameCommitDoesNotGuessBetweenPendingNetworkTargets() async throws
         timestamp: 3,
         context: context
     )
-    let firstPendingVisit = try #require(results.items[1].navigationVisit)
-    let secondPendingVisit = try #require(results.items[2].navigationVisit)
+    let firstPendingVisit = try #require(context.network.requests[1].navigationVisit)
+    let secondPendingVisit = try #require(context.network.requests[2].navigationVisit)
     await applyOriginatedNetworkRequest(
         id: "ambiguous-unattributed-pending",
         loaderID: "shared-pending-loader",
@@ -241,7 +236,7 @@ func ambiguousFrameCommitDoesNotGuessBetweenPendingNetworkTargets() async throws
         timestamp: 4,
         context: context
     )
-    let unattributedPendingVisit = try #require(results.items[3].navigationVisit)
+    let unattributedPendingVisit = try #require(context.network.requests[3].navigationVisit)
 
     context.apply(.frameNavigated(WebInspectorPageFrameLifecycle(
         id: FrameID("main-frame"),
@@ -260,7 +255,7 @@ func ambiguousFrameCommitDoesNotGuessBetweenPendingNetworkTargets() async throws
         context: context
     )
 
-    let committedVisit = try #require(results.items[4].navigationVisit)
+    let committedVisit = try #require(context.network.requests[4].navigationVisit)
     #expect(firstPendingVisit != secondPendingVisit)
     #expect(unattributedPendingVisit != firstPendingVisit)
     #expect(unattributedPendingVisit != secondPendingVisit)
@@ -271,7 +266,6 @@ func ambiguousFrameCommitDoesNotGuessBetweenPendingNetworkTargets() async throws
 @Test
 func frameCommitUsesExactPageBindingForPendingNetworkTarget() async throws {
     let context = WebInspectorContext.preview()
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await applyOriginatedNetworkRequest(
         id: "exact-current",
@@ -294,8 +288,8 @@ func frameCommitUsesExactPageBindingForPendingNetworkTarget() async throws {
         timestamp: 3,
         context: context
     )
-    let firstPendingVisit = try #require(results.items[1].navigationVisit)
-    let secondPendingVisit = try #require(results.items[2].navigationVisit)
+    let firstPendingVisit = try #require(context.network.requests[1].navigationVisit)
+    let secondPendingVisit = try #require(context.network.requests[2].navigationVisit)
 
     context.apply(.frameNavigated(WebInspectorPageFrameLifecycle(
         id: FrameID("main-frame"),
@@ -315,7 +309,7 @@ func frameCommitUsesExactPageBindingForPendingNetworkTarget() async throws {
         context: context
     )
 
-    let committedVisit = try #require(results.items[3].navigationVisit)
+    let committedVisit = try #require(context.network.requests[3].navigationVisit)
     #expect(firstPendingVisit != secondPendingVisit)
     #expect(committedVisit == secondPendingVisit)
 }
@@ -328,7 +322,6 @@ func frameDetachmentRetainsNetworkHistoryAndLateTerminalEvents() async throws {
         targetID: targetID,
         documentID: "detached-frame-root"
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await emitTransportNetworkRequest(
         id: "detached-request",
@@ -338,8 +331,8 @@ func frameDetachmentRetainsNetworkHistoryAndLateTerminalEvents() async throws {
         targetID: targetID,
         transport: transport
     )
-    try await waitUntil { results.items.count == 1 }
-    let retainedRequest = try #require(results.items.first)
+    try await waitUntil { context.network.requests.count == 1 }
+    let retainedRequest = try #require(context.network.requests.first)
     let retainedVisit = try #require(retainedRequest.navigationVisit)
 
     await receiveTransportTargetEvent(
@@ -367,7 +360,7 @@ func frameDetachmentRetainsNetworkHistoryAndLateTerminalEvents() async throws {
     )
     try await waitUntil { retainedRequest.state == .finished }
 
-    #expect(results.items == [retainedRequest])
+    #expect(context.network.requests == [retainedRequest])
     #expect(retainedRequest.navigationVisit == retainedVisit)
     #expect(retainedRequest.security?.connection?.tlsProtocol == "TLS 1.3")
     #expect(retainedRequest.security?.connection?.cipher == "AES_128_GCM_SHA256")
@@ -382,8 +375,8 @@ func frameDetachmentRetainsNetworkHistoryAndLateTerminalEvents() async throws {
         targetID: targetID,
         transport: transport
     )
-    try await waitUntil { results.items.count == 2 }
-    let reusedFrameRequest = try #require(results.items.last)
+    try await waitUntil { context.network.requests.count == 2 }
+    let reusedFrameRequest = try #require(context.network.requests.last)
     #expect(reusedFrameRequest.navigationVisit != retainedVisit)
 }
 
@@ -395,7 +388,6 @@ func memoryCacheOnlyRequestSharesFrameNavigationVisit() async throws {
         targetID: targetID,
         documentID: "memory-cache-visit-root"
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await emitTransportFrameNavigated(
         frameID: "child-frame",
@@ -411,17 +403,17 @@ func memoryCacheOnlyRequestSharesFrameNavigationVisit() async throws {
         targetID: targetID,
         transport: transport
     )
-    try await waitUntil { results.items.count == 1 }
+    try await waitUntil { context.network.requests.count == 1 }
     await receiveTransportTargetEvent(
         transport,
         targetID: targetID,
         method: "Network.requestServedFromMemoryCache",
         params: #"{"requestId":"cached-only","frameId":"child-frame","loaderId":"child-loader","documentURL":"https://example.test/","timestamp":2,"initiator":{"type":"other"},"resource":{"url":"https://example.test/cached.css","type":"Stylesheet","bodySize":1234,"response":{"url":"https://example.test/cached.css","status":200,"mimeType":"text/css","headers":{}}}}"#
     )
-    try await waitUntil { results.items.count == 2 }
+    try await waitUntil { context.network.requests.count == 2 }
 
-    let committedVisit = try #require(results.items[0].navigationVisit)
-    let cachedVisit = try #require(results.items[1].navigationVisit)
+    let committedVisit = try #require(context.network.requests[0].navigationVisit)
+    let cachedVisit = try #require(context.network.requests[1].navigationVisit)
     #expect(cachedVisit == committedVisit)
 }
 
@@ -433,7 +425,6 @@ func responseOnlyRequestSharesFrameNavigationVisit() async throws {
         targetID: targetID,
         documentID: "response-only-visit-root"
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await emitTransportFrameNavigated(
         frameID: "child-frame",
@@ -449,17 +440,17 @@ func responseOnlyRequestSharesFrameNavigationVisit() async throws {
         targetID: targetID,
         transport: transport
     )
-    try await waitUntil { results.items.count == 1 }
+    try await waitUntil { context.network.requests.count == 1 }
     await receiveTransportTargetEvent(
         transport,
         targetID: targetID,
         method: "Network.responseReceived",
         params: #"{"requestId":"response-only","frameId":"child-frame","loaderId":"child-loader","type":"Fetch","response":{"url":"https://example.test/response-only","status":200,"statusText":"OK","headers":{},"mimeType":"text/plain","source":"network"},"timestamp":2}"#
     )
-    try await waitUntil { results.items.count == 2 }
+    try await waitUntil { context.network.requests.count == 2 }
 
-    let committedVisit = try #require(results.items[0].navigationVisit)
-    let responseVisit = try #require(results.items[1].navigationVisit)
+    let committedVisit = try #require(context.network.requests[0].navigationVisit)
+    let responseVisit = try #require(context.network.requests[1].navigationVisit)
     #expect(responseVisit == committedVisit)
 }
 
@@ -471,7 +462,6 @@ func subframeDetachmentDoesNotAdvanceTopLevelNetworkVisit() async throws {
         targetID: targetID,
         documentID: "subframe-detach-top-level-root"
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await emitTransportNetworkRequest(
         id: "top-level-before-detach",
@@ -489,7 +479,7 @@ func subframeDetachmentDoesNotAdvanceTopLevelNetworkVisit() async throws {
         targetID: targetID,
         transport: transport
     )
-    try await waitUntil { results.items.count == 2 }
+    try await waitUntil { context.network.requests.count == 2 }
     await receiveTransportTargetEvent(
         transport,
         targetID: targetID,
@@ -504,10 +494,10 @@ func subframeDetachmentDoesNotAdvanceTopLevelNetworkVisit() async throws {
         targetID: targetID,
         transport: transport
     )
-    try await waitUntil { results.items.count == 3 }
+    try await waitUntil { context.network.requests.count == 3 }
 
-    let beforeDetach = try #require(results.items[0].navigationVisit)
-    let afterDetach = try #require(results.items[2].navigationVisit)
+    let beforeDetach = try #require(context.network.requests[0].navigationVisit)
+    let afterDetach = try #require(context.network.requests[2].navigationVisit)
     #expect(beforeDetach == afterDetach)
 }
 
@@ -519,7 +509,6 @@ func networkEventWithoutFrameMembershipHasNoNavigationVisit() async throws {
         targetID: targetID,
         documentID: "missing-frame-membership-root"
     )
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await receiveTransportTargetEvent(
         transport,
@@ -527,9 +516,9 @@ func networkEventWithoutFrameMembershipHasNoNavigationVisit() async throws {
         method: "Network.responseReceived",
         params: #"{"requestId":"missing-membership","frameId":"","loaderId":"","response":{"url":"https://example.test/missing-membership","status":200,"statusText":"OK","headers":{},"mimeType":"text/plain","source":"network"},"timestamp":1}"#
     )
-    try await waitUntil { results.items.count == 1 }
+    try await waitUntil { context.network.requests.count == 1 }
 
-    #expect(results.items[0].navigationVisit == nil)
+    #expect(context.network.requests[0].navigationVisit == nil)
 }
 
 @MainActor
@@ -542,13 +531,9 @@ func latestRootNetworkBurstIsConservedThroughDataKitInFIFOOrder() async throws {
         documentID: "latest-root-network-burst",
         protocolProfile: .latest
     )
-    let controller: WebInspectorFetchedResultsController<NetworkRequest> =
-        context.network.fetchedResultsController()
-    let transactionCounter = FetchedResultsTransactionCounter(
-        stream: controller.transactions
-    )
-    defer { transactionCounter.cancel() }
-    try await transactionCounter.waitUntilStarted()
+    let recorder = CollectionChangeRecorder(stream: context.network.requestChanges)
+    defer { recorder.cancel() }
+    try await recorder.waitUntilStarted()
 
     let expectedRequestIDs = (0..<eventCount).map { index in
         "request-42.\(index + 1)"
@@ -562,16 +547,15 @@ func latestRootNetworkBurstIsConservedThroughDataKitInFIFOOrder() async throws {
         await transport.receiveRootMessage(message)
     }
 
-    try await transactionCounter.waitForTransactionCount(
+    try await recorder.waitForChangeCount(
         eventCount,
         timeout: .seconds(30)
     )
 
-    let requests = controller.items
+    let requests = context.network.requests
     let actualRequestIDs = requests.map(\.id.proxyID)
     let expectedProxyIDs = expectedRequestIDs.map(Network.Request.ID.init)
-    #expect(transactionCounter.transactionCount == eventCount)
-    #expect(context.networkRequestsCollectionState.requestCount == eventCount)
+    #expect(recorder.changes.count == eventCount)
     #expect(requests.count == eventCount)
     #expect(Set(actualRequestIDs).count == eventCount)
     #expect(actualRequestIDs == expectedProxyIDs)
@@ -617,7 +601,6 @@ func delayedNetworkConsumerUsesEventTimeTargetAfterFrameRetarget() async throws 
     }
 
     let context = WebInspectorContext.preview()
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     await context.apply(oldNetworkEvent)
     let newID = Network.Request.ID("event-time-new")
     await context.apply(.requestWillBeSent(
@@ -637,8 +620,8 @@ func delayedNetworkConsumerUsesEventTimeTargetAfterFrameRetarget() async throws 
         timestamp: 2
     ))
 
-    let oldVisit = try #require(results.items[0].navigationVisit)
-    let newVisit = try #require(results.items[1].navigationVisit)
+    let oldVisit = try #require(context.network.requests[0].navigationVisit)
+    let newVisit = try #require(context.network.requests[1].navigationVisit)
     #expect(oldVisit != newVisit)
 }
 
@@ -668,7 +651,6 @@ func workerInitiatedRequestSharesOwningFrameNavigationVisit() async throws {
     )
 
     let context = WebInspectorContext.preview()
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     for _ in 0..<2 {
         let protocolEvent = try #require(await iterator.next())
         let proxyEvent = try LiveProxyEventDecoder.proxyEvent(
@@ -682,8 +664,8 @@ func workerInitiatedRequestSharesOwningFrameNavigationVisit() async throws {
         await context.apply(networkEvent)
     }
 
-    let documentVisit = try #require(results.items[0].navigationVisit)
-    let workerVisit = try #require(results.items[1].navigationVisit)
+    let documentVisit = try #require(context.network.requests[0].navigationVisit)
+    let workerVisit = try #require(context.network.requests[1].navigationVisit)
     #expect(workerVisit == documentVisit)
 }
 
@@ -692,7 +674,6 @@ func workerInitiatedRequestSharesOwningFrameNavigationVisit() async throws {
 func abandonedProvisionalTargetDoesNotReuseNetworkNavigationVisit() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await emitOriginatedNetworkRequest(
         id: "abandoned-provisional",
@@ -712,7 +693,7 @@ func abandonedProvisionalTargetDoesNotReuseNetworkNavigationVisit() async throws
         target: target,
         backend: runtime.backend
     )
-    try await waitUntil { results.items.count == 2 }
+    try await waitUntil { context.network.requests.count == 2 }
     await runtime.backend.emit(
         .targetDestroyed(targetID: WebInspectorTarget.ID("page-abandoned")),
         target: target
@@ -735,12 +716,12 @@ func abandonedProvisionalTargetDoesNotReuseNetworkNavigationVisit() async throws
         target: target,
         backend: runtime.backend
     )
-    try await waitUntil { results.items.count == 4 }
+    try await waitUntil { context.network.requests.count == 4 }
 
-    let abandonedVisit = try #require(results.items[0].navigationVisit)
-    let abandonedChildVisit = try #require(results.items[1].navigationVisit)
-    let laterVisit = try #require(results.items[2].navigationVisit)
-    let laterChildVisit = try #require(results.items[3].navigationVisit)
+    let abandonedVisit = try #require(context.network.requests[0].navigationVisit)
+    let abandonedChildVisit = try #require(context.network.requests[1].navigationVisit)
+    let laterVisit = try #require(context.network.requests[2].navigationVisit)
+    let laterChildVisit = try #require(context.network.requests[3].navigationVisit)
     #expect(abandonedVisit != laterVisit)
     #expect(abandonedChildVisit != laterChildVisit)
 }
@@ -792,7 +773,6 @@ func frameCommitBeforeTargetCommitPreservesUnattributedNetworkVisit() async thro
 func ambiguousFrameCommitPreservesCandidatesUntilExactTargetCommit() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await emitOriginatedNetworkRequest(
         id: "candidate-current",
@@ -818,9 +798,9 @@ func ambiguousFrameCommitPreservesCandidatesUntilExactTargetCommit() async throw
         target: target,
         backend: runtime.backend
     )
-    try await waitUntil { results.items.count == 3 }
-    let candidateAVisit = try #require(results.items[1].navigationVisit)
-    let candidateBVisit = try #require(results.items[2].navigationVisit)
+    try await waitUntil { context.network.requests.count == 3 }
+    let candidateAVisit = try #require(context.network.requests[1].navigationVisit)
+    let candidateBVisit = try #require(context.network.requests[2].navigationVisit)
 
     try await emitTopLevelFrameCommit(
         target: target,
@@ -844,9 +824,9 @@ func ambiguousFrameCommitPreservesCandidatesUntilExactTargetCommit() async throw
         target: target,
         backend: runtime.backend
     )
-    try await waitUntil { results.items.count == 4 }
+    try await waitUntil { context.network.requests.count == 4 }
 
-    let committedVisit = try #require(results.items[3].navigationVisit)
+    let committedVisit = try #require(context.network.requests[3].navigationVisit)
     #expect(candidateAVisit != candidateBVisit)
     #expect(committedVisit == candidateBVisit)
 }
@@ -856,7 +836,6 @@ func ambiguousFrameCommitPreservesCandidatesUntilExactTargetCommit() async throw
 func networkTargetCommitCommitsPendingNavigationVisit() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await emitOriginatedNetworkRequest(
         id: "a-first",
@@ -882,7 +861,7 @@ func networkTargetCommitCommitsPendingNavigationVisit() async throws {
         target: target,
         backend: runtime.backend
     )
-    try await waitUntil { results.items.count == 3 }
+    try await waitUntil { context.network.requests.count == 3 }
 
     await enqueueStartupReplies(
         on: runtime.backend,
@@ -921,7 +900,7 @@ func networkTargetCommitCommitsPendingNavigationVisit() async throws {
         target: target,
         backend: runtime.backend
     )
-    try await waitUntil { results.items.count == 5 }
+    try await waitUntil { context.network.requests.count == 5 }
 
     await enqueueStartupReplies(
         on: runtime.backend,
@@ -952,9 +931,9 @@ func networkTargetCommitCommitsPendingNavigationVisit() async throws {
         target: target,
         backend: runtime.backend
     )
-    try await waitUntil { results.items.count == 6 }
+    try await waitUntil { context.network.requests.count == 6 }
 
-    let visits = try results.items.map { try #require($0.navigationVisit) }
+    let visits = try context.network.requests.map { try #require($0.navigationVisit) }
     #expect(visits[0] == visits[2])
     #expect(visits[1] == visits[3])
     #expect(visits[4] == visits[5])
@@ -966,9 +945,7 @@ func networkTargetCommitCommitsPendingNavigationVisit() async throws {
 func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-    let controller = WebInspectorFetchedResultsController(fetchedResults: results)
-    let recorder = FetchedResultsTransactionRecorder(stream: controller.transactions)
+    let recorder = CollectionChangeRecorder(stream: context.network.requestChanges)
     defer { recorder.cancel() }
     try await recorder.waitUntilStarted()
 
@@ -984,7 +961,7 @@ func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
         ),
         target: target
     )
-    try await recorder.waitForTransactionCount(1)
+    try await recorder.waitForChangeCount(1)
 
     let secondRequestID = Network.Request.ID("clear-second-request")
     let secondModelID = NetworkRequest.ID(secondRequestID)
@@ -998,20 +975,14 @@ func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
         ),
         target: target
     )
-    try await recorder.waitForTransactionCount(2)
-    #expect(controller.snapshot.itemIDs == [firstModelID, secondModelID])
+    try await recorder.waitForChangeCount(2)
+    #expect(context.network.requests.map(\.id) == [firstModelID, secondModelID])
 
     context.clearNetworkRequests()
 
-    try await recorder.waitForTransactionCount(3)
-    let reset = try #require(recorder.transactions.last)
-    #expect(reset.isReset)
-    #expect(reset.oldSnapshot.itemIDs == [firstModelID, secondModelID])
-    #expect(reset.newSnapshot.itemIDs == [])
-    #expect(reset.sectionChanges == [])
-    #expect(reset.itemChanges == [])
-    #expect(controller.snapshot.itemIDs == [])
-    #expect(results.items.isEmpty)
+    try await recorder.waitForChangeCount(3)
+    #expect(recorder.changes.last == .reset)
+    #expect(context.network.requests.isEmpty)
     #expect(context.registeredRequest(for: firstModelID) == nil)
     #expect(context.registeredRequest(for: secondModelID) == nil)
 
@@ -1043,8 +1014,8 @@ func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
     )
     #expect(didProcessClearedEvents)
     #expect(context.state == .attached)
-    #expect(results.items.isEmpty)
-    #expect(recorder.transactions.count == 3)
+    #expect(context.network.requests.isEmpty)
+    #expect(recorder.changes.count == 3)
 
     let redirectedEventBaseline = context.eventPumpAppliedSequenceForTesting
     await runtime.backend.emit(
@@ -1065,8 +1036,8 @@ func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
         after: redirectedEventBaseline
     )
     #expect(didProcessRedirectedEvent)
-    #expect(results.items.isEmpty)
-    #expect(recorder.transactions.count == 3)
+    #expect(context.network.requests.isEmpty)
+    #expect(recorder.changes.count == 3)
     #expect(context.registeredRequest(for: firstModelID) == nil)
 
     await runtime.backend.emit(
@@ -1084,8 +1055,8 @@ func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
         target: target
     )
 
-    try await recorder.waitForTransactionCount(4)
-    let reusedRequest = try #require(results.items.first)
+    try await recorder.waitForChangeCount(4)
+    let reusedRequest = try #require(context.network.requests.first)
     #expect(reusedRequest.id == firstModelID)
     #expect(reusedRequest.url == "https://example.com/reused")
     #expect(context.registeredRequest(for: firstModelID) === reusedRequest)
@@ -1096,7 +1067,6 @@ func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
 func clearNetworkRequestsPreservesRetainedSecurityWithoutLeakingIntoReusedID() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     let requestID = Network.Request.ID("clear-security-request")
     let initialSecurity = Network.Security(
         connection: Network.Security.Connection(tlsProtocol: "TLS 1.2")
@@ -1125,11 +1095,11 @@ func clearNetworkRequestsPreservesRetainedSecurityWithoutLeakingIntoReusedID() a
         ),
         target: target
     )
-    try await waitUntil { results.items.first?.security == initialSecurity }
-    let retainedRequest = try #require(results.items.first)
+    try await waitUntil { context.network.requests.first?.security == initialSecurity }
+    let retainedRequest = try #require(context.network.requests.first)
 
     context.clearNetworkRequests()
-    #expect(results.items.isEmpty)
+    #expect(context.network.requests.isEmpty)
     #expect(retainedRequest.security == initialSecurity)
 
     let lateEventBaseline = context.eventPumpAppliedSequenceForTesting
@@ -1145,7 +1115,7 @@ func clearNetworkRequestsPreservesRetainedSecurityWithoutLeakingIntoReusedID() a
         target: target
     )
     #expect(await context.waitForEventPumpAppliedSequenceForTesting(after: lateEventBaseline))
-    #expect(results.items.isEmpty)
+    #expect(context.network.requests.isEmpty)
     #expect(retainedRequest.security == initialSecurity)
 
     await runtime.backend.emit(
@@ -1162,8 +1132,8 @@ func clearNetworkRequestsPreservesRetainedSecurityWithoutLeakingIntoReusedID() a
         ),
         target: target
     )
-    try await waitUntil { results.items.count == 1 }
-    let reusedRequest = try #require(results.items.first)
+    try await waitUntil { context.network.requests.count == 1 }
+    let reusedRequest = try #require(context.network.requests.first)
     #expect(reusedRequest !== retainedRequest)
     #expect(reusedRequest.security == nil)
     #expect(retainedRequest.security == initialSecurity)
@@ -1238,11 +1208,10 @@ func networkEventsPopulateAllRequestsInOrder() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil {
-        results.items.count == 1 && results.items.first?.state == .finished
+        context.network.requests.count == 1 && context.network.requests.first?.state == .finished
     }
-    let request = try #require(results.items.first)
+    let request = try #require(context.network.requests.first)
     #expect(request.url == "https://example.com/data.json")
     #expect(request.method == "GET")
     #expect(request.resourceType == .fetch)
@@ -1303,11 +1272,10 @@ func responseReceivedWithoutRequestWillBeSentCreatesRequest() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil {
-        results.items.first?.state == .finished
+        context.network.requests.first?.state == .finished
     }
-    let request = try #require(results.items.first)
+    let request = try #require(context.network.requests.first)
     #expect(request.id == NetworkRequest.ID(requestID))
     #expect(request.url == "https://example.com/late.css")
     #expect(request.method == "GET")
@@ -1392,11 +1360,10 @@ func loadingFinishedStoresTerminalMetadataAndOverridesDataTotals() async throws 
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil {
-        results.items.first?.state == .finished
+        context.network.requests.first?.state == .finished
     }
-    let request = try #require(results.items.first)
+    let request = try #require(context.network.requests.first)
     #expect(request.sourceMapURL == "app.js.map")
     #expect(request.metrics?.networkProtocol == "h3")
     #expect(request.metrics?.remoteAddress == "203.0.113.20:443")
@@ -1439,11 +1406,10 @@ func loadingFinishedClampsNegativeMetricTotals() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil {
-        results.items.first?.state == .finished
+        context.network.requests.first?.state == .finished
     }
-    let request = try #require(results.items.first)
+    let request = try #require(context.network.requests.first)
     #expect(request.metrics?.encodedDataLength == -8)
     #expect(request.metrics?.decodedBodyLength == -13)
     #expect(request.decodedDataLength == 0)
@@ -1638,9 +1604,8 @@ func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil {
-        results.items.first?.status == 302
+        context.network.requests.first?.status == 302
     }
 
     await runtime.backend.emit(
@@ -1654,7 +1619,7 @@ func repeatedRequestWillBeSentClearsStaleResponseFields() async throws {
         target: target
     )
 
-    let request = try #require(results.items.first)
+    let request = try #require(context.network.requests.first)
     try await waitUntil {
         request.url == "https://example.com/final" && request.state == .pending
     }
@@ -1687,7 +1652,6 @@ func networkRequestPreservesInitialInitiatorAcrossRedirects() async throws {
     let (target, context) = try await startContext(runtime: runtime)
     let requestID = Network.Request.ID("initiator-redirect")
     let initialNodeID = DOM.Node.ID("17")
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
 
     await runtime.backend.emit(
         .requestWillBeSent(
@@ -1709,8 +1673,8 @@ func networkRequestPreservesInitialInitiatorAcrossRedirects() async throws {
         ),
         target: target
     )
-    try await waitUntil { results.items.count == 1 }
-    let initialVisit = try #require(results.items.first?.navigationVisit)
+    try await waitUntil { context.network.requests.count == 1 }
+    let initialVisit = try #require(context.network.requests.first?.navigationVisit)
     await runtime.backend.emit(
         .requestWillBeSent(
             id: requestID,
@@ -1736,8 +1700,8 @@ func networkRequestPreservesInitialInitiatorAcrossRedirects() async throws {
         target: target
     )
 
-    try await waitUntil { results.items.first?.redirects.count == 1 }
-    let request = try #require(results.items.first)
+    try await waitUntil { context.network.requests.first?.redirects.count == 1 }
+    let request = try #require(context.network.requests.first)
     #expect(request.initiator?.nodeID == initialNodeID)
     #expect(request.navigationVisit == initialVisit)
 }
@@ -1775,9 +1739,8 @@ func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-    try await waitUntil { results.items.first?.state == .finished }
-    let request = try #require(results.items.first)
+    try await waitUntil { context.network.requests.first?.state == .finished }
+    let request = try #require(context.network.requests.first)
     #expect(request.lifecycleRevision == 0)
     #expect(request.security?.connection?.tlsProtocol == "TLS 1.3")
 
@@ -1796,7 +1759,7 @@ func completedRequestDoesNotTreatLaterRequestWillBeSentAsRedirect() async throws
     try await waitUntil {
         request.url == "https://example.com/second" && request.state == .pending
     }
-    #expect(results.items.first === request)
+    #expect(context.network.requests.first === request)
     #expect(request.redirects.isEmpty)
     #expect(request.requestSentTimestamp == 3)
     #expect(request.finishedOrFailedTimestamp == nil)
@@ -1833,9 +1796,8 @@ func loadingFailedStoresFailureTimestampAndClampsDataLength() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-    try await waitUntil { results.items.first?.state == .failed(errorText: "cancelled", canceled: true) }
-    let request = try #require(results.items.first)
+    try await waitUntil { context.network.requests.first?.state == .failed(errorText: "cancelled", canceled: true) }
+    let request = try #require(context.network.requests.first)
     #expect(request.requestSentTimestamp == 1)
     #expect(request.lastDataReceivedTimestamp == 2)
     #expect(request.finishedOrFailedTimestamp == 3)
@@ -1874,11 +1836,10 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil {
-        results.items.count == 1 && results.items.first?.state == .finished
+        context.network.requests.count == 1 && context.network.requests.first?.state == .finished
     }
-    let request = try #require(results.items.first)
+    let request = try #require(context.network.requests.first)
     #expect(request.url == "https://example.com/cached.css")
     #expect(request.method == "GET")
     #expect(request.resourceType == .stylesheet)
@@ -1980,9 +1941,8 @@ func memoryCacheEventWithoutURLForNewRequestIsSkipped() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-    try await waitUntil { results.items.count == 1 }
-    #expect(results.items.first?.url == "https://example.com/cached.css")
+    try await waitUntil { context.network.requests.count == 1 }
+    #expect(context.network.requests.first?.url == "https://example.com/cached.css")
     #expect(context.state == .attached)
 }
 
@@ -2010,9 +1970,8 @@ func requestPostDataCreatesNetworkBodyWithFormRepresentation() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-    try await waitUntil { results.items.count == 1 }
-    let request = try #require(results.items.first)
+    try await waitUntil { context.network.requests.count == 1 }
+    let request = try #require(context.network.requests.first)
     let body = try #require(request.requestBody)
     #expect(body.role == .request)
     #expect(body.kind == .form)
@@ -2051,9 +2010,8 @@ func responseRequestHeadersRefreshRequestBodyHints() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-    try await waitUntil { results.items.count == 1 }
-    let request = try #require(results.items.first)
+    try await waitUntil { context.network.requests.count == 1 }
+    let request = try #require(context.network.requests.first)
     let body = try #require(request.requestBody)
     #expect(body.kind == .text)
     #expect(body.textRepresentation == "name=Jane+Doe&city=Tokyo%20East")
@@ -2255,9 +2213,8 @@ func responseBodyPublishesHintsAndFetchLifecycle() async throws {
         target: target
     )
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-    try await waitUntil { results.items.first?.state == .responded }
-    let request = try #require(results.items.first)
+    try await waitUntil { context.network.requests.first?.state == .responded }
+    let request = try #require(context.network.requests.first)
     let body = request.responseBody
     #expect(body.role == .response)
     #expect(body.kind == .text)
@@ -2308,12 +2265,11 @@ func fetchResponseBodyStoresLoadedAndFailedPhases() async throws {
     await emitFinishedRequest(id: loadedID, target: target, backend: runtime.backend)
     await emitFinishedRequest(id: failedID, target: target, backend: runtime.backend)
 
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
     try await waitUntil {
-        results.items.count == 2 && results.items.allSatisfy { $0.state == .finished }
+        context.network.requests.count == 2 && context.network.requests.allSatisfy { $0.state == .finished }
     }
-    let loadedRequest = try #require(results.items.first { $0.id == NetworkRequest.ID(loadedID) })
-    let failedRequest = try #require(results.items.first { $0.id == NetworkRequest.ID(failedID) })
+    let loadedRequest = try #require(context.network.requests.first { $0.id == NetworkRequest.ID(loadedID) })
+    let failedRequest = try #require(context.network.requests.first { $0.id == NetworkRequest.ID(failedID) })
 
     await runtime.backend.enqueue(
         Network.Body(data: "hello", base64Encoded: false),
@@ -2858,7 +2814,7 @@ func resourceTreeRestoresLoadedResourcesAndFetchesTheirContent() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     await runtime.backend.enqueue(try loadedResourceTree(), for: "Page", method: "getResourceTree")
     let (_, context) = try await startContext(runtime: runtime)
-    let requests = context.network.fetchedResults().items
+    let requests = context.network.requests
     #expect(context.networkResourceTreeError == nil)
     #expect(requests.map(\.url) == [
         "https://example.test/", "https://example.test/child", "https://example.test/child.js",
@@ -2888,8 +2844,7 @@ func resourceTreeResponseKeepsIdentityAndDoesNotMergeLaterRequestsForSameURL() a
     let runtime = try await WebInspectorProxyTestRuntime.start()
     await runtime.backend.enqueue(try loadedResourceTree(), for: "Page", method: "getResourceTree")
     let (target, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-    let original = try #require(results.items.first { $0.resourceType == .stylesheet })
+    let original = try #require(context.network.requests.first { $0.resourceType == .stylesheet })
     let id = Network.Request.ID("late-response")
     let response = Network.Response(url: original.url, status: 200, mimeType: "text/css", security: nil, origin: .init(
         frameID: FrameID("main-frame"), loaderID: "main-loader", targetID: nil
@@ -2897,7 +2852,7 @@ func resourceTreeResponseKeepsIdentityAndDoesNotMergeLaterRequestsForSameURL() a
     await runtime.backend.emit(.responseReceived(id: id, response: response, resourceType: .stylesheet, timestamp: 2), target: target)
     await runtime.backend.emit(.loadingFinished(id: id, timestamp: 3, sourceMapURL: nil, metrics: nil), target: target)
     try await waitUntil { original.finishedOrFailedTimestamp == 3 }
-    #expect(results.items.count == 5)
+    #expect(context.network.requests.count == 5)
     #expect(context.registeredRequest(forProxyID: id) === original)
     #expect(original.status == 200)
     #expect(original.resourceContentFrameID == nil)
@@ -2910,11 +2865,11 @@ func resourceTreeResponseKeepsIdentityAndDoesNotMergeLaterRequestsForSameURL() a
         request: Network.Request(id: Network.Request.ID("next-request"), url: original.url, method: "GET", origin: response.origin),
         initiator: .init(kind: "other"), resourceType: .stylesheet, redirectResponse: nil, timestamp: 4
     ), target: target)
-    try await waitUntil { results.items.count == 6 }
-    #expect(results.items.filter { $0.url == original.url }.count == 2)
+    try await waitUntil { context.network.requests.count == 6 }
+    #expect(context.network.requests.filter { $0.url == original.url }.count == 2)
     context.clearNetworkRequests()
     await context.apply(.responseReceived(id: id, response: response, resourceType: .stylesheet, timestamp: 5))
-    #expect(results.items.isEmpty)
+    #expect(context.network.requests.isEmpty)
 }
 
 @MainActor
@@ -2939,7 +2894,7 @@ func resourceTreeMergesEventsReceivedWhileSnapshotIsInFlight() async throws {
     ), target: target)
     await gate.open()
     try await waitUntil(in: context) { context.state == .attached }
-    let requests = context.network.fetchedResults().items
+    let requests = context.network.requests
     #expect(requests.count == 5)
     let live = try #require(context.registeredRequest(forProxyID: id))
     #expect(live.method == "POST")
@@ -2961,7 +2916,7 @@ func resourceTreeDoesNotUndoUserClearWhileLookupIsInFlight() async throws {
     context.clearNetworkRequests()
     await gate.open()
     try await waitUntil(in: context) { context.state == .attached }
-    #expect(context.network.fetchedResults().items.isEmpty)
+    #expect(context.network.requests.isEmpty)
 }
 
 @MainActor
@@ -2977,7 +2932,7 @@ func resourceTreeFailurePreservesLiveNetworkCollectionAndReportsError() async th
     await context.apply(.requestWillBeSent(id: id,
         request: Network.Request(id: id, url: "https://example.test/live", method: "GET"),
         initiator: .init(kind: "other"), resourceType: .fetch, redirectResponse: nil, timestamp: 1))
-    #expect(context.network.fetchedResults().items.count == 1)
+    #expect(context.network.requests.count == 1)
 }
 
 @MainActor
@@ -2997,7 +2952,7 @@ func resourceTreeRefetchesWhenChildFrameDetachesDuringLookup() async throws {
     await runtime.backend.emit(.frameDetached(frameID: FrameID("child-frame")), target: target)
     await gate.open()
     try await waitUntil(in: context) { context.state == .attached }
-    #expect(context.network.fetchedResults().items.map(\.url) == ["https://example.test/new"])
+    #expect(context.network.requests.map(\.url) == ["https://example.test/new"])
     #expect(await runtime.backend.recordedCommands().filter { $0.method == "getResourceTree" }.count == 2)
 }
 
@@ -3007,7 +2962,7 @@ func resourceTreeContentExpiresOnlyForDetachedFrameAndRetainsLoadedBodies() asyn
     let runtime = try await WebInspectorProxyTestRuntime.start()
     await runtime.backend.enqueue(try loadedResourceTree(), for: "Page", method: "getResourceTree")
     let (_, context) = try await startContext(runtime: runtime)
-    let requests = context.network.fetchedResults().items
+    let requests = context.network.requests
     let childScript = try #require(requests.first { $0.url.hasSuffix("child.js") })
     let childDocument = try #require(requests.first { $0.url.hasSuffix("/child") })
     let stylesheet = try #require(requests.first { $0.resourceType == .stylesheet })
@@ -3032,13 +2987,13 @@ func clearingResourceTreeDoesNotResurrectUnknownResponseButAllowsNewRequests() a
     let response = Network.Response(url: "https://example.test/loaded.css", status: 200, security: nil,
         origin: .init(frameID: FrameID("main-frame"), loaderID: "main-loader", targetID: nil))
     await context.apply(.responseReceived(id: Network.Request.ID("old"), response: response, resourceType: .stylesheet, timestamp: 1))
-    #expect(context.network.fetchedResults().items.isEmpty)
+    #expect(context.network.requests.isEmpty)
     let newID = Network.Request.ID("new")
     await context.apply(.requestWillBeSent(id: newID,
         request: Network.Request(id: newID, url: "https://example.test/loaded.css", method: "GET", origin: response.origin),
         initiator: .init(kind: "other"), resourceType: .stylesheet, redirectResponse: nil, timestamp: 2))
     await context.apply(.responseReceived(id: newID, response: response, resourceType: .stylesheet, timestamp: 3))
-    #expect(context.network.fetchedResults().items.count == 1)
+    #expect(context.network.requests.count == 1)
     #expect(context.registeredRequest(forProxyID: newID)?.status == 200)
 }
 
@@ -3048,8 +3003,7 @@ func resourceTreeBackForwardVisitDoesNotDeduplicateAgainstHistoricalRequests() a
     let runtime = try await WebInspectorProxyTestRuntime.start()
     await runtime.backend.enqueue(try loadedResourceTree(), for: "Page", method: "getResourceTree")
     let (_, context) = try await startContext(runtime: runtime)
-    let results: WebInspectorFetchedResults<NetworkRequest> = context.network.fetchedResults()
-    let original = try #require(results.items.first { $0.resourceType == .stylesheet })
+    let original = try #require(context.network.requests.first { $0.resourceType == .stylesheet })
     let originalID = Network.Request.ID("first-visit")
     await context.apply(.responseReceived(id: originalID,
         response: Network.Response(url: original.url, status: 200, security: nil,
@@ -3070,7 +3024,7 @@ func resourceTreeBackForwardVisitDoesNotDeduplicateAgainstHistoricalRequests() a
     let otherPage = try JSONDecoder().decode(Page.ResourceTree.self, from: Data(#"{"frame":{"id":"main-frame","loaderId":"other-loader","url":"https://example.test/other","mimeType":"text/html"},"resources":[]}"#.utf8))
     try await navigate(tree: otherPage, rootID: "other-root")
     try await navigate(tree: loadedResourceTree(), rootID: "returned-root")
-    let stylesheets = results.items.filter { $0.url == original.url }
+    let stylesheets = context.network.requests.filter { $0.url == original.url }
     #expect(stylesheets.count == 2)
     let restored = try #require(stylesheets.last)
     #expect(restored !== original)
@@ -3087,7 +3041,7 @@ func laterRequestCannotReplaceUnfetchedResourceTreeContent() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     await runtime.backend.enqueue(try loadedResourceTree(), for: "Page", method: "getResourceTree")
     let (_, context) = try await startContext(runtime: runtime)
-    let original = try #require(context.network.fetchedResults().items.first { $0.resourceType == .stylesheet })
+    let original = try #require(context.network.requests.first { $0.resourceType == .stylesheet })
     let id = Network.Request.ID("replacement")
     await context.apply(.requestWillBeSent(id: id,
         request: Network.Request(id: id, url: original.url, method: "GET", origin: original.origin),
@@ -3112,7 +3066,7 @@ func resourceTreeContentReplyCannotOutliveFrameDetachment() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     await runtime.backend.enqueue(try loadedResourceTree(), for: "Page", method: "getResourceTree")
     let (target, context) = try await startContext(runtime: runtime)
-    let request = try #require(context.network.fetchedResults().items.first { $0.url.hasSuffix("child.js") })
+    let request = try #require(context.network.requests.first { $0.url.hasSuffix("child.js") })
     let gate = WebInspectorTestGate()
     await runtime.backend.hold(domain: "Page", method: "getResourceContent", gate: gate)
     await runtime.backend.enqueue(Network.Body(data: "replacement document", base64Encoded: false), for: "Page", method: "getResourceContent")

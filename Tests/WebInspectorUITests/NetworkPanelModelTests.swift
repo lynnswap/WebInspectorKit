@@ -1622,11 +1622,9 @@ func sameInstanceQueryResetRebindsEntryAndCarriesSelectionIntent() async throws 
             model.selectRequest(request)
         }
         let previousSubject = try #require(model.detailSubject)
-        let deliveryBaseline = model.rawTransactionDeliveryCountForTesting
 
-        try model.requests.updateQuery(NetworkRequestQuery())
+        model.rebuildEntriesForTesting()
 
-        #expect(await model.waitForRawTransactionDeliveryForTesting(after: deliveryBaseline))
         let reboundSubject = try #require(model.detailSubject)
         #expect(reboundSubject.intentID == previousSubject.intentID)
         #expect(reboundSubject.entry !== previousSubject.entry)
@@ -1671,84 +1669,6 @@ func entryScopedConditionalFetchRejectsClearedInstanceAfterSameIDReregistration(
         ) == false
     )
     #expect(model.memberTraversalCountForTesting == traversalBaseline)
-}
-
-@Test
-@MainActor
-func removedExplicitRequestClearsSelectionInsteadOfSelectingGroupedSibling() async throws {
-    let context = makeContext()
-    let frameID = FrameID("main-frame")
-    let nodeID = DOM.Node.ID("selection-removal")
-    context.apply(WebInspectorTargetLifecycleEvent.frameNavigated(WebInspectorPageFrameLifecycle(
-        id: frameID,
-        parentID: nil,
-        pageBindingID: "page",
-        loaderID: "loader",
-        name: "Main",
-        url: "https://example.test",
-        securityOrigin: "https://example.test",
-        mimeType: "text/html"
-    )))
-    let firstID = await applyOriginatedPendingRequest(
-        to: context,
-        requestID: "selection-removal-first",
-        frameID: frameID,
-        loaderID: "loader",
-        pageBindingID: "page",
-        initiatorNodeID: nodeID,
-        timestamp: 1
-    )
-    let secondID = await applyOriginatedPendingRequest(
-        to: context,
-        requestID: "selection-removal-second",
-        frameID: frameID,
-        loaderID: "loader",
-        pageBindingID: "page",
-        initiatorNodeID: nodeID,
-        timestamp: 2
-    )
-    await applyLoadingFinished(
-        to: context,
-        requestID: "selection-removal-second",
-        timestamp: 2.5
-    )
-    #expect(context.registeredRequest(for: secondID)?.state == .finished)
-    let model = NetworkPanelModel(context: context)
-    let groupedEntryID = try #require(model.entryID(containing: firstID))
-    var rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
-    try model.requests.updateQuery(NetworkRequestQuery(filter: .method(equals: "GET")))
-    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
-
-    model.selectRequest(context.registeredRequest(for: secondID))
-    let fullRebuildBaseline = model.fullEntryRebuildCountForTesting
-    rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
-    let secondProxyID = Network.Request.ID("selection-removal-second")
-    await context.apply(.requestWillBeSent(
-        id: secondProxyID,
-        request: Network.Request(
-            id: secondProxyID,
-            url: "https://example.test/selection-removal-second",
-            method: "POST",
-            origin: Network.Request.Origin(
-                frameID: frameID,
-                loaderID: "loader",
-                targetID: "page"
-            )
-        ),
-        initiator: Network.Initiator(kind: "other", nodeID: nodeID),
-        resourceType: .fetch,
-        redirectResponse: nil,
-        timestamp: 3
-    ))
-    #expect(context.registeredRequest(for: secondID)?.method == "POST")
-
-    #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
-    #expect(model.fullEntryRebuildCountForTesting == fullRebuildBaseline)
-    #expect(model.entry(for: groupedEntryID)?.requests.map(\.id) == [firstID])
-    #expect(model.entryID(containing: secondID) == nil)
-    #expect(context.registeredRequest(for: secondID) != nil)
-    #expect(model.selection == nil)
-    #expect(model.selectedRequest == nil)
 }
 
 @Test

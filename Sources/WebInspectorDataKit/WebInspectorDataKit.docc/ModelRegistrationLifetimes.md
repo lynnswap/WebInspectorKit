@@ -34,30 +34,12 @@ if let nodeID = tree.snapshot.selectedNodeID,
 }
 ```
 
-## Fetched Results After Context Release
+## Collections After Context Release
 
-``WebInspectorFetchedResults`` and ``WebInspectorFetchedResultsController`` do
-not retain their originating context. When that context is released:
+The change streams from ``NetworkModelController/requestChanges`` and
+``ConsoleModelController/messageChanges`` do not retain the context. When the
+context is released, they finish.
 
-- their active transaction streams finish;
-- transaction streams created later are already finished;
-- their final query, items, sections, and controller snapshot remain
-  readable;
-- changing the query throws `WebInspectorProxyError.disconnected`.
-
-Detaching, restarting, or failing an inspection context does not itself
-invalidate fetched results while the context object remains alive.
-
-## Updating Queries
-
-Query updates report stale registration, so call them with `try`:
-
-```swift
-try results.updateQuery(
-    NetworkRequestQuery(fetchLimit: 100)
-)
-
-try controller.updateQuery(
-    NetworkRequestQuery(fetchOffset: 100)
-)
-```
+Detaching, restarting, or failing an inspection context does not finish them
+while the context object remains alive. A restart or a clear publishes a
+`reset`, after which the collection is read again.

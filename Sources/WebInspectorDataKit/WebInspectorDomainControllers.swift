@@ -277,20 +277,20 @@ public final class NetworkModelController {
         self.context = context
     }
 
-    /// Creates observable network request results.
-    public func fetchedResults(
-        for query: NetworkRequestQuery = .init()
-    ) -> WebInspectorFetchedResults<NetworkRequest> {
-        context.networkFetchedResults(for: query)
+    /// The recorded network requests, in arrival order.
+    ///
+    /// Reading this property from an observation scope tracks insertions and
+    /// resets. Use ``requestChanges`` to apply changes incrementally.
+    public var requests: [NetworkRequest] {
+        context.networkRequests
     }
 
-    /// Creates a controller for observable network request results.
-    public func fetchedResultsController(
-        for query: NetworkRequestQuery = .init()
-    ) -> WebInspectorFetchedResultsController<NetworkRequest> {
-        WebInspectorFetchedResultsController(
-            fetchedResults: fetchedResults(for: query)
-        )
+    /// The changes to ``requests``, starting from the moment of the call.
+    ///
+    /// An `updated` change reports that a request's own properties changed;
+    /// each ``NetworkRequest`` is also observable on its own.
+    public var requestChanges: AsyncStream<WebInspectorCollectionChange<NetworkRequest.ID>> {
+        context.networkRequestChanges
     }
 
     /// Clears recorded network requests.
@@ -308,20 +308,17 @@ public final class ConsoleModelController {
         self.context = context
     }
 
-    /// Creates observable console message results.
-    public func fetchedResults(
-        for query: ConsoleMessageQuery = .init()
-    ) -> WebInspectorFetchedResults<ConsoleMessage> {
-        context.consoleFetchedResults(for: query)
+    /// The recorded console messages, in arrival order.
+    ///
+    /// Reading this property from an observation scope tracks insertions and
+    /// resets. Use ``messageChanges`` to apply changes incrementally.
+    public var messages: [ConsoleMessage] {
+        context.consoleMessages
     }
 
-    /// Creates a controller for observable console message results.
-    public func fetchedResultsController(
-        for query: ConsoleMessageQuery = .init()
-    ) -> WebInspectorFetchedResultsController<ConsoleMessage> {
-        WebInspectorFetchedResultsController(
-            fetchedResults: fetchedResults(for: query)
-        )
+    /// The changes to ``messages``, starting from the moment of the call.
+    public var messageChanges: AsyncStream<WebInspectorCollectionChange<ConsoleMessage.ID>> {
+        context.consoleMessageChanges
     }
 }
 

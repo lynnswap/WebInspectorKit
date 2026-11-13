@@ -52,7 +52,7 @@ func sharedContainerKeepsWireDomainsEnabledUntilLastContextStops() async throws 
     #expect(commands.contains(RecordedCommand(domain: "Network", method: "disable")) == false)
     #expect(commands.contains(RecordedCommand(domain: "Console", method: "disable")) == false)
 
-    var consoleTransactions = await secondOwner.consoleTransactions().makeAsyncIterator()
+    var consoleTransactions = await secondOwner.consoleMessageChanges().makeAsyncIterator()
     await runtime.backend.emit(
         .messageAdded(Console.Message(
             source: Console.Source(rawValue: "javascript"),

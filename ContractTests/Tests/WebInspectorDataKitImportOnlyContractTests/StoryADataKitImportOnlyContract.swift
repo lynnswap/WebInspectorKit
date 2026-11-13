@@ -19,68 +19,17 @@ func dataKitLegacyNetworkResponseSnapshotInitializerFunctionReferenceRemainsUsab
 @MainActor
 private final class DataKitImportOnlyConsumer {
     func consume(_ context: WebInspectorContext) async throws {
-        let requests = context.network.fetchedResults()
-        let messages = context.console.fetchedResults()
-        let requestsByMethod: WebInspectorFetchedResults<NetworkRequest> =
-            context.network.fetchedResults(for: NetworkRequestQuery(sectionBy: .method))
-        let messagesByLevel: WebInspectorFetchedResults<ConsoleMessage> =
-            context.console.fetchedResults(for: ConsoleMessageQuery(sectionBy: .level))
-        let requestController: WebInspectorFetchedResultsController<NetworkRequest> =
-            context.network.fetchedResultsController()
-        let messageController: WebInspectorFetchedResultsController<ConsoleMessage> =
-            context.console.fetchedResultsController()
-        let networkFilters: [NetworkRequestQuery.Filter] = [
-            .method(equals: "GET"),
-            .method(containing: "get"),
-            .url(equals: "https://example.com"),
-            .url(containing: "example"),
-            .searchableText(equals: "GET"),
-            .searchableText(containing: "GET"),
-            .mimeType(equals: nil),
-            .resourceCategory(.image),
-            .resourceCategories([.image, .media]),
-            .statusCode(atLeast: 400),
-            .statusCode(greaterThan: 399),
-            .statusCode(lessThan: 500),
-            .statusCode(atMost: 499),
-        ]
-        let networkQuery = NetworkRequestQuery(
-            filter: .all(networkFilters),
-            sortBy: [
-                .requestSentTimestamp(order: .forward),
-                .requestSentTimestamp(order: .reverse),
-            ],
-            sectionBy: .resourceType,
-            fetchLimit: 50,
-            fetchOffset: 1
-        )
-        _ = NetworkRequestQuery.Section.method
-        _ = NetworkRequestQuery.Section.resourceCategory
-        _ = NetworkRequestQuery.Section.mimeType
-        _ = NetworkRequestQuery.Filter.any(networkFilters)
-        let consoleFilters: [ConsoleMessageQuery.Filter] = [
-            .source(.init(rawValue: "console-api")),
-            .level(.init(rawValue: "warning")),
-            .kind(.init(rawValue: "log")),
-            .url("https://example.com/app.js"),
-            .text(containing: "warning"),
-        ]
-        let consoleQuery = ConsoleMessageQuery(
-            filter: .all(consoleFilters),
-            sortBy: [
-                .text(comparison: .localizedStandard, order: .forward),
-                .text(comparison: .lexical, order: .reverse),
-                .level(order: .forward),
-                .level(order: .reverse),
-            ],
-            sectionBy: .source,
-            fetchLimit: 50,
-            fetchOffset: 1
-        )
-        _ = ConsoleMessageQuery.Section.level
-        _ = ConsoleMessageQuery.Section.kind
-        _ = ConsoleMessageQuery.Section.url
-        _ = ConsoleMessageQuery.Filter.any(consoleFilters)
+        let requests = context.network.requests
+        let messages = context.console.messages
+        let requestChanges: AsyncStream<WebInspectorCollectionChange<NetworkRequest.ID>> =
+            context.network.requestChanges
+        let messageChanges: AsyncStream<WebInspectorCollectionChange<ConsoleMessage.ID>> =
+            context.console.messageChanges
+        _ = requestChanges
+        _ = messageChanges
+        _ = WebInspectorCollectionChange<NetworkRequest.ID>.reset
+        _ = WebInspectorCollectionChange<NetworkRequest.ID>.inserted([])
+        _ = WebInspectorCollectionChange<NetworkRequest.ID>.updated([])
 
         _ = context.state
         _ = context.rootNode?.children
@@ -111,39 +60,20 @@ private final class DataKitImportOnlyConsumer {
         try await context.hideHighlight()
         try await context.setElementPickerEnabled(false)
         try await context.reloadPage()
-        _ = requests.items.first?.url
-        _ = requests.items.first?.state
-        _ = requests.items.first?.hasResponse
-        _ = requests.items.first?.hasResponseBody
-        _ = requests.items.first?.metrics
-        _ = requests.items.first?.security?.connection?.tlsProtocol
-        _ = requests.items.first?.security?.certificate?.dnsNames
-        _ = requestsByMethod.sections.first?.title
-        let requestSnapshot: WebInspectorFetchedResultsSnapshot<NetworkRequest.ID> =
-            requestController.snapshot
-        let requestTransaction = WebInspectorFetchedResultsTransaction<NetworkRequest>(
-            oldSnapshot: requestSnapshot,
-            newSnapshot: requestSnapshot,
-            itemChanges: []
-        )
-        _ = requestController.transactions
-        _ = requestTransaction.hasChanges
-        _ = messages.items.first?.text
-        _ = messages.items.first?.parameters.first?.description
-        _ = messagesByLevel.sections.first?.id
-        _ = messageController.snapshot
-        _ = messageController.transactions
-        try requests.updateQuery(networkQuery)
-        try messages.updateQuery(consoleQuery)
-        try requests.updateQuery(NetworkRequestQuery(fetchLimit: 50))
-        try requestController.updateQuery(NetworkRequestQuery(fetchOffset: 1))
-        try messages.updateQuery(ConsoleMessageQuery(fetchLimit: 50))
-        try messageController.updateQuery(ConsoleMessageQuery(fetchOffset: 1))
+        _ = requests.first?.url
+        _ = requests.first?.state
+        _ = requests.first?.hasResponse
+        _ = requests.first?.hasResponseBody
+        _ = requests.first?.metrics
+        _ = requests.first?.security?.connection?.tlsProtocol
+        _ = requests.first?.security?.certificate?.dnsNames
+        _ = messages.first?.text
+        _ = messages.first?.parameters.first?.description
         _ = try await context.evaluate("1 + 1").object.description
 
         let request = NetworkRequestSnapshot(url: "https://example.com", method: "GET")
         let response = NetworkResponseSnapshot(status: 200, mimeType: "text/html")
-        if let security = requests.items.first?.security {
+        if let security = requests.first?.security {
             _ = response.reporting(security: security)
         }
         let redirect = RedirectHop(request: request, response: response, timestamp: 1)

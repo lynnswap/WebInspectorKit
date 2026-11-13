@@ -260,7 +260,7 @@ final class NetworkEventRecorder {
                 request.responseBody.load(Network.Body(data: responseBody, base64Encoded: false))
             }
         }
-        guard let resolution = requestStore.resolveSynchronously(
+        guard let resolution = requestStore.resolve(
             id: id,
             admission: .requestWillBeSent(hasRedirectResponse: false),
             create: {
@@ -289,7 +289,7 @@ final class NetworkEventRecorder {
                 chronologySequence: chronologySequence
             )
             hydrate(registration.request)
-            requestStore.commitUpdateSynchronously(registration)
+            requestStore.commitUpdate(registration)
         case .inserted:
             break
         }
@@ -317,11 +317,11 @@ final class NetworkEventRecorder {
     func apply(
         _ event: Network.Event,
         modelContext: WebInspectorContext
-    ) async {
+    ) {
         let chronologySequence = takeNetworkChronologySequence()
         switch event {
         case let .requestWillBeSent(id, request, initiator, resourceType, redirectResponse, timestamp):
-            await applyRequestWillBeSent(
+            applyRequestWillBeSent(
                 id: id,
                 request: request,
                 initiator: initiator,
@@ -332,7 +332,7 @@ final class NetworkEventRecorder {
                 modelContext: modelContext
             )
         case let .responseReceived(id, response, resourceType, timestamp):
-            await applyResponseReceived(
+            applyResponseReceived(
                 id: id,
                 response: response,
                 resourceType: resourceType,
@@ -350,29 +350,29 @@ final class NetworkEventRecorder {
                 encodedDataLength: encodedDataLength,
                 timestamp: timestamp
             )
-            await requestStore.commitUpdate(registration)
+            requestStore.commitUpdate(registration)
         case let .loadingFinished(id, timestamp, sourceMapURL, metrics):
             guard let registration = networkRegistration(for: id, method: "loadingFinished") else {
                 return
             }
             let request = registration.request
             request.finish(timestamp: timestamp, sourceMapURL: sourceMapURL, metrics: metrics)
-            await requestStore.commitUpdate(registration)
+            requestStore.commitUpdate(registration)
         case let .loadingFailed(id, errorText, canceled, timestamp):
             guard let registration = networkRegistration(for: id, method: "loadingFailed") else {
                 return
             }
             let request = registration.request
             request.fail(errorText: errorText, canceled: canceled, timestamp: timestamp)
-            await requestStore.commitUpdate(registration)
+            requestStore.commitUpdate(registration)
         case let .webSocket(event):
-            await apply(
+            apply(
                 event,
                 chronologySequence: chronologySequence,
                 modelContext: modelContext
             )
         case let .requestServedFromMemoryCache(id, response, initiator, resourceType, timestamp):
-            await applyRequestServedFromMemoryCache(
+            applyRequestServedFromMemoryCache(
                 id: id,
                 response: response,
                 initiator: initiator,
@@ -395,10 +395,10 @@ final class NetworkEventRecorder {
         timestamp: Double,
         chronologySequence: UInt64,
         modelContext: WebInspectorContext
-    ) async {
+    ) {
         requestStore.invalidateResourceTreeContent(replacedBy: payload)
         let id = NetworkRequest.ID(proxyID)
-        guard let resolution = await requestStore.resolve(
+        guard let resolution = requestStore.resolve(
             id: id,
             admission: .requestWillBeSent(hasRedirectResponse: redirectResponse != nil),
             create: {
@@ -439,7 +439,7 @@ final class NetworkEventRecorder {
                 topologyMayHaveChanged = true
             }
             if topologyMayHaveChanged {
-                await requestStore.commitUpdate(registration)
+                requestStore.commitUpdate(registration)
             }
         case .inserted:
             break
@@ -565,7 +565,7 @@ final class NetworkEventRecorder {
         timestamp: Double,
         chronologySequence: UInt64,
         modelContext: WebInspectorContext
-    ) async {
+    ) {
         let id = NetworkRequest.ID(proxyID)
         guard requestStore.isTombstoned(id) == false else {
             return
@@ -574,7 +574,7 @@ final class NetworkEventRecorder {
             skipEvent("Network.requestServedFromMemoryCache omitted response URL for a new request")
             return
         }
-        guard let resolution = await requestStore.resolve(
+        guard let resolution = requestStore.resolve(
             id: id,
             admission: .ordinary,
             create: {
@@ -617,7 +617,7 @@ final class NetworkEventRecorder {
                 resourceType: resourceType,
                 timestamp: timestamp
             )
-            await requestStore.commitUpdate(registration)
+            requestStore.commitUpdate(registration)
         case .inserted:
             break
         }
@@ -630,7 +630,7 @@ final class NetworkEventRecorder {
         timestamp: Double,
         chronologySequence: UInt64,
         modelContext: WebInspectorContext
-    ) async {
+    ) {
         if let url = response.url {
             guard !requestStore.isClearedResourceTreeResponse(id: proxyID, url: url, origin: response.origin) else { return }
             requestStore.bindResourceTreeRequest(id: proxyID, url: url, origin: response.origin)
@@ -643,7 +643,7 @@ final class NetworkEventRecorder {
             skipEvent("Network.responseReceived omitted response URL for an untracked request")
             return
         }
-        guard let resolution = await requestStore.resolve(
+        guard let resolution = requestStore.resolve(
             id: id,
             admission: .ordinary,
             create: {
@@ -684,7 +684,7 @@ final class NetworkEventRecorder {
                 resourceType: resourceType,
                 timestamp: timestamp
             )
-            await requestStore.commitUpdate(registration)
+            requestStore.commitUpdate(registration)
         case .inserted:
             break
         }
@@ -694,10 +694,10 @@ final class NetworkEventRecorder {
         _ event: Network.WebSocketEvent,
         chronologySequence: UInt64,
         modelContext: WebInspectorContext
-    ) async {
+    ) {
         switch event {
         case let .created(id, url):
-            await applyWebSocketCreated(
+            applyWebSocketCreated(
                 id: id,
                 url: url,
                 chronologySequence: chronologySequence,
@@ -718,7 +718,7 @@ final class NetworkEventRecorder {
             ) else {
                 return
             }
-            await requestStore.commitUpdate(registration)
+            requestStore.commitUpdate(registration)
         case let .handshakeResponse(id, response, timestamp):
             guard let registration = networkRegistration(
                 for: id,
@@ -734,7 +734,7 @@ final class NetworkEventRecorder {
             ) else {
                 return
             }
-            await requestStore.commitUpdate(registration)
+            requestStore.commitUpdate(registration)
         case let .frameSent(id, frame, timestamp):
             guard let registration = networkRegistration(for: id, method: "webSocketFrameSent") else {
                 return
@@ -746,7 +746,7 @@ final class NetworkEventRecorder {
                 timestamp: timestamp,
                 chronologySequence: chronologySequence
             )
-            await requestStore.commitUpdate(registration)
+            requestStore.commitUpdate(registration)
         case let .frameReceived(id, frame, timestamp):
             guard let registration = networkRegistration(for: id, method: "webSocketFrameReceived") else {
                 return
@@ -758,7 +758,7 @@ final class NetworkEventRecorder {
                 timestamp: timestamp,
                 chronologySequence: chronologySequence
             )
-            await requestStore.commitUpdate(registration)
+            requestStore.commitUpdate(registration)
         case let .error(id, message, timestamp):
             guard let registration = networkRegistration(for: id, method: "webSocketFrameError") else {
                 return
@@ -769,7 +769,7 @@ final class NetworkEventRecorder {
                 timestamp: timestamp,
                 chronologySequence: chronologySequence
             )
-            await requestStore.commitUpdate(registration)
+            requestStore.commitUpdate(registration)
         case let .closed(id, timestamp):
             guard let registration = networkRegistration(for: id, method: "webSocketClosed") else {
                 return
@@ -781,7 +781,7 @@ final class NetworkEventRecorder {
             ) else {
                 return
             }
-            await requestStore.commitUpdate(registration)
+            requestStore.commitUpdate(registration)
         case .other:
             break
         }
@@ -792,9 +792,9 @@ final class NetworkEventRecorder {
         url: String,
         chronologySequence: UInt64,
         modelContext: WebInspectorContext
-    ) async {
+    ) {
         let id = NetworkRequest.ID(proxyID)
-        guard let resolution = await requestStore.resolve(
+        guard let resolution = requestStore.resolve(
             id: id,
             admission: .webSocketCreated,
             create: {
@@ -820,7 +820,7 @@ final class NetworkEventRecorder {
                 url: url,
                 chronologySequence: chronologySequence
             )
-            await requestStore.commitUpdate(registration)
+            requestStore.commitUpdate(registration)
         case .inserted:
             break
         }
