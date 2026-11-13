@@ -1,5 +1,4 @@
 import Foundation
-import Observation
 import WebInspectorProxyKit
 
 /// Controls how DOM selection changes should be revealed to UI tree views.
@@ -448,78 +447,6 @@ public final class ConsoleInspector {
     /// Returns the registered message for an identifier.
     public func message(for id: ConsoleMessage.ID) -> ConsoleMessage? {
         context.registeredMessage(for: id)
-    }
-}
-
-/// The context of the current attachment.
-///
-/// The domain objects of a ``WebInspector`` read their context through this
-/// box, so they follow the inspector from one attachment to the next.
-@MainActor
-@Observable
-final class WebInspectorAttachment {
-    private(set) var context: WebInspectorContext
-
-    /// The relays that carry collection changes across attachments, or `nil`
-    /// for a box that stays with one context.
-    @ObservationIgnored private let spanningChanges: (
-        requests: WebInspectorAsyncStreamRelay<WebInspectorCollectionChange<NetworkRequest>>,
-        messages: WebInspectorAsyncStreamRelay<WebInspectorCollectionChange<ConsoleMessage>>
-    )?
-
-    /// Creates a box that stays with `context`.
-    init(context: WebInspectorContext) {
-        self.context = context
-        spanningChanges = nil
-    }
-
-    /// Creates the box of an inspector, whose context is replaced by
-    /// ``replaceContext(_:)``.
-    init(following context: WebInspectorContext) {
-        self.context = context
-        spanningChanges = (WebInspectorAsyncStreamRelay(), WebInspectorAsyncStreamRelay())
-        mirrorCollectionChanges(of: context)
-    }
-
-    /// Replaces the context and reports the replacement on the change
-    /// streams: everything was removed, then the new context's models were
-    /// inserted. The whole replacement is one synchronous step, so a consumer
-    /// that applies every change stays in step with the collections.
-    func replaceContext(_ newContext: WebInspectorContext) {
-        guard newContext !== context else {
-            return
-        }
-        context.setCollectionChangeMirrors(requests: nil, messages: nil)
-        context = newContext
-        guard let spanningChanges else {
-            return
-        }
-        spanningChanges.requests.yield(.removedAll)
-        spanningChanges.messages.yield(.removedAll)
-        mirrorCollectionChanges(of: newContext)
-        let requests = newContext.networkRequests
-        if requests.isEmpty == false {
-            spanningChanges.requests.yield(.inserted(requests))
-        }
-        let messages = newContext.consoleMessages
-        if messages.isEmpty == false {
-            spanningChanges.messages.yield(.inserted(messages))
-        }
-    }
-
-    var requestChanges: AsyncStream<WebInspectorCollectionChange<NetworkRequest>> {
-        spanningChanges?.requests.makeStream() ?? context.networkRequestChanges
-    }
-
-    var messageChanges: AsyncStream<WebInspectorCollectionChange<ConsoleMessage>> {
-        spanningChanges?.messages.makeStream() ?? context.consoleMessageChanges
-    }
-
-    private func mirrorCollectionChanges(of context: WebInspectorContext) {
-        context.setCollectionChangeMirrors(
-            requests: spanningChanges?.requests,
-            messages: spanningChanges?.messages
-        )
     }
 }
 

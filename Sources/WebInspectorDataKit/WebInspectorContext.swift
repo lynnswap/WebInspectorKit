@@ -1009,6 +1009,22 @@ package final class WebInspectorContext {
         return DOMTreeController(tree: tree)
     }
 
+    /// Hands the live tree states to the context that replaces this one, and
+    /// shows them that context's document.
+    func transferTreeStates(to context: WebInspectorContext) {
+        pruneReleasedTreeStates()
+        let transferred = treeStates
+        treeStates = []
+        context.treeStates.append(contentsOf: transferred)
+        for reference in transferred {
+            reference.tree?.applySnapshot(
+                rootNode: context.rootNode,
+                selectedNode: context.selectedNode,
+                reason: .reset
+            )
+        }
+    }
+
     func rootTreeController() -> DOMTreeController {
         let tree = DOMTreeState(rootNode: rootNode, selectedNode: selectedNode)
         treeStates.append(WeakDOMTreeState(tree))

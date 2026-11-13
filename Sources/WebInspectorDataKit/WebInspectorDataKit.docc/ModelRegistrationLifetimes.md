@@ -38,8 +38,9 @@ if let nodeID = tree.snapshot.selectedNodeID,
 }
 ```
 
-A ``DOMTreeController`` belongs to the attachment that was current when it was
-created. Create a new one after attaching again.
+A ``DOMTreeController`` from ``DOMInspector/treeController()`` follows the
+inspector across attachments: it publishes a `reset` snapshot when the
+attachment changes and then shows the new page's document.
 
 ## Collection Changes Across Attachments
 

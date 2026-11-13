@@ -142,7 +142,7 @@ public final class WebInspectorSession {
         interface.contextDidChange()
         let wasApplied: Bool
         do {
-            wasApplied = try await inspector.attach(makeContainer: makeContainer)
+            wasApplied = try await inspector.attachAndWait(makeContainer: makeContainer)
         } catch {
             interface.contextDidChange()
             stopPageUserInterfaceStyleObservation()

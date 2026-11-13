@@ -19,14 +19,19 @@ public extension WebInspector {
     /// - Throws: The startup failure, or `CancellationError` when a later
     ///   call replaced this one.
     func attachForTesting(to proxy: WebInspectorProxy) async throws {
-        let wasApplied = try await attach(makeContainer: {
+        let wasApplied = try await attachAndWait(makeContainer: {
             WebInspectorContainer(proxy: proxy)
         })
         guard wasApplied else {
             throw CancellationError()
         }
-        for await status in context.statusUpdates {
+        let attachedContext = context
+        for await status in attachedContext.statusUpdates {
             try Task.checkCancellation()
+            // A later call replaced the attachment while it was starting.
+            guard context === attachedContext else {
+                throw CancellationError()
+            }
             switch status.state {
             case .attaching:
                 continue
@@ -40,6 +45,9 @@ public extension WebInspector {
         }
 
         try Task.checkCancellation()
+        guard context === attachedContext else {
+            throw CancellationError()
+        }
         throw WebInspectorDataKitTestingError.statusUpdatesEndedBeforeStartupCompleted
     }
 

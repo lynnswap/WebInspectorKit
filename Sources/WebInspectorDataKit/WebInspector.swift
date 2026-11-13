@@ -23,6 +23,7 @@ import WebKit
 /// their progress. Calling either again replaces what was asked before: the
 /// inspector applies one call at a time, ends an attachment that was
 /// superseded while it was starting, and settles on the latest call.
+/// Releasing the inspector ends its attachment.
 ///
 /// The domain objects are the same for the lifetime of the inspector. Their
 /// models belong to one attachment and are replaced by the next.
@@ -45,16 +46,6 @@ public final class WebInspector {
         case failed(WebInspectorProxyError)
     }
 
-    private struct Request {
-        enum Kind {
-            case attach(@MainActor () async throws -> WebInspectorContainer)
-            case detach
-        }
-
-        let id: UInt64
-        let kind: Kind
-    }
-
     /// The DOM of the inspected page.
     public let dom: DOMInspector
 
@@ -74,17 +65,6 @@ public final class WebInspector {
     public let page: PageInspector
 
     @ObservationIgnored private let attachment: WebInspectorAttachment
-    @ObservationIgnored private var container: WebInspectorContainer?
-    @ObservationIgnored private var pendingRequest: Request?
-    @ObservationIgnored private var worker: Task<Void, Never>?
-    @ObservationIgnored private var runningAttach: Task<WebInspectorContainer, any Error>?
-    @ObservationIgnored private var lastRequestID: UInt64 = 0
-    @ObservationIgnored private var lastAppliedRequestID: UInt64 = 0
-    @ObservationIgnored private var lastAttachError: (any Error)?
-    @ObservationIgnored private var idleWaiters: [CheckedContinuation<Void, Never>] = []
-    /// What the latest call asked for, until that call has been applied.
-    private var requestedState: State?
-    private var attachFailure: WebInspectorProxyError?
 
     /// Creates a detached inspector.
     public convenience init() {
@@ -103,25 +83,13 @@ public final class WebInspector {
     }
 
     isolated deinit {
-        // The worker keeps the inspector alive while a call is being applied,
-        // so only an idle attachment is left to end here.
-        if let container {
-            Task {
-                await container.close()
-            }
-        }
+        attachment.endForReleasedInspector()
     }
 
     /// The progress of the latest ``attach(to:configuration:)`` or
     /// ``detach()`` call.
     public var state: State {
-        if let requestedState {
-            return requestedState
-        }
-        if let attachFailure {
-            return .failed(attachFailure)
-        }
-        return attachment.context.state
+        attachment.state
     }
 
     /// Starts inspecting a web view, replacing the current attachment.
@@ -133,9 +101,9 @@ public final class WebInspector {
         to webView: WKWebView,
         configuration: WebInspectorProxy.Configuration = .init()
     ) {
-        submit(.attach {
+        attachment.attach {
             try await WebInspectorContainer(attachingTo: webView, configuration: configuration)
-        })
+        }
     }
 
     /// Stops inspecting.
@@ -143,7 +111,7 @@ public final class WebInspector {
     /// The call returns immediately. The models of the ended attachment keep
     /// their last state, and the domain collections become empty.
     public func detach() {
-        submit(.detach)
+        attachment.detach()
     }
 
     /// The context of the current attachment. It is replaced whenever an
@@ -158,143 +126,32 @@ public final class WebInspector {
         attachment.replaceContext(context)
     }
 
+    /// Starts an attachment whose connection `makeContainer` provides.
+    package func attach(
+        makeContainer: @escaping @MainActor () async throws -> WebInspectorContainer
+    ) {
+        attachment.attach(makeContainer: makeContainer)
+    }
+
     /// Attaches with `makeContainer` and waits until the call is applied.
     ///
     /// Cancelling the calling task abandons the attachment.
     /// - Returns: `false` when a later call replaced this one.
     /// - Throws: The attachment failure.
     @discardableResult
-    package func attach(
+    package func attachAndWait(
         makeContainer: @escaping @MainActor () async throws -> WebInspectorContainer
     ) async throws -> Bool {
-        let id = submit(.attach(makeContainer))
-        await withTaskCancellationHandler {
-            await waitUntilIdle()
-        } onCancel: {
-            Task { @MainActor [weak self] in
-                self?.abandonRequest(id)
-            }
-        }
-        if Task.isCancelled, lastRequestID == id {
-            // The attachment finished before the cancellation reached it.
-            await detachAndWait()
-        }
-        guard lastRequestID == id, lastAppliedRequestID == id else {
-            return false
-        }
-        if let lastAttachError {
-            throw lastAttachError
-        }
-        return true
+        try await attachment.attachAndWait(makeContainer: makeContainer)
     }
 
     /// Detaches and waits until the call is applied.
     package func detachAndWait() async {
-        submit(.detach)
-        await waitUntilIdle()
+        await attachment.detachAndWait()
     }
 
     /// Suspends until every submitted call has been applied.
     package func waitUntilIdle() async {
-        guard worker != nil else {
-            return
-        }
-        await withCheckedContinuation { continuation in
-            idleWaiters.append(continuation)
-        }
-    }
-
-    @discardableResult
-    private func submit(_ kind: Request.Kind) -> UInt64 {
-        lastRequestID += 1
-        pendingRequest = Request(id: lastRequestID, kind: kind)
-        attachFailure = nil
-        lastAttachError = nil
-        switch kind {
-        case .attach:
-            requestedState = .attaching
-        case .detach:
-            requestedState = .detached
-        }
-        // An attachment that is still starting has been superseded.
-        runningAttach?.cancel()
-        if worker == nil {
-            // The task keeps the inspector alive until every call is applied,
-            // so a detach followed by a release still closes the connection.
-            worker = Task {
-                await self.applyRequests()
-            }
-        }
-        return lastRequestID
-    }
-
-    private func abandonRequest(_ id: UInt64) {
-        guard lastRequestID == id, lastAppliedRequestID != id else {
-            return
-        }
-        submit(.detach)
-    }
-
-    private func applyRequests() async {
-        while let request = pendingRequest {
-            pendingRequest = nil
-            await closeCurrentAttachment()
-            switch request.kind {
-            case .detach:
-                attachment.replaceContext(.detached())
-            case let .attach(makeContainer):
-                guard pendingRequest == nil else {
-                    continue
-                }
-                let attach = Task {
-                    try await makeContainer()
-                }
-                runningAttach = attach
-                let result = await attach.result
-                runningAttach = nil
-                switch result {
-                case let .success(container):
-                    guard pendingRequest == nil else {
-                        await container.close()
-                        continue
-                    }
-                    self.container = container
-                    attachment.replaceContext(container.mainContext)
-                case let .failure(error):
-                    guard pendingRequest == nil else {
-                        continue
-                    }
-                    attachment.replaceContext(.detached())
-                    lastAttachError = error
-                    attachFailure = (error as? WebInspectorProxyError)
-                        ?? .disconnected(String(describing: error))
-                }
-            }
-            lastAppliedRequestID = request.id
-        }
-        requestedState = nil
-        worker = nil
-        let waiters = idleWaiters
-        idleWaiters = []
-        for waiter in waiters {
-            waiter.resume()
-        }
-    }
-
-    private func closeCurrentAttachment() async {
-        let context = attachment.context
-        if let container {
-            self.container = nil
-            await container.close()
-        } else {
-            await context.stop()
-        }
-        // The connection is closed either way, so a domain that could not be
-        // disabled leaves nothing for the caller to recover.
-        if let teardownError = context.teardownError {
-            WebInspectorDataKitLog.error(
-                "Ending the attachment reported an error: \(String(describing: teardownError))"
-            )
-        }
+        await attachment.waitUntilIdle()
     }
 }

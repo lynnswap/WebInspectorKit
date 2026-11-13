@@ -29,7 +29,7 @@ func latestAttachReplacesAnAttachmentThatIsStillStarting() async throws {
     #expect(inspector.state == .detached)
 
     let firstAttach = Task { @MainActor in
-        try await inspector.attach(makeContainer: {
+        try await inspector.attachAndWait(makeContainer: {
             await firstStarted.open()
             await withTaskCancellationHandler {
                 await firstGate.wait()
@@ -43,7 +43,7 @@ func latestAttachReplacesAnAttachmentThatIsStillStarting() async throws {
     #expect(inspector.state == .attaching)
 
     let secondContainer = WebInspectorContainer(proxy: secondRuntime.proxy)
-    let secondWasApplied = try await inspector.attach(makeContainer: { secondContainer })
+    let secondWasApplied = try await inspector.attachAndWait(makeContainer: { secondContainer })
 
     #expect(secondWasApplied)
     #expect(try await firstAttach.value == false)
@@ -61,7 +61,7 @@ func latestAttachReplacesAnAttachmentThatIsStillStarting() async throws {
 func releasingAnInspectorEndsItsAttachment() async throws {
     let attachedRuntime = try await WebInspectorProxyTestRuntime.start()
     var attached: WebInspector? = WebInspector()
-    #expect(try await #require(attached).attach(makeContainer: {
+    #expect(try await #require(attached).attachAndWait(makeContainer: {
         WebInspectorContainer(proxy: attachedRuntime.proxy)
     }))
     attached = nil
@@ -70,12 +70,39 @@ func releasingAnInspectorEndsItsAttachment() async throws {
     // A detach that has not been applied yet survives the release as well.
     let detachingRuntime = try await WebInspectorProxyTestRuntime.start()
     var detaching: WebInspector? = WebInspector()
-    #expect(try await #require(detaching).attach(makeContainer: {
+    #expect(try await #require(detaching).attachAndWait(makeContainer: {
         WebInspectorContainer(proxy: detachingRuntime.proxy)
     }))
     detaching?.detach()
     detaching = nil
     try await detachingRuntime.proxy.waitUntilClosed()
+}
+
+@MainActor
+@Test
+func releasingAnInspectorEndsAnAttachmentThatIsStillStarting() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let started = WebInspectorTestGate()
+    let gate = WebInspectorTestGate()
+    var inspector: WebInspector? = WebInspector()
+    inspector?.attach(makeContainer: {
+        await started.open()
+        await withTaskCancellationHandler {
+            await gate.wait()
+        } onCancel: {
+            Task { await gate.open() }
+        }
+        return WebInspectorContainer(proxy: runtime.proxy)
+    })
+    await started.wait()
+    weak let releasedInspector = inspector
+
+    inspector = nil
+
+    // The starting attachment does not keep the inspector alive, and the
+    // connection it went on to make is closed.
+    #expect(releasedInspector == nil)
+    try await runtime.proxy.waitUntilClosed()
 }
 
 @MainActor
@@ -87,7 +114,7 @@ func cancellingAnAttachCallEndsItsAttachment() async throws {
     let gate = WebInspectorTestGate()
 
     let attach = Task { @MainActor in
-        try await inspector.attach(makeContainer: {
+        try await inspector.attachAndWait(makeContainer: {
             await started.open()
             await gate.wait()
             return WebInspectorContainer(proxy: runtime.proxy)
@@ -127,7 +154,7 @@ func failedAttachReportsTheFailureUntilTheNextCall() async throws {
     let failure = WebInspectorProxyError.disconnected("The web view has no inspectable page.")
 
     await #expect(throws: failure) {
-        try await inspector.attach(makeContainer: { throw failure })
+        try await inspector.attachAndWait(makeContainer: { throw failure })
     }
     #expect(inspector.state == .failed(failure))
 
@@ -191,4 +218,22 @@ func domainStateIsObservableAcrossAttachments() async throws {
     #expect(rootChanged.hasChanged)
     #expect(inspector.dom.rootNode === second.rootNode)
     #expect(inspector.dom.selectedNode == nil)
+}
+
+@MainActor
+@Test
+func domTreeControllerFollowsTheInspectorAcrossAttachments() async throws {
+    let first = WebInspectorContext.preview()
+    first.seedDOMDocument(DOM.Node(id: DOM.Node.ID("first-document"), nodeType: 9, nodeName: "#document"))
+    let inspector = WebInspector(context: first)
+    let tree = inspector.dom.treeController()
+    #expect(tree.snapshot.rootNodeID == first.rootNode?.id)
+
+    let second = WebInspectorContext.preview()
+    inspector.install(second)
+    #expect(tree.snapshot.rootNodeID == nil)
+
+    second.seedDOMDocument(DOM.Node(id: DOM.Node.ID("second-document"), nodeType: 9, nodeName: "#document"))
+    #expect(tree.snapshot.rootNodeID == second.rootNode?.id)
+    #expect(tree.snapshot.rootNodeID != nil)
 }
