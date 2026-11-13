@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import ObservationBridge
 import WebInspectorUIBase
 import WebInspectorDataKit
 import UIKit
@@ -8,7 +9,7 @@ package final class DOMNavigationItems: NSObject {
     private typealias UndoManagerProvider = @MainActor () -> UndoManager?
 
     private let context: WebInspectorContext
-    private var statusTask: Task<Void, Never>?
+    private var inspectionObservation: PortableObservationTracking.Token?
     private var undoManagerProvider: UndoManagerProvider = { nil }
 
     package struct KeyCommandActions {
@@ -56,7 +57,7 @@ package final class DOMNavigationItems: NSObject {
     }
 
     isolated deinit {
-        statusTask?.cancel()
+        inspectionObservation?.cancel()
     }
 
     package func install(
@@ -115,10 +116,8 @@ package final class DOMNavigationItems: NSObject {
     }
 
     private func startObservingInspection() {
-        statusTask = Task { @MainActor [weak self, context] in
-            for await status in context.statusUpdates {
-                self?.renderPickItem(status: status)
-            }
+        inspectionObservation = withPortableContinuousObservation { [weak self] _ in
+            self?.updatePickItemAppearance()
         }
     }
 
@@ -199,7 +198,7 @@ package final class DOMNavigationItems: NSObject {
         UIAction(
             title: String(localized: "reload", bundle: WebInspectorUILocalization.bundle),
             image: UIImage(systemName: "arrow.clockwise"),
-            attributes: context.status.state == .attached ? [] : [.disabled]
+            attributes: context.state == .attached ? [] : [.disabled]
         ) { [weak self] _ in
             self?.performReloadCommand()
         }
@@ -210,7 +209,7 @@ package final class DOMNavigationItems: NSObject {
             guard let self else {
                 return
             }
-            guard context.status.state == .attached else {
+            guard context.state == .attached else {
                 return
             }
             do {
@@ -225,7 +224,7 @@ package final class DOMNavigationItems: NSObject {
         UIAction(
             title: String(localized: "inspector.delete_node", bundle: WebInspectorUILocalization.bundle),
             image: UIImage(systemName: "trash"),
-            attributes: context.status.selectedNodeID == nil ? [.disabled, .destructive] : [.destructive]
+            attributes: context.dom.selectedNode == nil ? [.disabled, .destructive] : [.destructive]
         ) { [weak self] _ in
             self?.performDeleteCommand()
         }
@@ -279,16 +278,12 @@ package final class DOMNavigationItems: NSObject {
         }
     }
 
+    /// Reads the attachment and picker state, so the observation that calls
+    /// this tracks both.
     private func updatePickItemAppearance() {
         renderPickItem(
-            status: context.status
-        )
-    }
-
-    private func renderPickItem(status: WebInspectorContext.Status) {
-        renderPickItem(
-            isEnabled: status.state == .attached,
-            isSelectingElement: status.isElementPickerEnabled
+            isEnabled: context.state == .attached,
+            isSelectingElement: context.dom.isElementPickerEnabled
         )
     }
 

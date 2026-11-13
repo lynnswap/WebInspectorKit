@@ -953,12 +953,10 @@ struct ParentContainerTests {
         let navigationItems = try #require(
             splitViewController.domNavigationItemsForTesting
         )
-        var statusUpdates = fixture.context.statusUpdates.makeAsyncIterator()
+        let context = fixture.context
 
         navigationItems.performToggleElementPickerCommand()
-        while fixture.context.dom.isElementPickerEnabled == false,
-              let status = await statusUpdates.next(),
-              status.isElementPickerEnabled == false {}
+        _ = await waitForObservedValue({ context.dom.isElementPickerEnabled }, until: { $0 })
 
         #expect(fixture.context.dom.isElementPickerEnabled)
         #expect(presenter.presentedViewController === viewController)
@@ -1622,14 +1620,8 @@ struct ParentContainerTests {
         try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 1)
         try await runtime.backend.waitForSubscribers(domain: "Console", target: target, count: 1)
         try await runtime.backend.waitForSubscribers(domain: "Runtime", target: target, count: 1)
-        if context.state != .attached {
-            for await status in context.statusUpdates {
-                if status.state == .attached {
-                    break
-                }
-                try #require(status.state == .attaching)
-            }
-        }
+        let startupState = await waitForObservedValue({ context.state }, until: { $0 != .attaching })
+        try #require(startupState == .attached)
         let session = WebInspectorSession(context: context)
         return LiveSessionFixture(
             runtime: runtime,

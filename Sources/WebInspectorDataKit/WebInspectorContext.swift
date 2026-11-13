@@ -208,19 +208,6 @@ package final class WebInspectorContext {
         case failed(WebInspectorProxyError)
     }
 
-    /// A compact status value suitable for UI binding.
-    package struct Status: Equatable, Sendable {
-        /// The current attachment state.
-        package let state: State
-
-        /// The currently selected DOM node identity.
-        package let selectedNodeID: DOMNode.ID?
-
-        /// A Boolean value indicating whether WebKit inspect mode is enabled.
-        package let isElementPickerEnabled: Bool
-    }
-
-    private(set) weak var container: WebInspectorContainer?
     /// The state that a ``WebInspector`` republishes to observers.
     @MainActor
     @Observable
@@ -351,7 +338,6 @@ package final class WebInspectorContext {
     /// are tracked per style target in `styleTrackingLeases`.
     private var domainTrackingTargets: [WebInspectorEnabledDomain: WebInspectorTarget]
     private let domDocument = DOMDocumentStore()
-    private let statusRelay: WebInspectorAsyncStreamRelay<Status>
     private let networkRecorder: NetworkEventRecorder
     private var networkRequestStore: NetworkRequestStore {
         networkRecorder.requestStore
@@ -365,7 +351,6 @@ package final class WebInspectorContext {
 
     /// Creates a context for a container.
     package init(_ container: WebInspectorContainer) {
-        self.container = container
         proxy = container.proxy
         domainEnablement = container.domainEnablement
         domEditHistoryTarget = nil
@@ -404,7 +389,6 @@ package final class WebInspectorContext {
         nextEventPumpAppliedWaiterIDForTesting = 0
 #endif
         domainTrackingTargets = [:]
-        statusRelay = WebInspectorAsyncStreamRelay()
         networkRecorder = NetworkEventRecorder()
         let runtimeStore = RuntimeModelStore()
         self.runtimeStore = runtimeStore
@@ -479,7 +463,6 @@ package final class WebInspectorContext {
         invalidateElementPicker()
         isElementPickerEnabled = false
         state = .attaching
-        notifyStatusChanged()
         teardownError = nil
         networkRecorder.beginAttachment()
         let generation = currentPageGeneration
@@ -507,18 +490,6 @@ package final class WebInspectorContext {
         stateChangesForTesting.makeStream()
     }
     #endif
-
-    package var status: Status {
-        Status(
-            state: state,
-            selectedNodeID: selectedNode?.id,
-            isElementPickerEnabled: isElementPickerEnabled
-        )
-    }
-
-    package var statusUpdates: AsyncStream<Status> {
-        statusRelay.makeStream(initialElement: status)
-    }
 
     func node(for id: DOMNode.ID) -> DOMNode? {
         return domDocument.nodes[id]
@@ -562,7 +533,6 @@ package final class WebInspectorContext {
         pageHighlightMaintenanceTask = nil
         selectedNode = node
         domDocument.trees.selectionChanged(node, reveal: reveal)
-        notifyStatusChanged()
         refreshSelectedStyles()
     }
 
@@ -956,7 +926,6 @@ package final class WebInspectorContext {
         if isEnabled {
             pageHighlightState = nil
         }
-        notifyStatusChanged()
         WebInspectorDataKitLog.debug(
             "DOM picker setInspectMode finished enabled=\(isEnabled) target=\(page.id.rawValue)"
         )
@@ -1874,7 +1843,6 @@ package final class WebInspectorContext {
         selectedNode.setElementStyles(nil)
         self.selectedNode = nil
         domDocument.trees.selectionChanged(nil)
-        notifyStatusChanged()
     }
 
     @discardableResult
@@ -2085,15 +2053,7 @@ package final class WebInspectorContext {
 
     private func transition(to newState: State) {
         state = newState
-        notifyStatusChanged()
         WebInspectorDataKitLog.debug("context state=\(newState.logDescription)")
-    }
-
-    private func notifyStatusChanged() {
-        guard statusRelay.hasContinuations else {
-            return
-        }
-        statusRelay.yield(status)
     }
 
     func reloadDocument() {
@@ -2371,7 +2331,6 @@ extension WebInspectorContext {
         cancelStyleToggleOperations()
         invalidateElementPicker()
         isElementPickerEnabled = false
-        notifyStatusChanged()
         let generation = advanceCurrentPageGeneration()
         advanceDOMDocumentGeneration()
         let documentLoadID = domDocumentLoad.begin()
@@ -2479,7 +2438,6 @@ extension WebInspectorContext {
             requestedElementPickerEnabled = nil
             isElementPickerEnabled = false
             pageHighlightState = nil
-            notifyStatusChanged()
             let inspectedNodeID = DOMNode.ID(id)
             guard let node = domDocument.nodes[inspectedNodeID] else {
                 loadFrameDocumentIfNeeded(forNodeID: inspectedNodeID, reason: "DOM.inspect")
@@ -2528,7 +2486,6 @@ extension WebInspectorContext {
     package func seedElementPickerEnabled(_ isEnabled: Bool) {
         requestedElementPickerEnabled = nil
         isElementPickerEnabled = isEnabled
-        notifyStatusChanged()
     }
 
     /// Seeds the selected element node's styles through the same load path
@@ -2583,7 +2540,6 @@ extension WebInspectorContext {
         pendingInspectedNodeID = nil
         domDocument.nodes.removeAll()
         domDocument.trees.replaceSnapshot(rootNode: rootNode, selectedNode: selectedNode, reason: .reset)
-        notifyStatusChanged()
     }
 
     private func clearPageHighlightForDOMReset() {
@@ -2708,7 +2664,6 @@ extension WebInspectorContext {
         styleRefreshGeneration += 1
         self.selectedNode = nil
         domDocument.trees.selectionChanged(nil)
-        notifyStatusChanged()
     }
 
     private func cancelFrameDocumentLoadTasks() {

@@ -2252,15 +2252,7 @@ private func makeLiveNetworkModelFixture() async throws -> LiveNetworkModelFixtu
     try await runtime.backend.waitForSubscribers(domain: "Network", target: target, count: 1)
     try await runtime.backend.waitForSubscribers(domain: "Console", target: target, count: 1)
     try await runtime.backend.waitForSubscribers(domain: "Runtime", target: target, count: 1)
-    for await status in context.statusUpdates {
-        if status.state == .attached {
-            break
-        }
-        if status.state != .attaching {
-            Issue.record("Expected live Network context to attach; got \(status.state).")
-            break
-        }
-    }
+    _ = await waitForObservedValue({ context.state }, until: { $0 != .attaching })
     #expect(context.state == .attached)
     return LiveNetworkModelFixture(runtime: runtime, target: target, context: context)
 }

@@ -34,11 +34,15 @@ func malformedKnownOrderedEventFailsAttachedContext() async throws {
     )
     let proxy = context.inspectionProxyForTesting
     let target = try #require(context.currentPageForTesting)
-    let failedStatusTask = Task<WebInspectorContext.Status?, Never> { @MainActor in
-        for await status in context.statusUpdates {
-            if case .failed = status.state {
-                return status
+    let failedStateTask = Task<WebInspectorContext.State?, Never> { @MainActor in
+        try? await waitUntil(in: context, timeout: .seconds(5)) {
+            if case .failed = context.state {
+                return true
             }
+            return false
+        }
+        if case .failed = context.state {
+            return context.state
         }
         return nil
     }
@@ -69,9 +73,9 @@ func malformedKnownOrderedEventFailsAttachedContext() async throws {
         params: "{}"
     )
 
-    let failedStatus = try #require(await failedStatusTask.value)
+    let failedState = try #require(await failedStateTask.value)
     let proxyError = try #require(await proxyCloseTask.value)
-    guard case let .failed(error) = failedStatus.state,
+    guard case let .failed(error) = failedState,
           case let .disconnected(message) = error else {
         Issue.record("Expected the context to fail with a disconnected error.")
         return
@@ -108,7 +112,7 @@ func malformedKnownOrderedEventFailsAttachedContext() async throws {
     )
     #expect(context.eventPumpAppliedSequenceForTesting == appliedBeforeFailure)
     #expect(context.orderedEventSubscriptionStateForTesting == subscriptionAfterFailure)
-    #expect(context.state == failedStatus.state)
+    #expect(context.state == failedState)
     #expect(await backend.isDetached())
 }
 
@@ -122,11 +126,15 @@ func malformedKnownOrderedEventFailsAttachingContextWithoutHanging() async throw
     let proxy = try await WebInspectorProxy(transport: transport)
     let container = WebInspectorContainer(proxy: proxy)
     let context = container.mainContext
-    let failedStatusTask = Task<WebInspectorContext.Status?, Never> { @MainActor in
-        for await status in context.statusUpdates {
-            if case .failed = status.state {
-                return status
+    let failedStateTask = Task<WebInspectorContext.State?, Never> { @MainActor in
+        try? await waitUntil(in: context, timeout: .seconds(5)) {
+            if case .failed = context.state {
+                return true
             }
+            return false
+        }
+        if case .failed = context.state {
+            return context.state
         }
         return nil
     }
@@ -142,9 +150,9 @@ func malformedKnownOrderedEventFailsAttachingContextWithoutHanging() async throw
         params: "{}"
     )
 
-    let failedStatus = try #require(await failedStatusTask.value)
+    let failedState = try #require(await failedStateTask.value)
     let proxyError = try #require(await proxyCloseTask.value)
-    guard case let .failed(error) = failedStatus.state,
+    guard case let .failed(error) = failedState,
           case let .disconnected(message) = error else {
         Issue.record("Expected startup to fail with a disconnected error.")
         return

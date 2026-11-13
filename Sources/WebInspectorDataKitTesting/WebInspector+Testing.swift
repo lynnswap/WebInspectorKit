@@ -1,3 +1,4 @@
+import Observation
 import WebInspectorDataKit
 import WebInspectorProxyKit
 
@@ -5,9 +6,6 @@ import WebInspectorProxyKit
 public enum WebInspectorDataKitTestingError: Error, Equatable, Sendable {
     /// The inspector detached before startup reached a terminal result.
     case detachedBeforeStartupCompleted
-
-    /// The inspector stopped publishing status before startup reached a terminal result.
-    case statusUpdatesEndedBeforeStartupCompleted
 }
 
 public extension WebInspector {
@@ -26,15 +24,15 @@ public extension WebInspector {
             throw CancellationError()
         }
         let attachedContext = context
-        for await status in attachedContext.statusUpdates {
+        while true {
             try Task.checkCancellation()
             // A later call replaced the attachment while it was starting.
             guard context === attachedContext else {
                 throw CancellationError()
             }
-            switch status.state {
+            switch attachedContext.state {
             case .attaching:
-                continue
+                await stateChange()
             case .attached:
                 return
             case .detached:
@@ -43,16 +41,41 @@ public extension WebInspector {
                 throw error
             }
         }
-
-        try Task.checkCancellation()
-        guard context === attachedContext else {
-            throw CancellationError()
-        }
-        throw WebInspectorDataKitTestingError.statusUpdatesEndedBeforeStartupCompleted
     }
 
     /// Detaches and waits until the attachment has ended.
     func detachForTesting() async {
         await detachAndWait()
+    }
+
+    /// Suspends until ``state`` changes or the calling task is cancelled.
+    private func stateChange() async {
+        let waiter = StateChangeWaiter()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                waiter.continuation = continuation
+                withObservationTracking {
+                    _ = state
+                } onChange: {
+                    Task { @MainActor in
+                        waiter.resume()
+                    }
+                }
+            }
+        } onCancel: {
+            Task { @MainActor in
+                waiter.resume()
+            }
+        }
+    }
+}
+
+@MainActor
+private final class StateChangeWaiter {
+    var continuation: CheckedContinuation<Void, Never>?
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
     }
 }

@@ -308,7 +308,7 @@ final class WebInspectorSession {
         // the awaits below, and this retirement must not touch the
         // replacement context.
         let context = context
-        guard context.status.state == .attached else {
+        guard context.state == .attached else {
             return
         }
         do {

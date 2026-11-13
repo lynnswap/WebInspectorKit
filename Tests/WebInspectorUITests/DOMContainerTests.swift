@@ -1390,18 +1390,7 @@ struct DOMContainerTests {
     }
 
     private func waitForAttachedState(in context: WebInspectorContext) async -> Bool {
-        if context.state == .attached {
-            return true
-        }
-        for await status in context.statusUpdates {
-            if status.state == .attached {
-                return true
-            }
-            if status.state != .attaching {
-                return false
-            }
-        }
-        return context.state == .attached
+        await waitForObservedValue({ context.state }, until: { $0 != .attaching }) == .attached
     }
 
     private func waitForDOMRedoAvailability(_ isAvailable: Bool, undoManager: UndoManager?) async -> Bool {
