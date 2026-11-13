@@ -5,7 +5,7 @@ import Testing
 import UIKit
 import WebKit
 import WebInspectorKit
-import WebKitScreenTimeWorkaround
+import WebKitTestWorkarounds
 
 @Suite(.serialized)
 @MainActor

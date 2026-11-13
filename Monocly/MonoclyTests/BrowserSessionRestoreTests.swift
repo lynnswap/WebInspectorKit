@@ -9,7 +9,7 @@ import UIKit
 import WebKit
 import WebInspectorKit
 import WKViewportCoordinator
-import WebKitScreenTimeWorkaround
+import WebKitTestWorkarounds
 
 @Suite(.serialized)
 @MainActor

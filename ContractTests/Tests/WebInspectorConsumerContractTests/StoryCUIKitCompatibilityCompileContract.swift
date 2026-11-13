@@ -2,7 +2,7 @@
 import Testing
 import WebKit
 import WebInspectorKit
-import WebKitScreenTimeWorkaround
+import WebKitTestWorkarounds
 
 @MainActor
 @Test

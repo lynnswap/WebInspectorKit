@@ -1,7 +1,7 @@
 #if os(iOS) || os(macOS)
 import Testing
 import WebKit
-import WebKitScreenTimeWorkaround
+import WebKitTestWorkarounds
 import WebInspectorNativeBridgeObjC
 @testable import WebInspectorNativeBridge
 
