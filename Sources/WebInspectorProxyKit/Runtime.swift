@@ -12,20 +12,12 @@ public enum Runtime {
 
         /// Enables Runtime domain events and commands for the target.
         public func enable() async throws {
-            try await context.dispatchVoid(
-                domain: .runtime,
-                method: "enable",
-                payload: EnablePayload()
-            )
+            try await context.dispatch(EnablePayload())
         }
 
         /// Disables Runtime domain events for the target.
         public func disable() async throws {
-            try await context.dispatchVoid(
-                domain: .runtime,
-                method: "disable",
-                payload: DisablePayload()
-            )
+            try await context.dispatch(DisablePayload())
         }
 
         /// Evaluates a JavaScript expression in an execution context.
@@ -33,12 +25,7 @@ public enum Runtime {
             _ expression: String,
             in context: ExecutionContext.ID? = nil
         ) async throws -> EvaluationResult {
-            try await self.context.dispatch(
-                domain: .runtime,
-                method: "evaluate",
-                payload: EvaluatePayload(expression: expression, context: context),
-                returning: EvaluationResult.self
-            )
+            try await self.context.dispatch(EvaluatePayload(expression: expression, context: context))
         }
 
         /// Returns property descriptors for a remote object.
@@ -46,50 +33,27 @@ public enum Runtime {
             of object: RemoteObject.ID,
             ownProperties: Bool = true
         ) async throws -> [PropertyDescriptor] {
-            try await context.dispatch(
-                domain: .runtime,
-                method: "getProperties",
-                payload: GetPropertiesPayload(object: object, ownProperties: ownProperties),
-                returning: [PropertyDescriptor].self
-            )
+            try await context.dispatch(GetPropertiesPayload(object: object, ownProperties: ownProperties))
         }
 
         /// Returns a compact preview for a remote object.
         public func preview(of object: RemoteObject.ID) async throws -> ObjectPreview {
-            try await context.dispatch(
-                domain: .runtime,
-                method: "getPreview",
-                payload: GetPreviewPayload(object: object),
-                returning: ObjectPreview.self
-            )
+            try await context.dispatch(GetPreviewPayload(object: object))
         }
 
         /// Returns entries for an array-like, map-like, or set-like remote object.
         public func collectionEntries(of object: RemoteObject.ID) async throws -> [CollectionEntry] {
-            try await context.dispatch(
-                domain: .runtime,
-                method: "getCollectionEntries",
-                payload: GetCollectionEntriesPayload(object: object),
-                returning: [CollectionEntry].self
-            )
+            try await context.dispatch(GetCollectionEntriesPayload(object: object))
         }
 
         /// Releases one remote object handle.
         public func releaseObject(_ id: RemoteObject.ID) async throws {
-            try await context.dispatchVoid(
-                domain: .runtime,
-                method: "releaseObject",
-                payload: ReleaseObjectPayload(id: id)
-            )
+            try await context.dispatch(ReleaseObjectPayload(id: id))
         }
 
         /// Releases all remote object handles in an object group.
         public func releaseObjectGroup(_ group: ObjectGroup) async throws {
-            try await context.dispatchVoid(
-                domain: .runtime,
-                method: "releaseObjectGroup",
-                payload: ReleaseObjectGroupPayload(group: group)
-            )
+            try await context.dispatch(ReleaseObjectGroupPayload(group: group))
         }
 
         /// Runtime domain events emitted by this target.

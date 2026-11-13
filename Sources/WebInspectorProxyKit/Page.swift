@@ -11,46 +11,24 @@ public enum Page {
         }
 
         package func enable() async throws {
-            try await context.dispatchVoid(
-                domain: .page,
-                method: "enable",
-                payload: EnablePayload()
-            )
+            try await context.dispatch(EnablePayload())
         }
 
         package func disable() async throws {
-            try await context.dispatchVoid(
-                domain: .page,
-                method: "disable",
-                payload: DisablePayload()
-            )
+            try await context.dispatch(DisablePayload())
         }
 
         package func resourceTree() async throws -> WebInspectorProxyCommandReply<ResourceTree> {
-            try await context.dispatchWithReplyBoundary(
-                domain: .page,
-                method: "getResourceTree",
-                payload: ResourceTreePayload(),
-                returning: ResourceTree.self
-            )
+            try await context.dispatchWithReplyBoundary(ResourceTreePayload())
         }
 
         package func resourceContent(frameID: FrameID, url: String) async throws -> WebInspectorProxyCommandReply<Network.Body> {
-            try await context.dispatchWithReplyBoundary(
-                domain: .page,
-                method: "getResourceContent",
-                payload: ResourceContentPayload(frameID: frameID, url: url),
-                returning: Network.Body.self
-            )
+            try await context.dispatchWithReplyBoundary(ResourceContentPayload(frameID: frameID, url: url))
         }
 
         /// Reloads the inspected page.
         public func reload(ignoringCache: Bool = false) async throws {
-            try await context.dispatchVoid(
-                domain: .page,
-                method: "reload",
-                payload: ReloadPayload(ignoringCache: ignoringCache)
-            )
+            try await context.dispatch(ReloadPayload(ignoringCache: ignoringCache))
         }
     }
 
