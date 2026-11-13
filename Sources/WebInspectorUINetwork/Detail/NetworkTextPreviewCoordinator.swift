@@ -65,10 +65,6 @@ final class NetworkTextPreviewCoordinator {
     }
 
 #if DEBUG
-    var hasActivePreparationForTesting: Bool {
-        task != nil
-    }
-
     var activePreparationBodyIDForTesting: ObjectIdentifier? {
         pendingInput?.bodyID
     }
