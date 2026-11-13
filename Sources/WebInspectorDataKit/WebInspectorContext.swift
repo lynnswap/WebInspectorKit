@@ -553,13 +553,6 @@ package final class WebInspectorContext {
         return networkRequestStore.registration(forProxyID: id)?.request
     }
 
-#if DEBUG
-    package func domTreeRegistrationCountForTesting() -> Int {
-        pruneReleasedTreeStates()
-        return treeStates.count
-    }
-#endif
-
     func clearNetworkRequests() {
         networkRecorder.clearRequests()
     }
@@ -1008,18 +1001,6 @@ package final class WebInspectorContext {
     func xPath(for node: DOMNode) throws -> String {
         try registeredNode(node)
         return try currentDOMTreeSnapshot(containing: [node]).xPath(for: node.id)
-    }
-
-    func treeController(root: DOMNode) throws -> DOMTreeController {
-        guard nodesByID[root.id] === root else {
-            throw WebInspectorProxyError.disconnected(
-                "DOMTreeController root is not registered in this WebInspectorContext."
-            )
-        }
-        let tree = DOMTreeState(rootNode: root, selectedNode: selectedNode)
-        treeStates.append(WeakDOMTreeState(tree))
-        pruneReleasedTreeStates()
-        return DOMTreeController(tree: tree)
     }
 
     /// Hands the live tree states to the context that replaces this one, and

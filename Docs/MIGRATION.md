@@ -100,7 +100,8 @@ themselves, and DOM operations take the `DOMNode` instead of its ID.
 | `context.dom.setAttribute(_:value:on: id)`, `context.dom.setOuterHTML(_:of: id)` | The same methods with the node |
 | `context.selectorPath(for:)`, `context.xPath(for:)`, `context.hideHighlight()` | The same methods on `inspector.dom` |
 | `context.setElementPickerEnabled(_:)`, `context.dom.setInspectMode(enabled:)` | `inspector.dom.setElementPickerEnabled(_:)` |
-| `context.treeController()`, `context.treeController(root:)` | `inspector.dom.treeController()`, `inspector.dom.treeController(root:)` |
+| `context.treeController()` | `inspector.dom.treeController()` |
+| `context.treeController(root: node)` | Removed. A tree controller follows the document of the inspected page. |
 | `context.editHistory.undo()`, `context.editHistory.redo()` | `inspector.dom.undo()`, `inspector.dom.redo()` |
 | `context.css.styles(for: id)`, `context.css.refreshStyles(for: id)` | The same methods on `inspector.css`, with the node |
 | `context.setStyleHydrationActive(_:)`, `context.requestSetCSSProperty(_:enabled:options:)` | `inspector.css.setStyleHydrationActive(_:)`, `inspector.css.requestSetProperty(_:enabled:)` |
