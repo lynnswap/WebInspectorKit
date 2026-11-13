@@ -149,16 +149,6 @@ package final class WebInspectorContext {
         var bootstrapID: UInt64
     }
 
-    private struct DOMBootstrap {
-        var id: UInt64
-        var events: [DOM.Event]
-    }
-
-    private struct DOMDocumentLoad {
-        var id: UInt64
-        var bootstrap: DOMBootstrap?
-    }
-
     private struct OrderedEventWaiter {
         var sequence: UInt64
         var continuation: CheckedContinuation<Bool, Never>
@@ -351,9 +341,7 @@ package final class WebInspectorContext {
     private var orderedEventSubscriptionGeneration: UInt64
     private var lastOrderedEventSequence: UInt64
     private var orderedEventWaiters: [OrderedEventWaiter]
-    private var domDocumentLoad: DOMDocumentLoad?
-    private var nextDOMDocumentLoadID: UInt64
-    private var nextDOMBootstrapID: UInt64
+    private var domDocumentLoad = DOMDocumentLoadState()
 #if DEBUG
     private var eventPumpAppliedSequenceForTestingStorage: UInt64
     private var eventPumpAppliedWaitersForTesting: [UInt64: EventPumpAppliedWaiterForTesting]
@@ -362,8 +350,7 @@ package final class WebInspectorContext {
     /// The target each current-page domain lease was acquired on. CSS leases
     /// are tracked per style target in `styleTrackingLeases`.
     private var domainTrackingTargets: [WebInspectorEnabledDomain: WebInspectorTarget]
-    private let domNodes = DOMNodeIndex()
-    private let domTrees = DOMTreeStateRegistry()
+    private let domDocument = DOMDocumentStore()
     private let statusRelay: WebInspectorAsyncStreamRelay<Status>
     private let networkRecorder: NetworkEventRecorder
     private var networkRequestStore: NetworkRequestStore {
@@ -411,9 +398,6 @@ package final class WebInspectorContext {
         orderedEventSubscriptionGeneration = 0
         lastOrderedEventSequence = 0
         orderedEventWaiters = []
-        domDocumentLoad = nil
-        nextDOMDocumentLoadID = 0
-        nextDOMBootstrapID = 0
 #if DEBUG
         eventPumpAppliedSequenceForTestingStorage = 0
         eventPumpAppliedWaitersForTesting = [:]
@@ -429,14 +413,17 @@ package final class WebInspectorContext {
         pendingInspectedNodeID = nil
         pageHighlightState = nil
         nextPageHighlightOperationID = 0
-        domNodes.didRemoveNodes = { [weak self] removedIDs in
+        domDocument.nodes.didRemoveNodes = { [weak self] removedIDs in
             self?.domNodesDidLeaveIndex(removedIDs)
+        }
+        domDocument.styleInputsDidChange = { [weak self] nodeID in
+            self?.markSelectedStylesNeedsRefresh(for: nodeID)
         }
         #if DEBUG
         runtimeStore.stateDidChangeForTesting = { [stateChangesForTesting] in
             stateChangesForTesting.yield(())
         }
-        domNodes.didChangeForTesting = { [stateChangesForTesting] in
+        domDocument.nodes.didChangeForTesting = { [stateChangesForTesting] in
             stateChangesForTesting.yield(())
         }
         #endif
@@ -486,7 +473,7 @@ package final class WebInspectorContext {
         currentPageRetargetTask = nil
         documentReloadTask?.cancel()
         documentReloadTask = nil
-        cancelDOMDocumentLoad()
+        domDocumentLoad.cancel()
         inspectorInspectResolutionTask?.cancel()
         inspectorInspectResolutionTask = nil
         invalidateElementPicker()
@@ -496,7 +483,7 @@ package final class WebInspectorContext {
         teardownError = nil
         networkRecorder.beginAttachment()
         let generation = currentPageGeneration
-        let documentLoadID = beginDOMDocumentLoad()
+        let documentLoadID = domDocumentLoad.begin()
         startupTask = Task { [weak self, previousStartupTask, previousCurrentPageCleanupTask, generation] in
             await previousStartupTask?.value
             await previousCurrentPageCleanupTask?.value
@@ -534,7 +521,7 @@ package final class WebInspectorContext {
     }
 
     func node(for id: DOMNode.ID) -> DOMNode? {
-        return domNodes[id]
+        return domDocument.nodes[id]
     }
 
     func registeredRequest(
@@ -563,7 +550,7 @@ package final class WebInspectorContext {
         _ node: DOMNode?,
         reveal: DOMRevealPolicy = .selectAndScroll
     ) {
-        if let node, domNodes[node.id] !== node {
+        if let node, domDocument.nodes[node.id] !== node {
             return
         }
         pendingInspectedNodeID = nil
@@ -574,7 +561,7 @@ package final class WebInspectorContext {
         pageHighlightMaintenanceTask?.cancel()
         pageHighlightMaintenanceTask = nil
         selectedNode = node
-        domTrees.selectionChanged(node, reveal: reveal)
+        domDocument.trees.selectionChanged(node, reveal: reveal)
         notifyStatusChanged()
         refreshSelectedStyles()
     }
@@ -1002,15 +989,15 @@ package final class WebInspectorContext {
     /// Hands the live tree states to the context that replaces this one, and
     /// shows them that context's document.
     func transferTreeStates(to context: WebInspectorContext) {
-        domTrees.transfer(
-            to: context.domTrees,
+        domDocument.trees.transfer(
+            to: context.domDocument.trees,
             rootNode: context.rootNode,
             selectedNode: context.selectedNode
         )
     }
 
     func rootTreeController() -> DOMTreeController {
-        domTrees.makeController(rootNode: rootNode, selectedNode: selectedNode)
+        domDocument.trees.makeController(rootNode: rootNode, selectedNode: selectedNode)
     }
 
     func selectContext(_ context: RuntimeContext?) {
@@ -1151,7 +1138,7 @@ package final class WebInspectorContext {
         for node: DOMNode,
         depth: Int
     ) async {
-        guard domNodes[node.id] === node else {
+        guard domDocument.nodes[node.id] === node else {
             skipEvent("requestChildren ignored a DOMNode from a previous document generation")
             return
         }
@@ -1336,7 +1323,7 @@ package final class WebInspectorContext {
         currentPageCleanupTask = nil
         documentReloadTask?.cancel()
         documentReloadTask = nil
-        cancelDOMDocumentLoad()
+        domDocumentLoad.cancel()
         inspectorInspectResolutionTask?.cancel()
         inspectorInspectResolutionTask = nil
         inspectResolutionTask?.cancel()
@@ -1365,11 +1352,11 @@ package final class WebInspectorContext {
         documentLoadID: UInt64
     ) async {
         defer {
-            finishDOMDocumentLoad(id: documentLoadID)
+            domDocumentLoad.finish(documentLoadID)
         }
         guard Task.isCancelled == false,
               isCurrentPageGeneration(generation),
-              domDocumentLoad?.id == documentLoadID else {
+              domDocumentLoad.isCurrent(documentLoadID) else {
             return
         }
         if let teardownError = await disableEnabledDomainsBeforeRestart() {
@@ -1380,7 +1367,7 @@ package final class WebInspectorContext {
         }
         guard Task.isCancelled == false,
               isCurrentPageGeneration(generation),
-              domDocumentLoad?.id == documentLoadID else {
+              domDocumentLoad.isCurrent(documentLoadID) else {
             return
         }
 
@@ -1388,7 +1375,7 @@ package final class WebInspectorContext {
             let target = try await proxy.waitForCurrentPage()
             guard Task.isCancelled == false,
                   isCurrentPageGeneration(generation),
-                  domDocumentLoad?.id == documentLoadID else {
+                  domDocumentLoad.isCurrent(documentLoadID) else {
                 return
             }
             currentPage = target
@@ -1446,7 +1433,7 @@ package final class WebInspectorContext {
     private func disableStartupDomainsAfterCancellation(
         _ documentLoadID: UInt64
     ) async {
-        guard domDocumentLoad?.id == documentLoadID else {
+        guard domDocumentLoad.isCurrent(documentLoadID) else {
             return
         }
         if let error = await disableEnabledDomains() {
@@ -1546,36 +1533,36 @@ package final class WebInspectorContext {
     ) async throws -> LoadedDOMDocument {
         while true {
             guard Task.isCancelled == false,
-                  domDocumentLoad?.id == loadID else {
+                  domDocumentLoad.isCurrent(loadID) else {
                 throw CancellationError()
             }
             let generation = domDocumentGeneration
-            let bootstrapID = beginDOMBootstrap(loadID: loadID)
+            let bootstrapID = domDocumentLoad.beginBootstrap(loadID: loadID)
             let reply: WebInspectorProxyCommandReply<DOM.Node>
             do {
                 reply = try await target.dom.getDocumentWithReplyBoundary()
             } catch {
-                abandonDOMBootstrap(loadID: loadID, bootstrapID: bootstrapID)
+                domDocumentLoad.abandonBootstrap(loadID: loadID, bootstrapID: bootstrapID)
                 throw error
             }
             guard Task.isCancelled == false,
-                  domDocumentLoad?.id == loadID else {
-                abandonDOMBootstrap(loadID: loadID, bootstrapID: bootstrapID)
+                  domDocumentLoad.isCurrent(loadID) else {
+                domDocumentLoad.abandonBootstrap(loadID: loadID, bootstrapID: bootstrapID)
                 throw CancellationError()
             }
             guard await waitForOrderedEvents(
                 through: reply.receivedSequence
             ) else {
-                abandonDOMBootstrap(loadID: loadID, bootstrapID: bootstrapID)
+                domDocumentLoad.abandonBootstrap(loadID: loadID, bootstrapID: bootstrapID)
                 throw CancellationError()
             }
             guard Task.isCancelled == false,
-                  domDocumentLoad?.id == loadID else {
-                abandonDOMBootstrap(loadID: loadID, bootstrapID: bootstrapID)
+                  domDocumentLoad.isCurrent(loadID) else {
+                domDocumentLoad.abandonBootstrap(loadID: loadID, bootstrapID: bootstrapID)
                 throw CancellationError()
             }
             guard isDOMDocumentGeneration(generation) else {
-                abandonDOMBootstrap(loadID: loadID, bootstrapID: bootstrapID)
+                domDocumentLoad.abandonBootstrap(loadID: loadID, bootstrapID: bootstrapID)
                 continue
             }
             return LoadedDOMDocument(
@@ -1596,83 +1583,23 @@ package final class WebInspectorContext {
         if isDOMDocumentGeneration(document.generation) {
             return document
         }
-        abandonDOMBootstrap(loadID: loadID, bootstrapID: document.bootstrapID)
+        domDocumentLoad.abandonBootstrap(loadID: loadID, bootstrapID: document.bootstrapID)
         return try await loadCurrentDOMDocument(
             on: target,
             loadID: loadID
         )
     }
 
-    private func beginDOMDocumentLoad() -> UInt64 {
-        precondition(domDocumentLoad == nil, "Only one DOM document load may be active.")
-        let id = nextDOMDocumentLoadID
-        nextDOMDocumentLoadID += 1
-        domDocumentLoad = DOMDocumentLoad(id: id, bootstrap: nil)
-        return id
-    }
-
-    private func cancelDOMDocumentLoad() {
-        domDocumentLoad = nil
-    }
-
-    private func finishDOMDocumentLoad(id: UInt64) {
-        guard domDocumentLoad?.id == id else {
-            return
-        }
-        domDocumentLoad = nil
-    }
-
-    private func beginDOMBootstrap(loadID: UInt64) -> UInt64 {
-        guard var load = domDocumentLoad else {
-            preconditionFailure("DOM bootstrap requires an active document load.")
-        }
-        precondition(load.id == loadID, "DOM bootstrap must belong to the active document load.")
-        precondition(load.bootstrap == nil, "DOM document load already owns a bootstrap.")
-        let id = nextDOMBootstrapID
-        nextDOMBootstrapID += 1
-        load.bootstrap = DOMBootstrap(id: id, events: [])
-        domDocumentLoad = load
-        return id
-    }
-
-    private func abandonDOMBootstrap(loadID: UInt64, bootstrapID: UInt64) {
-        guard domDocumentLoad?.id == loadID,
-              domDocumentLoad?.bootstrap?.id == bootstrapID else {
-            return
-        }
-        domDocumentLoad?.bootstrap = nil
-    }
-
-    private func bufferDOMEventDuringDocumentLoad(_ event: DOM.Event) -> Bool {
-        guard var load = domDocumentLoad,
-              var bootstrap = load.bootstrap else {
-            return false
-        }
-        bootstrap.events.append(event)
-        load.bootstrap = bootstrap
-        domDocumentLoad = load
-        return true
-    }
-
     private func applyLoadedDOMDocument(
         _ document: LoadedDOMDocument,
         reason: DOMTreeSnapshotReason = .initialDocument
     ) {
-        guard let load = domDocumentLoad,
-              let bootstrap = load.bootstrap else {
-            preconditionFailure("Loaded DOM document requires an active bootstrap.")
-        }
-        precondition(
-            load.id == document.loadID,
-            "Loaded DOM document must own the active document load."
+        let bufferedEvents = domDocumentLoad.finishBootstrap(
+            loadID: document.loadID,
+            bootstrapID: document.bootstrapID
         )
-        precondition(
-            bootstrap.id == document.bootstrapID,
-            "Loaded DOM document must own the active bootstrap."
-        )
-        domDocumentLoad = nil
         applyDocument(document.node, reason: reason)
-        for event in bootstrap.events {
+        for event in bufferedEvents {
             apply(event)
         }
     }
@@ -1774,7 +1701,7 @@ package final class WebInspectorContext {
         currentPageRetargetTask?.cancel()
         currentPageCleanupTask?.cancel()
         documentReloadTask?.cancel()
-        cancelDOMDocumentLoad()
+        domDocumentLoad.cancel()
 
         if let proxyError = error as? WebInspectorProxyError {
             fail(proxyError)
@@ -1789,7 +1716,7 @@ package final class WebInspectorContext {
             pump.stop()
         }
         eventPumps = []
-        domDocumentLoad?.bootstrap = nil
+        domDocumentLoad.abandonBootstrap()
         resolveOrderedEventWaiters(reachedBoundary: false)
     }
 
@@ -1813,7 +1740,7 @@ package final class WebInspectorContext {
             case let .dom(value):
                 if case .documentUpdated = value {
                     apply(value)
-                } else if bufferDOMEventDuringDocumentLoad(value) == false {
+                } else if domDocumentLoad.buffer(value) == false {
                     apply(value)
                 }
             case let .css(value):
@@ -1946,13 +1873,13 @@ package final class WebInspectorContext {
         styleRefreshGeneration += 1
         selectedNode.setElementStyles(nil)
         self.selectedNode = nil
-        domTrees.selectionChanged(nil)
+        domDocument.trees.selectionChanged(nil)
         notifyStatusChanged()
     }
 
     @discardableResult
     private func registeredNode(_ node: DOMNode) throws -> DOMNode {
-        guard domNodes[node.id] === node else {
+        guard domDocument.nodes[node.id] === node else {
             throw WebInspectorProxyError.disconnected("DOMNode is not registered in this WebInspectorContext.")
         }
         return node
@@ -2107,7 +2034,7 @@ package final class WebInspectorContext {
 
     @discardableResult
     private func advanceDOMDocumentGeneration() -> Int {
-        domDocumentLoad?.bootstrap = nil
+        domDocumentLoad.abandonBootstrap()
         domDocumentGeneration += 1
         return domDocumentGeneration
     }
@@ -2175,15 +2102,15 @@ package final class WebInspectorContext {
             return
         }
 
-        precondition(domDocumentLoad == nil, "A DOM document load owner must absorb reload invalidations.")
+        precondition(domDocumentLoad.isLoading == false, "A DOM document load owner must absorb reload invalidations.")
         documentReloadTask?.cancel()
-        let documentLoadID = beginDOMDocumentLoad()
+        let documentLoadID = domDocumentLoad.begin()
         documentReloadTask = Task { [weak self, currentPage] in
             guard let self else {
                 return
             }
             defer {
-                self.finishDOMDocumentLoad(id: documentLoadID)
+                self.domDocumentLoad.finish(documentLoadID)
             }
             do {
                 let document = try await self.loadCurrentDOMDocument(
@@ -2248,11 +2175,11 @@ extension WebInspectorContext {
         currentPageRetargetTask?.cancel()
         documentReloadTask?.cancel()
         documentReloadTask = nil
-        cancelDOMDocumentLoad()
+        domDocumentLoad.cancel()
         let generation = advanceCurrentPageGeneration()
         advanceDOMDocumentGeneration()
         resetCurrentPageLifecycleModels()
-        let documentLoadID = beginDOMDocumentLoad()
+        let documentLoadID = domDocumentLoad.begin()
 
         currentPageRetargetTask = Task { [weak self, refreshedTarget, generation] in
             await self?.retargetCurrentPage(
@@ -2282,7 +2209,7 @@ extension WebInspectorContext {
         committedFrom previousTarget: WebInspectorTarget? = nil
     ) async {
         defer {
-            finishDOMDocumentLoad(id: documentLoadID)
+            domDocumentLoad.finish(documentLoadID)
             if isCurrentPageGeneration(generation) {
                 currentPageRetargetTask = nil
             }
@@ -2391,7 +2318,7 @@ extension WebInspectorContext {
         advanceDOMDocumentGeneration()
         resetDOM()
         runtimeStore.clearExecutionContexts(page: currentPage)
-        guard domDocumentLoad == nil else {
+        guard domDocumentLoad.isLoading == false else {
             return
         }
         reloadDocument()
@@ -2440,14 +2367,14 @@ extension WebInspectorContext {
         currentPageCleanupTask = nil
         documentReloadTask?.cancel()
         documentReloadTask = nil
-        cancelDOMDocumentLoad()
+        domDocumentLoad.cancel()
         cancelStyleToggleOperations()
         invalidateElementPicker()
         isElementPickerEnabled = false
         notifyStatusChanged()
         let generation = advanceCurrentPageGeneration()
         advanceDOMDocumentGeneration()
-        let documentLoadID = beginDOMDocumentLoad()
+        let documentLoadID = domDocumentLoad.begin()
 
         currentPageRetargetTask = Task { [weak self, generation] in
             await self?.retargetDestroyedCurrentPage(
@@ -2462,7 +2389,7 @@ extension WebInspectorContext {
         documentLoadID: UInt64
     ) async {
         defer {
-            finishDOMDocumentLoad(id: documentLoadID)
+            domDocumentLoad.finish(documentLoadID)
             if isCurrentPageGeneration(generation) {
                 currentPageRetargetTask = nil
             }
@@ -2516,45 +2443,23 @@ extension WebInspectorContext {
         case .documentUpdated:
             advanceDOMDocumentGeneration()
             resetDOM()
-            guard domDocumentLoad == nil else {
+            guard domDocumentLoad.isLoading == false else {
                 return
             }
             reloadDocument()
-        case let .setChildNodes(parent, nodes):
-            applySetChildNodes(parent: parent, nodes: nodes)
-        case let .childNodeInserted(parent, previous, node):
-            applyChildNodeInserted(parent: parent, previous: previous, node: node)
-        case let .childNodeRemoved(parent, node):
-            applyChildNodeRemoved(parent: parent, node: node)
-        case let .childNodeCountUpdated(id, count):
-            guard let node = domNodes[DOMNode.ID(id)] else {
-                let nodeID = DOMNode.ID(id)
-                loadFrameDocumentIfNeeded(forNodeID: nodeID, reason: "DOM.childNodeCountUpdated")
-                ignoreExpectedDOMMaterializationGap()
-                return
-            }
-            node.updateChildNodeCount(count)
-            domTrees.childCountChanged(node: node)
-        case let .attributeModified(id, name, value):
-            guard let node = domNodes[DOMNode.ID(id)] else {
-                let nodeID = DOMNode.ID(id)
-                loadFrameDocumentIfNeeded(forNodeID: nodeID, reason: "DOM.attributeModified")
-                ignoreExpectedDOMMaterializationGap()
-                return
-            }
-            node.setAttribute(name: name, value: value)
-            markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
-            domTrees.nodeChanged(node)
-        case let .attributeRemoved(id, name):
-            guard let node = domNodes[DOMNode.ID(id)] else {
-                let nodeID = DOMNode.ID(id)
-                loadFrameDocumentIfNeeded(forNodeID: nodeID, reason: "DOM.attributeRemoved")
-                ignoreExpectedDOMMaterializationGap()
-                return
-            }
-            node.removeAttribute(name: name)
-            markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
-            domTrees.nodeChanged(node)
+        case .setChildNodes,
+             .childNodeInserted,
+             .childNodeRemoved,
+             .childNodeCountUpdated,
+             .attributeModified,
+             .attributeRemoved,
+             .characterDataModified,
+             .detachedRoot,
+             .shadowRootPushed,
+             .shadowRootPopped,
+             .pseudoElementAdded,
+             .pseudoElementRemoved:
+            finishStructuralDOMEvent(domDocument.apply(event))
         case let .inlineStyleInvalidated(ids):
             if ids.isEmpty {
                 markSelectedStylesNeedsRefresh()
@@ -2563,16 +2468,6 @@ extension WebInspectorContext {
                     markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
                 }
             }
-        case let .characterDataModified(id, value):
-            guard let node = domNodes[DOMNode.ID(id)] else {
-                let nodeID = DOMNode.ID(id)
-                loadFrameDocumentIfNeeded(forNodeID: nodeID, reason: "DOM.characterDataModified")
-                ignoreExpectedDOMMaterializationGap()
-                return
-            }
-            node.setNodeValue(value)
-            markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
-            domTrees.nodeChanged(node)
         case let .inspect(id):
             if let command = elementPickerCommand {
                 guard command.documentEpoch == elementPickerDocumentEpoch else {
@@ -2586,7 +2481,7 @@ extension WebInspectorContext {
             pageHighlightState = nil
             notifyStatusChanged()
             let inspectedNodeID = DOMNode.ID(id)
-            guard let node = domNodes[inspectedNodeID] else {
+            guard let node = domDocument.nodes[inspectedNodeID] else {
                 loadFrameDocumentIfNeeded(forNodeID: inspectedNodeID, reason: "DOM.inspect")
                 WebInspectorDataKitLog.debug(
                     "DOM.inspect pending nodeID=\(String(describing: inspectedNodeID)) materialized=false root=\(String(describing: rootNode?.id))"
@@ -2608,19 +2503,6 @@ extension WebInspectorContext {
             inspectResolutionTask?.cancel()
             inspectResolutionTask = nil
             selectInspectedNode(node)
-        case .detachedRoot:
-            // Deferred by design: detached roots need a registry and selection
-            // policy outside the single connected tree (05-two-layer-sdk-design
-            // §detached roots). A pending inspect has its own lifecycle log.
-            ignoreExpectedDOMMaterializationGap()
-        case let .shadowRootPushed(host, root):
-            applyShadowRootPushed(host: host, root: root)
-        case let .shadowRootPopped(host, root):
-            applyShadowRootPopped(host: host, root: root)
-        case let .pseudoElementAdded(parent, element):
-            applyPseudoElementAdded(parent: parent, element: element)
-        case let .pseudoElementRemoved(parent, element):
-            applyPseudoElementRemoved(parent: parent, element: element)
         case .willDestroyDOMNode,
              .unknown:
             break
@@ -2631,8 +2513,8 @@ extension WebInspectorContext {
         _ node: DOM.Node,
         reason: DOMTreeSnapshotReason = .initialDocument
     ) {
-        rootNode = domNodes.materialize(node).node
-        domTrees.replaceSnapshot(rootNode: rootNode, selectedNode: selectedNode, reason: reason)
+        rootNode = domDocument.nodes.materialize(node).node
+        domDocument.trees.replaceSnapshot(rootNode: rootNode, selectedNode: selectedNode, reason: reason)
         resolvePendingInspectedNode(requestSubtreeIfNeeded: true)
     }
 
@@ -2699,8 +2581,8 @@ extension WebInspectorContext {
         domEditHistoryTarget = nil
         isElementPickerEnabled = false
         pendingInspectedNodeID = nil
-        domNodes.removeAll()
-        domTrees.replaceSnapshot(rootNode: rootNode, selectedNode: selectedNode, reason: .reset)
+        domDocument.nodes.removeAll()
+        domDocument.trees.replaceSnapshot(rootNode: rootNode, selectedNode: selectedNode, reason: .reset)
         notifyStatusChanged()
     }
 
@@ -2734,172 +2616,19 @@ extension WebInspectorContext {
         return pageHighlightState == nil
     }
 
-    private func applySetChildNodes(
-        parent: DOM.Node.ID,
-        nodes: [DOM.Node]
-    ) {
-        guard let parentNode = domNodes[DOMNode.ID(parent)] else {
-            let parentID = DOMNode.ID(parent)
-            loadFrameDocumentIfNeeded(forNodeID: parentID, reason: "DOM.setChildNodes")
+    /// Performs what a structural DOM event needs from the connection.
+    private func finishStructuralDOMEvent(_ outcome: DOMDocumentStore.EventOutcome) {
+        switch outcome {
+        case .applied:
+            break
+        case .materializedNodes:
+            resolvePendingInspectedNode(requestSubtreeIfNeeded: false)
+        case let .missingNode(nodeID, reason):
+            loadFrameDocumentIfNeeded(forNodeID: nodeID, reason: reason)
             ignoreExpectedDOMMaterializationGap()
-            return
-        }
-        let previousChildren: [DOMNode]
-        if case let .loaded(children) = parentNode.children {
-            previousChildren = children
-        } else {
-            previousChildren = []
-        }
-        let (newChildren, newSubtreeIDs) = domNodes.materialize(nodes)
-        let newChildIDs = Set(newChildren.map(\.id))
-        for previousChild in previousChildren where newChildIDs.contains(previousChild.id) == false {
-            domNodes.removeSubtree(previousChild, preserving: newSubtreeIDs)
-        }
-        parentNode.setChildren(newChildren)
-        domTrees.childrenReplaced(parent: parentNode)
-        resolvePendingInspectedNode(requestSubtreeIfNeeded: false)
-    }
-
-    private func applyChildNodeInserted(
-        parent: DOM.Node.ID,
-        previous: DOM.Node.ID?,
-        node: DOM.Node
-    ) {
-        guard let parentNode = domNodes[DOMNode.ID(parent)] else {
-            let parentID = DOMNode.ID(parent)
-            loadFrameDocumentIfNeeded(forNodeID: parentID, reason: "DOM.childNodeInserted")
+        case .ignoredGap:
             ignoreExpectedDOMMaterializationGap()
-            return
         }
-
-        var children: [DOMNode]
-        switch parentNode.children {
-        case let .unrequested(count) where count > 0:
-            parentNode.updateChildNodeCount(parentNode.childNodeCount + 1)
-            domTrees.childCountChanged(node: parentNode)
-            return
-        case .unrequested:
-            children = []
-        case let .loaded(loadedChildren):
-            children = loadedChildren
-        }
-        let inserted = domNodes.materialize(node).node
-        if let previous, let index = children.firstIndex(where: { $0.id == DOMNode.ID(previous) }) {
-            children.insert(inserted, at: children.index(after: index))
-        } else {
-            children.insert(inserted, at: 0)
-        }
-        parentNode.setChildren(children)
-        domTrees.childInserted(
-            parent: parentNode,
-            node: inserted,
-            previousSiblingID: previous.map(DOMNode.ID.init)
-        )
-        resolvePendingInspectedNode(requestSubtreeIfNeeded: false)
-    }
-
-    private func applyChildNodeRemoved(
-        parent: DOM.Node.ID,
-        node: DOM.Node.ID
-    ) {
-        guard let parentNode = domNodes[DOMNode.ID(parent)] else {
-            let parentID = DOMNode.ID(parent)
-            loadFrameDocumentIfNeeded(forNodeID: parentID, reason: "DOM.childNodeRemoved")
-            ignoreExpectedDOMMaterializationGap()
-            return
-        }
-
-        let removedID = DOMNode.ID(node)
-        guard let removedNode = domNodes[removedID] else {
-            loadFrameDocumentIfNeeded(forNodeID: removedID, reason: "DOM.childNodeRemoved")
-            ignoreExpectedDOMMaterializationGap()
-            return
-        }
-        domNodes.removeSubtree(removedNode)
-
-        guard case let .loaded(children) = parentNode.children else {
-            parentNode.updateChildNodeCount(max(0, parentNode.childNodeCount - 1))
-            domTrees.childCountChanged(node: parentNode)
-            return
-        }
-        parentNode.setChildren(children.filter { $0.id != removedID })
-        domTrees.childRemoved(parent: parentNode, nodeID: removedID)
-    }
-
-    private func applyShadowRootPushed(
-        host: DOM.Node.ID,
-        root payload: DOM.Node
-    ) {
-        guard let hostNode = domNodes[DOMNode.ID(host)] else {
-            let hostID = DOMNode.ID(host)
-            loadFrameDocumentIfNeeded(forNodeID: hostID, reason: "DOM.shadowRootPushed")
-            ignoreExpectedDOMMaterializationGap()
-            return
-        }
-
-        let rootNode = domNodes.materialize(payload).node
-        hostNode.appendShadowRoot(rootNode)
-        domTrees.childrenReplaced(parent: hostNode)
-        resolvePendingInspectedNode(requestSubtreeIfNeeded: false)
-    }
-
-    private func applyShadowRootPopped(
-        host: DOM.Node.ID,
-        root: DOM.Node.ID
-    ) {
-        guard let hostNode = domNodes[DOMNode.ID(host)] else {
-            let hostID = DOMNode.ID(host)
-            loadFrameDocumentIfNeeded(forNodeID: hostID, reason: "DOM.shadowRootPopped")
-            ignoreExpectedDOMMaterializationGap()
-            return
-        }
-
-        let rootID = DOMNode.ID(root)
-        guard let removedRoot = hostNode.removeShadowRoot(id: rootID) ?? domNodes[rootID] else {
-            ignoreExpectedDOMMaterializationGap()
-            return
-        }
-        domNodes.removeSubtree(removedRoot)
-        domTrees.childrenReplaced(parent: hostNode)
-    }
-
-    private func applyPseudoElementAdded(
-        parent: DOM.Node.ID,
-        element payload: DOM.Node
-    ) {
-        guard let parentNode = domNodes[DOMNode.ID(parent)] else {
-            let parentID = DOMNode.ID(parent)
-            loadFrameDocumentIfNeeded(forNodeID: parentID, reason: "DOM.pseudoElementAdded")
-            ignoreExpectedDOMMaterializationGap()
-            return
-        }
-
-        let (pseudoElement, materializedPayloadIDs) = domNodes.materialize(payload)
-        if let replacedElement = parentNode.setPseudoElement(pseudoElement) {
-            domNodes.removeSubtree(replacedElement, preserving: materializedPayloadIDs)
-        }
-        domTrees.childrenReplaced(parent: parentNode)
-        resolvePendingInspectedNode(requestSubtreeIfNeeded: false)
-    }
-
-    private func applyPseudoElementRemoved(
-        parent: DOM.Node.ID,
-        element: DOM.Node.ID
-    ) {
-        guard let parentNode = domNodes[DOMNode.ID(parent)] else {
-            let parentID = DOMNode.ID(parent)
-            loadFrameDocumentIfNeeded(forNodeID: parentID, reason: "DOM.pseudoElementRemoved")
-            ignoreExpectedDOMMaterializationGap()
-            return
-        }
-
-        let elementID = DOMNode.ID(element)
-        guard let removedElement = parentNode.removePseudoElement(id: elementID) ?? domNodes[elementID] else {
-            ignoreExpectedDOMMaterializationGap()
-            return
-        }
-        domNodes.removeSubtree(removedElement)
-        domTrees.childrenReplaced(parent: parentNode)
     }
 
     private func loadFrameDocumentIfNeeded(
@@ -2909,9 +2638,9 @@ extension WebInspectorContext {
         guard let frameTargetID = DOMNodeIndex.frameTargetID(for: nodeID) else {
             return
         }
-        if let root = domNodes.frameDocumentRoot(for: frameTargetID) {
-            if let owner = domNodes.attachFrameDocumentRoot(root, frameTargetID: frameTargetID) {
-                domTrees.childrenReplaced(parent: owner)
+        if let root = domDocument.nodes.frameDocumentRoot(for: frameTargetID) {
+            if let owner = domDocument.nodes.attachFrameDocumentRoot(root, frameTargetID: frameTargetID) {
+                domDocument.trees.childrenReplaced(parent: owner)
             }
             return
         }
@@ -2956,16 +2685,16 @@ extension WebInspectorContext {
         _ document: DOM.Node,
         frameTargetID: WebInspectorTarget.ID
     ) {
-        let frameRoot = domNodes.setFrameDocument(document, for: frameTargetID)
-        if let owner = domNodes.attachFrameDocumentRoot(frameRoot, frameTargetID: frameTargetID) {
-            domTrees.childrenReplaced(parent: owner)
+        let frameRoot = domDocument.nodes.setFrameDocument(document, for: frameTargetID)
+        if let owner = domDocument.nodes.attachFrameDocumentRoot(frameRoot, frameTargetID: frameTargetID) {
+            domDocument.trees.childrenReplaced(parent: owner)
         }
         resolvePendingInspectedNode(requestSubtreeIfNeeded: true)
     }
 
     private func detachFrameDocuments(forFrameID frameID: FrameID) {
-        domNodes.detachFrameDocuments(forFrameID: frameID) { owner in
-            domTrees.childrenReplaced(parent: owner)
+        domDocument.nodes.detachFrameDocuments(forFrameID: frameID) { owner in
+            domDocument.trees.childrenReplaced(parent: owner)
         }
     }
 
@@ -2978,7 +2707,7 @@ extension WebInspectorContext {
         styleRefreshTask = nil
         styleRefreshGeneration += 1
         self.selectedNode = nil
-        domTrees.selectionChanged(nil)
+        domDocument.trees.selectionChanged(nil)
         notifyStatusChanged()
     }
 
@@ -2995,7 +2724,7 @@ extension WebInspectorContext {
         guard let pendingInspectedNodeID else {
             return
         }
-        guard let inspectedNode = domNodes[pendingInspectedNodeID] else {
+        guard let inspectedNode = domDocument.nodes[pendingInspectedNodeID] else {
             if requestSubtreeIfNeeded {
                 requestMaterializationForPendingInspectedNode(pendingInspectedNodeID)
             }
@@ -3020,12 +2749,12 @@ extension WebInspectorContext {
         _ nodeID: DOMNode.ID
     ) {
         if let frameTargetID = DOMNodeIndex.frameTargetID(for: nodeID) {
-            if let frameRoot = domNodes.frameDocumentRoot(for: frameTargetID) {
+            if let frameRoot = domDocument.nodes.frameDocumentRoot(for: frameTargetID) {
                 WebInspectorDataKitLog.debug(
                     "DOM.inspect unresolved nodeID=\(String(describing: nodeID)); reattaching frame document root"
                 )
-                if let owner = domNodes.attachFrameDocumentRoot(frameRoot, frameTargetID: frameTargetID) {
-                    domTrees.childrenReplaced(parent: owner)
+                if let owner = domDocument.nodes.attachFrameDocumentRoot(frameRoot, frameTargetID: frameTargetID) {
+                    domDocument.trees.childrenReplaced(parent: owner)
                 }
             } else {
                 loadFrameDocumentIfNeeded(forFrameTargetID: frameTargetID, reason: "DOM.inspect")
@@ -3049,7 +2778,7 @@ extension WebInspectorContext {
                   self.isCurrentPageGeneration(pageGeneration),
                   self.isDOMDocumentGeneration(documentGeneration),
                   self.selectedNode?.id == nodeID,
-                  let selectedNode = self.domNodes[nodeID] else {
+                  let selectedNode = self.domDocument.nodes[nodeID] else {
                 return
             }
             do {
@@ -3827,7 +3556,7 @@ extension WebInspectorContext {
         }
         if let node = authority.node,
            let styles = authority.styles {
-            guard domNodes[node.id] === node,
+            guard domDocument.nodes[node.id] === node,
                   selectedNode === node,
                   node.elementStyles === styles else {
                 throw Self.staleCSSMutationError
