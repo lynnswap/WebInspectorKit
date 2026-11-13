@@ -227,6 +227,7 @@ final class WebInspectorAttachment {
                         continue
                     }
                     replaceContext(.detached())
+                    WebInspectorDataKitLog.error("Attaching failed: \(String(describing: error))")
                     lastAttachError = error
                     attachFailure = (error as? WebInspectorProxyError)
                         ?? .disconnected(String(describing: error))
