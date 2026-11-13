@@ -169,6 +169,16 @@ public final class WebInspectorContext {
         var wasEndedByInspect = false
     }
 
+    private enum ElementPickerCommandOutcome {
+        /// The reply was applied, or `Inspector.inspect` had already ended
+        /// the picker session.
+        case settled
+        /// The command's document was replaced before the reply.
+        /// `cleanupError` is the failure to turn inspect mode back off.
+        case replacedDocument(cleanupError: (any Error)?)
+        case failed(isEnabled: Bool, error: any Error)
+    }
+
     private struct PageHighlightState {
         enum Phase {
             case sending(Task<Void, any Error>)
@@ -306,7 +316,7 @@ public final class WebInspectorContext {
             #endif
         }
     }
-    private var elementPickerTask: Task<Void, any Error>?
+    private var elementPickerCommandTask: Task<ElementPickerCommandOutcome, Never>?
     private var elementPickerCommand: ElementPickerCommand?
     /// Advances when the document the picker belongs to is replaced.
     private var elementPickerDocumentEpoch: UInt64
@@ -380,7 +390,7 @@ public final class WebInspectorContext {
         inspectResolutionTask = nil
         pageHighlightMaintenanceTask = nil
         requestedElementPickerEnabled = nil
-        elementPickerTask = nil
+        elementPickerCommandTask = nil
         elementPickerCommand = nil
         elementPickerDocumentEpoch = 0
         frameDocumentLoadTasks = [:]
@@ -1017,32 +1027,67 @@ public final class WebInspectorContext {
     ) async throws {
         requireOwner(isolation)
         try Task.checkCancellation()
-        let pageGeneration = currentPageGeneration
-        let documentGeneration = domDocumentGeneration
-        let task: Task<Void, any Error>
-        if let elementPickerTask {
-            requestedElementPickerEnabled = isEnabled
-            task = elementPickerTask
-        } else {
+        let callerDocumentEpoch = elementPickerDocumentEpoch
+        // A pending request can outlive its command for a moment, until the
+        // callers waiting on that command resume. Replace it as well.
+        if elementPickerCommandTask == nil, requestedElementPickerEnabled == nil {
             guard isEnabled != isElementPickerEnabled else {
                 return
             }
             _ = try currentPageOrThrow()
-            requestedElementPickerEnabled = isEnabled
-            // The task does not inherit caller cancellation: once WebKit
-            // accepts a command, its reply decides the picker state.
-            task = Task { [weak self] in
-                _ = isolation
-                try await self?.applyRequestedElementPickerState(isolation: isolation)
-            }
-            elementPickerTask = task
         }
-        try await task.value
-        guard pageGeneration == currentPageGeneration,
-              documentGeneration == domDocumentGeneration else {
-            throw WebInspectorProxyError.disconnected(
-                "DOM element picker operation no longer belongs to the current document."
-            )
+        requestedElementPickerEnabled = isEnabled
+
+        while true {
+            let outcome: ElementPickerCommandOutcome
+            if let elementPickerCommandTask {
+                outcome = await elementPickerCommandTask.value
+            } else {
+                guard let requested = requestedElementPickerEnabled,
+                      requested != isElementPickerEnabled else {
+                    requestedElementPickerEnabled = nil
+                    return
+                }
+                let page: WebInspectorTarget
+                do {
+                    page = try currentPageOrThrow()
+                } catch {
+                    requestedElementPickerEnabled = nil
+                    throw error
+                }
+                // Record the command before its task is scheduled, so a
+                // document replaced in between is seen as a replacement.
+                let documentEpoch = elementPickerDocumentEpoch
+                elementPickerCommand = ElementPickerCommand(documentEpoch: documentEpoch)
+                // The task does not inherit caller cancellation: once WebKit
+                // accepts a command, its reply decides the picker state.
+                let task = Task<ElementPickerCommandOutcome, Never> {
+                    _ = isolation
+                    return await self.sendElementPickerCommand(
+                        requested,
+                        on: page,
+                        documentEpoch: documentEpoch,
+                        isolation: isolation
+                    )
+                }
+                elementPickerCommandTask = task
+                outcome = await task.value
+            }
+
+            let belongsToCurrentDocument = callerDocumentEpoch == elementPickerDocumentEpoch
+            switch outcome {
+            case let .failed(failedState, error) where belongsToCurrentDocument && failedState == isEnabled:
+                throw error
+            case let .replacedDocument(cleanupError?) where belongsToCurrentDocument == false:
+                throw cleanupError
+            case .settled, .failed, .replacedDocument:
+                break
+            }
+            guard belongsToCurrentDocument else {
+                throw WebInspectorProxyError.disconnected(
+                    "DOM element picker operation no longer belongs to the current document."
+                )
+            }
         }
     }
 
@@ -1054,56 +1099,71 @@ public final class WebInspectorContext {
         try await setElementPickerEnabled(!isEnabled, isolation: isolation)
     }
 
-    /// Sends `DOM.setInspectModeEnabled` until the picker matches the latest
-    /// request, one command at a time.
-    private func applyRequestedElementPickerState(
+    /// Sends the `DOM.setInspectModeEnabled` command recorded in
+    /// `elementPickerCommand` and applies its reply unless the document was
+    /// replaced or `Inspector.inspect` ended the picker session first.
+    private func sendElementPickerCommand(
+        _ isEnabled: Bool,
+        on page: WebInspectorTarget,
+        documentEpoch: UInt64,
         isolation: isolated (any Actor)
-    ) async throws {
+    ) async -> ElementPickerCommandOutcome {
         requireOwner(isolation)
         defer {
-            elementPickerTask = nil
+            elementPickerCommand = nil
+            elementPickerCommandTask = nil
         }
+        guard documentEpoch == elementPickerDocumentEpoch else {
+            return .replacedDocument(cleanupError: nil)
+        }
+        WebInspectorDataKitLog.debug(
+            "DOM picker setInspectMode start enabled=\(isEnabled) target=\(page.id.rawValue)"
+        )
+        let result: Result<Void, any Error>
         do {
-            while let isEnabled = requestedElementPickerEnabled,
-                  isEnabled != isElementPickerEnabled {
-                let page = try currentPageOrThrow()
-                elementPickerCommand = ElementPickerCommand(documentEpoch: elementPickerDocumentEpoch)
-                WebInspectorDataKitLog.debug(
-                    "DOM picker setInspectMode start enabled=\(isEnabled) target=\(page.id.rawValue)"
-                )
-                defer {
-                    elementPickerCommand = nil
-                }
-                try await page.dom.setInspectMode(enabled: isEnabled)
-                guard let command = elementPickerCommand else {
-                    continue
-                }
-                guard command.documentEpoch == elementPickerDocumentEpoch else {
-                    // The document that asked for the picker was replaced
-                    // while the command was in flight. Leave inspect mode off.
-                    if isEnabled {
-                        try await page.dom.setInspectMode(enabled: false)
-                    }
-                    continue
-                }
-                guard command.wasEndedByInspect == false else {
-                    continue
-                }
-                isElementPickerEnabled = isEnabled
-                if isEnabled {
-                    pageHighlightState = nil
-                }
-                notifyStatusChanged()
-                WebInspectorDataKitLog.debug(
-                    "DOM picker setInspectMode finished enabled=\(isEnabled) target=\(page.id.rawValue)"
-                )
-            }
-            requestedElementPickerEnabled = nil
+            try await page.dom.setInspectMode(enabled: isEnabled)
+            result = .success(())
         } catch {
-            requestedElementPickerEnabled = nil
-            WebInspectorDataKitLog.debug("DOM picker setInspectMode failed: \(String(describing: error))")
-            throw error
+            result = .failure(error)
         }
+
+        guard documentEpoch == elementPickerDocumentEpoch else {
+            // The document that asked for the picker was replaced while the
+            // command was in flight. Leave inspect mode off.
+            guard isEnabled, case .success = result else {
+                return .replacedDocument(cleanupError: nil)
+            }
+            do {
+                try await page.dom.setInspectMode(enabled: false)
+                return .replacedDocument(cleanupError: nil)
+            } catch {
+                WebInspectorDataKitLog.debug(
+                    "DOM picker disable for a replaced document failed target=\(page.id.rawValue): \(String(describing: error))"
+                )
+                return .replacedDocument(cleanupError: error)
+            }
+        }
+        if elementPickerCommand?.wasEndedByInspect == true {
+            return .settled
+        }
+        if case let .failure(error) = result {
+            WebInspectorDataKitLog.debug(
+                "DOM picker setInspectMode failed enabled=\(isEnabled) target=\(page.id.rawValue): \(String(describing: error))"
+            )
+            if requestedElementPickerEnabled == isEnabled {
+                requestedElementPickerEnabled = nil
+            }
+            return .failed(isEnabled: isEnabled, error: error)
+        }
+        isElementPickerEnabled = isEnabled
+        if isEnabled {
+            pageHighlightState = nil
+        }
+        notifyStatusChanged()
+        WebInspectorDataKitLog.debug(
+            "DOM picker setInspectMode finished enabled=\(isEnabled) target=\(page.id.rawValue)"
+        )
+        return .settled
     }
 
     /// Drops the pending picker request because its document was replaced.
