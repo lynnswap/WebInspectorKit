@@ -438,7 +438,7 @@ struct NetworkSecurityViewControllerTests {
     }
 
     private func makeRequest(id: String, url: String) -> NetworkRequest {
-        let context = WebInspectorContext.preview(isolation: MainActor.shared)
+        let context = WebInspectorContext.preview()
         return NetworkRequest(
             request: Network.Request(
                 id: Network.Request.ID(id),

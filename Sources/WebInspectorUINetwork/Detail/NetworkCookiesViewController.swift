@@ -23,6 +23,7 @@ package final class NetworkCookiesViewController: UICollectionViewController {
             self.storage = storage
         }
 
+        @MainActor
         package init(request: NetworkRequest) {
             storage = .request(
                 id: request.id,

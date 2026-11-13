@@ -76,6 +76,7 @@ public struct DOMMutationResult: Sendable, Hashable {
 /// Node IDs address the currently registered model in this controller's
 /// context. They do not revive a retained ``DOMNode`` from an earlier document
 /// or from another context. See <doc:ModelRegistrationLifetimes>.
+@MainActor
 public final class DOMModelController {
     private let context: WebInspectorContext
 
@@ -84,26 +85,24 @@ public final class DOMModelController {
     }
 
     /// Returns a live tree controller rooted at the current document.
-    public func treeController(isolation: isolated (any Actor) = #isolation) -> DOMTreeController {
-        context.rootTreeController(isolation: isolation)
+    public func treeController() -> DOMTreeController {
+        context.rootTreeController()
     }
 
     /// Requests regular child nodes for a DOM node.
     public func requestChildren(
         of nodeID: DOMNode.ID,
-        depth: Int = 1,
-        isolation: isolated (any Actor) = #isolation
+        depth: Int = 1
     ) async throws {
-        try await context.requestChildren(for: nodeID, depth: depth, isolation: isolation)
+        try await context.requestChildren(for: nodeID, depth: depth)
     }
 
     /// Selects a DOM node and optionally asks tree views to reveal it.
     public func select(
         _ nodeID: DOMNode.ID?,
-        reveal: DOMRevealPolicy = .selectAndScroll,
-        isolation: isolated (any Actor) = #isolation
+        reveal: DOMRevealPolicy = .selectAndScroll
     ) throws {
-        try context.selectNode(nodeID, reveal: reveal, isolation: isolation)
+        try context.selectNode(nodeID, reveal: reveal)
     }
 
     /// Sets an attribute value on a DOM node.
@@ -111,60 +110,54 @@ public final class DOMModelController {
         _ name: String,
         value: String,
         on nodeID: DOMNode.ID,
-        options: WebInspectorMutationOptions = .automatic,
-        isolation: isolated (any Actor) = #isolation
+        options: WebInspectorMutationOptions = .automatic
     ) async throws {
-        try await context.setDOMAttribute(name, value: value, on: nodeID, options: options, isolation: isolation)
+        try await context.setDOMAttribute(name, value: value, on: nodeID, options: options)
     }
 
     /// Replaces a DOM node with the supplied outer HTML.
     public func setOuterHTML(
         _ html: String,
         of nodeID: DOMNode.ID,
-        options: WebInspectorMutationOptions = .automatic,
-        isolation: isolated (any Actor) = #isolation
+        options: WebInspectorMutationOptions = .automatic
     ) async throws {
-        try await context.setDOMOuterHTML(html, of: nodeID, options: options, isolation: isolation)
+        try await context.setDOMOuterHTML(html, of: nodeID, options: options)
     }
 
     /// Removes DOM nodes from the inspected document.
     public func remove(
         _ nodeIDs: [DOMNode.ID],
-        options: WebInspectorMutationOptions = .automatic,
-        isolation: isolated (any Actor) = #isolation
+        options: WebInspectorMutationOptions = .automatic
     ) async throws -> DOMMutationResult {
-        try await context.removeDOMNodes(nodeIDs, options: options, isolation: isolation)
+        try await context.removeDOMNodes(nodeIDs, options: options)
     }
 
     /// Highlights a DOM node in the inspected page.
     public func highlight(
-        _ nodeID: DOMNode.ID,
-        isolation: isolated (any Actor) = #isolation
+        _ nodeID: DOMNode.ID
     ) async throws {
-        try await context.highlightNode(for: nodeID, isolation: isolation)
+        try await context.highlightNode(for: nodeID)
     }
 
     /// Clears the current DOM highlight.
-    public func hideHighlight(isolation: isolated (any Actor) = #isolation) async throws {
-        try await context.hideHighlight(isolation: isolation)
+    public func hideHighlight() async throws {
+        try await context.hideHighlight()
     }
 
     /// Enables or disables WebKit's element picker.
     public func setInspectMode(
-        enabled: Bool,
-        isolation: isolated (any Actor) = #isolation
+        enabled: Bool
     ) async throws {
-        try await context.setElementPickerEnabled(enabled, isolation: isolation)
+        try await context.setElementPickerEnabled(enabled)
     }
 
-    package func toggleInspectMode(
-        isolation: isolated (any Actor) = #isolation
-    ) async throws {
-        try await context.toggleElementPickerEnabled(isolation: isolation)
+    package func toggleInspectMode() async throws {
+        try await context.toggleElementPickerEnabled()
     }
 }
 
 /// Domain operation surface for CSS model commands.
+@MainActor
 public final class CSSModelController {
     private let context: WebInspectorContext
 
@@ -174,36 +167,32 @@ public final class CSSModelController {
 
     /// Returns observable CSS styles for a DOM node.
     public func styles(
-        for nodeID: DOMNode.ID,
-        isolation: isolated (any Actor) = #isolation
+        for nodeID: DOMNode.ID
     ) throws -> CSSStyles {
-        try context.styles(for: nodeID, isolation: isolation)
+        try context.styles(for: nodeID)
     }
 
     /// Requests a CSS style refresh for a DOM node.
     public func refreshStyles(
-        for nodeID: DOMNode.ID,
-        isolation: isolated (any Actor) = #isolation
+        for nodeID: DOMNode.ID
     ) throws {
-        _ = try context.refreshStyles(for: nodeID, isolation: isolation)
+        _ = try context.refreshStyles(for: nodeID)
     }
 
     /// Controls whether DataKit should hydrate CSS styles automatically.
     public func setStyleHydrationActive(
-        _ active: Bool,
-        isolation: isolated (any Actor) = #isolation
+        _ active: Bool
     ) {
-        context.setStyleHydrationActive(active, isolation: isolation)
+        context.setStyleHydrationActive(active)
     }
 
     /// Enables or disables a CSS declaration.
     public func setProperty(
         _ propertyID: CSSStyleProperty.ID,
         enabled: Bool,
-        options: WebInspectorMutationOptions = .automatic,
-        isolation: isolated (any Actor) = #isolation
+        options: WebInspectorMutationOptions = .automatic
     ) async throws {
-        try await context.setCSSProperty(propertyID, enabled: enabled, options: options, isolation: isolation)
+        try await context.setCSSProperty(propertyID, enabled: enabled, options: options)
     }
 
     /// Starts an asynchronous CSS declaration toggle request.
@@ -211,44 +200,41 @@ public final class CSSModelController {
     public func requestSetProperty(
         _ propertyID: CSSStyleProperty.ID,
         enabled: Bool,
-        options: WebInspectorMutationOptions = .automatic,
-        isolation: isolated (any Actor) = #isolation
+        options: WebInspectorMutationOptions = .automatic
     ) -> Bool {
-        context.requestSetCSSProperty(propertyID, enabled: enabled, options: options, isolation: isolation)
+        context.requestSetCSSProperty(propertyID, enabled: enabled, options: options)
     }
 
     /// Replaces the declaration text for a CSS property.
     public func setDeclarationText(
         _ text: String,
         for propertyID: CSSStyleProperty.ID,
-        options: WebInspectorMutationOptions = .automatic,
-        isolation: isolated (any Actor) = #isolation
+        options: WebInspectorMutationOptions = .automatic
     ) async throws {
-        try await context.setCSSDeclarationText(text, for: propertyID, options: options, isolation: isolation)
+        try await context.setCSSDeclarationText(text, for: propertyID, options: options)
     }
 
     /// Replaces a CSS rule selector.
     public func setRuleSelector(
         _ selector: String,
         for ruleID: CSSStyleRule.ID,
-        options: WebInspectorMutationOptions = .automatic,
-        isolation: isolated (any Actor) = #isolation
+        options: WebInspectorMutationOptions = .automatic
     ) async throws {
-        try await context.setCSSRuleSelector(selector, for: ruleID, options: options, isolation: isolation)
+        try await context.setCSSRuleSelector(selector, for: ruleID, options: options)
     }
 
     /// Replaces the full text of a stylesheet.
     public func setStyleSheetText(
         _ text: String,
         for styleSheetID: CSS.StyleSheet.ID,
-        options: WebInspectorMutationOptions = .automatic,
-        isolation: isolated (any Actor) = #isolation
+        options: WebInspectorMutationOptions = .automatic
     ) async throws {
-        try await context.setCSSStyleSheetText(text, for: styleSheetID, options: options, isolation: isolation)
+        try await context.setCSSStyleSheetText(text, for: styleSheetID, options: options)
     }
 }
 
 /// Domain operation surface for page-level commands.
+@MainActor
 public final class PageModelController {
     private let context: WebInspectorContext
 
@@ -258,14 +244,14 @@ public final class PageModelController {
 
     /// Reloads the inspected page.
     public func reload(
-        ignoringCache: Bool = false,
-        isolation: isolated (any Actor) = #isolation
+        ignoringCache: Bool = false
     ) async throws {
-        try await context.reloadPage(ignoringCache: ignoringCache, isolation: isolation)
+        try await context.reloadPage(ignoringCache: ignoringCache)
     }
 }
 
 /// Domain operation surface for Runtime model commands.
+@MainActor
 public final class RuntimeModelController {
     private let context: WebInspectorContext
 
@@ -276,14 +262,14 @@ public final class RuntimeModelController {
     /// Evaluates JavaScript in the selected or supplied Runtime context.
     public func evaluate(
         _ expression: String,
-        in runtimeContext: RuntimeContext? = nil,
-        isolation: isolated (any Actor) = #isolation
+        in runtimeContext: RuntimeContext? = nil
     ) async throws -> RuntimeEvaluation {
-        try await context.evaluate(expression, in: runtimeContext, isolation: isolation)
+        try await context.evaluate(expression, in: runtimeContext)
     }
 }
 
 /// Domain operation surface for Network model queries and commands.
+@MainActor
 public final class NetworkModelController {
     private let context: WebInspectorContext
 
@@ -293,29 +279,28 @@ public final class NetworkModelController {
 
     /// Creates observable network request results.
     public func fetchedResults(
-        for query: NetworkRequestQuery = .init(),
-        isolation: isolated (any Actor) = #isolation
+        for query: NetworkRequestQuery = .init()
     ) -> WebInspectorFetchedResults<NetworkRequest> {
-        context.networkFetchedResults(for: query, isolation: isolation)
+        context.networkFetchedResults(for: query)
     }
 
     /// Creates a controller for observable network request results.
     public func fetchedResultsController(
-        for query: NetworkRequestQuery = .init(),
-        isolation: isolated (any Actor) = #isolation
+        for query: NetworkRequestQuery = .init()
     ) -> WebInspectorFetchedResultsController<NetworkRequest> {
         WebInspectorFetchedResultsController(
-            fetchedResults: fetchedResults(for: query, isolation: isolation)
+            fetchedResults: fetchedResults(for: query)
         )
     }
 
     /// Clears recorded network requests.
-    public func clearRequests(isolation: isolated (any Actor) = #isolation) {
-        context.clearNetworkRequests(isolation: isolation)
+    public func clearRequests() {
+        context.clearNetworkRequests()
     }
 }
 
 /// Domain operation surface for Console model queries and commands.
+@MainActor
 public final class ConsoleModelController {
     private let context: WebInspectorContext
 
@@ -325,24 +310,23 @@ public final class ConsoleModelController {
 
     /// Creates observable console message results.
     public func fetchedResults(
-        for query: ConsoleMessageQuery = .init(),
-        isolation: isolated (any Actor) = #isolation
+        for query: ConsoleMessageQuery = .init()
     ) -> WebInspectorFetchedResults<ConsoleMessage> {
-        context.consoleFetchedResults(for: query, isolation: isolation)
+        context.consoleFetchedResults(for: query)
     }
 
     /// Creates a controller for observable console message results.
     public func fetchedResultsController(
-        for query: ConsoleMessageQuery = .init(),
-        isolation: isolated (any Actor) = #isolation
+        for query: ConsoleMessageQuery = .init()
     ) -> WebInspectorFetchedResultsController<ConsoleMessage> {
         WebInspectorFetchedResultsController(
-            fetchedResults: fetchedResults(for: query, isolation: isolation)
+            fetchedResults: fetchedResults(for: query)
         )
     }
 }
 
 /// Undo/redo surface for edits recorded through DataKit model operations.
+@MainActor
 public final class WebInspectorEditHistory {
     private let context: WebInspectorContext
 
@@ -351,13 +335,13 @@ public final class WebInspectorEditHistory {
     }
 
     /// Undoes the most recent edit recorded through DataKit.
-    public func undo(isolation: isolated (any Actor) = #isolation) async throws {
-        try await context.undoDOMChange(isolation: isolation)
+    public func undo() async throws {
+        try await context.undoDOMChange()
     }
 
     /// Redoes the most recent edit recorded through DataKit.
-    public func redo(isolation: isolated (any Actor) = #isolation) async throws {
-        try await context.redoDOMChange(isolation: isolation)
+    public func redo() async throws {
+        try await context.redoDOMChange()
     }
 }
 

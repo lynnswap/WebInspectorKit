@@ -2,6 +2,7 @@ import Testing
 import WebInspectorDataKit
 import WebInspectorProxyKitTesting
 
+@MainActor
 @Test
 func webInspectorDataKitPublicSurfaceIsUsableFromConsumerPackage() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()

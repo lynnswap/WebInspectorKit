@@ -7,6 +7,7 @@ import WebInspectorProxyKit
 /// The store holds state only. The owning context sends Runtime commands and
 /// passes its current page when a decision depends on it. Calls must come from
 /// the context's actor.
+@MainActor
 final class RuntimeModelStore {
     enum ObjectOwner: Hashable {
         case client

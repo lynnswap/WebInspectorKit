@@ -356,7 +356,7 @@ public final class WebInspectorSession {
     }
 
     private static func makeDetachedDataContext() -> WebInspectorContext {
-        WebInspectorContext.detached(isolation: MainActor.shared)
+        WebInspectorContext.detached()
     }
 }
 

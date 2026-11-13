@@ -9,8 +9,7 @@ func retainedFetchedResultsFinishStreamsAndReportStaleUpdatesFromConsumerPackage
     let runtime = try await WebInspectorProxyTestRuntime.start()
     var container: WebInspectorContainer? = WebInspectorContainer(proxy: runtime.proxy)
     var context: WebInspectorContext? = WebInspectorContext(
-        try #require(container),
-        isolation: MainActor.shared
+        try #require(container)
     )
     let retainedQuery = NetworkRequestQuery(
         filter: .method(equals: "GET"),

@@ -475,6 +475,7 @@ extension WebInspectorFetchedResultsIndexPath: Comparable {
 ///
 /// The controller shares the fetched results' registration and transaction
 /// stream lifetime. See <doc:ModelRegistrationLifetimes>.
+@MainActor
 public final class WebInspectorFetchedResultsController<Model: WebInspectorPersistentModel> {
     /// The observable fetched-results model.
     public let fetchedResults: WebInspectorFetchedResults<Model>
@@ -511,10 +512,9 @@ public extension WebInspectorFetchedResultsController where Model == NetworkRequ
 
     /// Replaces the query and updates the result contents atomically.
     func updateQuery(
-        _ query: NetworkRequestQuery,
-        isolation: isolated (any Actor) = #isolation
+        _ query: NetworkRequestQuery
     ) throws {
-        try fetchedResults.updateQuery(query, isolation: isolation)
+        try fetchedResults.updateQuery(query)
     }
 }
 
@@ -524,9 +524,8 @@ public extension WebInspectorFetchedResultsController where Model == ConsoleMess
 
     /// Replaces the query and updates the result contents atomically.
     func updateQuery(
-        _ query: ConsoleMessageQuery,
-        isolation: isolated (any Actor) = #isolation
+        _ query: ConsoleMessageQuery
     ) throws {
-        try fetchedResults.updateQuery(query, isolation: isolation)
+        try fetchedResults.updateQuery(query)
     }
 }

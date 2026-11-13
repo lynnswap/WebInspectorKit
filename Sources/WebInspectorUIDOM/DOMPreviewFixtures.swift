@@ -24,7 +24,7 @@ package enum DOMPreviewFixtures {
     package static func makeWebInspectorContext(
         document: DOM.Node = previewProxyDocument()
     ) -> WebInspectorContext {
-        let context = WebInspectorContext.preview(isolation: MainActor.shared)
+        let context = WebInspectorContext.preview()
         context.seedDOMDocument(document)
         return context
     }

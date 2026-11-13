@@ -398,6 +398,7 @@ public struct ConsoleMessageQuery: Hashable, Sendable {
 }
 
 extension ConsoleMessageQuery.Filter {
+    @MainActor
     package func matches(_ message: ConsoleMessage) -> Bool {
         switch storage {
         case let .source(source):
@@ -419,6 +420,7 @@ extension ConsoleMessageQuery.Filter {
 }
 
 extension ConsoleMessageQuery.Sort {
+    @MainActor
     package func compare(_ lhs: ConsoleMessage, _ rhs: ConsoleMessage) -> ComparisonResult {
         let comparison: ComparisonResult
         let order: SortOrder

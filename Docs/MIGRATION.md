@@ -20,6 +20,20 @@ initializers remain synchronous after preparation. DataKit, ProxyKit, and
 WebKitRuntime consumers that do not use the built-in UIKit UI do not need this
 UI preparation step.
 
+### WebInspectorDataKit is main-actor isolated
+
+`WebInspectorContext`, the domain controllers, the fetched-results types, and
+the model classes (`DOMNode`, `NetworkRequest`, `NetworkBody`,
+`WebSocketState`, `ConsoleMessage`, `RuntimeContext`, `RuntimeObject`,
+`CSSStyles`) are now `@MainActor`. Their methods no longer take an
+`isolation:` parameter, and a call from another actor is a compile-time error
+where it used to trap at run time.
+
+Remove `isolation:` arguments, and create contexts with
+`WebInspectorContext(container)` or `container.mainContext`. Code that kept a
+context on its own actor must hop to the main actor to use it. Model
+identities (`id`) stay readable from any isolation.
+
 ### Element picker requests ignore caller cancellation
 
 `WebInspectorContext.setElementPickerEnabled(_:)` and

@@ -80,7 +80,7 @@ func overlappingElementPickerEnableAndDisableLinearizeLatestIntent() async throw
 @MainActor
 @Test
 func unavailableElementPickerRequestDoesNotChangeNextToggleIntent() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let unavailableError = WebInspectorProxyError.disconnected(
         "WebInspectorDataKit has no current page target."
     )

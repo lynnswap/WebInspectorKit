@@ -199,7 +199,7 @@ private struct DOMTreeMenuModelFixture {
 
 @MainActor
 private func makeMenuFixture() throws -> DOMTreeMenuModelFixture {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     context.seedDOMDocument(menuFixtureDocument())
     let divID = DOMNode.ID(DOM.Node.ID("div"))
     let inputID = DOMNode.ID(DOM.Node.ID("input"))

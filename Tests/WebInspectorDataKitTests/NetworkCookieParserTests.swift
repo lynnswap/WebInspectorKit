@@ -4,6 +4,7 @@ import Testing
 
 @Suite
 struct NetworkCookieParserTests {
+    @MainActor
     @Test
     func absentAndBlankHeadersRemainDistinct() throws {
         #expect(NetworkCookieParser.parseRequestHeaders([:]) == nil)
@@ -29,6 +30,7 @@ struct NetworkCookieParserTests {
         requireHashableSendable(responseReport)
     }
 
+    @MainActor
     @Test
     func caseVariantHeaderFieldsAreRejectedInDeterministicOrder() throws {
         let requestHeaders = [
@@ -64,6 +66,7 @@ struct NetworkCookieParserTests {
         #expect(responseReport.status == .unparsed)
     }
 
+    @MainActor
     @Test
     func requestCookiesPreserveOrderDuplicatesAndUnnormalizedValues() throws {
         let rawHeader = "\tfirst = a=b== ; quoted=\"x,y\"; encoded=%2F%3D; first=again\t"
@@ -80,6 +83,7 @@ struct NetworkCookieParserTests {
         ])
     }
 
+    @MainActor
     @Test
     func requestCookieDiagnosticsPreserveInvalidFragments() throws {
         let partial = try #require(NetworkCookieParser.parseRequestHeaders([
@@ -102,6 +106,7 @@ struct NetworkCookieParserTests {
         #expect(unparsed.status == .unparsed)
     }
 
+    @MainActor
     @Test
     func requestCookieNamesMustBeHTTPTokens() throws {
         let report = try #require(NetworkCookieParser.parseRequestHeaders([
@@ -123,6 +128,7 @@ struct NetworkCookieParserTests {
         #expect(report.status == .partial)
     }
 
+    @MainActor
     @Test
     func requestControlCharactersRejectOnlyAffectedFragments() throws {
         let report = try #require(NetworkCookieParser.parseRequestHeaders([
@@ -146,6 +152,7 @@ struct NetworkCookieParserTests {
         #expect(report.status == .partial)
     }
 
+    @MainActor
     @Test
     func responseCookiePreservesOWSValuesAttributesAndTypedProjections() throws {
         let rawHeader = "\tname \t= \"a,b\"==%2F \t; Domain=.Example.COM; Path=/a,b; Expires=Wed, 09 Jun 2021 10:18:14 GMT; Max-Age=-42; Secure; HttpOnly; Partitioned; SameSite=Lax; Priority=High; Flag; X = one=two "
@@ -180,6 +187,7 @@ struct NetworkCookieParserTests {
         #expect(cookie.unknownAttributes.map(\.value) == ["High", nil, "one=two"])
     }
 
+    @MainActor
     @Test(arguments: [
         "a=b, c=d",
         "a=b,\t c \t= d",
@@ -199,6 +207,7 @@ struct NetworkCookieParserTests {
         #expect(report.status == .ambiguousCombined)
     }
 
+    @MainActor
     @Test(arguments: [
         "a=b\u{0}",
         "a=b\u{1F}",
@@ -222,6 +231,7 @@ struct NetworkCookieParserTests {
         #expect(report.status == .unparsed)
     }
 
+    @MainActor
     @Test
     func invalidResponseCookiePairRemainsRawOnly() throws {
         let report = try #require(NetworkCookieParser.parseResponseHeaders([
@@ -237,6 +247,7 @@ struct NetworkCookieParserTests {
         #expect(report.status == .unparsed)
     }
 
+    @MainActor
     @Test(arguments: [
         "bad name=value",
         "näme=value",
@@ -254,6 +265,7 @@ struct NetworkCookieParserTests {
         #expect(report.status == .unparsed)
     }
 
+    @MainActor
     @Test
     func attributeNamesMustBeTokensAndPresenceValuesAreDiagnosed() throws {
         let report = try #require(NetworkCookieParser.parseResponseHeaders([
@@ -287,6 +299,7 @@ struct NetworkCookieParserTests {
         #expect(report.status == .partial)
     }
 
+    @MainActor
     @Test
     func invalidKnownDuplicatesDoNotEraseSuccessfulProjections() throws {
         let validExpires = "Wed, 09 Jun 2021 10:18:14 GMT"
@@ -329,6 +342,7 @@ struct NetworkCookieParserTests {
         #expect(report.status == .partial)
     }
 
+    @MainActor
     @Test
     func maxAgeAcceptsZeroAndNegativeValues() throws {
         let zero = try responseCookie("a=b; Max-Age=0")
@@ -340,6 +354,7 @@ struct NetworkCookieParserTests {
         #expect(negative.maxAgeSeconds == Int64.min)
     }
 
+    @MainActor
     @Test(arguments: [
         "+1",
         "9223372036854775808",
@@ -360,6 +375,7 @@ struct NetworkCookieParserTests {
         #expect(report.status == .partial)
     }
 
+    @MainActor
     @Test
     func sameSitePreservesAllSemanticStates() throws {
         #expect(try responseCookie("a=b").sameSite == .absent)
@@ -369,6 +385,7 @@ struct NetworkCookieParserTests {
         #expect(try responseCookie("a=b; SameSite=FutureMode").sameSite == .other("FutureMode"))
     }
 
+    @MainActor
     @Test(arguments: [
         ("Wed, 09 Jun 69 10:18:14 GMT", 2069),
         ("Wed, 09 Jun 70 10:18:14 GMT", 1970),
@@ -384,6 +401,7 @@ struct NetworkCookieParserTests {
         #expect(utcCalendar.dateComponents([.year], from: date).year == expectedYear)
     }
 
+    @MainActor
     @Test(arguments: [
         "Wed, 32 Jun 2021 10:18:14 GMT",
         "Wed, 31 Feb 2021 10:18:14 GMT",

@@ -6,6 +6,7 @@ import WebInspectorProxyKit
 @Suite
 struct NetworkRequestHeadersContextTests {
 
+    @MainActor
     @Test(arguments: [ParameterEntry.query, .form])
     func parametersPreserveRepeatsEmptyValuesBareNamesAndEmptyFragments(entry: ParameterEntry) throws {
         let report = try #require(entry.parse("repeat=1&empty=&bare&=value&&repeat=2&"))
@@ -29,6 +30,7 @@ struct NetworkRequestHeadersContextTests {
         #expect(report.diagnostics.isEmpty)
     }
 
+    @MainActor
     @Test
     func parameterDecoderHandlesPlusReservedBytesAndLiteralAndEncodedUTF8() throws {
         let report = try #require(
@@ -43,6 +45,7 @@ struct NetworkRequestHeadersContextTests {
         #expect(report.status == .complete)
     }
 
+    @MainActor
     @Test(arguments: [ParameterEntry.query, .form])
     func malformedParameterComponentsRemainLocalAndKeepValidSiblings(entry: ParameterEntry) throws {
         let report = try #require(
@@ -79,6 +82,7 @@ struct NetworkRequestHeadersContextTests {
         #expect(unparsed.diagnostics.count == 2)
     }
 
+    @MainActor
     @Test
     func queryExtractionUsesRawQuestionMarkBeforeFragmentWithoutURLNormalization() throws {
         let malformedURLReport = try #require(
@@ -97,6 +101,7 @@ struct NetworkRequestHeadersContextTests {
         #expect(NetworkParameterParser.parseQuery(in: "https://example.test/path#fragment?ignored=1") == nil)
     }
 
+    @MainActor
     @Test
     func contentTypeParserNormalizesTokensAndPreservesQuotedAndDuplicateParameters() throws {
         let rawValue =
@@ -122,6 +127,7 @@ struct NetworkRequestHeadersContextTests {
         #expect(contentType.parameters.allSatisfy { $0.issue == nil })
     }
 
+    @MainActor
     @Test
     func contentTypeParserRetainsMalformedParametersAndRejectsEscapedControls() {
         let malformed = NetworkContentTypeParser.parse(
@@ -158,6 +164,7 @@ struct NetworkRequestHeadersContextTests {
         #expect(nonASCIITokens.parameters.first?.issue == .invalidName)
     }
 
+    @MainActor
     @Test
     func contentTypeHeaderDistinguishesAbsentUniqueAndAmbiguousCaseVariantsDeterministically() throws {
         #expect(NetworkContentTypeParser.parseHeader(in: [:]) == .absent)
@@ -187,6 +194,7 @@ struct NetworkRequestHeadersContextTests {
         #expect(repeatedValue == .ambiguous(rawValues: ["same", "same"]))
     }
 
+    @MainActor
     @Test
     func normalizedMediaTypeResolutionDistinguishesAbsentInvalidAndAmbiguousInput() {
         #expect(
@@ -224,6 +232,7 @@ struct NetworkRequestHeadersContextTests {
         )
     }
 
+    @MainActor
     @Test
     func bodyHintsTreatOnlyAbsentContentTypeAsURLInferredText() {
         let absent = NetworkBody.bodyHints(
@@ -257,7 +266,7 @@ struct NetworkRequestHeadersContextTests {
     @MainActor
     @Test
     func headersContextDistinguishesCancellationFailureAndProjectsResourceAndInitiator() throws {
-        let context = WebInspectorContext.preview(isolation: MainActor.shared)
+        let context = WebInspectorContext.preview()
         let nodeID = DOM.Node.ID("42", scopedToTargetRawValue: "page-target")
         let canceled = NetworkRequest(
             request: Network.Request(
@@ -310,7 +319,7 @@ struct NetworkRequestHeadersContextTests {
     @MainActor
     @Test
     func effectiveResponseMIMETypePrefersNonblankProtocolValueThenUniqueHeaderMediaType() {
-        let context = WebInspectorContext.preview(isolation: MainActor.shared)
+        let context = WebInspectorContext.preview()
         let request = NetworkRequest(
             request: Network.Request(
                 id: Network.Request.ID("mime-context"),
@@ -381,7 +390,7 @@ struct NetworkRequestHeadersContextTests {
     @MainActor
     @Test
     func redirectContextUsesFinalQueryAndBodyWhileKeepingInitialInitiator() throws {
-        let context = WebInspectorContext.preview(isolation: MainActor.shared)
+        let context = WebInspectorContext.preview()
         let requestID = Network.Request.ID("redirect-context")
         let request = NetworkRequest(
             request: Network.Request(
@@ -431,7 +440,7 @@ struct NetworkRequestHeadersContextTests {
     @MainActor
     @Test
     func lifecycleReuseRecomputesHeadersContextFromTheNewRequest() {
-        let context = WebInspectorContext.preview(isolation: MainActor.shared)
+        let context = WebInspectorContext.preview()
         let requestID = Network.Request.ID("reused-context")
         let request = NetworkRequest(
             request: Network.Request(
@@ -473,7 +482,7 @@ struct NetworkRequestHeadersContextTests {
     @MainActor
     @Test
     func metricsRequestHeadersRefineFormContextWithoutReplacingBodyIdentity() throws {
-        let context = WebInspectorContext.preview(isolation: MainActor.shared)
+        let context = WebInspectorContext.preview()
         let request = NetworkRequest(
             request: Network.Request(
                 id: Network.Request.ID("metrics-form-context"),
@@ -518,7 +527,7 @@ struct NetworkRequestHeadersContextTests {
     @MainActor
     @Test
     func requestDataDistinguishesUnavailableNilAndCapturedEmptyBodies() throws {
-        let context = WebInspectorContext.preview(isolation: MainActor.shared)
+        let context = WebInspectorContext.preview()
 
         let noPostData = NetworkRequest(
             request: Network.Request(
@@ -647,7 +656,7 @@ struct NetworkRequestHeadersContextTests {
     @MainActor
     @Test
     func memoryCacheWithoutCapturedPostDataDoesNotSynthesizeRequestData() {
-        let context = WebInspectorContext.preview(isolation: MainActor.shared)
+        let context = WebInspectorContext.preview()
         let request = NetworkRequest(
             request: Network.Request(
                 id: Network.Request.ID("cached-context"),
@@ -678,6 +687,7 @@ struct NetworkRequestHeadersContextTests {
         #expect(request.headersContext.requestData == nil)
     }
 
+    @MainActor
     @Test
     func formTextRepresentationUsesComponentLocalFallbackAndPreservesEqualsAndOrder() {
         let body = NetworkBody(

@@ -393,7 +393,7 @@ func consoleEventsPopulateRepeatAndClearFetchedMessages() async throws {
 @MainActor
 @Test
 func consoleRepeatUpdatesStayWithinTheirTarget() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let firstTargetID = WebInspectorTarget.ID("console-frame-a")
     let secondTargetID = WebInspectorTarget.ID("console-frame-b")
     let unknownTargetID = WebInspectorTarget.ID("console-frame-unknown")

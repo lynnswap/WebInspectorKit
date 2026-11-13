@@ -6,6 +6,7 @@ import WebInspectorProxyKit
 ///
 /// Message parameters are remote objects registered in `RuntimeModelStore`
 /// with the `.console` owner. Calls must come from the context's actor.
+@MainActor
 final class ConsoleMessageStore {
     private let runtime: RuntimeModelStore
     private var messagesByID: [ConsoleMessage.ID: ConsoleMessage] = [:]

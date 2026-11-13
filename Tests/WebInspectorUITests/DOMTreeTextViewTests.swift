@@ -1710,7 +1710,7 @@ private final class DOMTreeTestFixture {
     let treeController: DOMTreeController
 
     init(root: DOM.Node) {
-        let context = WebInspectorContext.preview(isolation: MainActor.shared)
+        let context = WebInspectorContext.preview()
         context.seedDOMDocument(root)
         self.context = context
         self.treeController = context.rootTreeController()

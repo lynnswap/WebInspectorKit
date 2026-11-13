@@ -5,6 +5,7 @@ import WebInspectorProxyKit
 /// whose styles it has read.
 ///
 /// Calls must come from the context's actor.
+@MainActor
 final class CSSStyleTrackingLeases {
     private struct Key: Hashable {
         var targetID: WebInspectorTarget.ID
@@ -35,8 +36,7 @@ final class CSSStyleTrackingLeases {
     /// it. Returns false when the lease was discarded while it was being
     /// acquired.
     func ensure(
-        on target: WebInspectorTarget,
-        isolation: isolated (any Actor)
+        on target: WebInspectorTarget
     ) async throws -> Bool {
         let key = Key(target)
         if targets[key] != nil {
@@ -82,7 +82,7 @@ final class CSSStyleTrackingLeases {
     }
 
     /// Drops every lease without sending `CSS.disable`.
-    func discardAll(isolation: isolated (any Actor)) async {
+    func discardAll() async {
         let enabledTargets = Self.sorted(Array(targets.values))
         let pendingAcquisitions = Self.sorted(Array(acquisitions.values))
         targets = [:]
@@ -134,7 +134,7 @@ final class CSSStyleTrackingLeases {
     }
 
     /// Releases every lease and returns the first failure.
-    func releaseAll(isolation: isolated (any Actor)) async -> WebInspectorProxyError? {
+    func releaseAll() async -> WebInspectorProxyError? {
         let enabledTargets = Self.sorted(Array(targets.values))
         let pendingAcquisitions = Self.sorted(Array(acquisitions.values))
         targets = [:]

@@ -14,7 +14,7 @@ private let staleFetchedResultsError = WebInspectorProxyError.disconnected(
 @MainActor
 @Test
 func retainedDOMNodeAfterContextReleaseKeepsSnapshotAndFailsWithoutTrapping() async throws {
-    var context: WebInspectorContext? = WebInspectorContext.preview(isolation: MainActor.shared)
+    var context: WebInspectorContext? = WebInspectorContext.preview()
     context?.seedDOMDocument(
         DOM.Node(
             id: DOM.Node.ID("released-node"),
@@ -48,8 +48,8 @@ func retainedDOMNodeAfterContextReleaseKeepsSnapshotAndFailsWithoutTrapping() as
 func staleAndForeignDOMNodesNeverRebindToSameIDReplacement() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let container = WebInspectorContainer(proxy: runtime.proxy)
-    let context = WebInspectorContext(container, isolation: MainActor.shared)
-    let foreignContext = WebInspectorContext(container, isolation: MainActor.shared)
+    let context = WebInspectorContext(container)
+    let foreignContext = WebInspectorContext(container)
     let sharedID = DOM.Node.ID("same-node-id")
     context.seedDOMDocument(
         DOM.Node(
@@ -156,8 +156,8 @@ func staleAndForeignDOMNodesNeverRebindToSameIDReplacement() async throws {
 @MainActor
 @Test
 func staleAndForeignRuntimeContextsPreserveTheCurrentSelection() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
-    let foreignContext = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
+    let foreignContext = WebInspectorContext.preview()
     let sharedID = Runtime.ExecutionContext.ID("same-runtime-id")
     context.apply(
         .executionContextCreated(
@@ -210,7 +210,7 @@ func staleAndForeignRuntimeContextsPreserveTheCurrentSelection() async throws {
 @MainActor
 @Test
 func contextReleaseFinishesEveryFetchedResultsStreamAndRetainsFinalSnapshots() async throws {
-    var context: WebInspectorContext? = WebInspectorContext.preview(isolation: MainActor.shared)
+    var context: WebInspectorContext? = WebInspectorContext.preview()
     context?.seedNetworkRequest(
         requestID: "retained-request",
         url: "https://example.test/data.json",
@@ -299,8 +299,8 @@ func contextReleaseFinishesEveryFetchedResultsStreamAndRetainsFinalSnapshots() a
 @MainActor
 @Test
 func liveFetchedResultsRemainRegisteredAcrossContextStatesAndRejectForeignUpdates() async throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
-    let foreignContext = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
+    let foreignContext = WebInspectorContext.preview()
     let networkResults = context.network.fetchedResults()
     let consoleResults = context.console.fetchedResults()
     let networkController = WebInspectorFetchedResultsController(fetchedResults: networkResults)

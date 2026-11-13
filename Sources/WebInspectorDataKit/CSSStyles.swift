@@ -89,6 +89,7 @@ struct CSSDeclarationIdentity {
 /// rules are shared by every DOM node they match, so a node-owned `CSSStyles`
 /// resource cannot own this state. `CSS.Style.ID` carries ProxyKit's target
 /// scope; current-page entries are retired by the document lifecycle owner.
+@MainActor
 final class CSSInspectorBaselineStore {
     private var baselines: [CSSStyleProperty.ID: CSSPropertyInspectorBaseline] = [:]
 
@@ -214,6 +215,7 @@ private func cssPropertiesByStyleID(
 
 /// Observable CSS state for one DOM element.
 @Observable
+@MainActor
 public final class CSSStyles: WebInspectorPersistentModel {
     /// Stable identity for an element's CSS style model.
     public struct ID: Hashable, Sendable {
@@ -248,7 +250,7 @@ public final class CSSStyles: WebInspectorPersistentModel {
     }
 
     /// The stable style model identity.
-    public let id: ID
+    public nonisolated let id: ID
 
     /// The current loading phase.
     public private(set) var phase: Phase

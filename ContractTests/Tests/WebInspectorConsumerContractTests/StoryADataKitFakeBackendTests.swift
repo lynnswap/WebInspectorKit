@@ -3,6 +3,7 @@ import WebInspectorDataKit
 import WebInspectorProxyKit
 import WebInspectorProxyKitTesting
 
+@MainActor
 @Test
 func fakeBackendDrivesDataKitDOMNetworkAndRuntimeContracts() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
@@ -16,6 +17,7 @@ func fakeBackendDrivesDataKitDOMNetworkAndRuntimeContracts() async throws {
     await owner.close()
 }
 
+@MainActor
 @Test
 func sharedContainerKeepsWireDomainsEnabledUntilLastContextStops() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
@@ -76,6 +78,7 @@ func sharedContainerKeepsWireDomainsEnabledUntilLastContextStops() async throws 
     #expect(commands.filter { $0.domain == "Console" && $0.method == "disable" }.count == 1)
 }
 
+@MainActor
 @Test
 func dataKitStartupSurfacesPageEnableFailure() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()

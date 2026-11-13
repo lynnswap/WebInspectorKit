@@ -1347,7 +1347,7 @@ struct DOMContainerTests {
     }
 
     private func makeWebInspectorContext() -> WebInspectorContext {
-        WebInspectorContext.preview(isolation: MainActor.shared)
+        WebInspectorContext.preview()
     }
 
     private struct LiveDOMContextFixture {

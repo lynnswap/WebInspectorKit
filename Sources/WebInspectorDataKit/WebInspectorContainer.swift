@@ -33,7 +33,7 @@ public final class WebInspectorContainer: @unchecked Sendable {
         if let context = _mainContext {
             return context
         }
-        let context = WebInspectorContext(self, isolation: MainActor.shared)
+        let context = WebInspectorContext(self)
         _mainContext = context
         context.start()
         return context

@@ -16,6 +16,7 @@ package struct NetworkRequestRecordInput: Hashable, Sendable {
     package var requestSentTimestamp: Double?
     package var hasResponse: Bool
 
+    @MainActor
     package init(request: NetworkRequest, orderIndex: Int) {
         id = request.id
         self.orderIndex = orderIndex
@@ -32,6 +33,7 @@ package struct NetworkRequestRecordInput: Hashable, Sendable {
         hasResponse = request.hasResponse
     }
 
+    @MainActor
     init(registration: NetworkRequestStore.Registration) {
         self.init(
             request: registration.request,
@@ -76,6 +78,7 @@ package struct NetworkRequestRecord: Hashable, Sendable {
         requestSentTimestamp = input.requestSentTimestamp
     }
 
+    @MainActor
     package init(request: NetworkRequest, orderIndex: Int) {
         self.init(input: NetworkRequestRecordInput(request: request, orderIndex: orderIndex))
     }
@@ -135,6 +138,7 @@ package struct NetworkRequestQueryState {
     private var recordsByID: [NetworkRequest.ID: NetworkRequestRecord]
     private var matchingIDs: [NetworkRequest.ID]
 
+    @MainActor
     package init(plan: NetworkRequestQueryPlan, requests: [NetworkRequest]) {
         self.plan = plan
         recordsByID = [:]
@@ -146,6 +150,7 @@ package struct NetworkRequestQueryState {
         }
     }
 
+    @MainActor
     private mutating func upsert(request: NetworkRequest, orderIndex: Int) {
         let record = NetworkRequestRecord(request: request, orderIndex: orderIndex)
         recordsByID[record.id] = record

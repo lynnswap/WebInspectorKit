@@ -680,7 +680,7 @@ func cssInvalidationDuringStyleFetchIsNotOverwrittenByStaleResult() async throws
 @MainActor
 @Test
 func cssInspectorBaselineIsSharedAcrossNodesAndSurvivesStaleLoads() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let firstStyles = CSSStyles(
         nodeID: DOMNode.ID(DOM.Node.ID("shared-baseline-first")),
         modelContext: context
@@ -733,7 +733,7 @@ func cssInspectorBaselineIsSharedAcrossNodesAndSurvivesStaleLoads() throws {
 @MainActor
 @Test
 func cssInspectorBaselineRekeysOnlyToUniqueSemanticDeclarationAfterInsertion() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let styles = CSSStyles(
         nodeID: DOMNode.ID(DOM.Node.ID("topology-baseline-node")),
         modelContext: context
@@ -778,7 +778,7 @@ func cssInspectorBaselineRekeysOnlyToUniqueSemanticDeclarationAfterInsertion() t
 @MainActor
 @Test
 func cssInspectorBaselineDoesNotRekeyAmbiguousDuplicateDeclarations() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let styles = CSSStyles(
         nodeID: DOMNode.ID(DOM.Node.ID("duplicate-baseline-node")),
         modelContext: context
@@ -808,7 +808,7 @@ func cssInspectorBaselineDoesNotRekeyAmbiguousDuplicateDeclarations() throws {
 @MainActor
 @Test
 func cssInspectorBaselineDoesNotCrossDocumentOrTargetLifetime() throws {
-    let context = WebInspectorContext.preview(isolation: MainActor.shared)
+    let context = WebInspectorContext.preview()
     let pageStyles = CSSStyles(
         nodeID: DOMNode.ID(DOM.Node.ID("page-baseline-node")),
         modelContext: context

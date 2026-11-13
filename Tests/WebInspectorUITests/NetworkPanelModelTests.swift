@@ -2299,7 +2299,7 @@ private func seedFinishedRequest(
 
 @MainActor
 private func makeContext() -> WebInspectorContext {
-    WebInspectorContext.preview(isolation: MainActor.shared)
+    WebInspectorContext.preview()
 }
 
 private struct LiveNetworkModelFixture {

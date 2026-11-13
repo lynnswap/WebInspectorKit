@@ -90,7 +90,8 @@ enum ContractTestSupport {
 
 struct ContractEventStreamEnded: Error {}
 
-actor ContractDataKitActor {
+@MainActor
+final class ContractDataKitActor {
     nonisolated let inspectorContainer: WebInspectorContainer
 
     private let runtime: WebInspectorProxyTestRuntime
@@ -322,7 +323,7 @@ actor ContractDataKitActor {
         if let context {
             return context
         }
-        let context = WebInspectorContext(inspectorContainer, isolation: self)
+        let context = WebInspectorContext(inspectorContainer)
         self.context = context
         return context
     }
