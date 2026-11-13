@@ -216,7 +216,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
             timestamp: -1
         )
         let model = NetworkPanelModel(context: context)
-        let selectedRequest = try #require(context.registeredRequest(for: selectedRequestID))
+        let selectedRequest = try #require(context.network.request(for: selectedRequestID))
         model.selectRequest(selectedRequest)
         let frameScheduler = ManualNetworkFrameScheduler()
         let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
@@ -312,7 +312,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
             timestamp: 0
         )
         let model = NetworkPanelModel(context: context)
-        let request = try #require(context.registeredRequest(for: requestID))
+        let request = try #require(context.network.request(for: requestID))
         let frameScheduler = ManualNetworkFrameScheduler()
         let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let listViewController = NetworkListViewController(
@@ -1143,7 +1143,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
             timestamp: 0
         )
         let model = NetworkPanelModel(context: context)
-        _ = try #require(context.registeredRequest(for: initialRequestID))
+        _ = try #require(context.network.request(for: initialRequestID))
         let frameScheduler = ManualNetworkFrameScheduler()
         let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let applyCompletionScheduler = ManualNetworkListSnapshotApplyCompletionScheduler()
@@ -1242,7 +1242,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
             timestamp: 0
         )
         let model = NetworkPanelModel(context: context)
-        let selectedRequest = try #require(context.registeredRequest(for: selectedRequestID))
+        let selectedRequest = try #require(context.network.request(for: selectedRequestID))
         model.selectRequest(selectedRequest)
         let frameScheduler = ManualNetworkFrameScheduler()
         let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
@@ -1477,7 +1477,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
             timestamp: 0
         )
         let model = NetworkPanelModel(context: context)
-        let firstRequest = try #require(context.registeredRequest(for: firstRequestID))
+        let firstRequest = try #require(context.network.request(for: firstRequestID))
         let frameScheduler = ManualNetworkFrameScheduler()
         let snapshotBuilder = BarrierNetworkListSnapshotBuilderFactory()
         let listViewController = NetworkListViewController(
@@ -1507,7 +1507,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
             responseStatusText: "OK",
             timestamp: 1
         )
-        let secondRequest = try #require(context.registeredRequest(for: secondRequestID))
+        let secondRequest = try #require(context.network.request(for: secondRequestID))
         #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
             after: transactionDeliveryBaseline
         ))
@@ -1558,7 +1558,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
             responseStatusText: "OK",
             timestamp: 2
         )
-        let thirdRequest = try #require(context.registeredRequest(for: thirdRequestID))
+        let thirdRequest = try #require(context.network.request(for: thirdRequestID))
         #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
             after: transactionDeliveryBaseline
         ))
@@ -1605,7 +1605,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
             responseStatusText: "OK",
             timestamp: 3
         )
-        let fourthRequest = try #require(context.registeredRequest(for: fourthRequestID))
+        let fourthRequest = try #require(context.network.request(for: fourthRequestID))
         #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
             after: transactionDeliveryBaseline
         ))
@@ -1757,7 +1757,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
             timestamp: 0
         )
         let model = NetworkPanelModel(context: context)
-        let firstRequest = try #require(context.registeredRequest(for: firstRequestID))
+        let firstRequest = try #require(context.network.request(for: firstRequestID))
         model.selectRequest(firstRequest)
         let selectedSubject = try #require(model.detailSubject)
         let frameScheduler = ManualNetworkFrameScheduler()
@@ -1801,7 +1801,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
             responseStatusText: "OK",
             timestamp: 1
         )
-        let secondRequest = try #require(context.registeredRequest(for: secondRequestID))
+        let secondRequest = try #require(context.network.request(for: secondRequestID))
         #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
             after: transactionDeliveryBaseline
         ))

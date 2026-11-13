@@ -20,6 +20,25 @@ initializers remain synchronous after preparation. DataKit, ProxyKit, and
 WebKitRuntime consumers that do not use the built-in UIKit UI do not need this
 UI preparation step.
 
+### Network, Console, Runtime, and Page operations live on the domain objects
+
+`WebInspectorContext` no longer repeats the operations of `context.network`,
+`context.console`, `context.runtime`, and `context.page`, and
+`NetworkRequest` and `RuntimeObject` no longer start commands themselves.
+
+| Before | After |
+| --- | --- |
+| `context.registeredRequest(for: id)` | `context.network.request(for: id)` |
+| `context.clearNetworkRequests()` | `context.network.clearRequests()` |
+| `context.networkResourceTreeError` | `context.network.resourceTreeError` |
+| `request.fetchResponseBody()` | `context.network.fetchResponseBody(for: request)` |
+| `context.registeredMessage(for: id)` | `context.console.message(for: id)` |
+| `context.executionContexts`, `context.selectedContext` | `context.runtime.executionContexts`, `context.runtime.selectedContext` |
+| `context.selectContext(runtimeContext)` | `context.runtime.select(runtimeContext)` |
+| `context.evaluate(expression)` | `context.runtime.evaluate(expression)` |
+| `object.properties()`, `object.collectionEntries()` | `context.runtime.properties(of: object)`, `context.runtime.collectionEntries(of: object)` |
+| `context.reloadPage()` | `context.page.reload()` |
+
 ### Queries and fetched results become ordered collections
 
 `NetworkRequestQuery`, `ConsoleMessageQuery`, `WebInspectorFetchedResults`,

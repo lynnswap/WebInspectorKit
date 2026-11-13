@@ -282,8 +282,7 @@ struct NetworkRequestHeadersContextTests {
                 nodeID: nodeID
             ),
             resourceType: .fetch,
-            timestamp: 1,
-            modelContext: context
+            timestamp: 1
         )
         canceled.fail(errorText: "cancelled by client", canceled: true, timestamp: 2)
 
@@ -309,8 +308,7 @@ struct NetworkRequestHeadersContextTests {
             ),
             initiator: nil,
             resourceType: .fetch,
-            timestamp: 1,
-            modelContext: context
+            timestamp: 1
         )
         failed.fail(errorText: "DNS lookup failed", canceled: false, timestamp: 2)
         #expect(failed.headersContext.outcome == .failed(reason: "DNS lookup failed"))
@@ -328,8 +326,7 @@ struct NetworkRequestHeadersContextTests {
             ),
             initiator: nil,
             resourceType: .fetch,
-            timestamp: 1,
-            modelContext: context
+            timestamp: 1
         )
 
         request.applyResponse(
@@ -406,8 +403,7 @@ struct NetworkRequestHeadersContextTests {
                 line: 9
             ),
             resourceType: .fetch,
-            timestamp: 1,
-            modelContext: context
+            timestamp: 1
         )
 
         request.applyRedirect(
@@ -452,8 +448,7 @@ struct NetworkRequestHeadersContextTests {
             ),
             initiator: Network.Initiator(kind: "parser", line: 1),
             resourceType: .fetch,
-            timestamp: 1,
-            modelContext: context
+            timestamp: 1
         )
         request.fail(errorText: "old failure", canceled: false, timestamp: 2)
 
@@ -492,8 +487,7 @@ struct NetworkRequestHeadersContextTests {
             ),
             initiator: nil,
             resourceType: .fetch,
-            timestamp: 1,
-            modelContext: context
+            timestamp: 1
         )
         let body = try #require(request.requestBody)
         #expect(request.headersContext.requestData == .body(contentType: .absent))
@@ -538,8 +532,7 @@ struct NetworkRequestHeadersContextTests {
             ),
             initiator: nil,
             resourceType: .fetch,
-            timestamp: 1,
-            modelContext: context
+            timestamp: 1
         )
         #expect(noPostData.requestBody == nil)
         #expect(noPostData.headersContext.requestData == nil)
@@ -554,8 +547,7 @@ struct NetworkRequestHeadersContextTests {
             ),
             initiator: nil,
             resourceType: .fetch,
-            timestamp: 1,
-            modelContext: context
+            timestamp: 1
         )
         guard case let .form(_, parameters) = emptyPostData.headersContext.requestData else {
             Issue.record("Expected captured empty form data.")
@@ -639,8 +631,7 @@ struct NetworkRequestHeadersContextTests {
             ),
             initiator: nil,
             resourceType: .fetch,
-            timestamp: 1,
-            modelContext: context
+            timestamp: 1
         )
         guard case let .body(contentTypeHeader) = multipart.headersContext.requestData,
             case let .value(contentType) = contentTypeHeader
@@ -666,8 +657,7 @@ struct NetworkRequestHeadersContextTests {
             initiator: nil,
             resourceType: .fetch,
             timestamp: nil,
-            requestHeaderSource: .unavailable,
-            modelContext: context
+            requestHeaderSource: .unavailable
         )
 
         request.applyMemoryCache(

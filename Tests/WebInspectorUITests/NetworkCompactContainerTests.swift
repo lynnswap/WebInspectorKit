@@ -644,7 +644,7 @@ struct NetworkCompactContainerTests: NetworkDetailTestSupport {
         let rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
 
         withUIKitAnimationsDisabled {
-            context.clearNetworkRequests()
+            context.network.clearRequests()
         }
         #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
         #expect(model.selectedRequestID == nil)

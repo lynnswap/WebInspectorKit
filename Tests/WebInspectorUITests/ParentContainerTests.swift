@@ -1292,7 +1292,7 @@ struct ParentContainerTests {
             requestID: "1",
             url: "https://example.com/app.js"
         )
-        let request = try #require(context.registeredRequest(for: requestID))
+        let request = try #require(context.network.request(for: requestID))
         let model = contentStore.networkPanelModel(
             for: context,
             contextEpoch: session.interface.contextBoundContentRevision

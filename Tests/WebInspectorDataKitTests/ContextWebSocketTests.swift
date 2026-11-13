@@ -29,7 +29,7 @@ func webSocketCreatedCreatesRequestWithConnectingState() async throws {
     #expect(request.webSocket?.readyState == .connecting)
     #expect(request.hasResponse == false)
     #expect(request.hasResponseBody == false)
-    #expect(context.registeredRequest(for: request.id) === request)
+    #expect(context.network.request(for: request.id) === request)
 }
 
 @MainActor
@@ -1122,8 +1122,7 @@ func legacyWebSocketFramesProjectionPublishesTimelineChangesThroughObservation()
         request: Network.Request(id: requestID, url: "wss://example.com/legacy", method: "GET"),
         initiator: nil,
         resourceType: .webSocket,
-        timestamp: nil,
-        modelContext: context
+        timestamp: nil
     )
     let webSocket = try #require(request.webSocket)
     let observation = SynchronousObservationProbe()
@@ -1276,7 +1275,7 @@ func closedWebSocketCannotFetchResponseBodyOrSendProtocolCommand() async throws 
     #expect(request.hasResponseBody == false)
     #expect(request.canFetchResponseBody == false)
     let commandsBeforeFetch = await runtime.backend.recordedCommands()
-    await request.fetchResponseBody()
+    await context.network.fetchResponseBody(for: request)
     let commandsAfterFetch = await runtime.backend.recordedCommands()
     #expect(commandsAfterFetch == commandsBeforeFetch)
     #expect(commandsAfterFetch.filter {

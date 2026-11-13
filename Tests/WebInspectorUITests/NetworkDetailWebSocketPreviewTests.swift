@@ -1155,7 +1155,7 @@ struct NetworkDetailWebSocketPreviewTests: NetworkDetailTestSupport {
 
         let clearedWebSocket = try #require(second.webSocket)
         let reregistrationTransactionBaseline = model.rawTransactionDeliveryCountForTesting
-        context.clearNetworkRequests()
+        context.network.clearRequests()
         let reregistered = try await applyWebSocket(
             to: context,
             requestID: "ws-rebind-second",

@@ -547,7 +547,7 @@ struct NetworkDetailCookiesModeTests: NetworkDetailTestSupport {
 
         let proxyID = Network.Request.ID("cookie-instance")
         let reregistrationTransactionBaseline = model.rawTransactionDeliveryCountForTesting
-        context.clearNetworkRequests()
+        context.network.clearRequests()
         let reregistered = try #require(await applyRequest(
             to: context,
             requestID: "cookie-instance",

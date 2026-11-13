@@ -72,7 +72,7 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
                 }
             }
             XCTAssertEqual(context.state, .attached)
-            XCTAssertNil(context.networkResourceTreeError)
+            XCTAssertNil(context.network.resourceTreeError)
             let requests = context.network.requests
             for name in ["index.html", "style.css", "app.js", "child.html", "child.js"] {
                 let url = directory.appendingPathComponent(name).absoluteString
@@ -81,7 +81,7 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
             let stylesheet = try XCTUnwrap(requests.first { $0.url.hasSuffix("/style.css") })
             XCTAssertNil(stylesheet.requestSentTimestamp)
             XCTAssertNil(stylesheet.status)
-            await stylesheet.fetchResponseBody()
+            await context.network.fetchResponseBody(for: stylesheet)
             XCTAssertEqual(stylesheet.responseBody.phase, .loaded)
             let tree = context.rootTreeController()
             let documentUpdates = tree.updates
@@ -101,7 +101,7 @@ final class WebInspectorProxyKitIntegrationTests: XCTestCase {
                 }
             }
             let restored = try XCTUnwrap(context.network.requests.last { $0 !== stylesheet && $0.url == stylesheet.url })
-            await restored.fetchResponseBody()
+            await context.network.fetchResponseBody(for: restored)
             XCTAssertEqual(restored.responseBody.phase, .loaded)
             await container.close()
         } catch {

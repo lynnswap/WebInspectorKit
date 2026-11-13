@@ -162,7 +162,7 @@ func staleAndForeignRuntimeContextsPreserveTheCurrentSelection() async throws {
                 name: "Old",
                 kind: .normal
             )))
-    let staleContext = try #require(context.executionContexts.first)
+    let staleContext = try #require(context.runtime.executionContexts.first)
     context.apply(.executionContextDestroyed(sharedID))
     context.apply(
         .executionContextCreated(
@@ -178,28 +178,28 @@ func staleAndForeignRuntimeContextsPreserveTheCurrentSelection() async throws {
                 name: "Foreign",
                 kind: .normal
             )))
-    let freshContext = try #require(context.executionContexts.first)
+    let freshContext = try #require(context.runtime.executionContexts.first)
     let foreignRuntimeContext = try #require(foreignContext.executionContexts.first)
     #expect(freshContext !== staleContext)
     #expect(freshContext.id == staleContext.id)
 
-    context.selectContext(freshContext)
-    context.selectContext(staleContext)
-    context.selectContext(foreignRuntimeContext)
+    context.runtime.select(freshContext)
+    context.runtime.select(staleContext)
+    context.runtime.select(foreignRuntimeContext)
 
-    #expect(context.selectedContext === freshContext)
+    #expect(context.runtime.selectedContext === freshContext)
     let error = WebInspectorProxyError.disconnected(
         "RuntimeContext is not registered in this WebInspectorContext."
     )
     await #expect(throws: error) {
-        _ = try await context.evaluate("1", in: staleContext)
+        _ = try await context.runtime.evaluate("1", in: staleContext)
     }
     await #expect(throws: error) {
-        _ = try await context.evaluate("1", in: foreignRuntimeContext)
+        _ = try await context.runtime.evaluate("1", in: foreignRuntimeContext)
     }
-    #expect(context.selectedContext === freshContext)
-    context.selectContext(nil)
-    #expect(context.selectedContext == nil)
+    #expect(context.runtime.selectedContext === freshContext)
+    context.runtime.select(nil)
+    #expect(context.runtime.selectedContext == nil)
     #expect(context.state == .attached)
 }
 

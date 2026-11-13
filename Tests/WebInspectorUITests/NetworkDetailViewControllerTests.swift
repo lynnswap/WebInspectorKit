@@ -230,7 +230,7 @@ struct NetworkDetailViewControllerTests: NetworkDetailTestSupport {
         }
         #expect(didEnableMenu)
 
-        context.clearNetworkRequests()
+        context.network.clearRequests()
 
         let didDisableMenu = await waitUntilRendered(in: viewController) {
             viewController.isDetailModeControlEnabledForTesting == false

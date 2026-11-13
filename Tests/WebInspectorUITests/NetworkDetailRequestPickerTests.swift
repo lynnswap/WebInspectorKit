@@ -284,7 +284,7 @@ struct NetworkDetailRequestPickerTests: NetworkDetailTestSupport {
         )
 
         let generationBaseline = model.rawTransactionDeliveryCountForTesting
-        context.clearNetworkRequests()
+        context.network.clearRequests()
         let replacementFirst = try #require(await applyGroupedRequest(
             to: context,
             requestID: "picker-lineage-first",

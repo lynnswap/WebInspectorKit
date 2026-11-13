@@ -96,7 +96,7 @@ func clearAvailabilityUsesUnfilteredRequestsWhenFiltersHideEveryRequest() async 
     #expect(await observedValues.waitUntilValue(false))
     #expect(await model.waitForRawTransactionDeliveryForTesting(after: transactionBaseline))
     #expect(model.captureListProjection().content == .noRequests)
-    #expect(context.registeredRequest(for: requestID) == nil)
+    #expect(context.network.request(for: requestID) == nil)
 }
 
 @Test
@@ -111,7 +111,7 @@ func selectedRequestUsesUnfilteredContextWhenFiltersHideRequest() async throws {
         mimeType: "text/javascript",
         timestamp: 1
     )
-    let request = try #require(context.registeredRequest(for: requestID))
+    let request = try #require(context.network.request(for: requestID))
     let model = NetworkPanelModel(context: context)
 
     model.selectRequest(request)
@@ -156,7 +156,7 @@ func selectedRequestInvalidatesWhenUnfilteredRequestDisappears() async throws {
         mimeType: "text/javascript",
         timestamp: 1
     )
-    let request = try #require(context.registeredRequest(for: requestID))
+    let request = try #require(context.network.request(for: requestID))
     let model = NetworkPanelModel(context: context)
     model.selectRequest(request)
     model.setSearchText("does-not-match")
@@ -175,7 +175,7 @@ func selectedRequestInvalidatesWhenUnfilteredRequestDisappears() async throws {
     #expect(model.selectedRequest === request)
 
     let rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
-    context.clearNetworkRequests()
+    context.network.clearRequests()
 
     #expect(model.selectedRequestID == requestID)
     #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
@@ -211,7 +211,7 @@ func requestDisplayUsesReadableURLDisplayName(url: String, expectedDisplayName: 
         mimeType: "text/html",
         timestamp: 1
     )
-    let request = try #require(context.registeredRequest(for: requestID))
+    let request = try #require(context.network.request(for: requestID))
 
     #expect(request.displayName == expectedDisplayName)
 }
@@ -237,8 +237,8 @@ func requestDisplayUsesEncodingFallbackForURLDerivedLabelsAndFilters() async thr
         timestamp: 2
     )
     let model = NetworkPanelModel(context: context)
-    let spacedURLRequest = try #require(context.registeredRequest(for: spacedURLRequestID))
-    let invalidEscapeRequest = try #require(context.registeredRequest(for: invalidEscapeRequestID))
+    let spacedURLRequest = try #require(context.network.request(for: spacedURLRequestID))
+    let invalidEscapeRequest = try #require(context.network.request(for: invalidEscapeRequestID))
 
     #expect(spacedURLRequest.displayName == "photo 1.png")
     #expect(spacedURLRequest.fileTypeLabel == "png")
@@ -505,7 +505,7 @@ func displayResourceFilterUpdatesWhenResponseMIMEBecomesPreviewable() async thro
     )
     #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
     #expect(model.displayRequestIDs == [requestID])
-    let request = try #require(context.registeredRequest(for: requestID))
+    let request = try #require(context.network.request(for: requestID))
     #expect(request.displayResourceFilter(mediaPreviewClassifier: { mimeType, url in
         NetworkDisplay.MediaPreviewSupport.classification(mimeType: mimeType, url: url)
     }) == .media)
@@ -525,7 +525,7 @@ func requestStatusSeverityUpdatesWhenResponseChanges() async throws {
         statusText: "Server Error",
         timestamp: 1
     )
-    let request = try #require(context.registeredRequest(for: requestID))
+    let request = try #require(context.network.request(for: requestID))
 
     #expect(request.statusSeverity == .error)
 
@@ -619,7 +619,7 @@ func requestFileTypeAndSearchUpdateWhenRawMIMETypeAppears() async throws {
         timestamp: 1.1
     )
     let model = NetworkPanelModel(context: context)
-    let request = try #require(context.registeredRequest(for: requestID))
+    let request = try #require(context.network.request(for: requestID))
 
     #expect(request.fileTypeLabel == "xhr")
     model.setSearchText("json")
@@ -716,7 +716,7 @@ func displayRequestsClearAfterReset() async throws {
     #expect(model.displayRequestIDs.count == 1)
 
     let rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
-    context.clearNetworkRequests()
+    context.network.clearRequests()
 
     #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
     #expect(model.displayRequestIDs.isEmpty)
@@ -781,7 +781,7 @@ func clearRequestsClearsSelectionButPreservesDisplayCriteria() async throws {
 
     model.setSearchText("cdn")
     model.setResourceFilter(.script, enabled: true)
-    model.selectRequest(context.registeredRequest(for: requestID))
+    model.selectRequest(context.network.request(for: requestID))
     let rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
     model.clearRequests()
 
@@ -790,7 +790,7 @@ func clearRequestsClearsSelectionButPreservesDisplayCriteria() async throws {
     #expect(model.activeResourceFilters == [.script])
     #expect(await model.waitForRawTransactionDeliveryForTesting(after: rawTransactionBaseline))
     #expect(model.displayRequests.isEmpty)
-    #expect(context.registeredRequest(for: requestID) == nil)
+    #expect(context.network.request(for: requestID) == nil)
 }
 
 @Test
@@ -805,7 +805,7 @@ func responseBodyFetchMovesUnavailablePreviewContextToFailedPhase() async throws
         mimeType: "application/json",
         timestamp: 1
     )
-    let request = try #require(context.registeredRequest(for: requestID))
+    let request = try #require(context.network.request(for: requestID))
     let model = NetworkPanelModel(context: context)
 
     #expect(request.canFetchResponseBody)
@@ -1167,7 +1167,7 @@ func redirectDoesNotReorderLogicalRequestChronologyWhenPanelStartsLater() async 
         timestamp: 3
     )
 
-    let redirectedRequest = try #require(context.registeredRequest(for: firstID))
+    let redirectedRequest = try #require(context.network.request(for: firstID))
     #expect(redirectedRequest.requestSentTimestamp == 3)
     #expect(redirectedRequest.logicalStartTimestamp == 1)
 
@@ -1341,7 +1341,7 @@ func groupedEntryAndExplicitMemberSelectionsHaveDistinctScopes() async throws {
     #expect(model.selectedRequest?.id == firstID)
     #expect(model.selectedEntryRequests.map(\.id) == [firstID, secondID])
 
-    model.selectRequest(context.registeredRequest(for: secondID))
+    model.selectRequest(context.network.request(for: secondID))
 
     #expect(model.selection == .request(entryID: stableID, requestID: secondID))
     #expect(model.selectedEntryID == stableID)
@@ -1386,7 +1386,7 @@ func resolvedSubjectsCarryExactValuesAndEveryExplicitSelectionGetsANewIntent() a
     let model = NetworkPanelModel(context: context)
     let entryID = try #require(model.entryID(containing: firstID))
     let entry = try #require(model.entry(for: entryID))
-    let second = try #require(context.registeredRequest(for: secondID))
+    let second = try #require(context.network.request(for: secondID))
 
     model.selectEntry(entry)
     let firstEntrySubject = try #require(model.detailSubject)
@@ -1466,8 +1466,8 @@ func conditionalResponseFetchUsesExactScopeAndRegistrationOwnership() async thro
     )
     await applyLoadingFinished(to: context, requestID: "response-fetch-second", timestamp: 6)
     let model = NetworkPanelModel(context: context)
-    let first = try #require(context.registeredRequest(for: firstID))
-    let second = try #require(context.registeredRequest(for: secondID))
+    let first = try #require(context.network.request(for: firstID))
+    let second = try #require(context.network.request(for: secondID))
     let groupedEntryID = try #require(model.entryID(containing: firstID))
     let groupedEntry = try #require(model.entry(for: groupedEntryID))
 
@@ -1505,7 +1505,7 @@ func conditionalResponseFetchUsesExactScopeAndRegistrationOwnership() async thro
     )
     await applyLoadingFinished(to: context, requestID: "response-fetch-second", timestamp: 9)
     #expect(await model.waitForRawTransactionDeliveryForTesting(after: deliveryBaseline))
-    #expect(context.registeredRequest(for: secondID) === second)
+    #expect(context.network.request(for: secondID) === second)
     #expect(model.detailSubject?.hasSameIdentity(as: entrySubject) == true)
     #expect(model.entryID(containing: secondID) != groupedEntryID)
 
@@ -1579,7 +1579,7 @@ func bufferedResetAndSameIDReinsertionCannotResurrectEitherSelectionScope() asyn
         let oldSubject = try #require(model.detailSubject)
         let deliveryBaseline = model.rawTransactionDeliveryCountForTesting
 
-        context.clearNetworkRequests()
+        context.network.clearRequests()
         let newRequest = try seedFinishedRequest(
             in: context,
             requestID: "buffered-reset",
@@ -1646,7 +1646,7 @@ func entryScopedConditionalFetchRejectsClearedInstanceAfterSameIDReregistration(
     let model = NetworkPanelModel(context: context)
     let deliveryBaseline = model.rawTransactionDeliveryCountForTesting
 
-    context.clearNetworkRequests()
+    context.network.clearRequests()
     let reregistered = try seedFinishedRequest(
         in: context,
         requestID: "entry-fetch-reregistration",
@@ -1830,7 +1830,7 @@ func entrySelectionPersistsWhenMemberLeavesAndExplicitRequestFollowsRegrouping()
     #expect(model.detailSubject?.intentID == entryIntentID)
     #expect(model.entry(for: groupedEntryID)?.requests.map(\.id) == [firstID, thirdID])
 
-    model.selectRequest(context.registeredRequest(for: thirdID))
+    model.selectRequest(context.network.request(for: thirdID))
     let requestIntentID = try #require(model.detailSubject?.intentID)
     rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
     await applyLoadingFinished(to: context, requestID: "third", timestamp: 6)
@@ -1876,7 +1876,7 @@ func reusedProtocolRequestIDPublishesLatestLifecycleAndReordersSingleton() async
     let reusedEntryID = try #require(model.entryID(containing: reusedID))
     let newerEntryID = try #require(model.entryID(containing: newerID))
     let stableEntry = try #require(model.entry(for: reusedEntryID))
-    model.selectRequest(context.registeredRequest(for: reusedID))
+    model.selectRequest(context.network.request(for: reusedID))
     #expect(model.displayEntryIDs == [newerEntryID, reusedEntryID])
     let rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
     let publicationBaseline = model.listTransactionPublicationCountForTesting
@@ -1914,7 +1914,7 @@ func selectedSingletonReusedIntoGroupPreservesSelection() async throws {
     )
     await applyLoadingFinished(to: context, requestID: "reused", timestamp: 2)
     let model = NetworkPanelModel(context: context)
-    model.selectRequest(context.registeredRequest(for: reusedID))
+    model.selectRequest(context.network.request(for: reusedID))
 
     let frameID = FrameID("main-frame")
     context.apply(WebInspectorTargetLifecycleEvent.frameNavigated(WebInspectorPageFrameLifecycle(
@@ -2214,7 +2214,7 @@ private func seedFinishedRequest(
         responseStatusText: "OK",
         timestamp: timestamp
     )
-    return try #require(context.registeredRequest(for: id))
+    return try #require(context.network.request(for: id))
 }
 
 @MainActor

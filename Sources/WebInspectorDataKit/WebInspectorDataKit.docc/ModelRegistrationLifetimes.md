@@ -23,6 +23,8 @@ Operations use these stale semantics:
   preserve the current selection. Passing `nil` still clears the selection.
 - ``DOMNode/requestChildren(depth:)`` ignores a stale node. It never
   redirects the request to a same-ID node from a later document.
+- ``NetworkModelController/fetchResponseBody(for:)`` fails the response body
+  of a stale request with an invalidation error.
 
 Resolve current models from the context or a current tree snapshot immediately
 before an operation:

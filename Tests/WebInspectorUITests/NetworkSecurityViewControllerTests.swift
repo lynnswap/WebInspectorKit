@@ -447,8 +447,7 @@ struct NetworkSecurityViewControllerTests {
             ),
             initiator: nil,
             resourceType: .fetch,
-            timestamp: 1,
-            modelContext: context
+            timestamp: 1
         )
     }
 

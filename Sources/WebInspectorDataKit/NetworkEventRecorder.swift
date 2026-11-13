@@ -215,8 +215,7 @@ final class NetworkEventRecorder {
         responseHeaders: [String: String] = [:],
         responseBody: String? = nil,
         timestamp: Double,
-        encodedBodyLength: Int = 0,
-        modelContext: WebInspectorContext
+        encodedBodyLength: Int = 0
     ) -> NetworkRequest.ID {
         let requestID = Network.Request.ID(rawRequestID)
         let resourceType = resourceTypeRawValue.map(Network.ResourceType.init(rawValue:))
@@ -269,8 +268,7 @@ final class NetworkEventRecorder {
                     initiator: nil,
                     resourceType: resourceType,
                     timestamp: timestamp,
-                    chronologySequence: chronologySequence,
-                    modelContext: modelContext
+                    chronologySequence: chronologySequence
                 )
                 hydrate(request)
                 return request
@@ -315,8 +313,7 @@ final class NetworkEventRecorder {
     }
 
     func apply(
-        _ event: Network.Event,
-        modelContext: WebInspectorContext
+        _ event: Network.Event
     ) {
         let chronologySequence = takeNetworkChronologySequence()
         switch event {
@@ -328,8 +325,7 @@ final class NetworkEventRecorder {
                 resourceType: resourceType,
                 redirectResponse: redirectResponse,
                 timestamp: timestamp,
-                chronologySequence: chronologySequence,
-                modelContext: modelContext
+                chronologySequence: chronologySequence
             )
         case let .responseReceived(id, response, resourceType, timestamp):
             applyResponseReceived(
@@ -337,8 +333,7 @@ final class NetworkEventRecorder {
                 response: response,
                 resourceType: resourceType,
                 timestamp: timestamp,
-                chronologySequence: chronologySequence,
-                modelContext: modelContext
+                chronologySequence: chronologySequence
             )
         case let .dataReceived(id, dataLength, encodedDataLength, timestamp):
             guard let registration = networkRegistration(for: id, method: "dataReceived") else {
@@ -368,8 +363,7 @@ final class NetworkEventRecorder {
         case let .webSocket(event):
             apply(
                 event,
-                chronologySequence: chronologySequence,
-                modelContext: modelContext
+                chronologySequence: chronologySequence
             )
         case let .requestServedFromMemoryCache(id, response, initiator, resourceType, timestamp):
             applyRequestServedFromMemoryCache(
@@ -378,8 +372,7 @@ final class NetworkEventRecorder {
                 initiator: initiator,
                 resourceType: resourceType,
                 timestamp: timestamp,
-                chronologySequence: chronologySequence,
-                modelContext: modelContext
+                chronologySequence: chronologySequence
             )
         case .unknown:
             break
@@ -393,8 +386,7 @@ final class NetworkEventRecorder {
         resourceType: Network.ResourceType?,
         redirectResponse: Network.Response?,
         timestamp: Double,
-        chronologySequence: UInt64,
-        modelContext: WebInspectorContext
+        chronologySequence: UInt64
     ) {
         requestStore.invalidateResourceTreeContent(replacedBy: payload)
         let id = NetworkRequest.ID(proxyID)
@@ -408,8 +400,7 @@ final class NetworkEventRecorder {
                     navigationVisit: networkNavigationVisit(for: payload),
                     resourceType: resourceType,
                     timestamp: timestamp,
-                    chronologySequence: chronologySequence,
-                    modelContext: modelContext
+                    chronologySequence: chronologySequence
                 )
             }
         ) else {
@@ -563,8 +554,7 @@ final class NetworkEventRecorder {
         initiator: Network.Initiator,
         resourceType: Network.ResourceType?,
         timestamp: Double,
-        chronologySequence: UInt64,
-        modelContext: WebInspectorContext
+        chronologySequence: UInt64
     ) {
         let id = NetworkRequest.ID(proxyID)
         guard requestStore.isTombstoned(id) == false else {
@@ -595,8 +585,7 @@ final class NetworkEventRecorder {
                     resourceType: resourceType,
                     timestamp: timestamp,
                     chronologySequence: chronologySequence,
-                    requestHeaderSource: .unavailable,
-                    modelContext: modelContext
+                    requestHeaderSource: .unavailable
                 )
                 request.applyMemoryCache(
                     response: response,
@@ -628,8 +617,7 @@ final class NetworkEventRecorder {
         response: Network.Response,
         resourceType: Network.ResourceType?,
         timestamp: Double,
-        chronologySequence: UInt64,
-        modelContext: WebInspectorContext
+        chronologySequence: UInt64
     ) {
         if let url = response.url {
             guard !requestStore.isClearedResourceTreeResponse(id: proxyID, url: url, origin: response.origin) else { return }
@@ -668,8 +656,7 @@ final class NetworkEventRecorder {
                     resourceType: resourceType,
                     timestamp: timestamp,
                     chronologySequence: chronologySequence,
-                    requestHeaderSource: .unavailable,
-                    modelContext: modelContext
+                    requestHeaderSource: .unavailable
                 )
                 request.applyResponse(response, resourceType: resourceType, timestamp: timestamp)
                 return request
@@ -692,16 +679,14 @@ final class NetworkEventRecorder {
 
     private func apply(
         _ event: Network.WebSocketEvent,
-        chronologySequence: UInt64,
-        modelContext: WebInspectorContext
+        chronologySequence: UInt64
     ) {
         switch event {
         case let .created(id, url):
             applyWebSocketCreated(
                 id: id,
                 url: url,
-                chronologySequence: chronologySequence,
-                modelContext: modelContext
+                chronologySequence: chronologySequence
             )
         case let .handshakeRequest(id, request, timestamp):
             guard let registration = networkRegistration(
@@ -790,8 +775,7 @@ final class NetworkEventRecorder {
     private func applyWebSocketCreated(
         id proxyID: Network.Request.ID,
         url: String,
-        chronologySequence: UInt64,
-        modelContext: WebInspectorContext
+        chronologySequence: UInt64
     ) {
         let id = NetworkRequest.ID(proxyID)
         guard let resolution = requestStore.resolve(
@@ -805,8 +789,7 @@ final class NetworkEventRecorder {
                     resourceType: .webSocket,
                     timestamp: nil,
                     chronologySequence: chronologySequence,
-                    requestHeaderSource: .unavailable,
-                    modelContext: modelContext
+                    requestHeaderSource: .unavailable
                 )
                 request.applyWebSocketCreated(url: url, chronologySequence: chronologySequence)
                 return request
@@ -845,7 +828,7 @@ final class NetworkEventRecorder {
         return nextChronologySequence
     }
 
-    func applyResourceTree(_ tree: Page.ResourceTree, modelContext: WebInspectorContext) {
+    func applyResourceTree(_ tree: Page.ResourceTree) {
         struct ResourceKey: Hashable {
             let frameID: FrameID
             let loaderID: String
@@ -888,8 +871,7 @@ final class NetworkEventRecorder {
                 resourceType: Network.ResourceType(rawValue: type),
                 timestamp: nil,
                 chronologySequence: takeNetworkChronologySequence(),
-                requestHeaderSource: .unavailable,
-                modelContext: modelContext
+                requestHeaderSource: .unavailable
             )
             request.applyResourceTreeMetadata(
                 frameID: frameID, mimeType: mimeType, failed: failed,
