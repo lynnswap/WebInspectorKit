@@ -1,13 +1,13 @@
 {
-  "originHash" : "a92442985984897017c2a75f3a9b3fa8166202717590d2e0eaf43240d776790c",
+  "originHash" : "2159eaa08c9276e765fbadb001e5656ceebff4b51ed500d19549273b3973bb69",
   "pins" : [
     {
       "identity" : "abibridge",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ABIBridge.git",
       "state" : {
-        "revision" : "4cbe8405dfd812c5683e10a39c219f00f1e7a6c3",
-        "version" : "0.17.0"
+        "revision" : "bfdb7304de682d0cba6e80709e3c2b994e2e87c1",
+        "version" : "0.19.1"
       }
     },
     {
@@ -33,8 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ObservationBridge.git",
       "state" : {
-        "revision" : "0eab3af7768d2296c1e71c88a2fe1423a95577cd",
-        "version" : "0.15.9"
+        "revision" : "e666da2d32e7f1def7bae25bc8d3b68b0387e4ef",
+        "version" : "0.15.12"
       }
     },
     {
@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/ScrollableTabBar.git",
       "state" : {
-        "revision" : "3d3d92e48344edbdc77f0f09dc06068e5cfcd271",
-        "version" : "0.2.11"
+        "revision" : "2d932a429b1fcfd040cbd59ed2b316404dfbe3d4",
+        "version" : "0.2.12"
       }
     },
     {
@@ -114,8 +114,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/SyntaxEditorUI.git",
       "state" : {
-        "revision" : "103d8623a9e0f5c7dad8da319f244b7bf20dcb33",
-        "version" : "0.19.5"
+        "revision" : "00a16010cdadcd0a3ff0c4d978be1b776a01d0a0",
+        "version" : "0.19.6"
       }
     },
     {
@@ -213,17 +213,17 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/UIHostingMenu.git",
       "state" : {
-        "revision" : "41949a800c30c36fe063b88d72ed4024deefa2a1",
-        "version" : "0.5.12"
+        "revision" : "2a587f0c627370d034d21181d31b3689c4b62975",
+        "version" : "0.5.13"
       }
     },
     {
-      "identity" : "webkitscreentimeworkaround",
+      "identity" : "webkittestworkarounds",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/lynnswap/WebKitScreenTimeWorkaround.git",
+      "location" : "https://github.com/lynnswap/WebKitTestWorkarounds.git",
       "state" : {
-        "revision" : "c7abc1846b6bba2635f043870d6dac3344990086",
-        "version" : "0.3.0"
+        "revision" : "077f9312e8034c26f4b1d1f192aa42aaa361882e",
+        "version" : "0.4.0"
       }
     },
     {
@@ -231,8 +231,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/WKViewportCoordinator.git",
       "state" : {
-        "revision" : "df2bfb7adc7be3863b11c9576d81b0b7b32224bc",
-        "version" : "0.11.7"
+        "revision" : "e844af909127cd808d7f382f6971a945b6b1a274",
+        "version" : "0.11.8"
       }
     },
     {

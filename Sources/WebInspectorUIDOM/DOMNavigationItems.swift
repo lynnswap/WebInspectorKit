@@ -305,14 +305,6 @@ package final class DOMNavigationItems: NSObject {
 
 #if DEBUG
 extension DOMNavigationItems {
-    var statusObservationTaskForTesting: Task<Void, Never>? {
-        statusTask
-    }
-
-    var pickItemForTesting: UIBarButtonItem {
-        pickItem
-    }
-
     func deleteSelectedNodeForTesting(undoManager: UndoManager?) async {
         await deleteSelectedNodeFromNavigation(undoManager: undoManager)
     }

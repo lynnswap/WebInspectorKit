@@ -1254,10 +1254,6 @@ extension NetworkDetailViewController {
         navigationItem.rightBarButtonItem
     }
 
-    var presentedRequestPickerForTesting: NetworkDetailRequestPickerViewController? {
-        presentedRequestPicker
-    }
-
     func selectModeForTesting(_ mode: NetworkDetailViewController.Mode) {
         modeControl.selectedID = mode
         modeControl.delegate?.scrollableTabBar(modeControl, didSelect: mode)
@@ -1274,10 +1270,6 @@ extension NetworkDetailViewController {
 
     func selectPreviewRoleForTesting(_ role: NetworkBody.Role) {
         previewRoleControlController.selectRoleForTesting(role)
-    }
-
-    func presentRequestPickerForTesting() {
-        presentRequestPicker()
     }
 }
 #endif

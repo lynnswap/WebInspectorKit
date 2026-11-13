@@ -1,7 +1,7 @@
 #if canImport(UIKit)
 import Testing
 import UIKit
-import WebKitScreenTimeWorkaround
+import WebKitTestWorkarounds
 import WebInspectorTestSupport
 @testable import WebInspectorDataKit
 @testable import WebInspectorProxyKit

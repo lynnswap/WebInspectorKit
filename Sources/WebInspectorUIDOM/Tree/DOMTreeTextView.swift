@@ -872,30 +872,13 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         reconcilePageSelectionHighlightIntentIfNeeded()
     }
 
-    private func reloadTree(resetFragments: Bool, countsCall: Bool = true) {
-#if DEBUG
-        if countsCall {
-            performanceCounters.reloadTreeCallCount += 1
-        }
-#endif
-        startRowDocumentReload(resetFragments: resetFragments, countsCall: false)
-    }
-
-    private func startRowDocumentReload(
-        resetFragments: Bool,
-        countsCall: Bool = true
-    ) {
+    private func reloadTree(resetFragments: Bool) {
         guard isRenderingActive else {
             let invalidation = DOMTreeRenderInvalidation.initial(snapshot: currentTreeSnapshot)
             mergePendingDOMTreeRenderInvalidation(invalidation)
             pendingDOMTreeRenderInvalidationRequiresRoute = true
             return
         }
-#if DEBUG
-        if countsCall {
-            performanceCounters.reloadTreeCallCount += 1
-        }
-#endif
         let didResetLocalDocumentState = resetLocalDocumentStateIfNeeded()
         let previousRows = rows
         let previousText = documentText
@@ -2088,10 +2071,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         type: NSTextLayoutManager.SegmentType,
         options: NSTextLayoutManager.SegmentOptions = [.rangeNotRequired]
     ) -> [CGRect] {
-        #if DEBUG
-        performanceCounters.textSegmentRectsCallCount += 1
-        #endif
-
         guard let textRange = textRange(for: range) else {
             return []
         }
@@ -2656,10 +2635,6 @@ extension DOMTreeTextView {
         await pageHighlightTask?.value
     }
 
-    var rowCountForTesting: Int {
-        rows.count
-    }
-
     var rowSnapshotsForTesting: [RowSnapshot] {
         rows.map { rowSnapshot(for: $0) }
     }
@@ -2771,10 +2746,6 @@ extension DOMTreeTextView {
         }
     }
 
-    var reloadTreeCallCountForTesting: Int {
-        performanceCounters.reloadTreeCallCount
-    }
-
     var buildRowRenderPlanCallCountForTesting: Int {
         performanceCounters.buildRowRenderPlanCallCount
     }
@@ -2793,10 +2764,6 @@ extension DOMTreeTextView {
 
     var rowSpanDisplayInvalidationCallCountForTesting: Int {
         performanceCounters.rowSpanDisplayInvalidationCallCount
-    }
-
-    var textSegmentRectsCallCountForTesting: Int {
-        performanceCounters.textSegmentRectsCallCount
     }
 
     var updateContentDecorationsCallCountForTesting: Int {
@@ -2979,14 +2946,6 @@ extension DOMTreeTextView {
         }
     }
 
-    var findFoundRangesForTesting: [NSRange] {
-        findDecorationState.foundRanges
-    }
-
-    var findHighlightedRangesForTesting: [NSRange] {
-        findDecorationState.highlightedRanges
-    }
-
     func toggleRowForTesting(containing text: String) {
         guard let row = rows.first(where: { $0.text.contains(text) }) else {
             return
@@ -3051,25 +3010,6 @@ extension DOMTreeTextView {
         clearHoveredRowAndRestoreSelectionHighlight()
     }
 
-    func decorateFindTextForTesting(query: String) {
-        clearFindDecorations()
-        for range in DOMTreeTextView.FindCoordinator.searchRanges(in: documentText, queryString: query) {
-            decorateFindTextRange(range, style: .found)
-        }
-        if let firstRange = DOMTreeTextView.FindCoordinator.searchRanges(in: documentText, queryString: query).first {
-            decorateFindTextRange(firstRange, style: .highlighted)
-        }
-    }
-
-    func decorateStaleFindTextForTesting(query: String) {
-        findCoordinator.decorateStaleFoundTextForTesting(queryString: query)
-    }
-
-    func synchronizeDocumentForTesting() async {
-        reloadTree(resetFragments: true)
-        await waitForRowDocumentForTesting()
-    }
-
     @discardableResult
     func waitForRowDocumentForTesting(timeout: Duration = .seconds(5)) async -> Bool {
         let start = ContinuousClock.now
@@ -3130,21 +3070,6 @@ extension DOMTreeTextView {
         rowHeight
     }
 
-    var paragraphLineHeightForTesting: CGFloat {
-        Self.paragraphLineHeight
-    }
-
-    var textBaselineOffsetForTesting: CGFloat {
-        Self.textBaselineOffset
-    }
-
-    func textHighlightRectsForTesting(containing text: String) -> [CGRect] {
-        guard let row = rows.first(where: { $0.text.contains(text) }) else {
-            return []
-        }
-        return textSegmentRects(for: row.documentRange, type: .highlight)
-    }
-
     func hitTestedLineTextForTesting(atContentPoint point: CGPoint) -> String? {
         row(at: point)?.text
     }
@@ -3155,25 +3080,6 @@ extension DOMTreeTextView {
             return nil
         }
         return row.text
-    }
-
-    static func tokenColorForTesting(kind: String, style: UIUserInterfaceStyle) -> UIColor? {
-        guard let tokenKind = DOMTreeTextView.Token.Kind(rawValue: kind) else {
-            return nil
-        }
-        return tokenKind.color(resolvedFor: UITraitCollection(userInterfaceStyle: style))
-    }
-
-    static func selectedRowBackgroundColorForTesting(style: UIUserInterfaceStyle) -> UIColor {
-        DOMTreeTextView.HighlightTheme.webInspector.selectedRowBackground.resolvedColor(
-            with: UITraitCollection(userInterfaceStyle: style)
-        )
-    }
-
-    static func disclosureColorForTesting(style: UIUserInterfaceStyle) -> UIColor {
-        DOMTreeTextView.HighlightTheme.webInspector.disclosure.resolvedColor(
-            with: UITraitCollection(userInterfaceStyle: style)
-        )
     }
 }
 #endif // DEBUG

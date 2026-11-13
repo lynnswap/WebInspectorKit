@@ -908,21 +908,8 @@ extension NetworkListViewController {
         collectionView
     }
 
-    package var searchControllerForTesting: UISearchController {
-        loadViewIfNeeded()
-        configureNavigationItem()
-        guard let activeSearchController else {
-            fatalError("Expected NetworkListViewController to have an active search controller")
-        }
-        return activeSearchController
-    }
-
     package var filterItemForTesting: UIBarButtonItem {
         filterItem
-    }
-
-    package var selectedRequestObservationDeliveryForTesting: PortableObservationTracking.Token? {
-        selectedEntryObservation
     }
 
     package var displayRequestIDsEvaluationCountForTesting: Int {
@@ -1017,11 +1004,6 @@ extension NetworkListViewController {
 
     package func waitForTrackedListSnapshotBuildTasksForTesting() async {
         await listSnapshotBuildCoordinator.waitUntilTrackedTasksComplete()
-    }
-
-    package func flushPendingListProjectionForTesting() {
-        listFrameScheduler.cancel()
-        listRenderingDisplayFrameDidFire()
     }
 
     package func waitForFetchedResultsTransactionDeliveryForTesting(
