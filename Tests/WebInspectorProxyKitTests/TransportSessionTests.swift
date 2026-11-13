@@ -2454,15 +2454,6 @@ private func receiveTargetDispatch(
     await session.receiveRootMessage(targetDispatchMessage(targetID: targetID, message: message))
 }
 
-private func targetDispatchMessage(
-    targetID: ProtocolTarget.ID,
-    message: String
-) -> String {
-    let escapedTargetID = jsonEscapedString(targetID.rawValue)
-    let escapedMessage = jsonEscapedString(message)
-    return #"{"method":"Target.dispatchMessageFromTarget","params":{"targetId":"\#(escapedTargetID)","message":"\#(escapedMessage)"}}"#
-}
-
 private func targetCommandWrapperMessage(
     outerID: UInt64,
     targetID: ProtocolTarget.ID = .init("page-main"),
@@ -2472,31 +2463,6 @@ private func targetCommandWrapperMessage(
     let escapedTargetID = jsonEscapedString(targetID.rawValue)
     let escapedMessage = jsonEscapedString(#"{"id":\#(innerID),"method":"\#(method)"}"#)
     return #"{"id":\#(outerID),"method":"Target.sendMessageToTarget","params":{"targetId":"\#(escapedTargetID)","message":"\#(escapedMessage)"}}"#
-}
-
-private func jsonEscapedString(_ string: String) -> String {
-    string
-        .replacingOccurrences(of: #"\"#, with: #"\\"#)
-        .replacingOccurrences(of: #"""#, with: #"\""#)
-}
-
-private func messageID(_ message: String) throws -> UInt64 {
-    let data = try #require(message.data(using: .utf8))
-    let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-    if let number = object["id"] as? NSNumber {
-        return number.uint64Value
-    }
-    if let string = object["id"] as? String,
-       let id = UInt64(string) {
-        return id
-    }
-    throw TransportSession.Error.malformedMessage
-}
-
-private func messageMethod(_ message: String) throws -> String? {
-    let data = try #require(message.data(using: .utf8))
-    let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-    return object["method"] as? String
 }
 
 private func jsonObject(from data: Data) throws -> [String: Any] {
