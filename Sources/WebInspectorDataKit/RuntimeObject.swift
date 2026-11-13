@@ -5,7 +5,7 @@ import WebInspectorProxyKit
 /// Observable model for a Runtime remote object.
 @Observable
 @MainActor
-public final class RuntimeObject: WebInspectorPersistentModel {
+public final class RuntimeObject: WebInspectorModel {
     struct Authority: Equatable {
         struct Context: Equatable {
             var id: RuntimeContext.ID

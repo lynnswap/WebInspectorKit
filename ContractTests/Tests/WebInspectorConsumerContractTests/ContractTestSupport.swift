@@ -130,7 +130,7 @@ final class ContractDataKitActor {
         let root = try #require(context.dom.rootNode)
         #expect(root.nodeName == "#document")
         #expect(context.dom.node(for: root.id) === root)
-        requirePersistentModel(root)
+        requireModel(root)
 
         let treeController = context.dom.treeController()
         let treeSnapshot: DOMTreeSnapshot = treeController.snapshot
@@ -290,7 +290,7 @@ final class ContractDataKitActor {
         inspector
     }
 
-    private func requirePersistentModel<Model: WebInspectorPersistentModel>(_ model: Model) {
+    private func requireModel<Model: WebInspectorModel>(_ model: Model) {
         #expect(Set([model]).contains(model))
     }
 

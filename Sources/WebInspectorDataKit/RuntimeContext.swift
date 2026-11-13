@@ -5,7 +5,7 @@ import WebInspectorProxyKit
 /// Observable model for a Runtime execution context.
 @Observable
 @MainActor
-public final class RuntimeContext: WebInspectorPersistentModel {
+public final class RuntimeContext: WebInspectorModel {
     struct Authority {
         var targetID: WebInspectorTarget.ID
         var targetRevision: UInt64

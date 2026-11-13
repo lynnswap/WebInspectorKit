@@ -78,6 +78,7 @@ inspector.detach()
   error of a failed attachment. `context.teardownError` has no replacement: the
   inspector closes the connection when an attachment ends and logs a domain
   that could not be disabled first.
+- `WebInspectorPersistentModel` is renamed to `WebInspectorModel`.
 - The inspector and its models are bound to the main actor. Methods no longer
   take an `isolation:` parameter. Model identities (`id`) stay readable from
   any isolation.

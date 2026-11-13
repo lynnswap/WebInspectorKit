@@ -669,7 +669,7 @@ extension NetworkDetailTestSupport {
         in viewController: NetworkListViewController,
         afterTransactionDeliveryCount transactionDeliveryCount: Int
     ) async -> Bool {
-        guard await viewController.waitForFetchedResultsTransactionDeliveryForTesting(
+        guard await viewController.waitForListTransactionDeliveryForTesting(
             after: transactionDeliveryCount
         ) else {
             return false

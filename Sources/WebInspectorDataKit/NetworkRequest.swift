@@ -1166,7 +1166,7 @@ public final class NetworkBody {
     }
 }
 
-/// Stable identity for one frame visit within a DataKit context.
+/// Stable identity for one frame visit within an attachment.
 ///
 /// WebKit may reuse a loader identifier after a back/forward navigation, so
 /// the frame/loader pair is content, not visit identity.
@@ -1223,7 +1223,7 @@ package enum NetworkResponseCookieSection: Equatable, Sendable {
 /// Observable model for one network request.
 @Observable
 @MainActor
-public final class NetworkRequest: WebInspectorPersistentModel {
+public final class NetworkRequest: WebInspectorModel {
     /// Stable identity for a network request within a context.
     public struct ID: Hashable, Sendable {
         let proxyID: Network.Request.ID

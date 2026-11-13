@@ -216,7 +216,7 @@ private func cssPropertiesByStyleID(
 /// Observable CSS state for one DOM element.
 @Observable
 @MainActor
-public final class CSSStyles: WebInspectorPersistentModel {
+public final class CSSStyles: WebInspectorModel {
     /// Stable identity for an element's CSS style model.
     public struct ID: Hashable, Sendable {
         let nodeID: DOMNode.ID
