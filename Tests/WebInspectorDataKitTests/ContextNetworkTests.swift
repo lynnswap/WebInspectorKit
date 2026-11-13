@@ -981,7 +981,7 @@ func clearNetworkRequestsPublishesResetAndIgnoresClearedEvents() async throws {
     context.clearNetworkRequests()
 
     try await recorder.waitForChangeCount(3)
-    #expect(recorder.changes.last == .reset)
+    #expect(recorder.changes.last == .removedAll)
     #expect(context.network.requests.isEmpty)
     #expect(context.registeredRequest(for: firstModelID) == nil)
     #expect(context.registeredRequest(for: secondModelID) == nil)

@@ -237,7 +237,7 @@ package final class NetworkRequestStore {
         registrationsByID = [:]
         requestAliases = [:]
         pendingResourceTreeRequests = [:]
-        changeRelay.yield(.reset)
+        changeRelay.yield(.removedAll)
     }
 
     private func prepareAdmission(for id: NetworkRequest.ID, admission: Admission) -> Bool {

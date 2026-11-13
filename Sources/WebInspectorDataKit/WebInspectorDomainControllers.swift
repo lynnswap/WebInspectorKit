@@ -280,7 +280,7 @@ public final class NetworkModelController {
     /// The recorded network requests, in arrival order.
     ///
     /// Reading this property from an observation scope tracks insertions and
-    /// resets. Use ``requestChanges`` to apply changes incrementally.
+    /// removals. Use ``requestChanges`` to apply changes incrementally.
     public var requests: [NetworkRequest] {
         context.networkRequests
     }
@@ -311,7 +311,7 @@ public final class ConsoleModelController {
     /// The recorded console messages, in arrival order.
     ///
     /// Reading this property from an observation scope tracks insertions and
-    /// resets. Use ``messageChanges`` to apply changes incrementally.
+    /// removals. Use ``messageChanges`` to apply changes incrementally.
     public var messages: [ConsoleMessage] {
         context.consoleMessages
     }

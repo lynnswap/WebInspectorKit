@@ -681,7 +681,10 @@ package final class NetworkPanelModel {
         let subjectBeforeTransaction = detailSubject
         let changedRequestIDs: [NetworkRequest.ID]
         switch change {
-        case .reset:
+        case .removedAll, .removed:
+            // Rebuilding from the live collection can run ahead of the feed.
+            // The insertions still buffered then arrive as upserts of
+            // requests that are already registered.
             rebuildEntries(from: context.network.requests)
             reconcileSubjectAfterReset(subjectBeforeTransaction)
             publishListTransaction(

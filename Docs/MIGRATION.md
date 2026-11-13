@@ -35,16 +35,22 @@ windows requests and messages; that belongs to the code that presents them.
 | A filter, sort, section, limit, or offset on a query | Apply it to the collection in your own model |
 
 Both collections are in arrival order and observable. A change stream reports
-`inserted` and `updated` model IDs and `reset`; after a `reset`, read the
-collection again:
+`inserted`, `updated`, and `removed` model IDs and `removedAll`. Copy the
+collection when you subscribe and apply every change in order:
 
 ```swift
-for await change in context.network.requestChanges {
+let changes = context.network.requestChanges
+var rows = context.network.requests.map(\.id)
+for await change in changes {
     switch change {
-    case .reset:
-        reload(context.network.requests)
-    case let .inserted(ids), let .updated(ids):
-        apply(ids.compactMap { context.registeredRequest(for: $0) })
+    case .removedAll:
+        rows.removeAll()
+    case let .inserted(ids):
+        rows.append(contentsOf: ids)
+    case let .removed(ids):
+        rows.removeAll { ids.contains($0) }
+    case let .updated(ids):
+        reconfigure(ids)
     }
 }
 ```

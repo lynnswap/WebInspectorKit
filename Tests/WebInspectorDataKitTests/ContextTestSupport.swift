@@ -1111,7 +1111,7 @@ func changesBeforeClearingRequests(
     context.clearNetworkRequests()
     var received: [WebInspectorCollectionChange<NetworkRequest.ID>] = []
     for await change in changes {
-        if change == .reset {
+        if change == .removedAll {
             break
         }
         received.append(change)

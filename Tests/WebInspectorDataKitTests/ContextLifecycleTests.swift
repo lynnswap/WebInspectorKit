@@ -1058,7 +1058,7 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
     #expect(linearizedSubscription.sequence == supersededSubscription.sequence)
     #expect(context.network.requests.isEmpty)
     #expect(context.registeredRequest(forProxyID: oldRequestID) == nil)
-    #expect(await networkChanges.next() == .reset)
+    #expect(await networkChanges.next() == .removedAll)
 
     _ = await runtime.backend.waitForRecordedCommands(
         domain: "Console",

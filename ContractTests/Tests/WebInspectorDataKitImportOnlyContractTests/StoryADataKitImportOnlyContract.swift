@@ -27,7 +27,7 @@ private final class DataKitImportOnlyConsumer {
             context.console.messageChanges
         _ = requestChanges
         _ = messageChanges
-        _ = WebInspectorCollectionChange<NetworkRequest.ID>.reset
+        _ = WebInspectorCollectionChange<NetworkRequest.ID>.removedAll
         _ = WebInspectorCollectionChange<NetworkRequest.ID>.inserted([])
         _ = WebInspectorCollectionChange<NetworkRequest.ID>.updated([])
 

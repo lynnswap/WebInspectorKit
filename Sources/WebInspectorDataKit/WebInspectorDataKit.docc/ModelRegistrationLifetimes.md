@@ -41,5 +41,5 @@ The change streams from ``NetworkModelController/requestChanges`` and
 context is released, they finish.
 
 Detaching, restarting, or failing an inspection context does not finish them
-while the context object remains alive. A restart or a clear publishes a
-`reset`, after which the collection is read again.
+while the context object remains alive. A restart or a clear publishes
+`removedAll`.

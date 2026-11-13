@@ -65,7 +65,7 @@ func storePublishesInsertionsUpdatesAndResetsInOrder() async throws {
     #expect(await changes.next() == .inserted([first.request.id]))
     #expect(await changes.next() == .updated([first.request.id]))
     #expect(await changes.next() == .inserted(restored.map(\.id)))
-    #expect(await changes.next() == .reset)
+    #expect(await changes.next() == .removedAll)
 
     let second = try insertStoreRequest("second", store: store, context: context)
     #expect(await changes.next() == .inserted([second.request.id]))
