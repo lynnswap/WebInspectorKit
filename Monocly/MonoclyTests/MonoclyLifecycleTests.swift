@@ -14,7 +14,6 @@ struct MonoclyLifecycleTests {
         if #available(iOS 26.1, *) {
             try ScreenTimeWorkaround.install()
         }
-        try await WebInspectorSession.prepare()
     }
 
     @Test
@@ -197,7 +196,7 @@ struct MonoclyLifecycleTests {
             let didPresent = coordinator.presentWindow(
                 from: fixture.rootViewController,
                 browserWindow: fixture.rootViewController.browserWindow,
-                inspectorSession: fixture.rootViewController.inspectorSession
+                inspector: fixture.rootViewController.inspector
             )
             #expect(didPresent == false)
             #expect(activationCount == 0)
@@ -217,7 +216,7 @@ struct MonoclyLifecycleTests {
 
             let didPresent = coordinator.presentSheet(
                 from: fixture.rootViewController,
-                inspectorSession: fixture.rootViewController.inspectorSession
+                inspector: fixture.rootViewController.inspector
             )
 
             let sheetController = try #require(
@@ -242,7 +241,7 @@ struct MonoclyLifecycleTests {
             let webView = try #require(pageController.hostedWebViewForTesting)
             webView.underPageBackgroundColor = pageStyle == .dark ? .black : .white
             await fixture.rootViewController.waitForInspectorSessionTransitions()
-            #expect(fixture.rootViewController.inspectorSession.pageUserInterfaceStyle == pageStyle)
+            #expect(fixture.rootViewController.inspector.pageUserInterfaceStyle == pageStyle)
             let coordinator = BrowserInspectorCoordinator()
             defer {
                 coordinator.invalidate()
@@ -251,7 +250,7 @@ struct MonoclyLifecycleTests {
 
             #expect(coordinator.presentSheet(
                 from: fixture.rootViewController,
-                inspectorSession: fixture.rootViewController.inspectorSession
+                inspector: fixture.rootViewController.inspector
             ))
             let sheetController = try #require(
                 coordinator.presentedSheetControllerForTesting as? WebInspectorViewController
@@ -377,7 +376,7 @@ struct MonoclyLifecycleTests {
             #expect(coordinator.presentWindow(
                 from: rootViewController,
                 browserWindow: rootViewController.browserWindow,
-                inspectorSession: rootViewController.inspectorSession
+                inspector: rootViewController.inspector
             ))
 
             inspectorSceneDelegate.connect(windowScene: windowScene)
@@ -390,12 +389,12 @@ struct MonoclyLifecycleTests {
 
             #expect(mainSceneDelegate.window == nil)
             #expect(mainSceneDelegate.rootViewController == nil)
-            #expect(BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorSession))
+            #expect(BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspector))
 
             inspectorSceneDelegate.disconnect(windowScene: windowScene)
             await rootViewController.waitForInspectorSessionTransitions()
 
-            #expect(BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorSession) == false)
+            #expect(BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspector) == false)
         }
     }
 
@@ -428,7 +427,7 @@ struct MonoclyLifecycleTests {
             #expect(coordinator.presentWindow(
                 from: firstRootViewController,
                 browserWindow: firstRootViewController.browserWindow,
-                inspectorSession: firstRootViewController.inspectorSession
+                inspector: firstRootViewController.inspector
             ))
 
             inspectorSceneDelegate.connect(windowScene: windowScene)
@@ -466,7 +465,7 @@ struct MonoclyLifecycleTests {
             #expect(coordinator.presentWindow(
                 from: fixture.rootViewController,
                 browserWindow: fixture.rootViewController.browserWindow,
-                inspectorSession: fixture.rootViewController.inspectorSession
+                inspector: fixture.rootViewController.inspector
             ))
             #expect(coordinator.hasInspectorWindowForTesting)
 
@@ -522,7 +521,7 @@ struct MonoclyLifecycleTests {
             #expect(coordinator.presentWindow(
                 from: fixture.rootViewController,
                 browserWindow: fixture.rootViewController.browserWindow,
-                inspectorSession: fixture.rootViewController.inspectorSession
+                inspector: fixture.rootViewController.inspector
             ))
 
             sceneDelegate.connect(windowScene: fixture.windowScene)
@@ -533,7 +532,7 @@ struct MonoclyLifecycleTests {
             #expect(coordinator.presentWindow(
                 from: fixture.rootViewController,
                 browserWindow: fixture.rootViewController.browserWindow,
-                inspectorSession: fixture.rootViewController.inspectorSession
+                inspector: fixture.rootViewController.inspector
             ))
             #expect(coordinator.hasInspectorWindowForTesting)
             #expect(activatedSceneSession === fixture.windowScene.session)
@@ -568,7 +567,7 @@ struct MonoclyLifecycleTests {
             #expect(coordinator.presentWindow(
                 from: fixture.rootViewController,
                 browserWindow: fixture.rootViewController.browserWindow,
-                inspectorSession: fixture.rootViewController.inspectorSession
+                inspector: fixture.rootViewController.inspector
             ))
             #expect(coordinator.hasInspectorWindowForTesting == false)
             #expect(BrowserInspectorCoordinator.inspectorWindowContext() == nil)
@@ -600,7 +599,7 @@ struct MonoclyLifecycleTests {
             #expect(coordinator.presentWindow(
                 from: fixture.rootViewController,
                 browserWindow: fixture.rootViewController.browserWindow,
-                inspectorSession: fixture.rootViewController.inspectorSession
+                inspector: fixture.rootViewController.inspector
             ))
             #expect(observedStates == [false, true])
 
@@ -611,7 +610,7 @@ struct MonoclyLifecycleTests {
             #expect(coordinator.presentWindow(
                 from: fixture.rootViewController,
                 browserWindow: fixture.rootViewController.browserWindow,
-                inspectorSession: fixture.rootViewController.inspectorSession
+                inspector: fixture.rootViewController.inspector
             ))
             #expect(observedStates == [false, true, false])
         }
@@ -634,10 +633,10 @@ struct MonoclyLifecycleTests {
             #expect(coordinator.presentWindow(
                 from: fixture.rootViewController,
                 browserWindow: fixture.rootViewController.browserWindow,
-                inspectorSession: fixture.rootViewController.inspectorSession
+                inspector: fixture.rootViewController.inspector
             ))
             BrowserInspectorCoordinator.setInspectorWindowReleaseHandler(
-                for: fixture.rootViewController.inspectorSession
+                for: fixture.rootViewController.inspector
             ) {
                 releaseCount += 1
             }
@@ -699,7 +698,7 @@ struct MonoclyLifecycleTests {
             #expect(coordinator.presentWindow(
                 from: fixture.rootViewController,
                 browserWindow: fixture.rootViewController.browserWindow,
-                inspectorSession: fixture.rootViewController.inspectorSession
+                inspector: fixture.rootViewController.inspector
             ))
 
             #expect(activatedSceneSession == nil)

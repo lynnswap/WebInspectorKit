@@ -1,7 +1,7 @@
 # WebInspectorKit
 
 WebInspectorKit declares the public UIKit inspector API and owns the root
-controllers, session integration, and custom tabs. App code imports
+controllers, the presentation state of an inspector, and custom tabs. App code imports
 `WebInspectorKit`; custom inspector UIs can use `WebInspectorDataKit` or
 `WebInspectorProxyKit` directly.
 
@@ -10,10 +10,11 @@ package for symbol-level details.
 
 ## Main Areas
 
-- `WebInspectorSession`: UIKit facade and custom-tab compatibility owner. It
-  wraps a DataKit `WebInspector` and is the UI-facing inspection lifecycle
-  surface.
-- `WebInspectorViewController`: Public built-in inspector root controller.
+- `WebInspectorViewController`: Public built-in inspector root controller. It
+  presents a DataKit `WebInspector`.
+- `WebInspectorSession`: Internal presentation state that an inspector keeps
+  for the built-in UI: tabs and selection, the inferred page style, and the
+  root presentations that decide when the inspector is detached.
 - `PresentationContentStore`: Root-controller-owned cache for tab controllers
   and the Network panel model. It is never shared through a session.
 - `Containers`: Host and wrapper view controllers for compact tab and regular
@@ -30,12 +31,12 @@ regular width uses split presentation.
 
 ## Data Flow
 
-`WebInspectorSession` owns the UI-facing session lifecycle and the
-`WebInspector` whose current attachment the built-in tabs present. DOM and
-Network controllers observe DataKit
-models and submit DataKit commands. Each `WebInspectorViewController` owns its
-presentation content so two roots borrowing one session cannot reparent or
-retire each other's view controllers.
+The app attaches and detaches the `WebInspector`. Its `WebInspectorSession`
+follows the inspector from one attachment to the next and evicts tab content
+that was built for the previous one. DOM and Network controllers observe
+DataKit models and submit DataKit commands. Each `WebInspectorViewController`
+owns its presentation content so two roots presenting one inspector cannot
+reparent or retire each other's view controllers.
 
 The UI must not own native bridge objects, protocol envelopes,
 `TransportSession`, or `TransportBackend` directly. Protocol implementation is
@@ -61,7 +62,7 @@ target registries, or transport lifecycle.
 
 UI tests should verify UIKit behavior at the UI/DataKit boundary:
 
-- root controller attach/detach lifecycle through `WebInspectorSession`
+- root controller presentation lifecycle and when it detaches the inspector
 - compact and regular controller containment
 - DOM row expansion, selection reveal, hover/click highlight affordances, and
   keyboard commands

@@ -39,6 +39,10 @@ public final class WebInspector {
         /// The inspector is attached and observing the page.
         case attached
 
+        /// The inspector is ending its attachment and closing the
+        /// connection.
+        case detaching
+
         /// The inspector is not attached.
         case detached
 
@@ -101,15 +105,17 @@ public final class WebInspector {
         to webView: WKWebView,
         configuration: WebInspectorProxy.Configuration = .init()
     ) {
-        attachment.attach {
+        attachment.attach(webView: webView) {
             try await WebInspectorContainer(attachingTo: webView, configuration: configuration)
         }
     }
 
     /// Stops inspecting.
     ///
-    /// The call returns immediately. The models of the ended attachment keep
-    /// their last state, and the domain collections become empty.
+    /// The call returns immediately. ``state`` is ``State/detaching`` until
+    /// the connection is closed, and then ``State/detached``. The models of
+    /// the ended attachment keep their last state, and the domain collections
+    /// become empty.
     public func detach() {
         attachment.detach()
     }
@@ -119,6 +125,32 @@ public final class WebInspector {
     package var context: WebInspectorContext {
         attachment.context
     }
+
+    /// The web view of the current attachment, when it was made to one.
+    package var inspectedWebView: WKWebView? {
+        attachment.inspectedWebView
+    }
+
+    /// The number of attach and detach calls made so far.
+    package var requestCount: UInt64 {
+        attachment.requestCount
+    }
+
+    /// Called when an attach or detach call is made, before it is applied.
+    package var attachmentWillChange: (@MainActor () -> Void)? {
+        get { attachment.attachmentWillChange }
+        set { attachment.attachmentWillChange = newValue }
+    }
+
+    /// Called after ``context`` was replaced, in the same step.
+    package var contextDidChange: (@MainActor () -> Void)? {
+        get { attachment.contextDidChange }
+        set { attachment.contextDidChange = newValue }
+    }
+
+    /// State that the presentation layer keeps for as long as the inspector
+    /// lives, such as the selected tab.
+    @ObservationIgnored package var presentationStorage: AnyObject?
 
     /// Replaces the current context with one that is managed elsewhere, such
     /// as a preview or a test fixture.

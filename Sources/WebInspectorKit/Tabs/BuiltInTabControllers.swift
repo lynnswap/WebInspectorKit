@@ -137,7 +137,10 @@ extension WebInspectorTab {
                     for: customContentKey(for: tab),
                     contextEpoch: session.interface.contextBoundContentRevision
                 ) {
-                    content.makeViewController(session)
+                    guard let inspector = session.inspector else {
+                        return UIViewController()
+                    }
+                    return content.makeViewController(inspector)
                 }
                 switch hostLayout {
                 case .compact:

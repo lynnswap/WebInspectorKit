@@ -102,14 +102,17 @@ final class RegularTabContentViewController: UINavigationController {
            activeItemIDs.contains(displayedDisplayItemID) == false {
             self.displayedDisplayItemID = nil
         }
-        setSegments(for: displayItems)
+        setSegments(for: displayItems, force: shouldRebuildContent)
         renderSelection(selectedDisplayItem, forceContentReplacement: shouldRebuildContent)
         renderedContentRevision = contentRevision
     }
 
-    private func setSegments(for displayItems: [WebInspectorTab.DisplayItem]) {
+    private func setSegments(
+        for displayItems: [WebInspectorTab.DisplayItem],
+        force: Bool = false
+    ) {
         let nextItemIDs = displayItems.map(\.id)
-        guard segmentDisplayItemIDs != nextItemIDs else {
+        guard force || segmentDisplayItemIDs != nextItemIDs else {
             return
         }
 

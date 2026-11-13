@@ -14,24 +14,52 @@ private let webInspectorSessionLifecycleLogger = Logger(
     category: "WebInspectorKit.Lifecycle"
 )
 
-/// The UIKit-facing inspection session used by `WebInspectorViewController`.
+/// The presentation state that the built-in UI keeps for one inspector: the
+/// tabs and their selection, the style of the inspected page, and the root
+/// presentations that are showing the inspector.
 ///
-/// A session owns attachment lifecycle, the current DataKit context, tab
-/// selection state, and page-derived presentation preferences.
-/// Await ``prepare()`` during app setup before creating inspector views.
+/// The inspector owns its session, so the state outlives the view controllers
+/// that present it. Use ``session(for:)`` to reach it.
 @MainActor
 @Observable
-public final class WebInspectorSession {
-    /// Prepares observation, hosted menus, and syntax previews for the inspector UI.
+final class WebInspectorSession {
+    /// Warms up observation, hosted menus, and syntax previews.
     ///
-    /// Await this during asynchronous app setup before constructing inspector
-    /// views. Repeated and concurrent calls share each dependency's preparation
-    /// across the process. This does not attach to a web view.
-    /// - Throws: A dependency preparation failure or cancellation.
-    public static func prepare() async throws {
+    /// The inspector UI works before this finishes: the dependencies prepare
+    /// on first use, and hosted menus are empty until they are ready. Repeated
+    /// and concurrent calls share each dependency's preparation.
+    static func prepare() async throws {
         try await PortableObservationTracking.prepare()
         try await SyntaxEditorModel.prepare()
         try await UIHostingMenuRuntime.prepare()
+    }
+
+    private static var runtimePreparation: Task<Void, Never>?
+
+    /// Starts ``prepare()`` once per process, without waiting for it.
+    static func prepareRuntimesIfNeeded() {
+        guard runtimePreparation == nil else {
+            return
+        }
+        runtimePreparation = Task {
+            do {
+                try await prepare()
+            } catch {
+                webInspectorSessionLifecycleLogger.error(
+                    "Inspector runtime preparation failed: \(String(describing: error), privacy: .public)"
+                )
+            }
+        }
+    }
+
+    /// Returns the session of an inspector, creating it on first use.
+    static func session(for inspector: WebInspector) -> WebInspectorSession {
+        if let session = inspector.presentationStorage as? WebInspectorSession {
+            return session
+        }
+        let session = WebInspectorSession(inspector: inspector, retainsInspector: false)
+        inspector.presentationStorage = session
+        return session
     }
 
     private struct RootPresentationRetirement {
@@ -43,31 +71,37 @@ public final class WebInspectorSession {
     /// The user interface style inferred from the inspected page.
     ///
     /// The value is `.unspecified` until the page style is known or when no useful style can be inferred.
-    public private(set) var pageUserInterfaceStyle: UIUserInterfaceStyle = .unspecified
-    @ObservationIgnored let inspector: WebInspector
-    @ObservationIgnored private var attachmentGeneration: UInt64 = 0
+    private(set) var pageUserInterfaceStyle: UIUserInterfaceStyle = .unspecified
+    /// The inspector owns a session made by ``session(for:)``, so that
+    /// session refers back weakly.
+    @ObservationIgnored private(set) weak var inspector: WebInspector?
+    /// Keeps the inspector of a session that was made without one.
+    @ObservationIgnored private let retainedInspector: WebInspector?
+    @ObservationIgnored private lazy var releasedInspectorContext = WebInspectorContext.detached()
     @ObservationIgnored private var activeRootPresentationIDs: Set<UUID> = []
     @ObservationIgnored private var deferredRootPresentationRetirement: RootPresentationRetirement?
     @ObservationIgnored private let makePageUserInterfaceStyleObserver: @MainActor (
         WKWebView,
         @escaping @MainActor (UIUserInterfaceStyle) -> Void
     ) -> any WebInspectorPageUserInterfaceStyleObserving
+    /// Replaces the page style observer of the next attachment in tests,
+    /// which attach without a web view.
+    @ObservationIgnored private var makePageUserInterfaceStyleObserverForNextAttachment: (@MainActor (
+        @escaping @MainActor (UIUserInterfaceStyle) -> Void
+    ) -> (any WebInspectorPageUserInterfaceStyleObserving)?)?
     @ObservationIgnored private var pageUserInterfaceStyleObserver: (any WebInspectorPageUserInterfaceStyleObserving)?
     #if DEBUG
     private(set) var detachCountForTesting = 0
     @ObservationIgnored private(set) var abandonmentRetirementTaskForTesting: Task<Void, Never>?
     #endif
 
-    /// Creates a session with the provided inspector tabs.
-    public init(tabs: [WebInspectorTab] = [.dom, .network]) {
-        self.interface = InterfaceModel(tabs: tabs)
-        self.inspector = WebInspector()
-        self.makePageUserInterfaceStyleObserver = { webView, apply in
-            WebInspectorPageUserInterfaceStyleObserver(webView: webView, apply: apply)
-        }
+    /// Creates a session that keeps its own inspector.
+    convenience init(tabs: [WebInspectorTab] = [.dom, .network]) {
+        self.init(inspector: WebInspector(), retainsInspector: true, tabs: tabs)
     }
 
-    init(
+    /// Creates a session that keeps its own inspector for `context`.
+    convenience init(
         context: WebInspectorContext,
         tabs: [WebInspectorTab] = [.dom, .network],
         makePageUserInterfaceStyleObserver: @escaping @MainActor (
@@ -77,46 +111,47 @@ public final class WebInspectorSession {
             WebInspectorPageUserInterfaceStyleObserver(webView: webView, apply: apply)
         }
     ) {
+        self.init(
+            inspector: WebInspector(context: context),
+            retainsInspector: true,
+            tabs: tabs,
+            makePageUserInterfaceStyleObserver: makePageUserInterfaceStyleObserver
+        )
+    }
+
+    private init(
+        inspector: WebInspector,
+        retainsInspector: Bool,
+        tabs: [WebInspectorTab] = [.dom, .network],
+        makePageUserInterfaceStyleObserver: @escaping @MainActor (
+            WKWebView,
+            @escaping @MainActor (UIUserInterfaceStyle) -> Void
+        ) -> any WebInspectorPageUserInterfaceStyleObserving = { webView, apply in
+            WebInspectorPageUserInterfaceStyleObserver(webView: webView, apply: apply)
+        }
+    ) {
         self.interface = InterfaceModel(tabs: tabs)
-        self.inspector = WebInspector(context: context)
+        self.inspector = inspector
+        self.retainedInspector = retainsInspector ? inspector : nil
         self.makePageUserInterfaceStyleObserver = makePageUserInterfaceStyleObserver
+        inspector.attachmentWillChange = { [weak self] in
+            // The style belongs to the page that is being left.
+            self?.stopPageUserInterfaceStyleObservation()
+        }
+        inspector.contextDidChange = { [weak self] in
+            self?.inspectorContextDidChange()
+        }
+        // The inspector can already be attached when its session is made.
+        restartPageUserInterfaceStyleObservation()
     }
 
     isolated deinit {
         stopPageUserInterfaceStyleObservation()
     }
 
+    /// The context of the inspector's current attachment.
     var context: WebInspectorContext {
-        inspector.context
-    }
-
-    /// Attaches the session to a web view.
-    ///
-    /// Attaching replaces any previous inspection context owned by this
-    /// session.
-    public func attach(to webView: WKWebView) async throws {
-        try await attach(
-            makeContainer: {
-                try await WebInspectorContainer(attachingTo: webView)
-            },
-            makePageUserInterfaceStyleObserver: { [makePageUserInterfaceStyleObserver] apply in
-                makePageUserInterfaceStyleObserver(webView, apply)
-            }
-        )
-    }
-
-    func attach(
-        to webView: WKWebView,
-        makeContainer: @escaping @MainActor (WKWebView) async throws -> WebInspectorContainer
-    ) async throws {
-        try await attach(
-            makeContainer: {
-                try await makeContainer(webView)
-            },
-            makePageUserInterfaceStyleObserver: { [makePageUserInterfaceStyleObserver] apply in
-                makePageUserInterfaceStyleObserver(webView, apply)
-            }
-        )
+        inspector?.context ?? releasedInspectorContext
     }
 
     func attachForTesting(
@@ -125,52 +160,51 @@ public final class WebInspectorSession {
             @escaping @MainActor (UIUserInterfaceStyle) -> Void
         ) -> (any WebInspectorPageUserInterfaceStyleObserving)? = { _ in nil }
     ) async throws {
-        try await attach(
-            makeContainer: makeContainer,
-            makePageUserInterfaceStyleObserver: makePageUserInterfaceStyleObserver
-        )
-    }
-
-    private func attach(
-        makeContainer: @escaping @MainActor () async throws -> WebInspectorContainer,
-        makePageUserInterfaceStyleObserver: @MainActor (
-            @escaping @MainActor (UIUserInterfaceStyle) -> Void
-        ) -> (any WebInspectorPageUserInterfaceStyleObserving)?
-    ) async throws {
-        advanceAttachmentGeneration()
-        stopPageUserInterfaceStyleObservation()
-        interface.contextDidChange()
-        let wasApplied: Bool
-        do {
-            wasApplied = try await inspector.attachAndWait(makeContainer: makeContainer)
-        } catch {
-            interface.contextDidChange()
-            stopPageUserInterfaceStyleObservation()
-            throw error
+        guard let inspector else {
+            throw CancellationError()
         }
+        makePageUserInterfaceStyleObserverForNextAttachment = makePageUserInterfaceStyleObserver
+        let wasApplied = try await inspector.attachAndWait(makeContainer: makeContainer)
         guard wasApplied else {
             // A later call replaced this one and owns the session state now.
             throw CancellationError()
         }
-        interface.contextDidChange()
-        startPageUserInterfaceStyleObservation(makePageUserInterfaceStyleObserver)
     }
 
-    /// Detaches the session and replaces the current context with a detached
-    /// placeholder context.
-    public func detach() async {
+    /// Detaches the inspector and waits until the call is applied.
+    func detach() async {
         await detachAndReplaceContext()
     }
 
     private func detachAndReplaceContext() async {
-        advanceAttachmentGeneration()
         #if DEBUG
         detachCountForTesting += 1
         #endif
+        await inspector?.detachAndWait()
+    }
+
+    /// Follows the inspector to its new context: content that was built for
+    /// the previous one is evicted, and the page style is observed on the
+    /// web view of the new attachment.
+    private func inspectorContextDidChange() {
+        interface.contextDidChange()
+        restartPageUserInterfaceStyleObservation()
+    }
+
+    private func restartPageUserInterfaceStyleObservation() {
         stopPageUserInterfaceStyleObservation()
-        interface.contextDidChange()
-        await inspector.detachAndWait()
-        interface.contextDidChange()
+        let makeObserverForNextAttachment = makePageUserInterfaceStyleObserverForNextAttachment
+        makePageUserInterfaceStyleObserverForNextAttachment = nil
+        guard let inspector, inspector.context.state != .detached else {
+            return
+        }
+        if let makeObserverForNextAttachment {
+            startPageUserInterfaceStyleObservation(makeObserverForNextAttachment)
+        } else if let webView = inspector.inspectedWebView {
+            startPageUserInterfaceStyleObservation { [makePageUserInterfaceStyleObserver] apply in
+                makePageUserInterfaceStyleObserver(webView, apply)
+            }
+        }
     }
 
     func beginRootPresentation(id: UUID) {
@@ -273,7 +307,7 @@ public final class WebInspectorSession {
         // Bind the context once: a concurrent attach can replace it across
         // the awaits below, and this retirement must not touch the
         // replacement context.
-        let context = inspector.context
+        let context = context
         guard context.status.state == .attached else {
             return
         }
@@ -320,13 +354,15 @@ public final class WebInspectorSession {
         pageUserInterfaceStyle = style
     }
 
-    private func advanceAttachmentGeneration() {
-        attachmentGeneration &+= 1
+    /// The number of attach and detach calls so far. A root presentation
+    /// that ended before the latest call no longer decides what happens to
+    /// the attachment.
+    private var attachmentGeneration: UInt64 {
+        inspector?.requestCount ?? 0
     }
 
     func installDataContext(_ context: WebInspectorContext) {
-        inspector.install(context)
-        interface.contextDidChange()
+        inspector?.install(context)
     }
 }
 
@@ -412,6 +448,17 @@ final class InterfaceModel {
         contextBoundContentRevision &+= 1
     }
 
+    /// Replaces the tabs of an inspector that may already be on screen.
+    ///
+    /// Tabs are equal by ID, so a tab with a known ID can still bring another
+    /// title or factory. Advancing the content revision makes every host
+    /// rebuild its tab items and evict the content it built for the previous
+    /// tabs.
+    func replaceTabs(_ tabs: [WebInspectorTab]) {
+        setTabs(tabs)
+        contextBoundContentRevision &+= 1
+    }
+
     func reachableContentKeys() -> Set<WebInspectorTab.ContentKey> {
         projection.contentKeys(for: .compact, tabs: tabs)
             .union(projection.contentKeys(for: .regular, tabs: tabs))
@@ -462,6 +509,21 @@ final class InterfaceModel {
             }
             result.append(tab)
         }
+    }
+}
+#endif
+
+#if canImport(UIKit)
+extension WebInspector {
+    /// The user interface style inferred from the page that the inspector is
+    /// attached to.
+    ///
+    /// The value is `.unspecified` until the page style is known, when no
+    /// useful style can be inferred, and while the inspector is detached.
+    /// Use it to match the appearance of the UI that presents the inspector
+    /// to the page.
+    public var pageUserInterfaceStyle: UIUserInterfaceStyle {
+        WebInspectorSession.session(for: self).pageUserInterfaceStyle
     }
 }
 #endif

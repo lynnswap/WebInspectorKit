@@ -33,7 +33,7 @@ final class BrowserPageViewController: UIViewController {
     }
 
     private let browserWindow: BrowserWindow
-    private let inspectorSession: WebInspectorSession
+    private let inspector: WebInspector
     private let launchConfiguration: BrowserLaunchConfiguration
     private let inspectorCoordinator = BrowserInspectorCoordinator()
     private var browserWindowObservation: PortableObservationTracking.Token?
@@ -91,12 +91,12 @@ final class BrowserPageViewController: UIViewController {
 
     init(
         browserWindow: BrowserWindow,
-        inspectorSession: WebInspectorSession,
+        inspector: WebInspector,
         launchConfiguration: BrowserLaunchConfiguration,
         progressHideScheduler: MainActorDelayScheduling = MainActorDelayScheduler()
     ) {
         self.browserWindow = browserWindow
-        self.inspectorSession = inspectorSession
+        self.inspector = inspector
         self.launchConfiguration = launchConfiguration
         self.progressHideScheduler = progressHideScheduler
         super.init(nibName: nil, bundle: nil)
@@ -692,7 +692,7 @@ final class BrowserPageViewController: UIViewController {
     private func openInspectorAsSheet() -> Bool {
         inspectorCoordinator.presentSheet(
             from: navigationController ?? self,
-            inspectorSession: inspectorSession
+            inspector: inspector
         )
     }
 
@@ -704,7 +704,7 @@ final class BrowserPageViewController: UIViewController {
         return inspectorCoordinator.presentWindow(
             from: navigationController ?? self,
             browserWindow: browserWindow,
-            inspectorSession: inspectorSession
+            inspector: inspector
         )
     }
 

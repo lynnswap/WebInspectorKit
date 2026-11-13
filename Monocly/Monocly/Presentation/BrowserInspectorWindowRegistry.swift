@@ -85,13 +85,13 @@ final class BrowserInspectorWindowRegistry {
 
     private struct RegistryUpdate {
         var previousPresentationState: Bool
-        var releaseInspectorSessionID: ObjectIdentifier?
+        var releaseInspectorID: ObjectIdentifier?
     }
 
     private var phase: PresentationPhase = .idle
     private let sceneRegistry = BrowserInspectorWindowRegistry.SceneRegistry()
     private var observers: [UUID: (Bool) -> Void] = [:]
-    private var releaseHandlersByInspectorSessionID: [ObjectIdentifier: () -> Void] = [:]
+    private var releaseHandlersByInspectorID: [ObjectIdentifier: () -> Void] = [:]
 
     var currentContext: BrowserInspectorCoordinator.WindowContext? {
         phase.context
@@ -133,16 +133,16 @@ final class BrowserInspectorWindowRegistry {
         publish(apply(.discardSceneSessions(Array(sceneSessions))))
     }
 
-    func hasWindow(for inspectorSession: WebInspectorSession) -> Bool {
-        phase.context?.inspectorSession === inspectorSession && presentationState
+    func hasWindow(for inspector: WebInspector) -> Bool {
+        phase.context?.inspector === inspector && presentationState
     }
 
     func setReleaseHandler(
-        for inspectorSession: WebInspectorSession,
+        for inspector: WebInspector,
         _ handler: (() -> Void)?
     ) {
-        let inspectorSessionID = ObjectIdentifier(inspectorSession)
-        releaseHandlersByInspectorSessionID[inspectorSessionID] = handler
+        let inspectorID = ObjectIdentifier(inspector)
+        releaseHandlersByInspectorID[inspectorID] = handler
     }
 
     func canRestoreSceneSession(_ sceneSession: UISceneSession) -> Bool {
@@ -174,18 +174,18 @@ final class BrowserInspectorWindowRegistry {
 
     private func apply(_ event: RegistryEvent) -> RegistryUpdate {
         let previousState = presentationState
-        let previousInspectorSessionID = phase.context.map { ObjectIdentifier($0.inspectorSession) }
-        var releaseInspectorSessionID: ObjectIdentifier?
+        let previousInspectorID = phase.context.map { ObjectIdentifier($0.inspector) }
+        var releaseInspectorID: ObjectIdentifier?
 
         switch event {
         case let .setContext(context):
-            let nextInspectorSessionID = context.map { ObjectIdentifier($0.inspectorSession) }
+            let nextInspectorID = context.map { ObjectIdentifier($0.inspector) }
             phase = phase.replacingContext(
                 context,
                 hasAttachedSceneSession: sceneRegistry.hasAttachedSceneSession
             )
-            if previousInspectorSessionID != nextInspectorSessionID {
-                releaseInspectorSessionID = previousInspectorSessionID
+            if previousInspectorID != nextInspectorID {
+                releaseInspectorID = previousInspectorID
             }
 
         case .beginPendingPresentation:
@@ -205,7 +205,7 @@ final class BrowserInspectorWindowRegistry {
                 shouldReleaseContext: shouldReleaseContext
             )
             if shouldReleaseContext {
-                releaseInspectorSessionID = previousInspectorSessionID
+                releaseInspectorID = previousInspectorID
             }
 
         case let .discardSceneSessions(sceneSessions):
@@ -217,29 +217,29 @@ final class BrowserInspectorWindowRegistry {
                 shouldReleaseContext: shouldReleaseContext
             )
             if shouldReleaseContext {
-                releaseInspectorSessionID = previousInspectorSessionID
+                releaseInspectorID = previousInspectorID
             }
 
         case .clear:
             phase = .idle
             sceneRegistry.clear()
-            releaseInspectorSessionID = previousInspectorSessionID
+            releaseInspectorID = previousInspectorID
         }
 
         return RegistryUpdate(
             previousPresentationState: previousState,
-            releaseInspectorSessionID: releaseInspectorSessionID
+            releaseInspectorID: releaseInspectorID
         )
     }
 
     private func publish(_ update: RegistryUpdate) {
-        releaseContext(for: update.releaseInspectorSessionID)
+        releaseContext(for: update.releaseInspectorID)
         notifyObserversIfNeeded(previousState: update.previousPresentationState)
     }
 
-    private func releaseContext(for inspectorSessionID: ObjectIdentifier?) {
-        guard let inspectorSessionID,
-              let releaseHandler = releaseHandlersByInspectorSessionID.removeValue(forKey: inspectorSessionID) else {
+    private func releaseContext(for inspectorID: ObjectIdentifier?) {
+        guard let inspectorID,
+              let releaseHandler = releaseHandlersByInspectorID.removeValue(forKey: inspectorID) else {
             return
         }
         releaseHandler()

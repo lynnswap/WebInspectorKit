@@ -18,7 +18,6 @@ struct BrowserSessionRestoreTests {
         if #available(iOS 26.1, *) {
             try ScreenTimeWorkaround.install()
         }
-        try await WebInspectorSession.prepare()
     }
 
     @Test
@@ -895,7 +894,7 @@ struct BrowserSessionRestoreTests {
         try await selectedWebViewInstalled.wait(for: secondWebView)
         await rootViewController.waitForInspectorSessionTransitions()
 
-        #expect(rootViewController.inspectorSession.pageUserInterfaceStyle == .dark)
+        #expect(rootViewController.inspector.pageUserInterfaceStyle == .dark)
     }
 
     @Test
@@ -911,7 +910,7 @@ struct BrowserSessionRestoreTests {
         )
         let pageViewController = BrowserPageViewController(
             browserWindow: store,
-            inspectorSession: WebInspectorSession(),
+            inspector: WebInspector(),
             launchConfiguration: .xcodeTestOrPreview(initialURL: initialURL),
             progressHideScheduler: scheduler
         )
@@ -955,7 +954,7 @@ struct BrowserSessionRestoreTests {
         )
         let pageViewController = BrowserPageViewController(
             browserWindow: store,
-            inspectorSession: WebInspectorSession(),
+            inspector: WebInspector(),
             launchConfiguration: .xcodeTestOrPreview(initialURL: initialURL),
             progressHideScheduler: ManualDelayScheduler()
         )
@@ -982,7 +981,7 @@ struct BrowserSessionRestoreTests {
         )
         let pageViewController = BrowserPageViewController(
             browserWindow: store,
-            inspectorSession: WebInspectorSession(),
+            inspector: WebInspector(),
             launchConfiguration: .xcodeTestOrPreview(initialURL: initialURL),
             progressHideScheduler: ManualDelayScheduler()
         )
@@ -1031,7 +1030,7 @@ struct BrowserSessionRestoreTests {
         )
         let pageViewController = BrowserPageViewController(
             browserWindow: store,
-            inspectorSession: WebInspectorSession(),
+            inspector: WebInspector(),
             launchConfiguration: .xcodeTestOrPreview(initialURL: initialURL),
             progressHideScheduler: ManualDelayScheduler()
         )
@@ -1133,7 +1132,7 @@ struct BrowserSessionRestoreTests {
         let fixture = try makeAttachmentLifecycleFixture()
         let pageViewController = BrowserPageViewController(
             browserWindow: fixture.browserWindow,
-            inspectorSession: WebInspectorSession(),
+            inspector: WebInspector(),
             launchConfiguration: .xcodeTestOrPreview(),
             progressHideScheduler: ManualDelayScheduler()
         )
@@ -1168,7 +1167,7 @@ struct BrowserSessionRestoreTests {
         let secondWebView = try #require(fixture.secondWebView as? BrowserViewportWebView)
         let pageViewController = BrowserPageViewController(
             browserWindow: fixture.browserWindow,
-            inspectorSession: WebInspectorSession(),
+            inspector: WebInspector(),
             launchConfiguration: .xcodeTestOrPreview(),
             progressHideScheduler: ManualDelayScheduler()
         )
@@ -1200,9 +1199,9 @@ struct BrowserSessionRestoreTests {
         let fixture = try makeAttachmentLifecycleFixture()
         let actions = ControlledInspectorAttachmentActions()
         defer { actions.releaseAttach(result: .failure(CancellationError())) }
-        let lifecycle = BrowserInspectorSessionAttachmentLifecycle(
+        let lifecycle = BrowserInspectorAttachmentLifecycle(
             browserWindow: fixture.browserWindow,
-            inspectorSession: WebInspectorSession(),
+            inspector: WebInspector(),
             attachAction: actions.attach,
             detachAction: actions.detach
         )
@@ -1230,9 +1229,9 @@ struct BrowserSessionRestoreTests {
         let fixture = try makeAttachmentLifecycleFixture()
         let actions = ControlledInspectorAttachmentActions()
         defer { actions.releaseAttach(result: .failure(CancellationError())) }
-        let lifecycle = BrowserInspectorSessionAttachmentLifecycle(
+        let lifecycle = BrowserInspectorAttachmentLifecycle(
             browserWindow: fixture.browserWindow,
-            inspectorSession: WebInspectorSession(),
+            inspector: WebInspector(),
             attachAction: actions.attach,
             detachAction: actions.detach
         )
@@ -1255,9 +1254,9 @@ struct BrowserSessionRestoreTests {
         let fixture = try makeAttachmentLifecycleFixture()
         let actions = ControlledInspectorAttachmentActions()
         defer { actions.releaseAttach(result: .failure(CancellationError())) }
-        let lifecycle = BrowserInspectorSessionAttachmentLifecycle(
+        let lifecycle = BrowserInspectorAttachmentLifecycle(
             browserWindow: fixture.browserWindow,
-            inspectorSession: WebInspectorSession(),
+            inspector: WebInspector(),
             attachAction: actions.attach,
             detachAction: actions.detach
         )
@@ -1280,9 +1279,9 @@ struct BrowserSessionRestoreTests {
         let fixture = try makeAttachmentLifecycleFixture()
         let actions = ControlledInspectorAttachmentActions()
         defer { actions.releaseAttach(result: .failure(CancellationError())) }
-        let lifecycle = BrowserInspectorSessionAttachmentLifecycle(
+        let lifecycle = BrowserInspectorAttachmentLifecycle(
             browserWindow: fixture.browserWindow,
-            inspectorSession: WebInspectorSession(),
+            inspector: WebInspector(),
             attachAction: actions.attach,
             detachAction: actions.detach
         )
@@ -1309,9 +1308,9 @@ struct BrowserSessionRestoreTests {
         let fixture = try makeAttachmentLifecycleFixture()
         let actions = ControlledInspectorAttachmentActions()
         defer { actions.releaseAttach(result: .failure(CancellationError())) }
-        var lifecycle: BrowserInspectorSessionAttachmentLifecycle? = BrowserInspectorSessionAttachmentLifecycle(
+        var lifecycle: BrowserInspectorAttachmentLifecycle? = BrowserInspectorAttachmentLifecycle(
             browserWindow: fixture.browserWindow,
-            inspectorSession: WebInspectorSession(),
+            inspector: WebInspector(),
             attachAction: actions.attach,
             detachAction: actions.detach
         )
@@ -1337,9 +1336,9 @@ struct BrowserSessionRestoreTests {
         let fixture = try makeAttachmentLifecycleFixture()
         let actions = ControlledInspectorAttachmentActions()
         defer { actions.releaseAttach(result: .failure(CancellationError())) }
-        let lifecycle = BrowserInspectorSessionAttachmentLifecycle(
+        let lifecycle = BrowserInspectorAttachmentLifecycle(
             browserWindow: fixture.browserWindow,
-            inspectorSession: WebInspectorSession(),
+            inspector: WebInspector(),
             attachAction: actions.attach,
             detachAction: actions.detach
         )

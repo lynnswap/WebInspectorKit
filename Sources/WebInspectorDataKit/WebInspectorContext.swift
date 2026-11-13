@@ -203,7 +203,20 @@ package final class WebInspectorContext {
     }
 #endif
 
-    package typealias State = WebInspector.State
+    /// The state of the context of one attachment.
+    package enum State: Equatable, Sendable {
+        /// The context is enabling domains and loading initial state.
+        case attaching
+
+        /// The context is attached and has started observing the page.
+        case attached
+
+        /// The context has been detached.
+        case detached
+
+        /// The context failed with an inspector error.
+        case failed(WebInspectorProxyError)
+    }
 
     /// A compact status value suitable for UI binding.
     package struct Status: Equatable, Sendable {

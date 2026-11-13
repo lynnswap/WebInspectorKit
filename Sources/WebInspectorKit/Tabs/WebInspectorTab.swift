@@ -1,5 +1,6 @@
 #if canImport(UIKit)
 import UIKit
+import WebInspectorDataKit
 import WebInspectorUIBase
 
 /// A tab shown by the built-in WebInspectorKit UI.
@@ -14,8 +15,8 @@ import WebInspectorUIBase
 ///     id: "app_console",
 ///     title: "Console",
 ///     systemImage: "terminal"
-/// ) { session in
-///     ConsoleViewController(inspectorSession: session)
+/// ) { inspector in
+///     ConsoleViewController(inspector: inspector)
 /// }
 ///
 /// let inspector = WebInspectorViewController(
@@ -44,7 +45,7 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
 
     @MainActor
     struct CustomContent {
-        let makeViewController: @MainActor (WebInspectorSession) -> UIViewController
+        let makeViewController: @MainActor (WebInspector) -> UIViewController
     }
 
     enum Content {
@@ -83,14 +84,16 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
 
     /// Creates an app-provided inspector tab backed by a UIKit view controller.
     ///
-    /// The factory is called the first time the tab content is needed for a
-    /// session. WebInspectorKit caches the returned controller for the tab ID
-    /// and reuses it across compact and regular presentations.
+    /// The factory receives the inspector that the view controller presents,
+    /// so the tab can read its domains. It is called the first time the tab
+    /// content is needed by a view controller. WebInspectorKit caches the
+    /// returned controller for the tab ID and reuses it across compact and
+    /// regular presentations.
     public init(
         id: ID,
         title: String,
         image: UIImage? = nil,
-        makeViewController: @escaping @MainActor (_ session: WebInspectorSession) -> UIViewController
+        makeViewController: @escaping @MainActor (_ inspector: WebInspector) -> UIViewController
     ) {
         self.id = id
         self.title = title
@@ -103,7 +106,7 @@ public struct WebInspectorTab: Equatable, Hashable, Identifiable {
         id: ID,
         title: String,
         systemImage: String,
-        makeViewController: @escaping @MainActor (_ session: WebInspectorSession) -> UIViewController
+        makeViewController: @escaping @MainActor (_ inspector: WebInspector) -> UIViewController
     ) {
         self.init(
             id: id,
