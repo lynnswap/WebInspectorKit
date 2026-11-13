@@ -316,11 +316,6 @@ public final class WebInspectorContext {
 
     private struct SupersededPageGeneration: Error {}
 
-    private enum RuntimeObjectOwner: Hashable {
-        case client
-        case console
-    }
-
     private struct CSSMutationAuthority {
         struct StyleSheet {
             var id: CSS.StyleSheet.ID
@@ -594,21 +589,13 @@ public final class WebInspectorContext {
     }
 
     /// Runtime execution contexts known to the current page.
-    public private(set) var executionContexts: [RuntimeContext] {
-        didSet {
-            #if DEBUG
-            stateChangesForTesting.yield(())
-            #endif
-        }
+    public var executionContexts: [RuntimeContext] {
+        runtimeStore.executionContexts
     }
 
     /// The selected Runtime execution context.
-    public private(set) var selectedContext: RuntimeContext? {
-        didSet {
-            #if DEBUG
-            stateChangesForTesting.yield(())
-            #endif
-        }
+    public var selectedContext: RuntimeContext? {
+        runtimeStore.selectedContext
     }
 
     private var currentPage: WebInspectorTarget?
@@ -683,20 +670,9 @@ public final class WebInspectorContext {
     private var networkNavigationTimelines: [FrameID: NetworkFrameNavigationTimeline]
     private var pendingNetworkNavigationsByTargetID: [String: [FrameID: String]]
     private var networkChronologySequence: UInt64
-    private var consoleMessagesByID: [ConsoleMessage.ID: ConsoleMessage]
-    private var orderedConsoleMessageIDs: [ConsoleMessage.ID]
-    private var lastConsoleMessageID: ConsoleMessage.ID?
-    private var lastConsoleMessageIDByTargetID: [WebInspectorTarget.ID: ConsoleMessage.ID]
-    private var nextConsoleMessageOrdinal: Int
-    private var consoleFetchedResults: [WeakWebInspectorFetchedResults<ConsoleMessage>]
-    private var runtimeContextsByID: [RuntimeContext.ID: RuntimeContext]
-    private var orderedRuntimeContextIDs: [RuntimeContext.ID]
-    private var runtimeObjectsByID: [RuntimeObject.ID: RuntimeObject]
-    private var runtimeObjectIDsByProxyID: [Runtime.RemoteObject.ID: RuntimeObject.ID]
-    private var runtimeObjectOwnersByID: [RuntimeObject.ID: Set<RuntimeObjectOwner>]
-    private var nextRuntimeObjectOrdinal: Int
+    private let runtimeStore: RuntimeModelStore
+    private let consoleStore: ConsoleMessageStore
     private var targetRevisionsByID: [WebInspectorTarget.ID: UInt64]
-    private var runtimeTargetRevisionsByID: [WebInspectorTarget.ID: UInt64]
     private var pendingInspectedNodeID: DOMNode.ID?
     private var pageHighlightState: PageHighlightState?
     private var nextPageHighlightOperationID: UInt64
@@ -714,8 +690,6 @@ public final class WebInspectorContext {
         domEditHistoryTarget = nil
         didInvalidateDOMEditHistoryTarget = false
         isElementPickerEnabled = false
-        executionContexts = []
-        selectedContext = nil
         currentPage = nil
         currentPageGeneration = 0
         domDocumentGeneration = 0
@@ -763,23 +737,18 @@ public final class WebInspectorContext {
         networkNavigationTimelines = [:]
         pendingNetworkNavigationsByTargetID = [:]
         networkChronologySequence = 0
-        consoleMessagesByID = [:]
-        orderedConsoleMessageIDs = []
-        lastConsoleMessageID = nil
-        lastConsoleMessageIDByTargetID = [:]
-        nextConsoleMessageOrdinal = 0
-        consoleFetchedResults = []
-        runtimeContextsByID = [:]
-        orderedRuntimeContextIDs = []
-        runtimeObjectsByID = [:]
-        runtimeObjectIDsByProxyID = [:]
-        runtimeObjectOwnersByID = [:]
-        nextRuntimeObjectOrdinal = 0
+        let runtimeStore = RuntimeModelStore()
+        self.runtimeStore = runtimeStore
+        consoleStore = ConsoleMessageStore(runtime: runtimeStore)
         targetRevisionsByID = [:]
-        runtimeTargetRevisionsByID = [:]
         pendingInspectedNodeID = nil
         pageHighlightState = nil
         nextPageHighlightOperationID = 0
+        #if DEBUG
+        runtimeStore.stateDidChangeForTesting = { [stateChangesForTesting] in
+            stateChangesForTesting.yield(())
+        }
+        #endif
         WebInspectorDataKitLog.debug("context state=\(state.logDescription)")
     }
 
@@ -943,7 +912,7 @@ public final class WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) -> ConsoleMessage? {
         requireOwner(isolation)
-        return consoleMessagesByID[id]
+        return consoleStore.message(for: id)
     }
 
     /// Selects a DOM node and reveals it in registered tree controllers.
@@ -1846,14 +1815,7 @@ public final class WebInspectorContext {
     /// does nothing and preserves the current selection.
     public func selectContext(_ context: RuntimeContext?, isolation: isolated (any Actor) = #isolation) {
         requireOwner(isolation)
-        guard let context else {
-            selectedContext = nil
-            return
-        }
-        guard runtimeContextsByID[context.id] === context else {
-            return
-        }
-        selectedContext = context
+        runtimeStore.select(context)
     }
 
     /// Evaluates JavaScript in the selected or supplied Runtime context.
@@ -1863,7 +1825,7 @@ public final class WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) async throws -> RuntimeEvaluation {
         requireOwner(isolation)
-        if let context, runtimeContextsByID[context.id] !== context {
+        if let context, runtimeStore.isRegistered(context) == false {
             throw WebInspectorProxyError.disconnected("RuntimeContext is not registered in this WebInspectorContext.")
         }
         guard let currentPage else {
@@ -1873,7 +1835,7 @@ public final class WebInspectorContext {
         let executionContext = context ?? selectedContext
         let authority: RuntimeObject.Authority
         if let executionContext {
-            guard runtimeContextsByID[executionContext.id] === executionContext else {
+            guard runtimeStore.isRegistered(executionContext) else {
                 throw WebInspectorProxyError.disconnected("RuntimeContext is not registered in this WebInspectorContext.")
             }
             authority = RuntimeObject.Authority(
@@ -1890,7 +1852,7 @@ public final class WebInspectorContext {
             authority = RuntimeObject.Authority(
                 pageGeneration: currentPageGeneration,
                 targetID: currentPage.id,
-                targetRevision: runtimeTargetRevision(for: currentPage.id),
+                targetRevision: runtimeStore.targetRevision(for: currentPage.id),
                 context: nil,
                 frameID: currentPage.frameID
             )
@@ -1902,7 +1864,7 @@ public final class WebInspectorContext {
             isolation: isolation
         )
         return RuntimeEvaluation(
-            object: registerRuntimeObject(result.object, owner: .client, authority: authority),
+            object: registerClientRuntimeObject(result.object, authority: authority),
             isException: result.wasThrown
         )
     }
@@ -1923,13 +1885,7 @@ public final class WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) -> WebInspectorFetchedResults<ConsoleMessage> {
         requireOwner(isolation)
-        let results = WebInspectorFetchedResults<ConsoleMessage>(
-            query: query,
-            modelContext: self
-        )
-        results.setItems(consoleMessages(for: query))
-        consoleFetchedResults.append(WeakWebInspectorFetchedResults(results))
-        return results
+        return consoleStore.makeFetchedResults(for: query, modelContext: self)
     }
 
     package func updateNetworkQuery(
@@ -1957,16 +1913,12 @@ public final class WebInspectorContext {
                 "WebInspectorFetchedResults is not registered in this WebInspectorContext."
             )
         }
-        results.applyConsoleQuery(query, items: consoleMessages(for: query))
+        consoleStore.updateQuery(query, for: results)
     }
 
     private func invalidateFetchedResultsRegistrations() {
-        let consoleResults = consoleFetchedResults.compactMap(\.value)
         networkRequestStore.invalidateFetchedResultsRegistrations()
-        consoleFetchedResults.removeAll()
-        for results in consoleResults {
-            results.invalidateRegistration()
-        }
+        consoleStore.invalidateFetchedResultsRegistrations()
     }
 
     func responseBodyResult(
@@ -2061,7 +2013,7 @@ public final class WebInspectorContext {
         return descriptors.map { descriptor in
             let remoteValue = descriptor.value
             let childObject = remoteValue.flatMap { value in
-                value.id == nil ? nil : registerRuntimeObject(value, owner: .client, authority: authority)
+                value.id == nil ? nil : registerClientRuntimeObject(value, authority: authority)
             }
             return RuntimeObject.Property(
                 name: descriptor.name,
@@ -2093,49 +2045,26 @@ public final class WebInspectorContext {
         )
         return entries.map { entry in
             RuntimeObject.Entry(
-                key: entry.key.map { registerRuntimeObject($0, owner: .client, authority: authority) },
-                value: registerRuntimeObject(entry.value, owner: .client, authority: authority)
+                key: entry.key.map { registerClientRuntimeObject($0, authority: authority) },
+                value: registerClientRuntimeObject(entry.value, authority: authority)
             )
         }
     }
 
-    @discardableResult
-    private func registeredRuntimeObject(_ object: RuntimeObject) throws -> RuntimeObject {
-        guard runtimeObjectsByID[object.id] === object else {
-            let error = WebInspectorProxyError.disconnected("RuntimeObject is not registered in this WebInspectorContext.")
-            throw error
-        }
-        return object
-    }
-
     private func runtimeObjectAuthority(for object: RuntimeObject) throws -> RuntimeObject.Authority {
-        try registeredRuntimeObject(object)
+        guard runtimeStore.isRegistered(object) else {
+            throw WebInspectorProxyError.disconnected("RuntimeObject is not registered in this WebInspectorContext.")
+        }
         let authority = object.authority
-        try validateRuntimeAuthority(authority, object: object)
+        try runtimeStore.validate(authority, object: object, pageGeneration: currentPageGeneration)
         return authority
     }
 
-    private func validateRuntimeAuthority(
-        _ authority: RuntimeObject.Authority,
-        object: RuntimeObject? = nil
-    ) throws {
-        try Task.checkCancellation()
-        guard authority.pageGeneration == currentPageGeneration,
-              authority.targetRevision == runtimeTargetRevision(for: authority.targetID) else {
-            throw WebInspectorProxyError.disconnected("Runtime command result is no longer current.")
-        }
-        if let contextAuthority = authority.context {
-            guard let context = runtimeContextsByID[contextAuthority.id],
-                  ObjectIdentifier(context) == contextAuthority.identity else {
-                throw WebInspectorProxyError.disconnected("Runtime command result is no longer current.")
-            }
-        }
-        if let object {
-            guard runtimeObjectsByID[object.id] === object,
-                  object.authority == authority else {
-                throw WebInspectorProxyError.disconnected("Runtime command result is no longer current.")
-            }
-        }
+    private func registerClientRuntimeObject(
+        _ payload: Runtime.RemoteObject,
+        authority: RuntimeObject.Authority
+    ) -> RuntimeObject {
+        runtimeStore.registerObject(payload, owner: .client, authority: authority, modelContext: self)
     }
 
     private func validateRuntimeCommandResult(
@@ -2146,11 +2075,11 @@ public final class WebInspectorContext {
     ) async throws {
         requireOwner(isolation)
         do {
-            try validateRuntimeAuthority(authority, object: object)
+            try runtimeStore.validate(authority, object: object, pageGeneration: currentPageGeneration)
             guard objects.allSatisfy({
                 runtimeRemoteObject($0, belongsTo: authority.targetID)
             }) else {
-                throw WebInspectorProxyError.disconnected("Runtime command result is no longer current.")
+                throw RuntimeModelStore.staleResultError
             }
         } catch {
             await releaseReturnedRuntimeObjects(
@@ -2201,109 +2130,6 @@ public final class WebInspectorContext {
         in entry: Runtime.CollectionEntry
     ) -> [Runtime.RemoteObject] {
         [entry.key, entry.value].compactMap { $0 }
-    }
-
-    private func registerRuntimeObject(
-        _ payload: Runtime.RemoteObject,
-        owner: RuntimeObjectOwner,
-        authority: RuntimeObject.Authority
-    ) -> RuntimeObject {
-        if let proxyID = payload.id,
-           let id = runtimeObjectIDsByProxyID[proxyID],
-           let object = runtimeObjectsByID[id] {
-            if let mergedAuthority = object.authority.merging(authority) {
-                object.update(from: payload)
-                object.authority = mergedAuthority
-                runtimeObjectOwnersByID[id, default: []].insert(owner)
-                return object
-            }
-            removeRuntimeObject(id: id, object: object)
-        }
-
-        let id: RuntimeObject.ID
-        if let proxyID = payload.id {
-            id = RuntimeObject.ID(remote: proxyID)
-            runtimeObjectIDsByProxyID[proxyID] = id
-        } else {
-            id = RuntimeObject.ID(synthetic: nextRuntimeObjectOrdinal)
-            nextRuntimeObjectOrdinal += 1
-        }
-
-        let object = RuntimeObject(
-            id: id,
-            remoteObject: payload,
-            authority: authority,
-            modelContext: self
-        )
-        runtimeObjectsByID[id] = object
-        runtimeObjectOwnersByID[id] = [owner]
-        return object
-    }
-
-    private func clearRuntimeObjects() {
-        let objects = runtimeObjectsByID
-        for (id, object) in objects {
-            removeRuntimeObject(id: id, object: object)
-        }
-        runtimeObjectIDsByProxyID = [:]
-        runtimeObjectOwnersByID = [:]
-        nextRuntimeObjectOrdinal = 0
-    }
-
-    private func clearRuntimeObjects(targetID: WebInspectorTarget.ID) {
-        clearRuntimeObjects { authority in
-            authority.targetID == targetID
-        }
-    }
-
-    private func clearRuntimeObjects(
-        where shouldRemove: (RuntimeObject.Authority) -> Bool
-    ) {
-        let removedObjects = runtimeObjectsByID.compactMap { id, object in
-            shouldRemove(object.authority) ? (id, object) : nil
-        }
-        for (id, object) in removedObjects {
-            removeRuntimeObject(id: id, object: object)
-        }
-    }
-
-    private func removeRuntimeObject(id: RuntimeObject.ID, object: RuntimeObject) {
-        let proxyID = object.proxyID
-        runtimeObjectsByID[id] = nil
-        runtimeObjectOwnersByID[id] = nil
-        object.invalidateRemoteHandle()
-        if let proxyID,
-           runtimeObjectIDsByProxyID[proxyID] == id {
-            runtimeObjectIDsByProxyID.removeValue(forKey: proxyID)
-        }
-    }
-
-    private func unregisterRuntimeObjects(owner: RuntimeObjectOwner) {
-        for (id, owners) in runtimeObjectOwnersByID.map({ ($0.key, $0.value) }) {
-            var remainingOwners = owners
-            remainingOwners.remove(owner)
-            guard remainingOwners.isEmpty else {
-                runtimeObjectOwnersByID[id] = remainingOwners
-                continue
-            }
-            runtimeObjectOwnersByID.removeValue(forKey: id)
-            if let object = runtimeObjectsByID[id] {
-                removeRuntimeObject(id: id, object: object)
-            }
-        }
-    }
-
-    private func unregisterRuntimeObject(_ object: RuntimeObject, owner: RuntimeObjectOwner) {
-        guard var owners = runtimeObjectOwnersByID[object.id] else {
-            return
-        }
-        owners.remove(owner)
-        guard owners.isEmpty else {
-            runtimeObjectOwnersByID[object.id] = owners
-            return
-        }
-        runtimeObjectOwnersByID.removeValue(forKey: object.id)
-        removeRuntimeObject(id: object.id, object: object)
     }
 
     private func runtimeValueText(for object: Runtime.RemoteObject) -> String? {
@@ -2909,12 +2735,8 @@ public final class WebInspectorContext {
     }
 
     private func resetReplayBackedModelsBeforeEnable() {
-        clearExecutionContexts()
-        consoleMessagesByID = [:]
-        orderedConsoleMessageIDs = []
-        lastConsoleMessageID = nil
-        lastConsoleMessageIDByTargetID = [:]
-        refreshAllConsoleMessages()
+        runtimeStore.clearExecutionContexts(page: currentPage)
+        consoleStore.resetBeforeReplay()
     }
 
     private func resetNetworkModelsForNewAttachment() {
@@ -2926,8 +2748,8 @@ public final class WebInspectorContext {
 
     private func resetCurrentPageLifecycleModels(isolation: isolated (any Actor)) {
         resetDOM(isolation: isolation)
-        clearExecutionContexts()
-        clearConsoleMessages()
+        runtimeStore.clearExecutionContexts(page: currentPage)
+        consoleStore.clear()
     }
 
     private func resetAttachmentBackedModels(isolation: isolated (any Actor)) {
@@ -3431,24 +3253,8 @@ public final class WebInspectorContext {
         targetRevisionsByID[targetID, default: 0] += 1
     }
 
-    private func runtimeTargetRevision(for targetID: WebInspectorTarget.ID) -> UInt64 {
-        runtimeTargetRevisionsByID[targetID] ?? 0
-    }
-
     private func runtimeAuthorityTargetID(for targetID: WebInspectorTarget.ID) -> WebInspectorTarget.ID {
-        guard let currentPage else {
-            return targetID
-        }
-        if targetID == .currentPage
-            || targetID == currentPage.id
-            || currentPage.pageBindingID == targetID.rawValue {
-            return currentPage.id
-        }
-        return targetID
-    }
-
-    private func advanceRuntimeTargetRevision(for targetID: WebInspectorTarget.ID) {
-        runtimeTargetRevisionsByID[targetID, default: 0] += 1
+        RuntimeModelStore.authorityTargetID(for: targetID, page: currentPage)
     }
 
     @discardableResult
@@ -3766,12 +3572,12 @@ extension WebInspectorContext {
         guard frame.parentID == nil || frame.id == currentPage.frameID else {
             invalidateCSSStyleSheets(frameID: frame.id)
             detachProjectedFrameDocument(forFrameID: frame.id, isolation: isolation)
-            clearExecutionContexts(frameID: frame.id)
+            runtimeStore.clearExecutionContexts(frameID: frame.id, page: currentPage)
             return
         }
         advanceDOMDocumentGeneration(isolation: isolation)
         resetDOM(isolation: isolation)
-        clearExecutionContexts()
+        runtimeStore.clearExecutionContexts(page: currentPage)
         guard domDocumentLoad == nil else {
             return
         }
@@ -3784,7 +3590,7 @@ extension WebInspectorContext {
     ) {
         invalidateCSSStyleSheets(frameID: frameID)
         detachProjectedFrameDocument(forFrameID: frameID, isolation: isolation)
-        clearExecutionContexts(frameID: frameID)
+        runtimeStore.clearExecutionContexts(frameID: frameID, page: currentPage)
     }
 
     private func applyCurrentPageTargetDestroyed(
@@ -3803,7 +3609,7 @@ extension WebInspectorContext {
         } else {
             invalidateCSSStyleSheets(targetID: authorityTargetID)
         }
-        clearExecutionContexts(targetID: authorityTargetID)
+        runtimeStore.clearExecutionContexts(targetID: authorityTargetID)
         guard targetID == .currentPage else {
             discardStyleTrackingLeases(forDestroyedTargetID: targetID)
             return
@@ -6390,301 +6196,21 @@ extension WebInspectorContext {
         isolation: isolated (any Actor) = #isolation
     ) {
         requireOwner(isolation)
-        switch event {
-        case let .messageAdded(message):
-            applyMessageAdded(message, targetID: targetID)
-        case let .messageRepeatCountUpdated(count, timestamp):
-            let lastMessageID: ConsoleMessage.ID?
-            if let targetID {
-                lastMessageID = lastConsoleMessageIDByTargetID[targetID]
-            } else {
-                lastMessageID = lastConsoleMessageID
-            }
-            guard let lastConsoleMessageID = lastMessageID,
-                  let message = consoleMessagesByID[lastConsoleMessageID] else {
-                skipEvent("Console.messageRepeatCountUpdated arrived before any tracked message")
-                return
-            }
-            message.updateRepeatCount(count, timestamp: timestamp)
-            refreshAllConsoleMessages(updatedItemIDs: [message.id])
-        case .messagesCleared:
-            // WebKit releases its "console" Runtime object group before
-            // emitting this event. DataKit owns only the local registrations.
-            clearConsoleMessages(targetID: targetID)
-        case .unknown:
-            break
-        }
-    }
-
-    private func clearConsoleMessages(targetID: WebInspectorTarget.ID? = nil) {
-        guard let targetID else {
-            consoleMessagesByID = [:]
-            orderedConsoleMessageIDs = []
-            lastConsoleMessageID = nil
-            lastConsoleMessageIDByTargetID = [:]
-            unregisterRuntimeObjects(owner: .console)
-            refreshAllConsoleMessages()
-            return
-        }
-        let removedMessages = consoleMessagesByID.values.filter { $0.targetID == targetID }
-        guard removedMessages.isEmpty == false else {
-            lastConsoleMessageIDByTargetID[targetID] = nil
-            refreshAllConsoleMessages()
-            return
-        }
-        let removedIDs = Set(removedMessages.map(\.id))
-        for id in removedIDs {
-            consoleMessagesByID[id] = nil
-        }
-        orderedConsoleMessageIDs.removeAll { removedIDs.contains($0) }
-        if let lastConsoleMessageID, removedIDs.contains(lastConsoleMessageID) {
-            self.lastConsoleMessageID = orderedConsoleMessageIDs.last
-        }
-        lastConsoleMessageIDByTargetID[targetID] = orderedConsoleMessageIDs.last { id in
-            consoleMessagesByID[id]?.targetID == targetID
-        }
-        unregisterConsoleRuntimeObjectsIfUnreferenced(from: removedMessages)
-        refreshAllConsoleMessages()
-    }
-
-    private func applyMessageAdded(_ payload: Console.Message, targetID: WebInspectorTarget.ID?) {
-        let id = ConsoleMessage.ID(nextConsoleMessageOrdinal)
-        nextConsoleMessageOrdinal += 1
-        let parameters = payload.parameters.map { payload in
-            let wireTargetID = payload.id?.targetScopeRawValue.map(WebInspectorTarget.ID.init)
-                ?? targetID
-                ?? .currentPage
-            let resolvedTargetID = runtimeAuthorityTargetID(for: wireTargetID)
-            let contexts = runtimeContextsByID.values.filter {
-                $0.authority.targetID == resolvedTargetID
-            }
-            let frameIDs = Set(contexts.compactMap(\.frameID))
-            let frameID = resolvedTargetID == currentPage?.id || frameIDs.count != 1
-                ? nil
-                : frameIDs.first
-            let authority = RuntimeObject.Authority(
-                pageGeneration: currentPageGeneration,
-                targetID: resolvedTargetID,
-                targetRevision: runtimeTargetRevision(for: resolvedTargetID),
-                context: nil,
-                frameID: frameID
-            )
-            return registerRuntimeObject(payload, owner: .console, authority: authority)
-        }
-        let message = ConsoleMessage(
-            id: id,
-            message: payload,
-            parameters: parameters,
+        consoleStore.apply(
+            event,
             targetID: targetID,
+            page: currentPage,
+            pageGeneration: currentPageGeneration,
             modelContext: self
         )
-        consoleMessagesByID[id] = message
-        orderedConsoleMessageIDs.append(id)
-        lastConsoleMessageID = id
-        if let targetID {
-            lastConsoleMessageIDByTargetID[targetID] = id
-        }
-        refreshAllConsoleMessages()
     }
 
-    private func unregisterConsoleRuntimeObjectsIfUnreferenced(from removedMessages: [ConsoleMessage]) {
-        let removedObjects = Set(removedMessages.flatMap(\.parameters).map(\.id))
-        guard removedObjects.isEmpty == false else {
-            return
-        }
-        let remainingConsoleObjects = Set(consoleMessagesByID.values.flatMap(\.parameters).map(\.id))
-        for objectID in removedObjects.subtracting(remainingConsoleObjects) {
-            guard let object = runtimeObjectsByID[objectID] else {
-                continue
-            }
-            unregisterRuntimeObject(object, owner: .console)
-        }
-    }
-
-    private func currentConsoleMessages() -> [ConsoleMessage] {
-        orderedConsoleMessageIDs.compactMap { consoleMessagesByID[$0] }
-    }
-
-    private func consoleMessages(for query: ConsoleMessageQuery) -> [ConsoleMessage] {
-        var items = currentConsoleMessages()
-        if let filter = query.filter {
-            items = items.filter(filter.matches)
-        }
-        if query.sortBy.isEmpty == false {
-            items.sort { lhs, rhs in
-                for sort in query.sortBy {
-                    switch sort.compare(lhs, rhs) {
-                    case .orderedAscending:
-                        return true
-                    case .orderedDescending:
-                        return false
-                    case .orderedSame:
-                        continue
-                    }
-                }
-                return lhs.id < rhs.id
-            }
-        }
-        let lowerBound = min(query.fetchOffsetAsInt, items.count)
-        let remainingCount = items.count - lowerBound
-        let visibleCount = min(query.fetchLimitAsInt ?? remainingCount, remainingCount)
-        let upperBound = lowerBound + visibleCount
-        return Array(items[lowerBound..<upperBound])
-    }
-
-    private func refreshAllConsoleMessages(updatedItemIDs: Set<ConsoleMessage.ID> = []) {
-        consoleFetchedResults.removeAll { $0.value == nil }
-        for registration in consoleFetchedResults {
-            guard let results = registration.value else {
-                continue
-            }
-            results.setItems(consoleMessages(for: results.consoleQuery), updatedItemIDs: updatedItemIDs)
-        }
-    }
-}
-
-extension WebInspectorContext {
     func apply(
         _ event: Runtime.Event,
         targetID: WebInspectorTarget.ID? = nil,
         isolation: isolated (any Actor) = #isolation
     ) {
         requireOwner(isolation)
-        switch event {
-        case let .executionContextCreated(context):
-            applyExecutionContextCreated(context, eventTargetID: targetID)
-        case let .executionContextDestroyed(id):
-            applyExecutionContextDestroyed(id)
-        case let .executionContextsCleared(eventTargetID):
-            let resolvedTargetID = runtimeAuthorityTargetID(for: eventTargetID)
-            if resolvedTargetID == currentPage?.id {
-                clearExecutionContexts()
-            } else {
-                clearExecutionContexts(targetID: resolvedTargetID)
-            }
-        case .unknown:
-            break
-        }
-    }
-
-    private func applyExecutionContextCreated(
-        _ payload: Runtime.ExecutionContext,
-        eventTargetID: WebInspectorTarget.ID?
-    ) {
-        let id = RuntimeContext.ID(payload.id)
-        let wireTargetID = payload.id.targetScopeRawValue.map(WebInspectorTarget.ID.init)
-            ?? eventTargetID
-            ?? .currentPage
-        let resolvedTargetID = runtimeAuthorityTargetID(for: wireTargetID)
-        if payload.kind == .normal,
-           payload.frameID != nil,
-           resolvedTargetID != currentPage?.id,
-           runtimeContextsByID.values.contains(where: { context in
-               context.id != id
-                   && context.authority.targetID == resolvedTargetID
-                   && context.kind == .normal
-           }) {
-            clearExecutionContexts(targetID: resolvedTargetID)
-        }
-
-        if let context = runtimeContextsByID[id] {
-            context.update(from: payload)
-        } else {
-            let context = RuntimeContext(
-                context: payload,
-                targetID: resolvedTargetID,
-                targetRevision: runtimeTargetRevision(for: resolvedTargetID),
-                modelContext: self
-            )
-            runtimeContextsByID[id] = context
-            orderedRuntimeContextIDs.append(id)
-        }
-        refreshExecutionContexts()
-        if selectedContext == nil {
-            selectedContext = runtimeContextsByID[id]
-        }
-    }
-
-    private func applyExecutionContextDestroyed(_ proxyID: Runtime.ExecutionContext.ID) {
-        let id = RuntimeContext.ID(proxyID)
-        guard let removed = runtimeContextsByID[id] else {
-            skipEvent("Runtime.executionContextDestroyed referenced an untracked context")
-            return
-        }
-        let removedIdentity = ObjectIdentifier(removed)
-        removeRuntimeContexts(ids: [id])
-        clearRuntimeObjects { authority in
-            authority.context?.identity == removedIdentity
-        }
-    }
-
-    private func clearExecutionContexts() {
-        let targetIDs = Set(runtimeContextsByID.values.map { $0.authority.targetID })
-            .union(runtimeObjectsByID.values.map { $0.authority.targetID })
-            .union(currentPage.map { [$0.id] } ?? [])
-        for targetID in targetIDs {
-            advanceRuntimeTargetRevision(for: targetID)
-        }
-        runtimeContextsByID = [:]
-        orderedRuntimeContextIDs = []
-        executionContexts = []
-        selectedContext = nil
-        clearRuntimeObjects()
-    }
-
-    private func clearExecutionContexts(targetID: WebInspectorTarget.ID) {
-        advanceRuntimeTargetRevision(for: targetID)
-        let removedIDs = Set(runtimeContextsByID.compactMap { id, context in
-            context.authority.targetID == targetID ? id : nil
-        })
-        removeRuntimeContexts(ids: removedIDs)
-        clearRuntimeObjects(targetID: targetID)
-    }
-
-    private func clearExecutionContexts(frameID: FrameID) {
-        let frameTargetIDs = Set<WebInspectorTarget.ID>(runtimeContextsByID.values.compactMap { context in
-            guard context.frameID == frameID,
-                  context.authority.targetID != currentPage?.id else {
-                return nil
-            }
-            return context.authority.targetID
-        })
-        for targetID in frameTargetIDs {
-            clearExecutionContexts(targetID: targetID)
-        }
-
-        let removedContexts = runtimeContextsByID.values.filter {
-            $0.frameID == frameID
-        }
-        let removedIDs = Set(removedContexts.map(\.id))
-        removeRuntimeContexts(ids: removedIDs)
-        let removedContextIdentities = Set(removedContexts.map(ObjectIdentifier.init))
-        clearRuntimeObjects { authority in
-            authority.frameID == frameID
-                || authority.context.map { removedContextIdentities.contains($0.identity) } == true
-        }
-    }
-
-    private func removeRuntimeContexts(ids: Set<RuntimeContext.ID>) {
-        guard ids.isEmpty == false else {
-            return
-        }
-        let selectedWasRemoved = selectedContext.map { ids.contains($0.id) } ?? false
-        for id in ids {
-            runtimeContextsByID[id] = nil
-        }
-        orderedRuntimeContextIDs.removeAll { ids.contains($0) }
-        refreshExecutionContexts()
-        if selectedWasRemoved {
-            selectedContext = firstRuntimeContext()
-        }
-    }
-
-    private func refreshExecutionContexts() {
-        executionContexts = orderedRuntimeContextIDs.compactMap { runtimeContextsByID[$0] }
-    }
-
-    private func firstRuntimeContext() -> RuntimeContext? {
-        orderedRuntimeContextIDs.compactMap { runtimeContextsByID[$0] }.first
+        runtimeStore.apply(event, targetID: targetID, page: currentPage, modelContext: self)
     }
 }
