@@ -1,123 +1,6 @@
 import Foundation
 import WebInspectorProxyKit
 
-private actor CSSOperationGate {
-    private struct Waiter {
-        let continuation: CheckedContinuation<Void, any Error>
-    }
-
-    private var acquiredTargetIDs: Set<WebInspectorTarget.ID> = []
-    private var waitersByTargetID: [WebInspectorTarget.ID: [UInt64: Waiter]] = [:]
-    private var waiterOrderByTargetID: [WebInspectorTarget.ID: [UInt64]] = [:]
-    private var nextWaiterID: UInt64 = 0
-    #if DEBUG
-    private struct QueueCountWaiter {
-        let count: Int
-        let promise: ReplyPromise<Void>
-    }
-    private var queueCountWaiters: [WebInspectorTarget.ID: [QueueCountWaiter]] = [:]
-    #endif
-
-    func acquire(targetID: WebInspectorTarget.ID) async throws {
-        try Task.checkCancellation()
-        if acquiredTargetIDs.insert(targetID).inserted {
-            return
-        }
-
-        nextWaiterID += 1
-        let waiterID = nextWaiterID
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation {
-                (continuation: CheckedContinuation<Void, any Error>) in
-                if Task.isCancelled {
-                    continuation.resume(throwing: CancellationError())
-                    return
-                }
-                waitersByTargetID[targetID, default: [:]][waiterID] = Waiter(
-                    continuation: continuation
-                )
-                waiterOrderByTargetID[targetID, default: []].append(waiterID)
-                #if DEBUG
-                resolveQueueCountWaiters(for: targetID)
-                #endif
-            }
-        } onCancel: {
-            Task {
-                await self.cancel(targetID: targetID, waiterID: waiterID)
-            }
-        }
-
-        do {
-            try Task.checkCancellation()
-        } catch {
-            // A release can hand this waiter ownership before the cancellation
-            // handler removes it. Return that ownership before surfacing the
-            // cancellation so the next queued operation cannot deadlock.
-            release(targetID: targetID)
-            throw error
-        }
-    }
-
-    func release(targetID: WebInspectorTarget.ID) {
-        precondition(
-            acquiredTargetIDs.contains(targetID),
-            "CSS operation gate released without an owner."
-        )
-        while let waiterID = waiterOrderByTargetID[targetID]?.first {
-            waiterOrderByTargetID[targetID]?.removeFirst()
-            guard let waiter = waitersByTargetID[targetID]?.removeValue(forKey: waiterID) else {
-                continue
-            }
-            waiter.continuation.resume(returning: ())
-            return
-        }
-        waiterOrderByTargetID[targetID] = nil
-        waitersByTargetID[targetID] = nil
-        acquiredTargetIDs.remove(targetID)
-    }
-
-    #if DEBUG
-    private enum QueueWaitError: Error {
-        case timedOut
-    }
-
-    func waitForQueuedOperationCount(_ count: Int, for targetID: WebInspectorTarget.ID) async throws {
-        guard (waitersByTargetID[targetID]?.count ?? 0) < count else {
-            return
-        }
-        let promise = ReplyPromise<Void>()
-        queueCountWaiters[targetID, default: []].append(QueueCountWaiter(count: count, promise: promise))
-        defer {
-            queueCountWaiters[targetID]?.removeAll { $0.promise === promise }
-        }
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask { try await promise.value() }
-            group.addTask {
-                try await Task.sleep(for: .seconds(1))
-                throw QueueWaitError.timedOut
-            }
-            defer { group.cancelAll() }
-            _ = try await group.next()
-        }
-    }
-
-    private func resolveQueueCountWaiters(for targetID: WebInspectorTarget.ID) {
-        let count = waitersByTargetID[targetID]?.count ?? 0
-        let ready = (queueCountWaiters[targetID] ?? []).filter { $0.count <= count }
-        queueCountWaiters[targetID]?.removeAll { $0.count <= count }
-        for waiter in ready {
-            waiter.promise.fulfill(.success(()))
-        }
-    }
-    #endif
-
-    private func cancel(targetID: WebInspectorTarget.ID, waiterID: UInt64) {
-        waitersByTargetID[targetID]?.removeValue(forKey: waiterID)?.continuation.resume(
-            throwing: CancellationError()
-        )
-    }
-}
-
 /// The identity-preserving model context for an inspected page.
 ///
 /// A context owns observable DOM, Network, Console, Runtime, and CSS models.
@@ -223,13 +106,6 @@ public final class WebInspectorContext {
         }
     }
 
-    private struct CSSStyleSheetLifetime {
-        var frameID: FrameID?
-        var revision: UInt64
-        var contentRevision: UInt64
-        var isPresent: Bool
-    }
-
     private final class StyleToggleOperation {
         var task: Task<Void, Never>?
 
@@ -304,22 +180,6 @@ public final class WebInspectorContext {
         let documentGeneration: Int
         let nodeID: DOMNode.ID
         var phase: Phase
-    }
-
-    private struct StyleTrackingKey: Hashable {
-        var targetID: WebInspectorTarget.ID
-        var pageBindingID: String?
-
-        init(_ target: WebInspectorTarget) {
-            targetID = target.id
-            pageBindingID = target.pageBindingID
-        }
-    }
-
-    private struct StyleTrackingAcquisition {
-        var generation: UInt64
-        var target: WebInspectorTarget
-        var task: Task<Void, any Error>
     }
 
 #if DEBUG
@@ -457,10 +317,8 @@ public final class WebInspectorContext {
     private var styleToggleOperations: [CSSStyleProperty.ID: StyleToggleOperation]
     let cssInspectorBaselineStore: CSSInspectorBaselineStore
     private let cssOperationGate: CSSOperationGate
-    private var cssStyleSheetLifetimesByID: [CSS.StyleSheet.ID: CSSStyleSheetLifetime]
-    private var styleTrackingTargets: [StyleTrackingKey: WebInspectorTarget]
-    private var styleTrackingAcquisitions: [StyleTrackingKey: StyleTrackingAcquisition]
-    private var nextStyleTrackingAcquisitionGeneration: UInt64
+    private var cssStyleSheets: CSSStyleSheetLifetimes
+    private let styleTrackingLeases: CSSStyleTrackingLeases
     private var eventPumps: [WebInspectorEventPump]
     private var orderedEventSubscriptionGeneration: UInt64
     private var lastOrderedEventSequence: UInt64
@@ -474,7 +332,7 @@ public final class WebInspectorContext {
     private var nextEventPumpAppliedWaiterIDForTesting: UInt64
 #endif
     /// The target each current-page domain lease was acquired on. CSS leases
-    /// are tracked per style target in `styleTrackingTargets`.
+    /// are tracked per style target in `styleTrackingLeases`.
     private var domainTrackingTargets: [WebInspectorEnabledDomain: WebInspectorTarget]
     private var nodesByID: [DOMNode.ID: DOMNode] {
         didSet {
@@ -532,10 +390,8 @@ public final class WebInspectorContext {
         styleToggleOperations = [:]
         cssInspectorBaselineStore = CSSInspectorBaselineStore()
         cssOperationGate = CSSOperationGate()
-        cssStyleSheetLifetimesByID = [:]
-        styleTrackingTargets = [:]
-        styleTrackingAcquisitions = [:]
-        nextStyleTrackingAcquisitionGeneration = 0
+        cssStyleSheets = CSSStyleSheetLifetimes()
+        styleTrackingLeases = CSSStyleTrackingLeases(domainEnablement: container.domainEnablement)
         eventPumps = []
         orderedEventSubscriptionGeneration = 0
         lastOrderedEventSequence = 0
@@ -594,9 +450,7 @@ public final class WebInspectorContext {
         pageHighlightMaintenanceTask?.cancel()
         cancelFrameDocumentLoadTasks()
         styleRefreshTask?.cancel()
-        for acquisition in styleTrackingAcquisitions.values {
-            acquisition.task.cancel()
-        }
+        styleTrackingLeases.cancelPendingAcquisitions()
         for operation in styleToggleOperations.values {
             operation.task?.cancel()
             operation.task = nil
@@ -1827,7 +1681,7 @@ public final class WebInspectorContext {
     }
 
     private func discardCurrentPageDomainLeases(isolation: isolated (any Actor)) async {
-        await discardStyleTrackingLeases(isolation: isolation)
+        await styleTrackingLeases.discardAll(isolation: isolation)
         for domain in [WebInspectorEnabledDomain.inspector, .page, .runtime, .network, .console] {
             await discardDomainTrackingLease(domain, isolation: isolation)
         }
@@ -1896,146 +1750,6 @@ public final class WebInspectorContext {
             return
         }
         throw CancellationError()
-    }
-
-    private func ensureStyleTracking(
-        on target: WebInspectorTarget,
-        isolation: isolated (any Actor)
-    ) async throws -> Bool {
-        _ = isolation
-        let key = StyleTrackingKey(target)
-        if styleTrackingTargets[key] != nil {
-            return true
-        }
-
-        let acquisition: StyleTrackingAcquisition
-        if let existing = styleTrackingAcquisitions[key] {
-            acquisition = existing
-        } else {
-            let generation = nextStyleTrackingAcquisitionGeneration
-            nextStyleTrackingAcquisitionGeneration += 1
-            let registry = domainEnablement
-            let task = Task<Void, any Error> {
-                try await registry.acquireStyleAccess(on: target)
-            }
-            acquisition = StyleTrackingAcquisition(
-                generation: generation,
-                target: target,
-                task: task
-            )
-            styleTrackingAcquisitions[key] = acquisition
-        }
-
-        do {
-            try await acquisition.task.value
-        } catch {
-            if styleTrackingAcquisitions[key]?.generation == acquisition.generation {
-                styleTrackingAcquisitions[key] = nil
-            }
-            throw error
-        }
-
-        if styleTrackingTargets[key] != nil {
-            return true
-        }
-        guard styleTrackingAcquisitions[key]?.generation == acquisition.generation else {
-            return false
-        }
-        styleTrackingAcquisitions[key] = nil
-        styleTrackingTargets[key] = target
-        return true
-    }
-
-    private func discardStyleTrackingLeases(isolation: isolated (any Actor)) async {
-        _ = isolation
-        let enabledTargets = sortedStyleTrackingTargets(Array(styleTrackingTargets.values))
-        let pendingAcquisitions = styleTrackingAcquisitions.values.sorted {
-            styleTrackingSortKey($0.target) < styleTrackingSortKey($1.target)
-        }
-        styleTrackingTargets = [:]
-        styleTrackingAcquisitions = [:]
-
-        for target in enabledTargets {
-            await domainEnablement.discardStyleAccess(on: target)
-        }
-        for acquisition in pendingAcquisitions {
-            do {
-                try await acquisition.task.value
-                await domainEnablement.discardStyleAccess(on: acquisition.target)
-            } catch {
-                // No release is valid here: a failed registry acquisition
-                // never creates a lease.
-            }
-        }
-    }
-
-    private func discardStyleTrackingLeases(forDestroyedTargetID targetID: WebInspectorTarget.ID) {
-        let enabledKeys = styleTrackingTargets.keys.filter { $0.targetID == targetID }
-        let enabledTargets = sortedStyleTrackingTargets(enabledKeys.compactMap { key in
-            styleTrackingTargets.removeValue(forKey: key)
-        })
-        let pendingKeys = styleTrackingAcquisitions.keys.filter { $0.targetID == targetID }
-        let pendingAcquisitions = pendingKeys.compactMap { key in
-            styleTrackingAcquisitions.removeValue(forKey: key)
-        }.sorted {
-            styleTrackingSortKey($0.target) < styleTrackingSortKey($1.target)
-        }
-        guard enabledTargets.isEmpty == false || pendingAcquisitions.isEmpty == false else {
-            return
-        }
-
-        let registry = domainEnablement
-        Task {
-            for target in enabledTargets {
-                await registry.discardStyleAccess(on: target)
-            }
-            for acquisition in pendingAcquisitions {
-                do {
-                    try await acquisition.task.value
-                    await registry.discardStyleAccess(on: acquisition.target)
-                } catch {
-                    // No release is valid here: a failed registry acquisition
-                    // never creates a lease.
-                }
-            }
-        }
-    }
-
-    private func disableStyleTracking(isolation: isolated (any Actor)) async -> WebInspectorProxyError? {
-        _ = isolation
-        let enabledTargets = sortedStyleTrackingTargets(Array(styleTrackingTargets.values))
-        let pendingAcquisitions = styleTrackingAcquisitions.values.sorted {
-            styleTrackingSortKey($0.target) < styleTrackingSortKey($1.target)
-        }
-        styleTrackingTargets = [:]
-        styleTrackingAcquisitions = [:]
-
-        var firstError: WebInspectorProxyError?
-        for target in enabledTargets {
-            if let error = await domainEnablement.releaseStyleAccess(on: target), firstError == nil {
-                firstError = error
-            }
-        }
-        for acquisition in pendingAcquisitions {
-            do {
-                try await acquisition.task.value
-                if let error = await domainEnablement.releaseStyleAccess(on: acquisition.target), firstError == nil {
-                    firstError = error
-                }
-            } catch {
-                // No release is valid here: a failed registry acquisition
-                // never creates a lease.
-            }
-        }
-        return firstError
-    }
-
-    private func sortedStyleTrackingTargets(_ targets: [WebInspectorTarget]) -> [WebInspectorTarget] {
-        targets.sorted { styleTrackingSortKey($0) < styleTrackingSortKey($1) }
-    }
-
-    private func styleTrackingSortKey(_ target: WebInspectorTarget) -> String {
-        "\(target.id.rawValue)\u{0}\(target.pageBindingID ?? "")"
     }
 
     private func releaseLateAcquiredDomain(
@@ -2213,7 +1927,7 @@ public final class WebInspectorContext {
         isolation: isolated (any Actor)
     ) async -> WebInspectorProxyError? {
         let consoleError = await disableDomainTracking(.console, isolation: isolation)
-        let styleError = await disableStyleTracking(isolation: isolation)
+        let styleError = await styleTrackingLeases.releaseAll(isolation: isolation)
         var firstError = consoleError ?? styleError
         for domain in [WebInspectorEnabledDomain.runtime, .network, .page, .inspector] {
             let error = await disableDomainTracking(domain, isolation: isolation)
@@ -2992,7 +2706,7 @@ extension WebInspectorContext {
         generation: Int,
         isolation: isolated (any Actor)
     ) async -> Bool {
-        await discardStyleTrackingLeases(isolation: isolation)
+        await styleTrackingLeases.discardAll(isolation: isolation)
         guard Task.isCancelled == false,
               isCurrentPageGeneration(generation, isolation: isolation) else {
             return false
@@ -3017,7 +2731,7 @@ extension WebInspectorContext {
             return
         }
         guard frame.parentID == nil || frame.id == currentPage.frameID else {
-            invalidateCSSStyleSheets(frameID: frame.id)
+            cssStyleSheets.invalidate(frameID: frame.id)
             detachProjectedFrameDocument(forFrameID: frame.id, isolation: isolation)
             runtimeStore.clearExecutionContexts(frameID: frame.id, page: currentPage)
             return
@@ -3035,7 +2749,7 @@ extension WebInspectorContext {
         _ frameID: FrameID,
         isolation: isolated (any Actor)
     ) {
-        invalidateCSSStyleSheets(frameID: frameID)
+        cssStyleSheets.invalidate(frameID: frameID)
         detachProjectedFrameDocument(forFrameID: frameID, isolation: isolation)
         runtimeStore.clearExecutionContexts(frameID: frameID, page: currentPage)
     }
@@ -3052,13 +2766,13 @@ extension WebInspectorContext {
             cssInspectorBaselineStore.reset(targetID: authorityTargetID)
         }
         if authorityTargetID == currentPage?.id {
-            invalidateAllCSSStyleSheets()
+            cssStyleSheets.invalidateAll()
         } else {
-            invalidateCSSStyleSheets(targetID: authorityTargetID)
+            cssStyleSheets.invalidate(targetID: authorityTargetID)
         }
         runtimeStore.clearExecutionContexts(targetID: authorityTargetID)
         guard targetID == .currentPage else {
-            discardStyleTrackingLeases(forDestroyedTargetID: targetID)
+            styleTrackingLeases.discard(forDestroyedTargetID: targetID)
             return
         }
         guard currentPage != nil else {
@@ -3328,7 +3042,7 @@ extension WebInspectorContext {
         invalidateElementPicker()
         cancelStyleToggleOperations()
         cssInspectorBaselineStore.reset()
-        cssStyleSheetLifetimesByID = [:]
+        cssStyleSheets.removeAll()
         inspectorInspectResolutionTask?.cancel()
         inspectorInspectResolutionTask = nil
         inspectResolutionTask?.cancel()
@@ -4032,90 +3746,20 @@ extension WebInspectorContext {
         requireOwner(isolation)
         switch event {
         case let .styleSheetChanged(id):
-            advanceCSSStyleSheetContentRevision(id)
+            cssStyleSheets.advanceContentRevision(id)
             markSelectedStylesNeedsRefresh()
         case .mediaQueryResultChanged:
             markSelectedStylesNeedsRefresh()
         case let .styleSheetAdded(header):
-            recordCSSStyleSheet(header)
+            cssStyleSheets.record(header)
             markSelectedStylesNeedsRefresh()
         case let .styleSheetRemoved(id):
-            invalidateCSSStyleSheet(id)
+            cssStyleSheets.invalidate(id)
             markSelectedStylesNeedsRefresh()
         case let .nodeLayoutFlagsChanged(id):
             markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
         case .unknown:
             break
-        }
-    }
-
-    private func recordCSSStyleSheet(_ header: CSS.StyleSheetHeader) {
-        let id = header.styleSheetID
-        guard let lifetime = cssStyleSheetLifetimesByID[id] else {
-            cssStyleSheetLifetimesByID[id] = CSSStyleSheetLifetime(
-                frameID: header.frameID,
-                revision: 0,
-                contentRevision: 0,
-                isPresent: true
-            )
-            return
-        }
-        guard lifetime.isPresent == false || lifetime.frameID != header.frameID else {
-            return
-        }
-        cssStyleSheetLifetimesByID[id] = CSSStyleSheetLifetime(
-            frameID: header.frameID,
-            revision: lifetime.revision + 1,
-            contentRevision: lifetime.contentRevision,
-            isPresent: true
-        )
-    }
-
-    private func invalidateCSSStyleSheet(_ id: CSS.StyleSheet.ID) {
-        let lifetime = cssStyleSheetLifetimesByID[id]
-        cssStyleSheetLifetimesByID[id] = CSSStyleSheetLifetime(
-            frameID: lifetime?.frameID,
-            revision: (lifetime?.revision ?? 0) + 1,
-            contentRevision: lifetime?.contentRevision ?? 0,
-            isPresent: false
-        )
-    }
-
-    private func advanceCSSStyleSheetContentRevision(_ id: CSS.StyleSheet.ID) {
-        guard var lifetime = cssStyleSheetLifetimesByID[id] else {
-            cssStyleSheetLifetimesByID[id] = CSSStyleSheetLifetime(
-                frameID: nil,
-                revision: 0,
-                contentRevision: 1,
-                isPresent: false
-            )
-            return
-        }
-        lifetime.contentRevision += 1
-        cssStyleSheetLifetimesByID[id] = lifetime
-    }
-
-    private func invalidateCSSStyleSheets(frameID: FrameID) {
-        let ids = cssStyleSheetLifetimesByID.compactMap { id, lifetime in
-            lifetime.frameID == frameID ? id : nil
-        }
-        for id in ids {
-            invalidateCSSStyleSheet(id)
-        }
-    }
-
-    private func invalidateCSSStyleSheets(targetID: WebInspectorTarget.ID) {
-        let ids = cssStyleSheetLifetimesByID.keys.filter {
-            $0.targetScopeRawValue == targetID.rawValue
-        }
-        for id in ids {
-            invalidateCSSStyleSheet(id)
-        }
-    }
-
-    private func invalidateAllCSSStyleSheets() {
-        for id in Array(cssStyleSheetLifetimesByID.keys) {
-            invalidateCSSStyleSheet(id)
         }
     }
 
@@ -4168,7 +3812,7 @@ extension WebInspectorContext {
                     styles.cancelLoading(generation: generation)
                     return
                 }
-                guard try await ensureStyleTracking(on: target, isolation: isolation) else {
+                guard try await styleTrackingLeases.ensure(on: target, isolation: isolation) else {
                     styles.markUnavailable(generation: generation)
                     return
                 }
@@ -4446,7 +4090,7 @@ extension WebInspectorContext {
             let commandAuthority = cssMutationAuthority(target: target, styleSheetID: id)
             try await target.css.setStyleSheetText(id, text: text)
             try validateCSSMutationAuthority(commandAuthority)
-            advanceCSSStyleSheetContentRevision(id)
+            cssStyleSheets.advanceContentRevision(id)
             markSelectedStylesNeedsRefresh(isolation: isolation)
             try await Self.markDOMUndoableStateIfNeeded(on: target, options: options)
             try validateCSSMutationAuthority(commandAuthority)
@@ -4762,7 +4406,7 @@ extension WebInspectorContext {
         }
 
         do {
-            guard try await ensureStyleTracking(on: target, isolation: isolation) else {
+            guard try await styleTrackingLeases.ensure(on: target, isolation: isolation) else {
                 styles.markUnavailable(generation: generation)
                 throw WebInspectorProxyError.commandFailed(
                     domain: "CSS",
@@ -4865,9 +4509,9 @@ extension WebInspectorContext {
             styleSheet: styleSheetID.map { id in
                 CSSMutationAuthority.StyleSheet(
                     id: id,
-                    revision: cssStyleSheetLifetimesByID[id]?.revision ?? 0,
+                    revision: cssStyleSheets.revision(of: id),
                     contentRevision: tracksStyleSheetContentRevision
-                        ? (cssStyleSheetLifetimesByID[id]?.contentRevision ?? 0)
+                        ? cssStyleSheets.contentRevision(of: id)
                         : nil
                 )
             }
@@ -4882,12 +4526,12 @@ extension WebInspectorContext {
             throw Self.staleCSSMutationError
         }
         if let styleSheet = authority.styleSheet,
-           styleSheet.revision != (cssStyleSheetLifetimesByID[styleSheet.id]?.revision ?? 0) {
+           styleSheet.revision != cssStyleSheets.revision(of: styleSheet.id) {
             throw Self.staleCSSMutationError
         }
         if let styleSheet = authority.styleSheet,
            let contentRevision = styleSheet.contentRevision,
-           contentRevision != (cssStyleSheetLifetimesByID[styleSheet.id]?.contentRevision ?? 0) {
+           contentRevision != cssStyleSheets.contentRevision(of: styleSheet.id) {
             throw Self.staleCSSMutationError
         }
         if authority.isCurrentPage {
