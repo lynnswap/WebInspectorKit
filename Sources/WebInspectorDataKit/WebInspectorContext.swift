@@ -60,86 +60,16 @@ package final class WebInspectorContext {
 
     private struct SupersededPageGeneration: Error {}
 
-    private struct CSSMutationAuthority {
-        struct StyleSheet {
-            var id: CSS.StyleSheet.ID
-            var revision: UInt64
-            var contentRevision: UInt64?
-        }
-
-        var pageGeneration: Int
-        var documentGeneration: Int
-        var targetID: WebInspectorTarget.ID
-        var targetRevision: UInt64
-        var isCurrentPage: Bool
-        var pageBindingID: String?
-        var node: DOMNode?
-        var styles: CSSStyles?
-        var styleSheet: StyleSheet?
-    }
-
-    @MainActor
-    private enum CSSStyleTextMutation {
-        case setProperty(enabled: Bool)
-        case setDeclarationText(String)
-
-        func submittedDeclaration(
-            in styles: CSSStyles,
-            propertyID: CSSStyleProperty.ID
-        ) -> CSSDeclarationIdentity? {
-            switch self {
-            case let .setProperty(enabled):
-                styles.canSubmitSetStyleText(for: propertyID, enabled: enabled)
-            case let .setDeclarationText(text):
-                styles.canSubmitSetDeclarationText(for: propertyID, text: text)
-            }
-        }
-
-        func intent(
-            in styles: CSSStyles,
-            declaration: CSSDeclarationIdentity
-        ) -> CSSStyles.SetStyleTextIntent? {
-            switch self {
-            case let .setProperty(enabled):
-                styles.setStyleTextIntent(for: declaration, enabled: enabled)
-            case let .setDeclarationText(text):
-                styles.setDeclarationTextIntent(for: declaration, text: text)
-            }
-        }
-    }
-
-    @MainActor
-    private final class StyleToggleOperation {
-        var task: Task<Void, Never>?
-
-        init(task: Task<Void, Never>? = nil) {
-            self.task = task
-        }
-    }
-
-    @MainActor
-    private final class WeakContextReference {
-        private weak var context: WebInspectorContext?
-
-        init(_ context: WebInspectorContext) {
-            self.context = context
-        }
-
-        func withContext<Output>(
-            _ operation: (WebInspectorContext) throws -> Output
-        ) throws -> Output {
-            guard let context else {
-                throw CancellationError()
-            }
-            return try operation(context)
-        }
-
-        func withContextIfPresent(_ operation: (WebInspectorContext) -> Void) {
-            guard let context else {
-                return
-            }
-            operation(context)
-        }
+    /// The page, document, and target that a queued operation was started
+    /// against. The operation no longer applies once any of them has been
+    /// replaced.
+    struct TargetAuthority {
+        fileprivate var pageGeneration: Int
+        fileprivate var documentGeneration: Int
+        fileprivate var targetID: WebInspectorTarget.ID
+        fileprivate var targetRevision: UInt64
+        fileprivate var isCurrentPage: Bool
+        fileprivate var pageBindingID: String?
     }
 
     private struct LoadedDOMDocument {
@@ -291,7 +221,7 @@ package final class WebInspectorContext {
         runtimeStore.selectedContext
     }
 
-    private var currentPage: WebInspectorTarget?
+    private(set) var currentPage: WebInspectorTarget?
     private var currentPageGeneration: Int
     private var domDocumentGeneration: Int
     private var startupTask: Task<Void, Never>?
@@ -316,14 +246,7 @@ package final class WebInspectorContext {
     /// Advances when the document the picker belongs to is replaced.
     private var elementPickerDocumentEpoch: UInt64
     private var frameDocumentLoadTasks: [WebInspectorTarget.ID: Task<Void, Never>]
-    private var styleRefreshTask: Task<Void, Never>?
-    private var styleRefreshGeneration: Int
-    private var isStyleHydrationActive: Bool
-    private var styleToggleOperations: [CSSStyleProperty.ID: StyleToggleOperation]
-    let cssInspectorBaselineStore: CSSInspectorBaselineStore
-    private let cssOperationGate: CSSOperationGate
-    private var cssStyleSheets: CSSStyleSheetLifetimes
-    private let styleTrackingLeases: CSSStyleTrackingLeases
+    private let styleEditor: CSSStyleEditor
     private var eventPumps: [WebInspectorEventPump]
     private var orderedEventSubscriptionGeneration: UInt64
     private var lastOrderedEventSequence: UInt64
@@ -335,7 +258,7 @@ package final class WebInspectorContext {
     private var nextEventPumpAppliedWaiterIDForTesting: UInt64
 #endif
     /// The target each current-page domain lease was acquired on. CSS leases
-    /// are tracked per style target in `styleTrackingLeases`.
+    /// are tracked per style target by the style editor.
     private var domainTrackingTargets: [WebInspectorEnabledDomain: WebInspectorTarget]
     private let domDocument = DOMDocumentStore()
     private let networkRecorder: NetworkEventRecorder
@@ -371,14 +294,7 @@ package final class WebInspectorContext {
         elementPickerCommand = nil
         elementPickerDocumentEpoch = 0
         frameDocumentLoadTasks = [:]
-        styleRefreshTask = nil
-        styleRefreshGeneration = 0
-        isStyleHydrationActive = false
-        styleToggleOperations = [:]
-        cssInspectorBaselineStore = CSSInspectorBaselineStore()
-        cssOperationGate = CSSOperationGate()
-        cssStyleSheets = CSSStyleSheetLifetimes()
-        styleTrackingLeases = CSSStyleTrackingLeases(domainEnablement: container.domainEnablement)
+        styleEditor = CSSStyleEditor(domainEnablement: container.domainEnablement)
         eventPumps = []
         orderedEventSubscriptionGeneration = 0
         lastOrderedEventSequence = 0
@@ -401,7 +317,10 @@ package final class WebInspectorContext {
             self?.domNodesDidLeaveIndex(removedIDs)
         }
         domDocument.styleInputsDidChange = { [weak self] nodeID in
-            self?.markSelectedStylesNeedsRefresh(for: nodeID)
+            guard let self else {
+                return
+            }
+            self.styleEditor.markSelectedStylesNeedsRefresh(for: nodeID, in: self)
         }
         #if DEBUG
         runtimeStore.stateDidChangeForTesting = { [stateChangesForTesting] in
@@ -437,12 +356,7 @@ package final class WebInspectorContext {
         inspectResolutionTask?.cancel()
         pageHighlightMaintenanceTask?.cancel()
         cancelFrameDocumentLoadTasks()
-        styleRefreshTask?.cancel()
-        styleTrackingLeases.cancelPendingAcquisitions()
-        for operation in styleToggleOperations.values {
-            operation.task?.cancel()
-            operation.task = nil
-        }
+        styleEditor.cancelTasks()
         stopEventPumps()
         resolveEventPumpAppliedWaitersForTesting(result: false)
     }
@@ -533,7 +447,7 @@ package final class WebInspectorContext {
         pageHighlightMaintenanceTask = nil
         selectedNode = node
         domDocument.trees.selectionChanged(node, reveal: reveal)
-        refreshSelectedStyles()
+        styleEditor.refreshSelectedStyles(in: self)
     }
 
     func setDOMAttribute(
@@ -1300,10 +1214,8 @@ package final class WebInspectorContext {
         pageHighlightMaintenanceTask?.cancel()
         pageHighlightMaintenanceTask = nil
         cancelFrameDocumentLoadTasks()
-        styleRefreshTask?.cancel()
-        styleRefreshTask = nil
-        styleRefreshGeneration += 1
-        cancelStyleToggleOperations()
+        styleEditor.invalidateRefresh()
+        styleEditor.cancelToggleOperations()
         stopEventPumps()
         pendingInspectedNodeID = nil
         isElementPickerEnabled = false
@@ -1417,7 +1329,7 @@ package final class WebInspectorContext {
     }
 
     private func discardCurrentPageDomainLeases() async {
-        await styleTrackingLeases.discardAll()
+        await styleEditor.trackingLeases.discardAll()
         for domain in [WebInspectorEnabledDomain.inspector, .page, .runtime, .network, .console] {
             await discardDomainTrackingLease(domain)
         }
@@ -1591,7 +1503,7 @@ package final class WebInspectorContext {
 
     private func disableEnabledDomains() async -> WebInspectorProxyError? {
         let consoleError = await disableDomainTracking(.console)
-        let styleError = await styleTrackingLeases.releaseAll()
+        let styleError = await styleEditor.trackingLeases.releaseAll()
         var firstError = consoleError ?? styleError
         for domain in [WebInspectorEnabledDomain.runtime, .network, .page, .inspector] {
             let error = await disableDomainTracking(domain)
@@ -1837,17 +1749,20 @@ package final class WebInspectorContext {
             return
         }
 
-        styleRefreshTask?.cancel()
-        styleRefreshTask = nil
-        styleRefreshGeneration += 1
+        styleEditor.invalidateRefresh()
         selectedNode.setElementStyles(nil)
         self.selectedNode = nil
         domDocument.trees.selectionChanged(nil)
     }
 
+    /// Whether `node` is the model this context currently holds for its ID.
+    func isRegistered(_ node: DOMNode) -> Bool {
+        domDocument.nodes[node.id] === node
+    }
+
     @discardableResult
     private func registeredNode(_ node: DOMNode) throws -> DOMNode {
-        guard domDocument.nodes[node.id] === node else {
+        guard isRegistered(node) else {
             throw WebInspectorProxyError.disconnected("DOMNode is not registered in this WebInspectorContext.")
         }
         return node
@@ -1860,35 +1775,35 @@ package final class WebInspectorContext {
         return currentPage
     }
 
-    private func domTarget(owning id: DOM.Node.ID) throws -> WebInspectorTarget {
+    func domTarget(owning id: DOM.Node.ID) throws -> WebInspectorTarget {
         if let scopedTargetRawValue = id.targetScopeRawValue {
             return proxy.frameTarget(id: WebInspectorTarget.ID(scopedTargetRawValue))
         }
         return try currentPageOrThrow()
     }
 
-    private func cssTarget(owning id: CSS.Style.ID) throws -> WebInspectorTarget {
+    func cssTarget(owning id: CSS.Style.ID) throws -> WebInspectorTarget {
         if let scopedTargetRawValue = id.targetScopeRawValue {
             return proxy.frameTarget(id: WebInspectorTarget.ID(scopedTargetRawValue))
         }
         return try currentPageOrThrow()
     }
 
-    private func cssTarget(owning id: CSS.Rule.ID) throws -> WebInspectorTarget {
+    func cssTarget(owning id: CSS.Rule.ID) throws -> WebInspectorTarget {
         if let scopedTargetRawValue = id.targetScopeRawValue {
             return proxy.frameTarget(id: WebInspectorTarget.ID(scopedTargetRawValue))
         }
         return try currentPageOrThrow()
     }
 
-    private func cssTarget(owning id: CSS.StyleSheet.ID) throws -> WebInspectorTarget {
+    func cssTarget(owning id: CSS.StyleSheet.ID) throws -> WebInspectorTarget {
         if let scopedTargetRawValue = id.targetScopeRawValue {
             return proxy.frameTarget(id: WebInspectorTarget.ID(scopedTargetRawValue))
         }
         return try currentPageOrThrow()
     }
 
-    private static func markDOMUndoableStateIfNeeded(
+    static func markDOMUndoableStateIfNeeded(
         on target: WebInspectorTarget,
         registersUndo: Bool
     ) async throws {
@@ -1897,7 +1812,7 @@ package final class WebInspectorContext {
         }
     }
 
-    private func recordDOMEditHistoryTarget(_ target: WebInspectorTarget, registersUndo: Bool) {
+    func recordDOMEditHistoryTarget(_ target: WebInspectorTarget, registersUndo: Bool) {
         guard registersUndo else {
             return
         }
@@ -2035,7 +1950,7 @@ package final class WebInspectorContext {
     /// Command failures surface at their call site (thrown, or a per-model
     /// phase such as `NetworkBody.Phase.failed`); only terminal connection
     /// loss moves the whole context to `.failed`.
-    private func failIfTerminal(_ error: Error, operation: String) {
+    func failIfTerminal(_ error: Error, operation: String) {
         switch error {
         case let proxyError as WebInspectorProxyError:
             switch proxyError {
@@ -2246,7 +2161,7 @@ extension WebInspectorContext {
         to committedTarget: WebInspectorTarget,
         generation: Int
     ) async -> Bool {
-        await styleTrackingLeases.discardAll()
+        await styleEditor.trackingLeases.discardAll()
         guard Task.isCancelled == false,
               isCurrentPageGeneration(generation) else {
             return false
@@ -2270,7 +2185,7 @@ extension WebInspectorContext {
             return
         }
         guard frame.parentID == nil || frame.id == currentPage.frameID else {
-            cssStyleSheets.invalidate(frameID: frame.id)
+            styleEditor.invalidateStyleSheets(frameID: frame.id)
             detachFrameDocuments(forFrameID: frame.id)
             runtimeStore.clearExecutionContexts(frameID: frame.id, page: currentPage)
             return
@@ -2287,7 +2202,7 @@ extension WebInspectorContext {
     private func applyCurrentPageFrameDetached(
         _ frameID: FrameID
     ) {
-        cssStyleSheets.invalidate(frameID: frameID)
+        styleEditor.invalidateStyleSheets(frameID: frameID)
         detachFrameDocuments(forFrameID: frameID)
         runtimeStore.clearExecutionContexts(frameID: frameID, page: currentPage)
     }
@@ -2297,19 +2212,13 @@ extension WebInspectorContext {
     ) {
         let authorityTargetID = runtimeAuthorityTargetID(for: targetID)
         advanceTargetRevision(for: authorityTargetID)
-        if authorityTargetID == currentPage?.id {
-            cssInspectorBaselineStore.reset()
-        } else {
-            cssInspectorBaselineStore.reset(targetID: authorityTargetID)
-        }
-        if authorityTargetID == currentPage?.id {
-            cssStyleSheets.invalidateAll()
-        } else {
-            cssStyleSheets.invalidate(targetID: authorityTargetID)
-        }
+        styleEditor.forgetTarget(
+            authorityTargetID,
+            isCurrentPage: authorityTargetID == currentPage?.id
+        )
         runtimeStore.clearExecutionContexts(targetID: authorityTargetID)
         guard targetID == .currentPage else {
-            styleTrackingLeases.discard(forDestroyedTargetID: targetID)
+            styleEditor.trackingLeases.discard(forDestroyedTargetID: targetID)
             return
         }
         guard currentPage != nil else {
@@ -2328,7 +2237,7 @@ extension WebInspectorContext {
         documentReloadTask?.cancel()
         documentReloadTask = nil
         domDocumentLoad.cancel()
-        cancelStyleToggleOperations()
+        styleEditor.cancelToggleOperations()
         invalidateElementPicker()
         isElementPickerEnabled = false
         let generation = advanceCurrentPageGeneration()
@@ -2421,10 +2330,10 @@ extension WebInspectorContext {
             finishStructuralDOMEvent(domDocument.apply(event))
         case let .inlineStyleInvalidated(ids):
             if ids.isEmpty {
-                markSelectedStylesNeedsRefresh()
+                styleEditor.markSelectedStylesNeedsRefresh(in: self)
             } else {
                 for id in ids {
-                    markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
+                    styleEditor.markSelectedStylesNeedsRefresh(for: DOMNode.ID(id), in: self)
                 }
             }
         case let .inspect(id):
@@ -2502,10 +2411,8 @@ extension WebInspectorContext {
         guard selectedNode.nodeType == 1 else {
             preconditionFailure("seedSelectedNodeStyles requires a selected element node.")
         }
-        styleRefreshTask?.cancel()
-        styleRefreshTask = nil
-        styleRefreshGeneration += 1
-        let styles = selectedNode.elementStyles ?? CSSStyles(nodeID: selectedNode.id, inspectorBaselineStore: cssInspectorBaselineStore)
+        styleEditor.invalidateRefresh()
+        let styles = selectedNode.elementStyles ?? CSSStyles(nodeID: selectedNode.id, inspectorBaselineStore: styleEditor.inspectorBaselineStore)
         selectedNode.setElementStyles(styles)
         styles.load(
             matchedStyles: matchedStyles,
@@ -2516,16 +2423,11 @@ extension WebInspectorContext {
 
     private func resetDOM() {
         invalidateElementPicker()
-        cancelStyleToggleOperations()
-        cssInspectorBaselineStore.reset()
-        cssStyleSheets.removeAll()
+        styleEditor.resetForNewDocument()
         inspectorInspectResolutionTask?.cancel()
         inspectorInspectResolutionTask = nil
         inspectResolutionTask?.cancel()
         inspectResolutionTask = nil
-        styleRefreshTask?.cancel()
-        styleRefreshTask = nil
-        styleRefreshGeneration += 1
         pageHighlightMaintenanceTask?.cancel()
         pageHighlightMaintenanceTask = nil
         clearPageHighlightForDOMReset()
@@ -2659,9 +2561,7 @@ extension WebInspectorContext {
         guard let selectedNode, removedIDs.contains(selectedNode.id) else {
             return
         }
-        styleRefreshTask?.cancel()
-        styleRefreshTask = nil
-        styleRefreshGeneration += 1
+        styleEditor.invalidateRefresh()
         self.selectedNode = nil
         domDocument.trees.selectionChanged(nil)
     }
@@ -2748,112 +2648,36 @@ extension WebInspectorContext {
 }
 
 extension WebInspectorContext {
-    private struct SelectedStylePayloads {
-        var matchedStyles: CSS.MatchedStyles
-        var inlineStyles: CSS.InlineStyles
-        var computedProperties: [CSS.ComputedProperty]
+    var cssInspectorBaselineStore: CSSInspectorBaselineStore {
+        styleEditor.inspectorBaselineStore
     }
 
     func apply(_ event: CSS.Event) {
-        switch event {
-        case let .styleSheetChanged(id):
-            cssStyleSheets.advanceContentRevision(id)
-            markSelectedStylesNeedsRefresh()
-        case .mediaQueryResultChanged:
-            markSelectedStylesNeedsRefresh()
-        case let .styleSheetAdded(header):
-            cssStyleSheets.record(header)
-            markSelectedStylesNeedsRefresh()
-        case let .styleSheetRemoved(id):
-            cssStyleSheets.invalidate(id)
-            markSelectedStylesNeedsRefresh()
-        case let .nodeLayoutFlagsChanged(id):
-            markSelectedStylesNeedsRefresh(for: DOMNode.ID(id))
-        case .unknown:
-            break
-        }
+        styleEditor.apply(event, in: self)
     }
 
-    private func refreshSelectedStyles() {
-        styleRefreshTask?.cancel()
-        styleRefreshTask = nil
-
-        guard let selectedNode else {
-            return
-        }
-        guard selectedNode.nodeType == 1 else {
-            selectedNode.setElementStyles(nil)
-            return
-        }
-
-        let styles = selectedNode.elementStyles ?? CSSStyles(nodeID: selectedNode.id, inspectorBaselineStore: cssInspectorBaselineStore)
-        selectedNode.setElementStyles(styles)
-        styleRefreshGeneration += 1
-        let generation = styleRefreshGeneration
-        styles.markLoading(generation: generation)
-        styleRefreshTask = Task { [weak self, weak selectedNode, styles] in
-            guard let self, let selectedNode else {
-                return
-            }
-            await self.loadStyles(for: selectedNode, into: styles, generation: generation)
-        }
+    func targetAuthority(for target: WebInspectorTarget) -> TargetAuthority {
+        TargetAuthority(
+            pageGeneration: currentPageGeneration,
+            documentGeneration: domDocumentGeneration,
+            targetID: target.id,
+            targetRevision: targetRevision(for: target.id),
+            isCurrentPage: target.id == currentPage?.id,
+            pageBindingID: target.pageBindingID
+        )
     }
 
-    private func loadStyles(
-        for node: DOMNode,
-        into styles: CSSStyles,
-        generation: Int
-    ) async {
-        guard isCurrentStyleRefresh(node: node, generation: generation) else {
-            styles.cancelLoading(generation: generation)
-            return
+    func isCurrent(_ authority: TargetAuthority) -> Bool {
+        guard authority.pageGeneration == currentPageGeneration,
+              authority.documentGeneration == domDocumentGeneration,
+              authority.targetRevision == targetRevision(for: authority.targetID) else {
+            return false
         }
-        guard currentPage != nil else {
-            styles.markUnavailable(generation: generation)
-            return
+        if authority.isCurrentPage {
+            return currentPage?.id == authority.targetID
+                && currentPage?.pageBindingID == authority.pageBindingID
         }
-
-        do {
-            let target = try domTarget(owning: node.id.proxyID)
-            try await withExclusiveCSSOperation(on: target) {
-                guard isCurrentStyleRefresh(node: node, generation: generation) else {
-                    styles.cancelLoading(generation: generation)
-                    return
-                }
-                guard try await styleTrackingLeases.ensure(on: target) else {
-                    styles.markUnavailable(generation: generation)
-                    return
-                }
-                guard isCurrentStyleRefresh(node: node, generation: generation) else {
-                    styles.cancelLoading(generation: generation)
-                    return
-                }
-                guard let payloads = try await selectedStylePayloads(
-                    for: node,
-                    target: target,
-                    generation: generation
-                ) else {
-                    styles.cancelLoading(generation: generation)
-                    return
-                }
-                styles.load(
-                    matchedStyles: payloads.matchedStyles,
-                    inlineStyles: payloads.inlineStyles,
-                    computedProperties: payloads.computedProperties,
-                    generation: generation
-                )
-            }
-        } catch is CancellationError {
-            styles.cancelLoading(generation: generation)
-        } catch let error as WebInspectorProxyError {
-            styles.fail(error, generation: generation)
-        } catch {
-            styles.fail(.commandFailed(
-                domain: "CSS",
-                method: "getMatchedStylesForNode/getInlineStylesForNode/getComputedStyleForNode",
-                message: String(describing: error)
-            ), generation: generation)
-        }
+        return true
     }
 
     #if DEBUG
@@ -2861,68 +2685,12 @@ extension WebInspectorContext {
         _ count: Int,
         for target: WebInspectorTarget
     ) async throws {
-        try await cssOperationGate.waitForQueuedOperationCount(count, for: target.id)
+        try await styleEditor.waitForQueuedOperationCountForTesting(count, for: target)
     }
     #endif
 
-    private func withExclusiveCSSOperation<Output>(
-        on target: WebInspectorTarget,
-        _ operation: () async throws -> Output
-    ) async throws -> Output {
-        try await cssOperationGate.acquire(targetID: target.id)
-        do {
-            try Task.checkCancellation()
-            let output = try await operation()
-            await cssOperationGate.release(targetID: target.id)
-            return output
-        } catch {
-            await cssOperationGate.release(targetID: target.id)
-            throw error
-        }
-    }
-
-    private func selectedStylePayloads(
-        for node: DOMNode,
-        target: WebInspectorTarget,
-        generation: Int
-    ) async throws -> SelectedStylePayloads? {
-        let matchedStyles = try await target.css.matchedStyles(for: node.id.proxyID)
-        guard isCurrentStyleRefresh(node: node, generation: generation) else {
-            return nil
-        }
-        let inlineStyles = try await target.css.inlineStyles(for: node.id.proxyID)
-        guard isCurrentStyleRefresh(node: node, generation: generation) else {
-            return nil
-        }
-        let computedProperties = try await target.css.computedStyle(for: node.id.proxyID)
-        guard isCurrentStyleRefresh(node: node, generation: generation) else {
-            return nil
-        }
-        return SelectedStylePayloads(
-            matchedStyles: matchedStyles,
-            inlineStyles: inlineStyles,
-            computedProperties: computedProperties
-        )
-    }
-
-    private func isCurrentStyleRefresh(node: DOMNode, generation: Int) -> Bool {
-        Task.isCancelled == false && selectedNode === node && styleRefreshGeneration == generation
-    }
-
     func setStyleHydrationActive(_ active: Bool) {
-        guard isStyleHydrationActive != active else {
-            return
-        }
-        isStyleHydrationActive = active
-        guard active, let styles = selectedNode?.elementStyles else {
-            return
-        }
-        switch styles.phase {
-        case .needsRefresh, .failed:
-            refreshSelectedStyles()
-        case .loading, .loaded, .unavailable:
-            break
-        }
+        styleEditor.setHydrationActive(active, in: self)
     }
 
     func styles(for node: DOMNode) throws -> CSSStyles {
@@ -2946,7 +2714,7 @@ extension WebInspectorContext {
     @discardableResult
     func refreshStyles(for node: DOMNode) throws -> CSSStyles {
         let styles = try styles(for: node)
-        refreshSelectedStyles()
+        styleEditor.refreshSelectedStyles(in: self)
         return styles
     }
 
@@ -2955,43 +2723,7 @@ extension WebInspectorContext {
         enabled: Bool,
         registersUndo: Bool
     ) async throws {
-        let mutation = CSSStyleTextMutation.setProperty(enabled: enabled)
-        guard styleToggleOperations[id] == nil,
-              let node = selectedNode,
-              let styles = node.elementStyles,
-              let submittedDeclaration = mutation.submittedDeclaration(
-                  in: styles,
-                  propertyID: id
-              ) else {
-            throw WebInspectorProxyError.commandFailed(
-                domain: "CSS",
-                method: "setStyleText",
-                message: "CSS property is stale, already mutating, or not editable."
-            )
-        }
-
-        let target = try cssTarget(owning: submittedDeclaration.styleID)
-        let submissionAuthority = cssMutationAuthority(
-            target: target,
-            styleSheetID: submittedDeclaration.styleID.owningStyleSheetID,
-            node: node,
-            styles: styles
-        )
-        let operation = beginStyleToggleOperation(for: id)
-        defer {
-            finishStyleToggleOperation(for: id, operation: operation)
-        }
-        try await performCSSStyleTextMutation(
-            mutation,
-            propertyID: id,
-            submittedDeclaration: submittedDeclaration,
-            node: node,
-            styles: styles,
-            target: target,
-            submissionAuthority: submissionAuthority,
-            operation: operation,
-            registersUndo: registersUndo
-        )
+        try await styleEditor.setProperty(id, enabled: enabled, registersUndo: registersUndo, in: self)
     }
 
     func setCSSDeclarationText(
@@ -2999,43 +2731,7 @@ extension WebInspectorContext {
         for id: CSSStyleProperty.ID,
         registersUndo: Bool
     ) async throws {
-        let mutation = CSSStyleTextMutation.setDeclarationText(text)
-        guard styleToggleOperations[id] == nil,
-              let node = selectedNode,
-              let styles = node.elementStyles,
-              let submittedDeclaration = mutation.submittedDeclaration(
-                  in: styles,
-                  propertyID: id
-              ) else {
-            throw WebInspectorProxyError.commandFailed(
-                domain: "CSS",
-                method: "setStyleText",
-                message: "CSS declaration is stale, already mutating, or not editable."
-            )
-        }
-
-        let target = try cssTarget(owning: submittedDeclaration.styleID)
-        let submissionAuthority = cssMutationAuthority(
-            target: target,
-            styleSheetID: submittedDeclaration.styleID.owningStyleSheetID,
-            node: node,
-            styles: styles
-        )
-        let operation = beginStyleToggleOperation(for: id)
-        defer {
-            finishStyleToggleOperation(for: id, operation: operation)
-        }
-        try await performCSSStyleTextMutation(
-            mutation,
-            propertyID: id,
-            submittedDeclaration: submittedDeclaration,
-            node: node,
-            styles: styles,
-            target: target,
-            submissionAuthority: submissionAuthority,
-            operation: operation,
-            registersUndo: registersUndo
-        )
+        try await styleEditor.setDeclarationText(text, for: id, registersUndo: registersUndo, in: self)
     }
 
     func setCSSRuleSelector(
@@ -3043,26 +2739,7 @@ extension WebInspectorContext {
         for id: CSSStyleRule.ID,
         registersUndo: Bool
     ) async throws {
-        let proxyID = id.proxyID
-        let target = try cssTarget(owning: proxyID)
-        let submissionAuthority = cssMutationAuthority(
-            target: target,
-            styleSheetID: proxyID.owningStyleSheetID,
-            tracksStyleSheetContentRevision: true
-        )
-        try await withExclusiveCSSOperation(on: target) {
-            try validateCSSMutationAuthority(submissionAuthority)
-            let commandAuthority = cssMutationAuthority(
-                target: target,
-                styleSheetID: proxyID.owningStyleSheetID
-            )
-            _ = try await target.css.setRuleSelector(proxyID, selector: selector)
-            try validateCSSMutationAuthority(commandAuthority)
-            try await Self.markDOMUndoableStateIfNeeded(on: target, registersUndo: registersUndo)
-            try validateCSSMutationAuthority(commandAuthority)
-            recordDOMEditHistoryTarget(target, registersUndo: registersUndo)
-        }
-        refreshSelectedStylesIfHydrationActive()
+        try await styleEditor.setRuleSelector(selector, for: id, registersUndo: registersUndo, in: self)
     }
 
     func setCSSStyleSheetText(
@@ -3070,19 +2747,7 @@ extension WebInspectorContext {
         for id: CSS.StyleSheet.ID,
         registersUndo: Bool
     ) async throws {
-        let target = try cssTarget(owning: id)
-        let submissionAuthority = cssMutationAuthority(target: target, styleSheetID: id)
-        try await withExclusiveCSSOperation(on: target) {
-            try validateCSSMutationAuthority(submissionAuthority)
-            let commandAuthority = cssMutationAuthority(target: target, styleSheetID: id)
-            try await target.css.setStyleSheetText(id, text: text)
-            try validateCSSMutationAuthority(commandAuthority)
-            cssStyleSheets.advanceContentRevision(id)
-            markSelectedStylesNeedsRefresh()
-            try await Self.markDOMUndoableStateIfNeeded(on: target, registersUndo: registersUndo)
-            try validateCSSMutationAuthority(commandAuthority)
-            recordDOMEditHistoryTarget(target, registersUndo: registersUndo)
-        }
+        try await styleEditor.setStyleSheetText(text, for: id, registersUndo: registersUndo, in: self)
     }
 
     @discardableResult
@@ -3091,498 +2756,7 @@ extension WebInspectorContext {
         enabled: Bool,
         registersUndo: Bool
     ) -> Bool {
-        let mutation = CSSStyleTextMutation.setProperty(enabled: enabled)
-        guard styleToggleOperations[id] == nil,
-              let node = selectedNode,
-              let styles = node.elementStyles,
-              let submittedDeclaration = mutation.submittedDeclaration(
-                  in: styles,
-                  propertyID: id
-              ) else {
-            return false
-        }
-        let target: WebInspectorTarget
-        do {
-            target = try cssTarget(owning: submittedDeclaration.styleID)
-        } catch {
-            failIfTerminal(error, operation: "CSS.setStyleText")
-            return false
-        }
-        let submissionAuthority = cssMutationAuthority(
-            target: target,
-            styleSheetID: submittedDeclaration.styleID.owningStyleSheetID,
-            node: node,
-            styles: styles
-        )
-        let operation = beginStyleToggleOperation(for: id)
-        let weakContext = WeakContextReference(self)
-        let operationGate = cssOperationGate
-
-        let task = Task { [target, styles, submissionAuthority, operation, weakContext, operationGate] in
-            do {
-                try Task.checkCancellation()
-                try await Self.performRequestedCSSStyleTextMutation(
-                    mutation,
-                    propertyID: id,
-                    submittedDeclaration: submittedDeclaration,
-                    node: node,
-                    styles: styles,
-                    target: target,
-                    submissionAuthority: submissionAuthority,
-                    operation: operation,
-                    registersUndo: registersUndo,
-                    context: weakContext,
-                    operationGate: operationGate
-                )
-                weakContext.withContextIfPresent {
-                    $0.finishStyleToggleOperation(for: id, operation: operation)
-                }
-            } catch is CancellationError {
-                weakContext.withContextIfPresent {
-                    $0.finishStyleToggleOperation(for: id, operation: operation)
-                }
-            } catch let error as WebInspectorProxyError where error == Self.staleCSSMutationError {
-                weakContext.withContextIfPresent {
-                    $0.finishStyleToggleOperation(for: id, operation: operation)
-                }
-            } catch {
-                weakContext.withContextIfPresent { context in
-                    let isCurrent = context.isCurrentStyleToggleOperation(
-                        for: id,
-                        operation: operation
-                    )
-                    context.finishStyleToggleOperation(for: id, operation: operation)
-                    guard isCurrent, Task.isCancelled == false else {
-                        return
-                    }
-                    context.failIfTerminal(error, operation: "CSS.setStyleText")
-                    context.refreshSelectedStyles()
-                }
-            }
-        }
-        if styleToggleOperations[id] === operation {
-            operation.task = task
-        } else {
-            task.cancel()
-        }
-        return true
-    }
-
-    private static func performRequestedCSSStyleTextMutation(
-        _ mutation: CSSStyleTextMutation,
-        propertyID: CSSStyleProperty.ID,
-        submittedDeclaration: CSSDeclarationIdentity,
-        node: DOMNode,
-        styles: CSSStyles,
-        target: WebInspectorTarget,
-        submissionAuthority: CSSMutationAuthority,
-        operation: StyleToggleOperation,
-        registersUndo: Bool,
-        context: WeakContextReference,
-        operationGate: CSSOperationGate
-    ) async throws {
-        try await operationGate.acquire(targetID: target.id)
-        do {
-            try await refreshRequestedCSSStylesForMutationIfNeeded(
-                node: node,
-                styles: styles,
-                target: target,
-                submissionAuthority: submissionAuthority,
-                propertyID: propertyID,
-                operation: operation,
-                context: context
-            )
-            let (intent, commandAuthority) = try context.withContext { context in
-                try context.validateCSSMutationAuthority(submissionAuthority)
-                try context.validateStyleToggleOperation(propertyID, operation: operation)
-                guard let intent = mutation.intent(
-                    in: styles,
-                    declaration: submittedDeclaration
-                ),
-                      try context.cssTarget(owning: intent.styleID).id == target.id else {
-                    throw WebInspectorProxyError.commandFailed(
-                        domain: "CSS",
-                        method: "setStyleText",
-                        message: "CSS declaration changed before the queued mutation could run."
-                    )
-                }
-                return (
-                    intent,
-                    context.cssMutationAuthority(
-                        target: target,
-                        styleSheetID: intent.styleID.owningStyleSheetID,
-                        node: node,
-                        styles: styles
-                    )
-                )
-            }
-
-            let result = try await target.css.setStyleText(intent.styleID, text: intent.text)
-            try context.withContext { context in
-                try context.validateCSSMutationAuthority(commandAuthority)
-                try context.validateStyleToggleOperation(propertyID, operation: operation)
-            }
-            try await markDOMUndoableStateIfNeeded(on: target, registersUndo: registersUndo)
-            try context.withContext { context in
-                try context.validateCSSMutationAuthority(commandAuthority)
-                try context.validateStyleToggleOperation(propertyID, operation: operation)
-                context.recordDOMEditHistoryTarget(target, registersUndo: registersUndo)
-                styles.applySetStyleText(result: result, for: propertyID)
-                context.refreshSelectedStylesIfHydrationActive()
-            }
-            await operationGate.release(targetID: target.id)
-        } catch {
-            await operationGate.release(targetID: target.id)
-            throw error
-        }
-    }
-
-    private static func refreshRequestedCSSStylesForMutationIfNeeded(
-        node: DOMNode,
-        styles: CSSStyles,
-        target: WebInspectorTarget,
-        submissionAuthority: CSSMutationAuthority,
-        propertyID: CSSStyleProperty.ID,
-        operation: StyleToggleOperation,
-        context: WeakContextReference
-    ) async throws {
-        let generation = try context.withContext { context in
-            try context.validateCSSMutationAuthority(submissionAuthority)
-            try context.validateStyleToggleOperation(propertyID, operation: operation)
-            return try context.beginCSSStylesRefreshForMutationIfNeeded(styles)
-        }
-        guard let generation else {
-            return
-        }
-
-        // Submission requires a previously materialized editable declaration,
-        // which proves this target already owns an active style-tracking lease.
-        // Reacquiring here would create a second lease owner for the same pane.
-        do {
-            let matchedStyles = try await target.css.matchedStyles(for: node.id.proxyID)
-            try context.withContext {
-                try $0.validateRequestedCSSStyleRefresh(
-                    node: node,
-                    generation: generation,
-                    submissionAuthority: submissionAuthority,
-                    propertyID: propertyID,
-                    operation: operation
-                )
-            }
-            let inlineStyles = try await target.css.inlineStyles(for: node.id.proxyID)
-            try context.withContext {
-                try $0.validateRequestedCSSStyleRefresh(
-                    node: node,
-                    generation: generation,
-                    submissionAuthority: submissionAuthority,
-                    propertyID: propertyID,
-                    operation: operation
-                )
-            }
-            let computedProperties = try await target.css.computedStyle(for: node.id.proxyID)
-            try context.withContext { context in
-                try context.validateRequestedCSSStyleRefresh(
-                    node: node,
-                    generation: generation,
-                    submissionAuthority: submissionAuthority,
-                    propertyID: propertyID,
-                    operation: operation
-                )
-                styles.load(
-                    matchedStyles: matchedStyles,
-                    inlineStyles: inlineStyles,
-                    computedProperties: computedProperties,
-                    generation: generation
-                )
-            }
-        } catch is CancellationError {
-            styles.cancelLoading(generation: generation)
-            throw CancellationError()
-        } catch let error as WebInspectorProxyError {
-            if error == staleCSSMutationError {
-                styles.cancelLoading(generation: generation)
-            } else {
-                styles.fail(error, generation: generation)
-            }
-            throw error
-        } catch {
-            let proxyError = WebInspectorProxyError.commandFailed(
-                domain: "CSS",
-                method: "getMatchedStylesForNode/getInlineStylesForNode/getComputedStyleForNode",
-                message: String(describing: error)
-            )
-            styles.fail(proxyError, generation: generation)
-            throw proxyError
-        }
-    }
-
-    private func performCSSStyleTextMutation(
-        _ mutation: CSSStyleTextMutation,
-        propertyID: CSSStyleProperty.ID,
-        submittedDeclaration: CSSDeclarationIdentity,
-        node: DOMNode,
-        styles: CSSStyles,
-        target: WebInspectorTarget,
-        submissionAuthority: CSSMutationAuthority,
-        operation: StyleToggleOperation,
-        registersUndo: Bool
-    ) async throws {
-        try await withExclusiveCSSOperation(on: target) {
-            try validateCSSMutationAuthority(submissionAuthority)
-            try validateStyleToggleOperation(propertyID, operation: operation)
-            try await refreshCSSStylesForMutationIfNeeded(
-                node: node,
-                styles: styles,
-                target: target
-            )
-            try validateCSSMutationAuthority(submissionAuthority)
-            try validateStyleToggleOperation(propertyID, operation: operation)
-            guard let intent = mutation.intent(
-                in: styles,
-                declaration: submittedDeclaration
-            ),
-                  try cssTarget(owning: intent.styleID).id == target.id else {
-                throw WebInspectorProxyError.commandFailed(
-                    domain: "CSS",
-                    method: "setStyleText",
-                    message: "CSS declaration changed before the queued mutation could run."
-                )
-            }
-            let commandAuthority = cssMutationAuthority(
-                target: target,
-                styleSheetID: intent.styleID.owningStyleSheetID,
-                node: node,
-                styles: styles
-            )
-            let result = try await target.css.setStyleText(intent.styleID, text: intent.text)
-            try validateCSSMutationAuthority(commandAuthority)
-            try validateStyleToggleOperation(propertyID, operation: operation)
-            try await Self.markDOMUndoableStateIfNeeded(on: target, registersUndo: registersUndo)
-            try validateCSSMutationAuthority(commandAuthority)
-            try validateStyleToggleOperation(propertyID, operation: operation)
-            recordDOMEditHistoryTarget(target, registersUndo: registersUndo)
-            styles.applySetStyleText(result: result, for: propertyID)
-        }
-        refreshSelectedStylesIfHydrationActive()
-    }
-
-    private func refreshCSSStylesForMutationIfNeeded(
-        node: DOMNode,
-        styles: CSSStyles,
-        target: WebInspectorTarget
-    ) async throws {
-        guard let generation = try beginCSSStylesRefreshForMutationIfNeeded(styles) else {
-            return
-        }
-
-        do {
-            guard try await styleTrackingLeases.ensure(on: target) else {
-                styles.markUnavailable(generation: generation)
-                throw WebInspectorProxyError.commandFailed(
-                    domain: "CSS",
-                    method: "setStyleText",
-                    message: "CSS tracking is unavailable for the selected target."
-                )
-            }
-            guard let payloads = try await selectedStylePayloads(
-                for: node,
-                target: target,
-                generation: generation
-            ) else {
-                styles.cancelLoading(generation: generation)
-                throw Self.staleCSSMutationError
-            }
-            styles.load(
-                matchedStyles: payloads.matchedStyles,
-                inlineStyles: payloads.inlineStyles,
-                computedProperties: payloads.computedProperties,
-                generation: generation
-            )
-        } catch is CancellationError {
-            styles.cancelLoading(generation: generation)
-            throw CancellationError()
-        } catch let error as WebInspectorProxyError {
-            if error != Self.staleCSSMutationError {
-                styles.fail(error, generation: generation)
-            }
-            throw error
-        } catch {
-            let proxyError = WebInspectorProxyError.commandFailed(
-                domain: "CSS",
-                method: "getMatchedStylesForNode/getInlineStylesForNode/getComputedStyleForNode",
-                message: String(describing: error)
-            )
-            styles.fail(proxyError, generation: generation)
-            throw proxyError
-        }
-    }
-
-    private func beginCSSStylesRefreshForMutationIfNeeded(
-        _ styles: CSSStyles
-    ) throws -> Int? {
-        switch styles.phase {
-        case .loaded:
-            return nil
-        case .loading, .needsRefresh:
-            break
-        case .unavailable, .failed:
-            throw WebInspectorProxyError.commandFailed(
-                domain: "CSS",
-                method: "setStyleText",
-                message: "Current CSS declarations are unavailable."
-            )
-        }
-
-        styleRefreshTask?.cancel()
-        styleRefreshTask = nil
-        styleRefreshGeneration += 1
-        let generation = styleRefreshGeneration
-        styles.markLoading(generation: generation)
-        return generation
-    }
-
-    private func validateRequestedCSSStyleRefresh(
-        node: DOMNode,
-        generation: Int,
-        submissionAuthority: CSSMutationAuthority,
-        propertyID: CSSStyleProperty.ID,
-        operation: StyleToggleOperation
-    ) throws {
-        try validateCSSMutationAuthority(submissionAuthority)
-        try validateStyleToggleOperation(propertyID, operation: operation)
-        guard isCurrentStyleRefresh(node: node, generation: generation) else {
-            throw Self.staleCSSMutationError
-        }
-    }
-
-    private static var staleCSSMutationError: WebInspectorProxyError {
-        .disconnected("CSS mutation no longer belongs to the current document.")
-    }
-
-    private func cssMutationAuthority(
-        target: WebInspectorTarget,
-        styleSheetID: CSS.StyleSheet.ID?,
-        tracksStyleSheetContentRevision: Bool = false,
-        node: DOMNode? = nil,
-        styles: CSSStyles? = nil
-    ) -> CSSMutationAuthority {
-        CSSMutationAuthority(
-            pageGeneration: currentPageGeneration,
-            documentGeneration: domDocumentGeneration,
-            targetID: target.id,
-            targetRevision: targetRevision(for: target.id),
-            isCurrentPage: target.id == currentPage?.id,
-            pageBindingID: target.pageBindingID,
-            node: node,
-            styles: styles,
-            styleSheet: styleSheetID.map { id in
-                CSSMutationAuthority.StyleSheet(
-                    id: id,
-                    revision: cssStyleSheets.revision(of: id),
-                    contentRevision: tracksStyleSheetContentRevision
-                        ? cssStyleSheets.contentRevision(of: id)
-                        : nil
-                )
-            }
-        )
-    }
-
-    private func validateCSSMutationAuthority(_ authority: CSSMutationAuthority) throws {
-        try Task.checkCancellation()
-        guard authority.pageGeneration == currentPageGeneration,
-              authority.documentGeneration == domDocumentGeneration,
-              authority.targetRevision == targetRevision(for: authority.targetID) else {
-            throw Self.staleCSSMutationError
-        }
-        if let styleSheet = authority.styleSheet,
-           styleSheet.revision != cssStyleSheets.revision(of: styleSheet.id) {
-            throw Self.staleCSSMutationError
-        }
-        if let styleSheet = authority.styleSheet,
-           let contentRevision = styleSheet.contentRevision,
-           contentRevision != cssStyleSheets.contentRevision(of: styleSheet.id) {
-            throw Self.staleCSSMutationError
-        }
-        if authority.isCurrentPage {
-            guard currentPage?.id == authority.targetID,
-                  currentPage?.pageBindingID == authority.pageBindingID else {
-                throw Self.staleCSSMutationError
-            }
-        }
-        if let node = authority.node,
-           let styles = authority.styles {
-            guard domDocument.nodes[node.id] === node,
-                  selectedNode === node,
-                  node.elementStyles === styles else {
-                throw Self.staleCSSMutationError
-            }
-        }
-    }
-
-    private func beginStyleToggleOperation(for id: CSSStyleProperty.ID) -> StyleToggleOperation {
-        let operation = StyleToggleOperation()
-        styleToggleOperations[id] = operation
-        return operation
-    }
-
-    private func isCurrentStyleToggleOperation(
-        for id: CSSStyleProperty.ID,
-        operation: StyleToggleOperation
-    ) -> Bool {
-        styleToggleOperations[id] === operation
-    }
-
-    private func validateStyleToggleOperation(
-        _ id: CSSStyleProperty.ID,
-        operation: StyleToggleOperation
-    ) throws {
-        guard isCurrentStyleToggleOperation(for: id, operation: operation) else {
-            throw Self.staleCSSMutationError
-        }
-    }
-
-    private func finishStyleToggleOperation(
-        for id: CSSStyleProperty.ID,
-        operation: StyleToggleOperation
-    ) {
-        guard styleToggleOperations[id] === operation else {
-            return
-        }
-        operation.task = nil
-        styleToggleOperations[id] = nil
-    }
-
-    private func cancelStyleToggleOperations() {
-        for operation in styleToggleOperations.values {
-            operation.task?.cancel()
-            operation.task = nil
-        }
-        styleToggleOperations = [:]
-    }
-
-    private func refreshSelectedStylesIfHydrationActive() {
-        guard isStyleHydrationActive else {
-            return
-        }
-        refreshSelectedStyles()
-    }
-
-    private func markSelectedStylesNeedsRefresh(
-        for nodeID: DOMNode.ID
-    ) {
-        guard selectedNode?.id == nodeID else {
-            return
-        }
-        markSelectedStylesNeedsRefresh()
-    }
-
-    private func markSelectedStylesNeedsRefresh() {
-        styleRefreshGeneration += 1
-        guard let styles = selectedNode?.elementStyles else {
-            return
-        }
-        styles.markNeedsRefresh()
-        refreshSelectedStylesIfHydrationActive()
+        styleEditor.requestSetProperty(id, enabled: enabled, registersUndo: registersUndo, in: self)
     }
 }
 
