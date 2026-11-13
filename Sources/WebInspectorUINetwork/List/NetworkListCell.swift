@@ -186,10 +186,6 @@ package final class NetworkListCell: UICollectionViewListCell {
 
 #if DEBUG
 extension NetworkListCell {
-    package var displayNameForTesting: String? {
-        (contentConfiguration as? UIListContentConfiguration)?.text
-    }
-
     package var fileTypeLabelForTesting: String? {
         fileTypeLabel.text
     }

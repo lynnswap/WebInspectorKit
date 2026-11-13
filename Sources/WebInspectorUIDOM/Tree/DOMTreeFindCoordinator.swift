@@ -246,27 +246,6 @@ extension DOMTreeTextView {
             return findSearchIdentifier == activeSearchIdentifier
         }
 
-    #if DEBUG
-        func decorateStaleFoundTextForTesting(queryString: String) {
-            guard let textView,
-                  let range = Self.searchRanges(in: textView.documentTextForFind, queryString: queryString).first
-            else {
-                return
-            }
-
-            decorate(
-                foundTextRange: DOMTreeTextRange(nsRange: range, findSearchIdentifier: Int.max),
-                document: documentIdentifier,
-                usingStyle: .found
-            )
-            decorate(
-                foundTextRange: DOMTreeTextRange(nsRange: range, findSearchIdentifier: Int.max),
-                document: documentIdentifier,
-                usingStyle: .highlighted
-            )
-        }
-    #endif
-
         static func searchRanges(
             in source: String,
             queryString: String,
