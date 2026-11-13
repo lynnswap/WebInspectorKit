@@ -314,6 +314,8 @@ public final class WebInspectorContext {
         }
     }
 
+    private struct SupersededPageGeneration: Error {}
+
     private enum RuntimeObjectOwner: Hashable {
         case client
         case console
@@ -662,11 +664,9 @@ public final class WebInspectorContext {
     private var eventPumpAppliedWaitersForTesting: [UInt64: EventPumpAppliedWaiterForTesting]
     private var nextEventPumpAppliedWaiterIDForTesting: UInt64
 #endif
-    private var inspectorTrackingTarget: WebInspectorTarget?
-    private var pageTrackingTarget: WebInspectorTarget?
-    private var networkTrackingTarget: WebInspectorTarget?
-    private var runtimeTrackingTarget: WebInspectorTarget?
-    private var consoleTrackingTarget: WebInspectorTarget?
+    /// The target each current-page domain lease was acquired on. CSS leases
+    /// are tracked per style target in `styleTrackingTargets`.
+    private var domainTrackingTargets: [WebInspectorEnabledDomain: WebInspectorTarget]
     private var nodesByID: [DOMNode.ID: DOMNode] {
         didSet {
             #if DEBUG
@@ -753,11 +753,7 @@ public final class WebInspectorContext {
         eventPumpAppliedWaitersForTesting = [:]
         nextEventPumpAppliedWaiterIDForTesting = 0
 #endif
-        inspectorTrackingTarget = nil
-        pageTrackingTarget = nil
-        networkTrackingTarget = nil
-        runtimeTrackingTarget = nil
-        consoleTrackingTarget = nil
+        domainTrackingTargets = [:]
         nodesByID = [:]
         frameDocumentProjectionIndex = FrameDocumentProjectionIndex()
         treeStates = []
@@ -2407,46 +2403,12 @@ public final class WebInspectorContext {
             }
             currentPage = target
             await subscribe(to: target, isolation: isolation)
-            await waitForCurrentPageEventSubscriptions(target, isolation: isolation)
-            guard Task.isCancelled == false else {
-                await disableStartupDomainsAfterCancellation(documentLoadID, isolation: isolation)
-                return
-            }
-            guard isCurrentPageGeneration(generation, isolation: isolation) else {
-                return
-            }
+            await target.waitForModelEventSubscriptions()
+            try checkPageGeneration(generation, isolation: isolation)
             resetReplayBackedModelsBeforeEnable()
-            try await enableInspectorTracking(on: target, generation: generation, isolation: isolation)
-            guard Task.isCancelled == false else {
-                await disableStartupDomainsAfterCancellation(documentLoadID, isolation: isolation)
-                return
-            }
-            guard isCurrentPageGeneration(generation, isolation: isolation) else {
-                return
-            }
-            try await enablePageTracking(on: target, generation: generation, isolation: isolation)
-            guard Task.isCancelled == false else {
-                await disableStartupDomainsAfterCancellation(documentLoadID, isolation: isolation)
-                return
-            }
-            guard isCurrentPageGeneration(generation, isolation: isolation) else {
-                return
-            }
-            try await enableRuntimeTracking(on: target, generation: generation, isolation: isolation)
-            guard Task.isCancelled == false else {
-                await disableStartupDomainsAfterCancellation(documentLoadID, isolation: isolation)
-                return
-            }
-            guard isCurrentPageGeneration(generation, isolation: isolation) else {
-                return
-            }
-            try await enableNetworkTracking(on: target, generation: generation, isolation: isolation)
-            guard Task.isCancelled == false else {
-                await disableStartupDomainsAfterCancellation(documentLoadID, isolation: isolation)
-                return
-            }
-            guard isCurrentPageGeneration(generation, isolation: isolation) else {
-                return
+            for domain in [WebInspectorEnabledDomain.inspector, .page, .runtime, .network] {
+                try await enableDomainTracking(domain, on: target, generation: generation, isolation: isolation)
+                try checkPageGeneration(generation, isolation: isolation)
             }
             try await loadNetworkResourceTree(on: target, generation: generation, isolation: isolation)
             var document = try await loadCurrentDOMDocument(
@@ -2454,49 +2416,22 @@ public final class WebInspectorContext {
                 loadID: documentLoadID,
                 isolation: isolation
             )
-            guard Task.isCancelled == false else {
-                await disableStartupDomainsAfterCancellation(documentLoadID, isolation: isolation)
-                return
-            }
-            guard isCurrentPageGeneration(generation, isolation: isolation) else {
-                return
-            }
-            try await enableConsoleTracking(on: target, generation: generation, isolation: isolation)
-            guard Task.isCancelled == false else {
-                await disableStartupDomainsAfterCancellation(documentLoadID, isolation: isolation)
-                return
-            }
-            guard isCurrentPageGeneration(generation, isolation: isolation) else {
-                return
-            }
+            try checkPageGeneration(generation, isolation: isolation)
+            try await enableDomainTracking(.console, on: target, generation: generation, isolation: isolation)
+            try checkPageGeneration(generation, isolation: isolation)
             document = try await reloadDOMDocumentIfNeeded(
                 document,
                 on: target,
                 loadID: documentLoadID,
                 isolation: isolation
             )
-            guard Task.isCancelled == false else {
-                await disableStartupDomainsAfterCancellation(documentLoadID, isolation: isolation)
-                return
-            }
-            guard isCurrentPageGeneration(generation, isolation: isolation) else {
-                return
-            }
+            try checkPageGeneration(generation, isolation: isolation)
             applyLoadedDOMDocument(document, isolation: isolation)
             transition(to: .attached)
         } catch is CancellationError {
             await disableStartupDomainsAfterCancellation(documentLoadID, isolation: isolation)
+        } catch is SupersededPageGeneration {
             return
-        } catch let error as WebInspectorProxyError {
-            guard Task.isCancelled == false else {
-                await disableStartupDomainsAfterCancellation(documentLoadID, isolation: isolation)
-                return
-            }
-            guard isCurrentPageGeneration(generation, isolation: isolation) else {
-                return
-            }
-            await logStartupTeardownFailure(isolation: isolation)
-            fail(error)
         } catch {
             guard Task.isCancelled == false else {
                 await disableStartupDomainsAfterCancellation(documentLoadID, isolation: isolation)
@@ -2506,7 +2441,17 @@ public final class WebInspectorContext {
                 return
             }
             await logStartupTeardownFailure(isolation: isolation)
-            fail(.attachFailed(String(describing: error)))
+            fail(error as? WebInspectorProxyError ?? .attachFailed(String(describing: error)))
+        }
+    }
+
+    /// Throws `CancellationError` when the current task is cancelled, and
+    /// `SupersededPageGeneration` when a newer page generation replaced
+    /// `generation`.
+    private func checkPageGeneration(_ generation: Int, isolation: isolated (any Actor)) throws {
+        try Task.checkCancellation()
+        guard isCurrentPageGeneration(generation, isolation: isolation) else {
+            throw SupersededPageGeneration()
         }
     }
 
@@ -2517,15 +2462,9 @@ public final class WebInspectorContext {
         guard domDocumentLoad?.id == documentLoadID else {
             return
         }
-        await disableEnabledDomainsAfterCancellation(isolation: isolation)
-    }
-
-    private func waitForCurrentPageEventSubscriptions(
-        _ target: WebInspectorTarget,
-        isolation: isolated (any Actor)
-    ) async {
-        _ = isolation
-        await target.waitForModelEventSubscriptions()
+        if let error = await disableEnabledDomains(isolation: isolation) {
+            failIfTerminal(error, operation: "domain disable after cancellation")
+        }
     }
 
     private func disableEnabledDomainsBeforeRestart(
@@ -2537,98 +2476,34 @@ public final class WebInspectorContext {
     }
 
     private func discardCurrentPageDomainLeases(isolation: isolated (any Actor)) async {
-        _ = isolation
         await discardStyleTrackingLeases(isolation: isolation)
-        if let target = inspectorTrackingTarget {
-            inspectorTrackingTarget = nil
-            await domainEnablement.discardLease(.inspector, on: target)
-        }
-        if let target = pageTrackingTarget {
-            pageTrackingTarget = nil
-            await domainEnablement.discardLease(.page, on: target)
-        }
-        if let target = runtimeTrackingTarget {
-            runtimeTrackingTarget = nil
-            await domainEnablement.discardLease(.runtime, on: target)
-        }
-        if let target = networkTrackingTarget {
-            networkTrackingTarget = nil
-            await domainEnablement.discardLease(.network, on: target)
-        }
-        if let target = consoleTrackingTarget {
-            consoleTrackingTarget = nil
-            await domainEnablement.discardLease(.console, on: target)
+        for domain in [WebInspectorEnabledDomain.inspector, .page, .runtime, .network, .console] {
+            await discardDomainTrackingLease(domain, isolation: isolation)
         }
     }
 
-    private func enableInspectorTracking(
+    private func discardDomainTrackingLease(
+        _ domain: WebInspectorEnabledDomain,
+        isolation: isolated (any Actor)
+    ) async {
+        guard let target = domainTrackingTargets.removeValue(forKey: domain) else {
+            return
+        }
+        await domainEnablement.discardLease(domain, on: target)
+    }
+
+    private func enableDomainTracking(
+        _ domain: WebInspectorEnabledDomain,
         on target: WebInspectorTarget,
         generation: Int,
         isolation: isolated (any Actor)
     ) async throws {
-        _ = isolation
-        try await domainEnablement.acquire(.inspector, on: target)
+        try await domainEnablement.acquire(domain, on: target)
         guard isCurrentPageGeneration(generation, isolation: isolation) else {
-            await releaseLateAcquiredDomain(.inspector, on: target, isolation: isolation)
+            await releaseLateAcquiredDomain(domain, on: target, isolation: isolation)
             return
         }
-        inspectorTrackingTarget = target
-    }
-
-    private func enableRuntimeTracking(
-        on target: WebInspectorTarget,
-        generation: Int,
-        isolation: isolated (any Actor)
-    ) async throws {
-        _ = isolation
-        try await domainEnablement.acquire(.runtime, on: target)
-        guard isCurrentPageGeneration(generation, isolation: isolation) else {
-            await releaseLateAcquiredDomain(.runtime, on: target, isolation: isolation)
-            return
-        }
-        runtimeTrackingTarget = target
-    }
-
-    private func enablePageTracking(
-        on target: WebInspectorTarget,
-        generation: Int,
-        isolation: isolated (any Actor)
-    ) async throws {
-        _ = isolation
-        try await domainEnablement.acquire(.page, on: target)
-        guard isCurrentPageGeneration(generation, isolation: isolation) else {
-            await releaseLateAcquiredDomain(.page, on: target, isolation: isolation)
-            return
-        }
-        pageTrackingTarget = target
-    }
-
-    private func enableConsoleTracking(
-        on target: WebInspectorTarget,
-        generation: Int,
-        isolation: isolated (any Actor)
-    ) async throws {
-        _ = isolation
-        try await domainEnablement.acquire(.console, on: target)
-        guard isCurrentPageGeneration(generation, isolation: isolation) else {
-            await releaseLateAcquiredDomain(.console, on: target, isolation: isolation)
-            return
-        }
-        consoleTrackingTarget = target
-    }
-
-    private func enableNetworkTracking(
-        on target: WebInspectorTarget,
-        generation: Int,
-        isolation: isolated (any Actor)
-    ) async throws {
-        _ = isolation
-        try await domainEnablement.acquire(.network, on: target)
-        guard isCurrentPageGeneration(generation, isolation: isolation) else {
-            await releaseLateAcquiredDomain(.network, on: target, isolation: isolation)
-            return
-        }
-        networkTrackingTarget = target
+        domainTrackingTargets[domain] = target
     }
 
     private func loadNetworkResourceTree(
@@ -3063,88 +2938,30 @@ public final class WebInspectorContext {
     private func disableEnabledDomains(
         isolation: isolated (any Actor)
     ) async -> WebInspectorProxyError? {
-        let consoleError = await disableConsoleTracking(isolation: isolation)
+        let consoleError = await disableDomainTracking(.console, isolation: isolation)
         let styleError = await disableStyleTracking(isolation: isolation)
-        let runtimeError = await disableRuntimeTracking(isolation: isolation)
-        let networkError = await disableNetworkTracking(isolation: isolation)
-        let pageError = await disablePageTracking(isolation: isolation)
-        let inspectorError = await disableInspectorTracking(isolation: isolation)
-        return consoleError ?? styleError ?? runtimeError ?? networkError ?? pageError ?? inspectorError
+        var firstError = consoleError ?? styleError
+        for domain in [WebInspectorEnabledDomain.runtime, .network, .page, .inspector] {
+            let error = await disableDomainTracking(domain, isolation: isolation)
+            firstError = firstError ?? error
+        }
+        return firstError
     }
 
-    private func disableInspectorTracking(
+    private func disableDomainTracking(
+        _ domain: WebInspectorEnabledDomain,
         isolation: isolated (any Actor)
     ) async -> WebInspectorProxyError? {
-        _ = isolation
-        guard let target = inspectorTrackingTarget else {
+        guard let target = domainTrackingTargets.removeValue(forKey: domain) else {
             return nil
         }
-        inspectorTrackingTarget = nil
-        return await domainEnablement.release(.inspector, on: target)
-    }
-
-    private func disableConsoleTracking(
-        isolation: isolated (any Actor)
-    ) async -> WebInspectorProxyError? {
-        _ = isolation
-        guard let target = consoleTrackingTarget else {
-            return nil
-        }
-        consoleTrackingTarget = nil
-        return await domainEnablement.release(.console, on: target)
-    }
-
-    private func disablePageTracking(
-        isolation: isolated (any Actor)
-    ) async -> WebInspectorProxyError? {
-        _ = isolation
-        guard let target = pageTrackingTarget else {
-            return nil
-        }
-        pageTrackingTarget = nil
-        return await domainEnablement.release(.page, on: target)
-    }
-
-    private func disableRuntimeTracking(
-        isolation: isolated (any Actor)
-    ) async -> WebInspectorProxyError? {
-        _ = isolation
-        guard let target = runtimeTrackingTarget else {
-            return nil
-        }
-        runtimeTrackingTarget = nil
-        return await domainEnablement.release(.runtime, on: target)
-    }
-
-    private func disableNetworkTracking(
-        isolation: isolated (any Actor)
-    ) async -> WebInspectorProxyError? {
-        _ = isolation
-        guard let target = networkTrackingTarget else {
-            return nil
-        }
-        networkTrackingTarget = nil
-        return await domainEnablement.release(.network, on: target)
-    }
-
-    private func disableEnabledDomainsAfterCancellation(
-        isolation: isolated (any Actor)
-    ) async {
-        if let error = await disableEnabledDomains(isolation: isolation) {
-            failIfTerminal(error, operation: "domain disable after cancellation")
-        }
-    }
-
-    private func disableEnabledDomainsAfterStartupFailure(
-        isolation: isolated (any Actor)
-    ) async -> WebInspectorProxyError? {
-        await disableEnabledDomains(isolation: isolation)
+        return await domainEnablement.release(domain, on: target)
     }
 
     /// Best-effort teardown after a startup failure: the startup error is the
     /// root cause and owns `state`; a teardown error must not mask it.
     private func logStartupTeardownFailure(isolation: isolated (any Actor)) async {
-        if let teardownError = await disableEnabledDomainsAfterStartupFailure(isolation: isolation) {
+        if let teardownError = await disableEnabledDomains(isolation: isolation) {
             WebInspectorDataKitLog.debug("domain disable after startup failure also failed: \(String(describing: teardownError))")
         }
     }
@@ -3824,19 +3641,12 @@ extension WebInspectorContext {
     }
 
     private func hasRequiredCurrentPageDomainLeases(for target: WebInspectorTarget) -> Bool {
-        guard let inspectorTrackingTarget,
-              let pageTrackingTarget,
-              let runtimeTrackingTarget,
-              let networkTrackingTarget,
-              let consoleTrackingTarget else {
-            return false
+        [WebInspectorEnabledDomain.inspector, .page, .runtime, .network, .console].allSatisfy { domain in
+            guard let trackingTarget = domainTrackingTargets[domain] else {
+                return false
+            }
+            return trackingTarget.pageBindingID == target.pageBindingID
         }
-        let expectedBinding = target.pageBindingID
-        return inspectorTrackingTarget.pageBindingID == expectedBinding
-            && pageTrackingTarget.pageBindingID == expectedBinding
-            && runtimeTrackingTarget.pageBindingID == expectedBinding
-            && networkTrackingTarget.pageBindingID == expectedBinding
-            && consoleTrackingTarget.pageBindingID == expectedBinding
     }
 
     private func retargetCurrentPage(
@@ -3873,27 +3683,14 @@ extension WebInspectorContext {
         }
 
         do {
-            guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
-                return
-            }
+            try checkPageGeneration(generation, isolation: isolation)
             if retainDomainLeases == false {
-                try await enableInspectorTracking(on: target, generation: generation, isolation: isolation)
-                guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
-                    return
-                }
-                if enablesPageDomain {
-                    try await enablePageTracking(on: target, generation: generation, isolation: isolation)
-                    guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
-                        return
-                    }
-                }
-                try await enableRuntimeTracking(on: target, generation: generation, isolation: isolation)
-                guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
-                    return
-                }
-                try await enableNetworkTracking(on: target, generation: generation, isolation: isolation)
-                guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
-                    return
+                let domains: [WebInspectorEnabledDomain] = enablesPageDomain
+                    ? [.inspector, .page, .runtime, .network]
+                    : [.inspector, .runtime, .network]
+                for domain in domains {
+                    try await enableDomainTracking(domain, on: target, generation: generation, isolation: isolation)
+                    try checkPageGeneration(generation, isolation: isolation)
                 }
             }
             try await loadNetworkResourceTree(on: target, generation: generation, isolation: isolation)
@@ -3902,14 +3699,10 @@ extension WebInspectorContext {
                 loadID: documentLoadID,
                 isolation: isolation
             )
-            guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
-                return
-            }
+            try checkPageGeneration(generation, isolation: isolation)
             if retainDomainLeases == false {
-                try await enableConsoleTracking(on: target, generation: generation, isolation: isolation)
-                guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
-                    return
-                }
+                try await enableDomainTracking(.console, on: target, generation: generation, isolation: isolation)
+                try checkPageGeneration(generation, isolation: isolation)
             }
             document = try await reloadDOMDocumentIfNeeded(
                 document,
@@ -3917,14 +3710,14 @@ extension WebInspectorContext {
                 loadID: documentLoadID,
                 isolation: isolation
             )
-            guard Task.isCancelled == false, isCurrentPageGeneration(generation, isolation: isolation) else {
-                return
-            }
+            try checkPageGeneration(generation, isolation: isolation)
             applyLoadedDOMDocument(document, reason: .pageChanged, isolation: isolation)
             if case .attaching = state {
                 transition(to: .attached)
             }
         } catch is CancellationError {
+            return
+        } catch is SupersededPageGeneration {
             return
         } catch {
             guard isCurrentPageGeneration(generation, isolation: isolation) else {
@@ -3932,7 +3725,7 @@ extension WebInspectorContext {
             }
             let retargetError = error as? WebInspectorProxyError
                 ?? .attachFailed(String(describing: error))
-            if let teardownError = await disableEnabledDomainsAfterStartupFailure(isolation: isolation) {
+            if let teardownError = await disableEnabledDomains(isolation: isolation) {
                 WebInspectorDataKitLog.debug(
                     "domain disable after retarget failure also failed: \(String(describing: teardownError))"
                 )
@@ -3951,39 +3744,14 @@ extension WebInspectorContext {
               isCurrentPageGeneration(generation, isolation: isolation) else {
             return false
         }
-        for domain in [
-            WebInspectorEnabledDomain.inspector,
-            .runtime,
-            .network,
-            .console,
-        ] {
-            let trackingTarget: WebInspectorTarget?
-            switch domain {
-            case .inspector:
-                trackingTarget = inspectorTrackingTarget
-                inspectorTrackingTarget = nil
-            case .runtime:
-                trackingTarget = runtimeTrackingTarget
-                runtimeTrackingTarget = nil
-            case .network:
-                trackingTarget = networkTrackingTarget
-                networkTrackingTarget = nil
-            case .console:
-                trackingTarget = consoleTrackingTarget
-                consoleTrackingTarget = nil
-            case .page, .css:
-                preconditionFailure("Unexpected committed-target domain transition.")
-            }
-            guard let trackingTarget else {
-                continue
-            }
-            await domainEnablement.discardLease(domain, on: trackingTarget)
+        for domain in [WebInspectorEnabledDomain.inspector, .runtime, .network, .console] {
+            await discardDomainTrackingLease(domain, isolation: isolation)
         }
 
-        guard pageTrackingTarget != nil else {
+        guard domainTrackingTargets[.page] != nil else {
             return false
         }
-        self.pageTrackingTarget = committedTarget
+        domainTrackingTargets[.page] = committedTarget
         return true
     }
 
