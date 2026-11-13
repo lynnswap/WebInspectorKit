@@ -885,7 +885,7 @@ struct BrowserSessionRestoreTests {
         firstWebView.underPageBackgroundColor = .white
         secondWebView.underPageBackgroundColor = .black
         let selectedWebViewInstalled = WebViewIdentitySignal()
-        rootViewController.setInspectorSessionAttachedForTesting(to: firstWebView)
+        rootViewController.inspector.attach(to: firstWebView)
         rootViewController.onSelectedWebViewInstalledForTesting = { webView in
             selectedWebViewInstalled.record(webView)
         }
@@ -894,7 +894,18 @@ struct BrowserSessionRestoreTests {
         try await selectedWebViewInstalled.wait(for: secondWebView)
         await rootViewController.waitForInspectorSessionTransitions()
 
+        #expect(rootViewController.inspector.inspectedWebView === secondWebView)
         #expect(rootViewController.inspector.pageUserInterfaceStyle == .dark)
+
+        // A closing window ends the inspection and does not follow later
+        // selections.
+        rootViewController.finalizeInspectorSession()
+        store.selectTab(id: store.tabs[0].id)
+        try await selectedWebViewInstalled.wait(for: firstWebView)
+        await rootViewController.waitForInspectorSessionTransitions()
+
+        #expect(rootViewController.inspector.inspectedWebView == nil)
+        #expect(rootViewController.inspector.state == .detached)
     }
 
     @Test
@@ -1129,7 +1140,7 @@ struct BrowserSessionRestoreTests {
 
     @Test
     func tabSwitchInstallsSelectedWebViewOnceAndPreservesTabIdentity() async throws {
-        let fixture = try makeAttachmentLifecycleFixture()
+        let fixture = try makeTwoTabFixture()
         let pageViewController = BrowserPageViewController(
             browserWindow: fixture.browserWindow,
             inspector: WebInspector(),
@@ -1162,7 +1173,7 @@ struct BrowserSessionRestoreTests {
 
     @Test
     func returningToTabRecreatesViewportCoordinatorForRetainedWebView() async throws {
-        let fixture = try makeAttachmentLifecycleFixture()
+        let fixture = try makeTwoTabFixture()
         let firstWebView = try #require(fixture.firstWebView as? BrowserViewportWebView)
         let secondWebView = try #require(fixture.secondWebView as? BrowserViewportWebView)
         let pageViewController = BrowserPageViewController(
@@ -1192,170 +1203,6 @@ struct BrowserSessionRestoreTests {
         #expect(reinstalledCoordinator.hostViewController === pageViewController)
         #expect(secondWebView.viewportCoordinator == nil)
         #expect(pageViewController.hostedWebViewForTesting === firstWebView)
-    }
-
-    @Test
-    func attachmentLifecycleAttachesLatestWebViewAfterInFlightSelectionChange() async throws {
-        let fixture = try makeAttachmentLifecycleFixture()
-        let actions = ControlledInspectorAttachmentActions()
-        defer { actions.releaseAttach(result: .failure(CancellationError())) }
-        let lifecycle = BrowserInspectorAttachmentLifecycle(
-            browserWindow: fixture.browserWindow,
-            inspector: WebInspector(),
-            attachAction: actions.attach,
-            detachAction: actions.detach
-        )
-
-        lifecycle.request(.attached)
-        try await actions.waitUntilAttachStarted(count: 1)
-
-        fixture.browserWindow.selectTab(id: fixture.secondTabID)
-        lifecycle.selectedWebViewDidChange(to: fixture.secondWebView)
-        actions.releaseAttach()
-        try await actions.waitUntilAttachStarted(count: 2)
-        actions.releaseAttach()
-        await lifecycle.waitForTransitions()
-
-        #expect(actions.attachedWebViews == [fixture.firstWebView, fixture.secondWebView])
-        #expect(actions.events == [
-            .attach(ObjectIdentifier(fixture.firstWebView)),
-            .detach,
-            .attach(ObjectIdentifier(fixture.secondWebView))
-        ])
-    }
-
-    @Test
-    func attachmentLifecycleDetachesBeforeReplacingAttachedWebView() async throws {
-        let fixture = try makeAttachmentLifecycleFixture()
-        let actions = ControlledInspectorAttachmentActions()
-        defer { actions.releaseAttach(result: .failure(CancellationError())) }
-        let lifecycle = BrowserInspectorAttachmentLifecycle(
-            browserWindow: fixture.browserWindow,
-            inspector: WebInspector(),
-            attachAction: actions.attach,
-            detachAction: actions.detach
-        )
-        lifecycle.setAttachedForTesting(to: fixture.firstWebView)
-
-        fixture.browserWindow.selectTab(id: fixture.secondTabID)
-        lifecycle.selectedWebViewDidChange(to: fixture.secondWebView)
-        try await actions.waitUntilAttachStarted(count: 1)
-        actions.releaseAttach()
-        await lifecycle.waitForTransitions()
-
-        #expect(actions.events == [
-            .detach,
-            .attach(ObjectIdentifier(fixture.secondWebView))
-        ])
-    }
-
-    @Test
-    func attachmentLifecycleFinalizesByDetachingAfterInFlightAttachCompletes() async throws {
-        let fixture = try makeAttachmentLifecycleFixture()
-        let actions = ControlledInspectorAttachmentActions()
-        defer { actions.releaseAttach(result: .failure(CancellationError())) }
-        let lifecycle = BrowserInspectorAttachmentLifecycle(
-            browserWindow: fixture.browserWindow,
-            inspector: WebInspector(),
-            attachAction: actions.attach,
-            detachAction: actions.detach
-        )
-
-        lifecycle.request(.attached)
-        try await actions.waitUntilAttachStarted(count: 1)
-        #expect(lifecycle.finalize())
-
-        actions.releaseAttach()
-        try await actions.waitUntilDetachCount(1)
-        await lifecycle.waitForTransitions()
-        lifecycle.request(.attached)
-
-        #expect(actions.attachedWebViews == [fixture.firstWebView])
-        #expect(actions.detachCount == 1)
-    }
-
-    @Test
-    func attachmentLifecycleDoesNotAutomaticallyRetryFailedAttach() async throws {
-        let fixture = try makeAttachmentLifecycleFixture()
-        let actions = ControlledInspectorAttachmentActions()
-        defer { actions.releaseAttach(result: .failure(CancellationError())) }
-        let lifecycle = BrowserInspectorAttachmentLifecycle(
-            browserWindow: fixture.browserWindow,
-            inspector: WebInspector(),
-            attachAction: actions.attach,
-            detachAction: actions.detach
-        )
-
-        lifecycle.request(.attached)
-        try await actions.waitUntilAttachStarted(count: 1)
-        actions.releaseAttach(result: .failure(NSError(domain: "BrowserSessionRestoreTests", code: 1)))
-        await lifecycle.waitForTransitions()
-
-        #expect(actions.attachedWebViews == [fixture.firstWebView])
-        #expect(actions.detachCount == 0)
-
-        lifecycle.request(.attached)
-        try await actions.waitUntilAttachStarted(count: 2)
-        actions.releaseAttach()
-        await lifecycle.waitForTransitions()
-
-        #expect(actions.attachedWebViews == [fixture.firstWebView, fixture.firstWebView])
-        #expect(actions.detachCount == 0)
-    }
-
-    @Test
-    func inFlightAttachmentDoesNotRetainLifecycleOwnerOrStartPendingReattachment() async throws {
-        let fixture = try makeAttachmentLifecycleFixture()
-        let actions = ControlledInspectorAttachmentActions()
-        defer { actions.releaseAttach(result: .failure(CancellationError())) }
-        var lifecycle: BrowserInspectorAttachmentLifecycle? = BrowserInspectorAttachmentLifecycle(
-            browserWindow: fixture.browserWindow,
-            inspector: WebInspector(),
-            attachAction: actions.attach,
-            detachAction: actions.detach
-        )
-        weak var retainedLifecycle = lifecycle
-
-        lifecycle?.request(.attached)
-        try await actions.waitUntilAttachStarted(count: 1)
-        fixture.browserWindow.selectTab(id: fixture.secondTabID)
-        lifecycle?.selectedWebViewDidChange(to: fixture.secondWebView)
-
-        lifecycle = nil
-        #expect(retainedLifecycle == nil)
-
-        actions.releaseAttach()
-        try await actions.waitUntilAttachCompleted(count: 1)
-
-        #expect(actions.attachedWebViews == [fixture.firstWebView])
-        #expect(actions.detachCount == 0)
-    }
-
-    @Test
-    func cancellingInFlightAttachmentRejectsLateCompletionAndPendingReattachment() async throws {
-        let fixture = try makeAttachmentLifecycleFixture()
-        let actions = ControlledInspectorAttachmentActions()
-        defer { actions.releaseAttach(result: .failure(CancellationError())) }
-        let lifecycle = BrowserInspectorAttachmentLifecycle(
-            browserWindow: fixture.browserWindow,
-            inspector: WebInspector(),
-            attachAction: actions.attach,
-            detachAction: actions.detach
-        )
-
-        lifecycle.request(.attached)
-        try await actions.waitUntilAttachStarted(count: 1)
-        fixture.browserWindow.selectTab(id: fixture.secondTabID)
-        lifecycle.selectedWebViewDidChange(to: fixture.secondWebView)
-
-        lifecycle.cancel()
-        actions.releaseAttach()
-        try await actions.waitUntilAttachCompleted(count: 1)
-        lifecycle.request(.attached)
-
-        #expect(actions.attachedWebViews == [fixture.firstWebView])
-        #expect(actions.attachCompletionCount == 1)
-        #expect(actions.detachCount == 0)
     }
 
     @Test
@@ -1580,14 +1427,14 @@ struct BrowserSessionRestoreTests {
         )
     }
 
-    private struct AttachmentLifecycleFixture {
+    private struct TwoTabFixture {
         var secondTabID: UUID
         var browserWindow: BrowserWindow
         var firstWebView: WKWebView
         var secondWebView: WKWebView
     }
 
-    private func makeAttachmentLifecycleFixture() throws -> AttachmentLifecycleFixture {
+    private func makeTwoTabFixture() throws -> TwoTabFixture {
         let firstID = UUID()
         let secondID = UUID()
         let restoredSession = BrowserSession.RestoredState(
@@ -1619,7 +1466,7 @@ struct BrowserSessionRestoreTests {
             ),
             sessionPersistence: .ephemeral
         )
-        return AttachmentLifecycleFixture(
+        return TwoTabFixture(
             secondTabID: secondID,
             browserWindow: store,
             firstWebView: store.tabs[0].webView,
@@ -1745,59 +1592,6 @@ struct BrowserSessionRestoreTests {
             self.defaultText = defaultText
             promptPresentationCount += 1
             completion(promptResult)
-        }
-    }
-
-    @MainActor
-    @Observable
-    fileprivate final class ControlledInspectorAttachmentActions {
-        enum Event: Equatable {
-            case attach(ObjectIdentifier)
-            case detach
-        }
-
-        private(set) var attachedWebViews: [WKWebView] = []
-        private(set) var attachCompletionCount = 0
-        private(set) var detachCount = 0
-        private(set) var events: [Event] = []
-        private var attachContinuation: CheckedContinuation<Void, Never>?
-        private var attachResult: Result<Void, any Error> = .success(())
-
-        func attach(_ webView: WKWebView) async throws {
-            try Task.checkCancellation()
-            attachedWebViews.append(webView)
-            events.append(.attach(ObjectIdentifier(webView)))
-            await withCheckedContinuation { continuation in
-                attachContinuation = continuation
-            }
-            attachCompletionCount += 1
-            let result = attachResult
-            attachResult = .success(())
-            try result.get()
-        }
-
-        func detach() async {
-            detachCount += 1
-            events.append(.detach)
-        }
-
-        func waitUntilAttachStarted(count: Int) async throws {
-            try await requireTestEvent { self.attachedWebViews.count >= count }
-        }
-
-        func waitUntilAttachCompleted(count: Int) async throws {
-            try await requireTestEvent { self.attachCompletionCount >= count }
-        }
-
-        func waitUntilDetachCount(_ count: Int) async throws {
-            try await requireTestEvent { self.detachCount >= count }
-        }
-
-        func releaseAttach(result: Result<Void, any Error> = .success(())) {
-            attachResult = result
-            let continuation = attachContinuation
-            attachContinuation = nil
-            continuation?.resume()
         }
     }
 }
