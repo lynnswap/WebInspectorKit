@@ -35,8 +35,8 @@ public struct RecordedCommand: Equatable, Sendable {
         payload = AnyRecordedValue(())
     }
 
-    package init<Payload: Sendable, Result: Sendable>(
-        command: WebInspectorProxyCommand<Payload, Result>
+    package init<Payload: WebInspectorProxyCommandPayload>(
+        command: WebInspectorProxyCommand<Payload>
     ) {
         targetID = command.targetID
         route = command.route
@@ -716,9 +716,9 @@ private func lifecycleDomain(for event: WebInspectorTargetLifecycleEvent) -> Web
 }
 
 extension WebInspectorTestBackend: WebInspectorProxyBackend {
-    package func dispatchCommand<Payload: Sendable, Result: Sendable>(
-        _ command: WebInspectorProxyCommand<Payload, Result>
-    ) async throws -> Result {
+    package func dispatchCommand<Payload: WebInspectorProxyCommandPayload>(
+        _ command: WebInspectorProxyCommand<Payload>
+    ) async throws -> Payload.Result {
         let recordedCommand = RecordedCommand(command: command)
         commands.append(recordedCommand)
         resolveRecordedCommandWaiters()
@@ -756,20 +756,20 @@ extension WebInspectorTestBackend: WebInspectorProxyBackend {
             throw error
         }
 
-        guard let result = value as? Result else {
+        guard let result = value as? Payload.Result else {
             throw WebInspectorProxyError.commandFailed(
                 domain: command.domain.rawValue,
                 method: command.method,
                 message: "Enqueued result for \(command.domain.rawValue).\(command.method) has type "
-                    + "\(type(of: value)); expected \(Result.self)."
+                    + "\(type(of: value)); expected \(Payload.Result.self)."
             )
         }
         return result
     }
 
-    package func dispatchCommandWithReplyBoundary<Payload: Sendable, Result: Sendable>(
-        _ command: WebInspectorProxyCommand<Payload, Result>
-    ) async throws -> WebInspectorProxyCommandReply<Result> {
+    package func dispatchCommandWithReplyBoundary<Payload: WebInspectorProxyCommandPayload>(
+        _ command: WebInspectorProxyCommand<Payload>
+    ) async throws -> WebInspectorProxyCommandReply<Payload.Result> {
         let value = try await dispatchCommand(command)
         return WebInspectorProxyCommandReply(
             value: value,

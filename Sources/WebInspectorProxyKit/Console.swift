@@ -12,38 +12,22 @@ public enum Console {
 
         /// Enables Console domain events and commands for the target.
         public func enable() async throws {
-            try await context.dispatchVoid(
-                domain: .console,
-                method: "enable",
-                payload: EnablePayload()
-            )
+            try await context.dispatch(EnablePayload())
         }
 
         /// Disables Console domain events for the target.
         public func disable() async throws {
-            try await context.dispatchVoid(
-                domain: .console,
-                method: "disable",
-                payload: DisablePayload()
-            )
+            try await context.dispatch(DisablePayload())
         }
 
         /// Clears console messages in the inspected target.
         public func clearMessages() async throws {
-            try await context.dispatchVoid(
-                domain: .console,
-                method: "clearMessages",
-                payload: ClearMessagesPayload()
-            )
+            try await context.dispatch(ClearMessagesPayload())
         }
 
         /// Sets the logging level for a WebKit logging channel.
         public func setLoggingChannelLevel(_ source: ChannelSource, level: ChannelLevel) async throws {
-            try await context.dispatchVoid(
-                domain: .console,
-                method: "setLoggingChannelLevel",
-                payload: SetLoggingChannelLevelPayload(source: source, level: level)
-            )
+            try await context.dispatch(SetLoggingChannelLevelPayload(source: source, level: level))
         }
 
         /// Console domain events emitted by this target.

@@ -5,19 +5,6 @@ import WebInspectorNativeBridge
 
 private let logger = Logger(subsystem: "WebInspectorKit", category: "WebInspectorProxy")
 
-private struct ProtocolCommandTarget: Sendable {
-    var targetID: WebInspectorTarget.ID
-    var route: RoutingTargetID
-
-    init(
-        targetID: WebInspectorTarget.ID,
-        route: RoutingTargetID
-    ) {
-        self.targetID = targetID
-        self.route = route
-    }
-}
-
 /// An attached Web Inspector protocol connection for a `WKWebView`.
 ///
 /// `WebInspectorProxy` owns the private WebKit inspector attachment, tracks the
@@ -294,11 +281,9 @@ public actor WebInspectorProxy {
         guard let pageTarget else {
             throw WebInspectorProxyError.disconnected("WebInspectorProxyKit shell has no current page target.")
         }
-        let _: Void = try await dispatchCommand(
+        try await dispatchCommand(
             targetID: pageTarget.id,
             route: pageTarget.route,
-            domain: .page,
-            method: "reload",
             payload: Page.ReloadPayload(ignoringCache: false)
         )
     }
@@ -373,66 +358,55 @@ public actor WebInspectorProxy {
         closeWaiters.count
     }
 
-    package func dispatchCommand<Payload: Sendable, Result: Sendable>(
+    package func dispatchCommand<Payload: WebInspectorProxyCommandPayload>(
         targetID: WebInspectorTarget.ID,
         route: RoutingTargetID,
-        domain: WebInspectorProxyDomain,
-        method: String,
         payload: Payload
-    ) async throws -> Result {
+    ) async throws -> Payload.Result {
         try ensureOpenForOperation()
         guard let backend else {
-            throw unimplementedCommand(domain: domain.rawValue, method: method)
+            throw unimplementedCommand(domain: Payload.domain.rawValue, method: Payload.method)
         }
-        let commandTarget = resolvedCommandTarget(
-            targetID: targetID,
-            route: route,
-            domain: domain,
-            payload: payload
-        )
-        let command = WebInspectorProxyCommand<Payload, Result>(
-            targetID: commandTarget.targetID,
-            route: commandTarget.route,
-            domain: domain,
-            method: method,
-            payload: payload
-        )
         do {
-            return try await backend.dispatchCommand(command)
+            return try await backend.dispatchCommand(command(targetID: targetID, route: route, payload: payload))
         } catch {
             throw operationError(replacing: error)
         }
     }
 
-    package func dispatchCommandWithReplyBoundary<Payload: Sendable, Result: Sendable>(
+    package func dispatchCommandWithReplyBoundary<Payload: WebInspectorProxyCommandPayload>(
         targetID: WebInspectorTarget.ID,
         route: RoutingTargetID,
-        domain: WebInspectorProxyDomain,
-        method: String,
         payload: Payload
-    ) async throws -> WebInspectorProxyCommandReply<Result> {
+    ) async throws -> WebInspectorProxyCommandReply<Payload.Result> {
         try ensureOpenForOperation()
         guard let backend else {
-            throw unimplementedCommand(domain: domain.rawValue, method: method)
+            throw unimplementedCommand(domain: Payload.domain.rawValue, method: Payload.method)
         }
-        let commandTarget = resolvedCommandTarget(
-            targetID: targetID,
-            route: route,
-            domain: domain,
-            payload: payload
-        )
-        let command = WebInspectorProxyCommand<Payload, Result>(
-            targetID: commandTarget.targetID,
-            route: commandTarget.route,
-            domain: domain,
-            method: method,
-            payload: payload
-        )
         do {
-            return try await backend.dispatchCommandWithReplyBoundary(command)
+            return try await backend.dispatchCommandWithReplyBoundary(
+                command(targetID: targetID, route: route, payload: payload)
+            )
         } catch {
             throw operationError(replacing: error)
         }
+    }
+
+    /// Addresses a command to the frame target that owns the identifier it
+    /// acts on, or to the target it was issued on.
+    private nonisolated func command<Payload: WebInspectorProxyCommandPayload>(
+        targetID: WebInspectorTarget.ID,
+        route: RoutingTargetID,
+        payload: Payload
+    ) -> WebInspectorProxyCommand<Payload> {
+        guard let scope = payload.owningTargetScope else {
+            return WebInspectorProxyCommand(targetID: targetID, route: route, payload: payload)
+        }
+        return WebInspectorProxyCommand(
+            targetID: WebInspectorTarget.ID(scope),
+            route: RoutingTargetID(scope),
+            payload: payload
+        )
     }
 
     package nonisolated func orderedEvents(
@@ -700,11 +674,9 @@ public actor WebInspectorProxy {
         // Inspector.inspect is a page-target event. WebInspectorKit resolves it
         // through the main page DOM agent, whose node namespace is unscoped.
         do {
-            let nodeID: DOM.Node.ID = try await dispatchCommand(
+            let nodeID = try await dispatchCommand(
                 targetID: .currentPage,
                 route: .currentPage,
-                domain: .dom,
-                method: "requestNode",
                 payload: DOM.RequestNodePayload(objectID: objectID)
             )
             logger.debug(
@@ -726,211 +698,6 @@ public actor WebInspectorProxy {
         case let .target(rawValue):
             return rawValue
         }
-    }
-
-    private func resolvedCommandTarget<Payload: Sendable>(
-        targetID: WebInspectorTarget.ID,
-        route: RoutingTargetID,
-        domain: WebInspectorProxyDomain,
-        payload: Payload
-    ) -> ProtocolCommandTarget {
-        if let nodeID = Self.nodeID(from: payload, domain: domain) {
-            if let scopedTargetRawValue = nodeID.targetScopeRawValue {
-                return ProtocolCommandTarget(
-                    targetID: WebInspectorTarget.ID(scopedTargetRawValue),
-                    route: RoutingTargetID(scopedTargetRawValue)
-                )
-            }
-        }
-        if let styleID = Self.styleID(from: payload, domain: domain),
-           let scopedTargetRawValue = styleID.targetScopeRawValue {
-            return ProtocolCommandTarget(
-                targetID: WebInspectorTarget.ID(scopedTargetRawValue),
-                route: RoutingTargetID(scopedTargetRawValue)
-            )
-        }
-        if let ruleID = Self.ruleID(from: payload, domain: domain),
-           let scopedTargetRawValue = ruleID.targetScopeRawValue {
-            return ProtocolCommandTarget(
-                targetID: WebInspectorTarget.ID(scopedTargetRawValue),
-                route: RoutingTargetID(scopedTargetRawValue)
-            )
-        }
-        if let styleSheetID = Self.styleSheetID(from: payload, domain: domain),
-           let scopedTargetRawValue = styleSheetID.targetScopeRawValue {
-            return ProtocolCommandTarget(
-                targetID: WebInspectorTarget.ID(scopedTargetRawValue),
-                route: RoutingTargetID(scopedTargetRawValue)
-            )
-        }
-        if let requestID = Self.networkRequestID(from: payload, domain: domain),
-           let scopedTargetRawValue = requestID.targetScopeRawValue {
-            return ProtocolCommandTarget(
-                targetID: WebInspectorTarget.ID(scopedTargetRawValue),
-                route: RoutingTargetID(scopedTargetRawValue)
-            )
-        }
-        if let executionContextID = Self.executionContextID(from: payload, domain: domain),
-           let scopedTargetRawValue = executionContextID.targetScopeRawValue {
-            return ProtocolCommandTarget(
-                targetID: WebInspectorTarget.ID(scopedTargetRawValue),
-                route: RoutingTargetID(scopedTargetRawValue)
-            )
-        }
-        if let requestNodeObjectID = Self.requestNodeObjectID(from: payload, domain: domain),
-           let scopedTargetRawValue = requestNodeObjectID.targetScopeRawValue {
-            return ProtocolCommandTarget(
-                targetID: WebInspectorTarget.ID(scopedTargetRawValue),
-                route: RoutingTargetID(scopedTargetRawValue)
-            )
-        }
-        if let remoteObjectID = Self.remoteObjectID(from: payload, domain: domain),
-           let scopedTargetRawValue = remoteObjectID.targetScopeRawValue {
-            return ProtocolCommandTarget(
-                targetID: WebInspectorTarget.ID(scopedTargetRawValue),
-                route: RoutingTargetID(scopedTargetRawValue)
-            )
-        }
-        return ProtocolCommandTarget(targetID: targetID, route: route)
-    }
-
-    private nonisolated static func nodeID<Payload: Sendable>(
-        from payload: Payload,
-        domain: WebInspectorProxyDomain
-    ) -> DOM.Node.ID? {
-        switch domain {
-        case .dom:
-            switch payload {
-            case let payload as DOM.RequestChildNodesPayload:
-                return payload.id
-            case let payload as DOM.GetOuterHTMLPayload:
-                return payload.id
-            case let payload as DOM.GetAttributesPayload:
-                return payload.id
-            case let payload as DOM.SetAttributeValuePayload:
-                return payload.id
-            case let payload as DOM.SetAttributesAsTextPayload:
-                return payload.id
-            case let payload as DOM.RemoveAttributePayload:
-                return payload.id
-            case let payload as DOM.SetOuterHTMLPayload:
-                return payload.id
-            case let payload as DOM.RemoveNodePayload:
-                return payload.id
-            default:
-                return nil
-            }
-        case .css:
-            switch payload {
-            case let payload as CSS.GetMatchedStylesForNodePayload:
-                return payload.node
-            case let payload as CSS.GetComputedStyleForNodePayload:
-                return payload.node
-            case let payload as CSS.GetInlineStylesForNodePayload:
-                return payload.node
-            default:
-                return nil
-            }
-        case .network, .console, .runtime, .page, .inspector:
-            return nil
-        }
-    }
-
-    private nonisolated static func styleID<Payload: Sendable>(
-        from payload: Payload,
-        domain: WebInspectorProxyDomain
-    ) -> CSS.Style.ID? {
-        guard domain == .css,
-              let payload = payload as? CSS.SetStyleTextPayload else {
-            return nil
-        }
-        return payload.id
-    }
-
-    private nonisolated static func ruleID<Payload: Sendable>(
-        from payload: Payload,
-        domain: WebInspectorProxyDomain
-    ) -> CSS.Rule.ID? {
-        guard domain == .css else {
-            return nil
-        }
-        switch payload {
-        case let payload as CSS.SetRuleSelectorPayload:
-            return payload.id
-        case let payload as CSS.SetGroupingHeaderTextPayload:
-            return payload.id
-        default:
-            return nil
-        }
-    }
-
-    private nonisolated static func styleSheetID<Payload: Sendable>(
-        from payload: Payload,
-        domain: WebInspectorProxyDomain
-    ) -> CSS.StyleSheet.ID? {
-        guard domain == .css,
-              let payload = payload as? CSS.SetStyleSheetTextPayload else {
-            return nil
-        }
-        return payload.id
-    }
-
-    private nonisolated static func networkRequestID<Payload: Sendable>(
-        from payload: Payload,
-        domain: WebInspectorProxyDomain
-    ) -> Network.Request.ID? {
-        guard domain == .network,
-              let payload = payload as? Network.GetResponseBodyPayload else {
-            return nil
-        }
-        return payload.id
-    }
-
-    private nonisolated static func executionContextID<Payload: Sendable>(
-        from payload: Payload,
-        domain: WebInspectorProxyDomain
-    ) -> Runtime.ExecutionContext.ID? {
-        guard domain == .runtime,
-              let payload = payload as? Runtime.EvaluatePayload else {
-            return nil
-        }
-        return payload.context
-    }
-
-    private nonisolated static func remoteObjectID<Payload: Sendable>(
-        from payload: Payload,
-        domain: WebInspectorProxyDomain
-    ) -> Runtime.RemoteObject.ID? {
-        switch domain {
-        case .runtime:
-            switch payload {
-            case let payload as Runtime.GetPropertiesPayload:
-                return payload.object
-            case let payload as Runtime.GetPreviewPayload:
-                return payload.object
-            case let payload as Runtime.GetCollectionEntriesPayload:
-                return payload.object
-            case let payload as Runtime.ReleaseObjectPayload:
-                return payload.id
-            default:
-                return nil
-            }
-        case .dom:
-            return nil
-        default:
-            return nil
-        }
-    }
-
-    private nonisolated static func requestNodeObjectID<Payload: Sendable>(
-        from payload: Payload,
-        domain: WebInspectorProxyDomain
-    ) -> Runtime.RemoteObject.ID? {
-        guard domain == .dom,
-              let payload = payload as? DOM.RequestNodePayload else {
-            return nil
-        }
-        return payload.objectID
     }
 
     private func bootstrapCurrentPage(from transport: TransportSession) async throws {

@@ -12,20 +12,12 @@ public enum Network {
 
         /// Enables Network domain events and commands for the target.
         public func enable() async throws {
-            try await context.dispatchVoid(
-                domain: .network,
-                method: "enable",
-                payload: EnablePayload()
-            )
+            try await context.dispatch(EnablePayload())
         }
 
         /// Disables Network domain events for the target.
         public func disable() async throws {
-            try await context.dispatchVoid(
-                domain: .network,
-                method: "disable",
-                payload: DisablePayload()
-            )
+            try await context.dispatch(DisablePayload())
         }
 
         /// Returns the response body for a completed network request.
@@ -33,12 +25,7 @@ public enum Network {
             for id: Request.ID,
             backendResourceIdentifier: BackendResourceID? = nil
         ) async throws -> Body {
-            try await context.dispatch(
-                domain: .network,
-                method: "getResponseBody",
-                payload: GetResponseBodyPayload(id: id, backendResourceIdentifier: backendResourceIdentifier),
-                returning: Body.self
-            )
+            try await context.dispatch(GetResponseBodyPayload(id: id, backendResourceIdentifier: backendResourceIdentifier))
         }
 
         /// Network domain events emitted by this target.

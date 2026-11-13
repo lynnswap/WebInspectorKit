@@ -27,114 +27,61 @@ public enum DOM {
 
         /// Returns the root document node for the target.
         public func getDocument() async throws -> Node {
-            try await context.dispatch(
-                domain: .dom,
-                method: "getDocument",
-                payload: GetDocumentPayload(),
-                returning: Node.self
-            )
+            try await context.dispatch(GetDocumentPayload())
         }
 
         package func getDocumentWithReplyBoundary() async throws -> WebInspectorProxyCommandReply<Node> {
-            try await context.dispatchWithReplyBoundary(
-                domain: .dom,
-                method: "getDocument",
-                payload: GetDocumentPayload(),
-                returning: Node.self
-            )
+            try await context.dispatchWithReplyBoundary(GetDocumentPayload())
         }
 
         /// Requests child-node events for a node up to the supplied depth.
         public func requestChildNodes(_ id: Node.ID, depth: Int = 1) async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "requestChildNodes",
-                payload: RequestChildNodesPayload(id: id, depth: depth)
-            )
+            try await context.dispatch(RequestChildNodesPayload(id: id, depth: depth))
         }
 
     /// Resolves a runtime object into a DOM node identity through its owning target.
         public func requestNode(forRemoteObject objectID: Runtime.RemoteObject.ID) async throws -> Node.ID {
-            try await context.dispatch(
-                domain: .dom,
-                method: "requestNode",
-                payload: RequestNodePayload(objectID: objectID),
-                returning: Node.ID.self
-            )
+            try await context.dispatch(RequestNodePayload(objectID: objectID))
         }
 
         /// Returns serialized outer HTML for a node.
         public func outerHTML(of id: Node.ID) async throws -> String {
-            try await context.dispatch(
-                domain: .dom,
-                method: "getOuterHTML",
-                payload: GetOuterHTMLPayload(id: id),
-                returning: String.self
-            )
+            try await context.dispatch(GetOuterHTMLPayload(id: id))
         }
 
         /// Returns the current attributes for a node.
         public func attributes(of id: Node.ID) async throws -> [Attribute] {
-            try await context.dispatch(
-                domain: .dom,
-                method: "getAttributes",
-                payload: GetAttributesPayload(id: id),
-                returning: [Attribute].self
-            )
+            try await context.dispatch(GetAttributesPayload(id: id))
         }
 
         /// Sets a single attribute value on a node.
         public func setAttributeValue(_ id: Node.ID, name: String, value: String) async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "setAttributeValue",
-                payload: SetAttributeValuePayload(id: id, name: name, value: value)
-            )
+            try await context.dispatch(SetAttributeValuePayload(id: id, name: name, value: value))
         }
 
         /// Replaces attributes on a node using raw attribute text.
         public func setAttributesAsText(_ id: Node.ID, text: String, name: String? = nil) async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "setAttributesAsText",
-                payload: SetAttributesAsTextPayload(id: id, text: text, name: name)
-            )
+            try await context.dispatch(SetAttributesAsTextPayload(id: id, text: text, name: name))
         }
 
         /// Removes an attribute from a node.
         public func removeAttribute(_ id: Node.ID, name: String) async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "removeAttribute",
-                payload: RemoveAttributePayload(id: id, name: name)
-            )
+            try await context.dispatch(RemoveAttributePayload(id: id, name: name))
         }
 
         /// Replaces a node with the supplied outer HTML.
         public func setOuterHTML(_ id: Node.ID, html: String) async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "setOuterHTML",
-                payload: SetOuterHTMLPayload(id: id, html: html)
-            )
+            try await context.dispatch(SetOuterHTMLPayload(id: id, html: html))
         }
 
         /// Removes a node from the document.
         public func removeNode(_ id: Node.ID) async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "removeNode",
-                payload: RemoveNodePayload(id: id)
-            )
+            try await context.dispatch(RemoveNodePayload(id: id))
         }
 
         /// Marks the current DOM state as an undoable editing checkpoint.
         public func markUndoableState() async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "markUndoableState",
-                payload: MarkUndoableStatePayload()
-            )
+            try await context.dispatch(MarkUndoableStatePayload())
         }
 
         /// Highlights a DOM node in the inspected page.
@@ -145,47 +92,27 @@ public enum DOM {
             guard id.targetScopeRawValue == nil else {
                 return
             }
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "highlightNode",
-                payload: HighlightNodePayload(id: id)
-            )
+            try await context.dispatch(HighlightNodePayload(id: id))
         }
 
         /// Clears the current DOM highlight.
         public func hideHighlight() async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "hideHighlight",
-                payload: HideHighlightPayload()
-            )
+            try await context.dispatch(HideHighlightPayload())
         }
 
         /// Enables or disables WebKit's element picker.
         public func setInspectMode(enabled: Bool) async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "setInspectModeEnabled",
-                payload: SetInspectModeEnabledPayload(enabled: enabled)
-            )
+            try await context.dispatch(SetInspectModeEnabledPayload(enabled: enabled))
         }
 
         /// Undoes the most recent DOM edit recorded by WebKit.
         public func undo() async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "undo",
-                payload: UndoPayload()
-            )
+            try await context.dispatch(UndoPayload())
         }
 
         /// Redoes the most recent DOM edit recorded by WebKit.
         public func redo() async throws {
-            try await context.dispatchVoid(
-                domain: .dom,
-                method: "redo",
-                payload: RedoPayload()
-            )
+            try await context.dispatch(RedoPayload())
         }
 
         /// DOM domain events emitted by this target.

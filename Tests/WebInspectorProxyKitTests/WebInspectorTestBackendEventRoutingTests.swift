@@ -129,12 +129,10 @@ func testBackendOrderedFeedsSeparateRoutesAndPreserveReplyWatermarks() async thr
     await runtime.backend.emit(.mediaQueryResultChanged, target: retargeted)
     await runtime.backend.enqueue((), for: "CSS", method: "enable")
     let reply = try await runtime.backend.dispatchCommandWithReplyBoundary(
-        WebInspectorProxyCommand<Void, Void>(
+        WebInspectorProxyCommand(
             targetID: retargeted.id,
             route: retargeted.route,
-            domain: .css,
-            method: "enable",
-            payload: ()
+            payload: CSS.EnablePayload()
         )
     )
     #expect(reply.receivedSequence == 2)

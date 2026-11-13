@@ -12,89 +12,47 @@ public enum CSS {
 
         /// Enables CSS domain events and commands for the target.
         public func enable() async throws {
-            try await context.dispatchVoid(
-                domain: .css,
-                method: "enable",
-                payload: EnablePayload()
-            )
+            try await context.dispatch(EnablePayload())
         }
 
         /// Disables CSS domain events for the target.
         public func disable() async throws {
-            try await context.dispatchVoid(
-                domain: .css,
-                method: "disable",
-                payload: DisablePayload()
-            )
+            try await context.dispatch(DisablePayload())
         }
 
         /// Returns cascade information for the supplied DOM node.
         public func matchedStyles(for node: DOM.Node.ID) async throws -> MatchedStyles {
-            try await context.dispatch(
-                domain: .css,
-                method: "getMatchedStylesForNode",
-                payload: GetMatchedStylesForNodePayload(node: node),
-                returning: MatchedStyles.self
-            )
+            try await context.dispatch(GetMatchedStylesForNodePayload(node: node))
         }
 
         /// Returns the computed CSS properties for the supplied DOM node.
         public func computedStyle(for node: DOM.Node.ID) async throws -> [ComputedProperty] {
-            try await context.dispatch(
-                domain: .css,
-                method: "getComputedStyleForNode",
-                payload: GetComputedStyleForNodePayload(node: node),
-                returning: [ComputedProperty].self
-            )
+            try await context.dispatch(GetComputedStyleForNodePayload(node: node))
         }
 
         /// Returns the inline and attribute-derived style declarations for the node.
         public func inlineStyles(for node: DOM.Node.ID) async throws -> InlineStyles {
-            try await context.dispatch(
-                domain: .css,
-                method: "getInlineStylesForNode",
-                payload: GetInlineStylesForNodePayload(node: node),
-                returning: InlineStyles.self
-            )
+            try await context.dispatch(GetInlineStylesForNodePayload(node: node))
         }
 
         /// Replaces the declaration text for a style and returns the updated style.
         public func setStyleText(_ id: Style.ID, text: String) async throws -> Style {
-            try await context.dispatch(
-                domain: .css,
-                method: "setStyleText",
-                payload: SetStyleTextPayload(id: id, text: text),
-                returning: Style.self
-            )
+            try await context.dispatch(SetStyleTextPayload(id: id, text: text))
         }
 
         /// Replaces the full text of a stylesheet.
         public func setStyleSheetText(_ id: StyleSheet.ID, text: String) async throws {
-            try await context.dispatchVoid(
-                domain: .css,
-                method: "setStyleSheetText",
-                payload: SetStyleSheetTextPayload(id: id, text: text)
-            )
+            try await context.dispatch(SetStyleSheetTextPayload(id: id, text: text))
         }
 
         /// Replaces the selector text for a rule and returns the updated rule.
         public func setRuleSelector(_ id: Rule.ID, selector: String) async throws -> Rule {
-            try await context.dispatch(
-                domain: .css,
-                method: "setRuleSelector",
-                payload: SetRuleSelectorPayload(id: id, selector: selector),
-                returning: Rule.self
-            )
+            try await context.dispatch(SetRuleSelectorPayload(id: id, selector: selector))
         }
 
         /// Replaces the grouping header for a nested rule and returns the updated grouping.
         public func setGroupingHeaderText(_ id: Rule.ID, text: String) async throws -> Rule.Grouping {
-            try await context.dispatch(
-                domain: .css,
-                method: "setGroupingHeaderText",
-                payload: SetGroupingHeaderTextPayload(id: id, text: text),
-                returning: Rule.Grouping.self
-            )
+            try await context.dispatch(SetGroupingHeaderTextPayload(id: id, text: text))
         }
 
         /// CSS domain events emitted by this target.

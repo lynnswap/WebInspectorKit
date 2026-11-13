@@ -9,27 +9,15 @@ package enum Inspector {
         }
 
         package func enable() async throws {
-            try await context.dispatchVoid(
-                domain: .inspector,
-                method: "enable",
-                payload: EnablePayload()
-            )
+            try await context.dispatch(EnablePayload())
         }
 
         package func disable() async throws {
-            try await context.dispatchVoid(
-                domain: .inspector,
-                method: "disable",
-                payload: DisablePayload()
-            )
+            try await context.dispatch(DisablePayload())
         }
 
         package func initialized() async throws {
-            try await context.dispatchVoid(
-                domain: .inspector,
-                method: "initialized",
-                payload: InitializedPayload()
-            )
+            try await context.dispatch(InitializedPayload())
         }
     }
 

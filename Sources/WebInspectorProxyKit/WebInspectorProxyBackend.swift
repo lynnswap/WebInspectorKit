@@ -67,24 +67,69 @@ package struct WebInspectorProxyCommandReply<Result: Sendable>: Sendable {
     }
 }
 
-package struct WebInspectorProxyCommand<Payload: Sendable, Result: Sendable>: Sendable {
+/// A command of the inspector protocol, described by the type of its
+/// payload.
+///
+/// The payload type states everything a backend needs to send the command
+/// and read its reply, so a command cannot be sent with the parameters or the
+/// reply decoding of another.
+package protocol WebInspectorProxyCommandPayload: Sendable {
+    /// The value the reply decodes to.
+    associatedtype Result: Sendable
+
+    static var domain: WebInspectorProxyDomain { get }
+
+    /// The method name without its domain, such as `getDocument`.
+    static var method: String { get }
+
+    /// The scope of the identifier the command acts on, when a frame target
+    /// owns that identifier. The command is sent to that target instead of
+    /// the one it was issued on.
+    var owningTargetScope: String? { get }
+
+    /// The `params` object sent to WebKit.
+    func parameters() throws -> [String: Any]
+
+    /// Decodes the `result` object of the reply.
+    /// - Parameter targetScope: The scope to give the identifiers in the
+    ///   reply, when the command ran on a frame target.
+    static func decodeResult(from data: Data, targetScope: String?) throws -> Result
+}
+
+package extension WebInspectorProxyCommandPayload {
+    var owningTargetScope: String? {
+        nil
+    }
+
+    func parameters() throws -> [String: Any] {
+        [:]
+    }
+}
+
+package extension WebInspectorProxyCommandPayload where Result == Void {
+    static func decodeResult(from data: Data, targetScope: String?) throws {}
+}
+
+package struct WebInspectorProxyCommand<Payload: WebInspectorProxyCommandPayload>: Sendable {
     package let targetID: WebInspectorTarget.ID
     package let route: RoutingTargetID
-    package let domain: WebInspectorProxyDomain
-    package let method: String
     package let payload: Payload
+
+    package var domain: WebInspectorProxyDomain {
+        Payload.domain
+    }
+
+    package var method: String {
+        Payload.method
+    }
 
     package init(
         targetID: WebInspectorTarget.ID,
         route: RoutingTargetID,
-        domain: WebInspectorProxyDomain,
-        method: String,
         payload: Payload
     ) {
         self.targetID = targetID
         self.route = route
-        self.domain = domain
-        self.method = method
         self.payload = payload
     }
 }
@@ -123,13 +168,13 @@ package struct WebInspectorProxyOrderedEventFeed: Sendable {
 }
 
 package protocol WebInspectorProxyBackend: Sendable {
-    func dispatchCommand<Payload: Sendable, Result: Sendable>(
-        _ command: WebInspectorProxyCommand<Payload, Result>
-    ) async throws -> Result
+    func dispatchCommand<Payload: WebInspectorProxyCommandPayload>(
+        _ command: WebInspectorProxyCommand<Payload>
+    ) async throws -> Payload.Result
 
-    func dispatchCommandWithReplyBoundary<Payload: Sendable, Result: Sendable>(
-        _ command: WebInspectorProxyCommand<Payload, Result>
-    ) async throws -> WebInspectorProxyCommandReply<Result>
+    func dispatchCommandWithReplyBoundary<Payload: WebInspectorProxyCommandPayload>(
+        _ command: WebInspectorProxyCommand<Payload>
+    ) async throws -> WebInspectorProxyCommandReply<Payload.Result>
 
     func finishEventSubscriptions(throwing error: WebInspectorProxyError?) async
 

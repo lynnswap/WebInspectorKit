@@ -195,49 +195,16 @@ package struct DomainClientContext: Sendable {
         self.route = route
     }
 
-    package func dispatch<Payload: Sendable, Result: Sendable>(
-        domain: WebInspectorProxyDomain,
-        method: String,
-        payload: Payload,
-        returning resultType: Result.Type = Result.self
-    ) async throws -> Result {
-        _ = resultType
-        return try await proxy.dispatchCommand(
-            targetID: targetID,
-            route: route,
-            domain: domain,
-            method: method,
-            payload: payload
-        )
+    package func dispatch<Payload: WebInspectorProxyCommandPayload>(
+        _ payload: Payload
+    ) async throws -> Payload.Result {
+        try await proxy.dispatchCommand(targetID: targetID, route: route, payload: payload)
     }
 
-    package func dispatchWithReplyBoundary<Payload: Sendable, Result: Sendable>(
-        domain: WebInspectorProxyDomain,
-        method: String,
-        payload: Payload,
-        returning resultType: Result.Type = Result.self
-    ) async throws -> WebInspectorProxyCommandReply<Result> {
-        _ = resultType
-        return try await proxy.dispatchCommandWithReplyBoundary(
-            targetID: targetID,
-            route: route,
-            domain: domain,
-            method: method,
-            payload: payload
-        )
-    }
-
-    package func dispatchVoid<Payload: Sendable>(
-        domain: WebInspectorProxyDomain,
-        method: String,
-        payload: Payload
-    ) async throws {
-        let _: Void = try await dispatch(
-            domain: domain,
-            method: method,
-            payload: payload,
-            returning: Void.self
-        )
+    package func dispatchWithReplyBoundary<Payload: WebInspectorProxyCommandPayload>(
+        _ payload: Payload
+    ) async throws -> WebInspectorProxyCommandReply<Payload.Result> {
+        try await proxy.dispatchCommandWithReplyBoundary(targetID: targetID, route: route, payload: payload)
     }
 
     package func domEvents() -> AsyncStream<DOM.Event> {
