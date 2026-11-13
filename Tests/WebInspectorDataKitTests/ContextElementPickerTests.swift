@@ -92,7 +92,7 @@ func unavailableElementPickerRequestDoesNotChangeNextToggleIntent() async throws
         try await context.toggleElementPickerEnabled()
     }
 
-    #expect(context.elementPickerDesiredStateForTesting?.isEnabled == false)
+    #expect(context.requestedElementPickerEnabledForTesting == nil)
     #expect(context.isElementPickerEnabled == false)
 }
 
@@ -115,14 +115,11 @@ func rapidElementPickerTogglesFlipPendingIntent() async throws {
         method: "setInspectModeEnabled",
         count: 1
     )
-    let firstDesiredStateID = try #require(context.elementPickerDesiredStateForTesting?.id)
-
     let disableTask = Task { @MainActor in
         try await context.toggleElementPickerEnabled()
     }
     try await waitUntil(in: context) {
-        context.elementPickerDesiredStateForTesting?.id != firstDesiredStateID
-            && context.elementPickerDesiredStateForTesting?.isEnabled == false
+        context.requestedElementPickerEnabledForTesting == false
     }
     await enableGate.open()
 
@@ -156,127 +153,22 @@ func rapidElementPickerEnableDisableEnableAppliesOnlyLatestIntent() async throws
         method: "setInspectModeEnabled",
         count: 1
     )
-    let firstDesiredStateID = try #require(context.elementPickerDesiredStateForTesting?.id)
-
     let disableTask = Task { @MainActor in
         try await context.toggleElementPickerEnabled()
     }
     try await waitUntil(in: context) {
-        context.elementPickerDesiredStateForTesting?.id != firstDesiredStateID
-            && context.elementPickerDesiredStateForTesting?.isEnabled == false
+        context.requestedElementPickerEnabledForTesting == false
     }
-    let disableDesiredStateID = try #require(context.elementPickerDesiredStateForTesting?.id)
-
     let latestEnableTask = Task { @MainActor in
         try await context.toggleElementPickerEnabled()
     }
     try await waitUntil(in: context) {
-        context.elementPickerDesiredStateForTesting?.id != disableDesiredStateID
-            && context.elementPickerDesiredStateForTesting?.isEnabled == true
+        context.requestedElementPickerEnabledForTesting == true
     }
     await enableGate.open()
 
     try await firstEnableTask.value
     try await disableTask.value
-    try await latestEnableTask.value
-
-    let commands = await runtime.backend.recordedCommands().filter {
-        $0.domain == "DOM" && $0.method == "setInspectModeEnabled"
-    }
-    #expect(commands.compactMap {
-        $0.payload.cast(as: DOM.SetInspectModeEnabledPayload.self)?.enabled
-    } == [true])
-    #expect(context.isElementPickerEnabled)
-}
-
-@MainActor
-@Test
-func cancellingLatestPickerIntentRestoresEarlierPendingIntent() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (_, context) = try await startContext(runtime: runtime)
-    let enableGate = WebInspectorTestGate()
-
-    await runtime.backend.hold(domain: "DOM", method: "setInspectModeEnabled", gate: enableGate)
-    await runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
-    await runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
-
-    let firstEnableTask = Task { @MainActor in
-        try await context.toggleElementPickerEnabled()
-    }
-    _ = await runtime.backend.waitForRecordedCommands(
-        domain: "DOM",
-        method: "setInspectModeEnabled",
-        count: 1
-    )
-    let firstDesiredStateID = try #require(context.elementPickerDesiredStateForTesting?.id)
-
-    let disableTask = Task { @MainActor in
-        try await context.toggleElementPickerEnabled()
-    }
-    try await waitUntil(in: context) {
-        context.elementPickerDesiredStateForTesting?.id != firstDesiredStateID
-            && context.elementPickerDesiredStateForTesting?.isEnabled == false
-    }
-    let disableDesiredStateID = try #require(context.elementPickerDesiredStateForTesting?.id)
-
-    let cancelledEnableTask = Task { @MainActor in
-        try await context.toggleElementPickerEnabled()
-    }
-    try await waitUntil(in: context) {
-        context.elementPickerDesiredStateForTesting?.id != disableDesiredStateID
-            && context.elementPickerDesiredStateForTesting?.isEnabled == true
-    }
-    cancelledEnableTask.cancel()
-    await enableGate.open()
-
-    try await firstEnableTask.value
-    try await disableTask.value
-    await #expect(throws: CancellationError.self) {
-        try await cancelledEnableTask.value
-    }
-
-    let commands = await runtime.backend.recordedCommands().filter {
-        $0.domain == "DOM" && $0.method == "setInspectModeEnabled"
-    }
-    #expect(commands.compactMap {
-        $0.payload.cast(as: DOM.SetInspectModeEnabledPayload.self)?.enabled
-    } == [true, false])
-    #expect(context.isElementPickerEnabled == false)
-}
-
-@MainActor
-@Test
-func cancellingSupersededPickerCallerDoesNotCancelLatestSameIntent() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (_, context) = try await startContext(runtime: runtime)
-    let enableGate = WebInspectorTestGate()
-
-    await runtime.backend.hold(domain: "DOM", method: "setInspectModeEnabled", gate: enableGate)
-    await runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
-
-    let firstEnableTask = Task { @MainActor in
-        try await context.setElementPickerEnabled(true)
-    }
-    _ = await runtime.backend.waitForRecordedCommands(
-        domain: "DOM",
-        method: "setInspectModeEnabled",
-        count: 1
-    )
-    let firstDesiredStateID = try #require(context.elementPickerDesiredStateForTesting?.id)
-
-    let latestEnableTask = Task { @MainActor in
-        try await context.setElementPickerEnabled(true)
-    }
-    try await waitUntil(in: context) {
-        context.elementPickerDesiredStateForTesting?.id != firstDesiredStateID
-            && context.elementPickerDesiredStateForTesting?.isEnabled == true
-    }
-    firstEnableTask.cancel()
-    await enableGate.open()
-
-    await #expect(throws: CancellationError.self) {
-        try await firstEnableTask.value
-    }
     try await latestEnableTask.value
 
     let commands = await runtime.backend.recordedCommands().filter {
@@ -315,15 +207,12 @@ func coalescedElementPickerCallersShareFailureWithoutRetry() async throws {
         method: "setInspectModeEnabled",
         count: 1
     )
-    let firstDesiredStateID = try #require(context.elementPickerDesiredStateForTesting?.id)
-
+    var stateChanges = context.stateChangeStreamForTesting().makeAsyncIterator()
     let latestEnableTask = Task { @MainActor in
         try await context.setElementPickerEnabled(true)
     }
-    try await waitUntil(in: context) {
-        context.elementPickerDesiredStateForTesting?.id != firstDesiredStateID
-            && context.elementPickerDesiredStateForTesting?.isEnabled == true
-    }
+    // The second caller records its request before it waits for the command.
+    _ = await stateChanges.next()
     await enableGate.open()
 
     await #expect(throws: enableError) {
@@ -355,7 +244,7 @@ func coalescedElementPickerCallersShareFailureWithoutRetry() async throws {
 
 @MainActor
 @Test
-func cancellingElementPickerEnableWhoseCommandFailsThrowsCancellationWithoutRetry() async throws {
+func failedElementPickerEnableDoesNotFailPendingDisable() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
     let (_, context) = try await startContext(runtime: runtime)
     let enableGate = WebInspectorTestGate()
@@ -366,11 +255,7 @@ func cancellingElementPickerEnableWhoseCommandFailsThrowsCancellationWithoutRetr
     )
 
     await runtime.backend.hold(domain: "DOM", method: "setInspectModeEnabled", gate: enableGate)
-    await runtime.backend.enqueueFailure(
-        enableError,
-        for: "DOM",
-        method: "setInspectModeEnabled"
-    )
+    await runtime.backend.enqueueFailure(enableError, for: "DOM", method: "setInspectModeEnabled")
 
     let enableTask = Task { @MainActor in
         try await context.setElementPickerEnabled(true)
@@ -380,12 +265,18 @@ func cancellingElementPickerEnableWhoseCommandFailsThrowsCancellationWithoutRetr
         method: "setInspectModeEnabled",
         count: 1
     )
-    enableTask.cancel()
+    let disableTask = Task { @MainActor in
+        try await context.setElementPickerEnabled(false)
+    }
+    try await waitUntil(in: context) {
+        context.requestedElementPickerEnabledForTesting == false
+    }
     await enableGate.open()
 
-    await #expect(throws: CancellationError.self) {
+    await #expect(throws: enableError) {
         try await enableTask.value
     }
+    try await disableTask.value
 
     let commands = await runtime.backend.recordedCommands().filter {
         $0.domain == "DOM" && $0.method == "setInspectModeEnabled"
@@ -398,56 +289,22 @@ func cancellingElementPickerEnableWhoseCommandFailsThrowsCancellationWithoutRetr
 
 @MainActor
 @Test
-func cancellingElementPickerEnableAwaitsOneSuccessfulDisable() async throws {
+func elementPickerInspectBeforeFailedEnableReplySettlesWithoutError() async throws {
     let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (_, context) = try await startContext(runtime: runtime)
-    let commandGate = WebInspectorTestGate()
-
-    await runtime.backend.hold(domain: "DOM", method: "setInspectModeEnabled", gate: commandGate)
-    await runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
-    await runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
-
-    let enableTask = Task { @MainActor in
-        try await context.setElementPickerEnabled(true)
-    }
-    _ = await runtime.backend.waitForRecordedCommands(
-        domain: "DOM",
-        method: "setInspectModeEnabled",
-        count: 1
+    let documentID = DOM.Node.ID("picker-inspect-failure-document")
+    let (target, context) = try await startContext(
+        runtime: runtime,
+        document: DOM.Node(id: documentID, nodeType: 9, nodeName: "#document")
     )
+    let enableGate = WebInspectorTestGate()
 
-    enableTask.cancel()
-    await commandGate.open()
-
-    await #expect(throws: CancellationError.self) {
-        try await enableTask.value
-    }
-
-    let completed = await runtime.backend.completedCommands().filter {
-        $0.domain == "DOM" && $0.method == "setInspectModeEnabled"
-    }
-    #expect(completed.compactMap {
-        $0.payload.cast(as: DOM.SetInspectModeEnabledPayload.self)?.enabled
-    } == [true, false])
-    #expect(context.isElementPickerEnabled == false)
-}
-
-@MainActor
-@Test
-func cancellingElementPickerEnableDoesNotRetryFailedDisable() async throws {
-    let runtime = try await WebInspectorProxyTestRuntime.start()
-    let (_, context) = try await startContext(runtime: runtime)
-    let commandGate = WebInspectorTestGate()
-    let rollbackError = WebInspectorProxyError.commandFailed(
-        domain: "DOM",
-        method: "setInspectModeEnabled",
-        message: "rollback failed"
-    )
-
-    await runtime.backend.hold(domain: "DOM", method: "setInspectModeEnabled", gate: commandGate)
-    await runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
+    await runtime.backend.hold(domain: "DOM", method: "setInspectModeEnabled", gate: enableGate)
     await runtime.backend.enqueueFailure(
-        rollbackError,
+        WebInspectorProxyError.commandFailed(
+            domain: "DOM",
+            method: "setInspectModeEnabled",
+            message: "enable reply lost"
+        ),
         for: "DOM",
         method: "setInspectModeEnabled"
     )
@@ -461,31 +318,45 @@ func cancellingElementPickerEnableDoesNotRetryFailedDisable() async throws {
         count: 1
     )
 
-    enableTask.cancel()
-    await commandGate.open()
+    await runtime.backend.emit(.inspect(documentID), target: target)
+    try await waitUntil(in: context) { context.selectedNode?.id == DOMNode.ID(documentID) }
 
-    await #expect(throws: rollbackError) {
-        try await enableTask.value
+    await enableGate.open()
+    try await enableTask.value
+
+    #expect(context.isElementPickerEnabled == false)
+}
+
+@MainActor
+@Test
+func cancellingElementPickerCallerDoesNotRevertRequest() async throws {
+    let runtime = try await WebInspectorProxyTestRuntime.start()
+    let (_, context) = try await startContext(runtime: runtime)
+    let enableGate = WebInspectorTestGate()
+
+    await runtime.backend.hold(domain: "DOM", method: "setInspectModeEnabled", gate: enableGate)
+    await runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
+
+    let enableTask = Task { @MainActor in
+        try await context.setElementPickerEnabled(true)
     }
+    _ = await runtime.backend.waitForRecordedCommands(
+        domain: "DOM",
+        method: "setInspectModeEnabled",
+        count: 1
+    )
+
+    enableTask.cancel()
+    await enableGate.open()
+    try await enableTask.value
 
     let commands = await runtime.backend.recordedCommands().filter {
         $0.domain == "DOM" && $0.method == "setInspectModeEnabled"
     }
     #expect(commands.compactMap {
         $0.payload.cast(as: DOM.SetInspectModeEnabledPayload.self)?.enabled
-    } == [true, false])
+    } == [true])
     #expect(context.isElementPickerEnabled)
-
-    await runtime.backend.enqueue((), for: "DOM", method: "setInspectModeEnabled")
-    try await context.setElementPickerEnabled(false)
-    #expect(context.isElementPickerEnabled == false)
-
-    let recoveredCommands = await runtime.backend.recordedCommands().filter {
-        $0.domain == "DOM" && $0.method == "setInspectModeEnabled"
-    }
-    #expect(recoveredCommands.compactMap {
-        $0.payload.cast(as: DOM.SetInspectModeEnabledPayload.self)?.enabled
-    } == [true, false, false])
 }
 
 @MainActor
