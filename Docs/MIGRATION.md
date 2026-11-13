@@ -1,7 +1,7 @@
 # Migration Guide
 
-This guide covers the source changes between v0.9.7 and the next release. For
-earlier releases, read the guide at the
+This guide covers the source changes since v0.9.7. For earlier releases, read
+the guide at the
 [v0.9.7 tag](https://github.com/lynnswap/WebInspectorKit/blob/v0.9.7/Docs/MIGRATION.md).
 
 ## The built-in UI
