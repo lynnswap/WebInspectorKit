@@ -129,8 +129,8 @@ final class ContractDataKitActor {
         let context = modelContext()
         #expect(context.network.requests.isEmpty)
         #expect(context.console.messages.isEmpty)
-        let _: AsyncStream<WebInspectorCollectionChange<NetworkRequest.ID>> = context.network.requestChanges
-        let _: AsyncStream<WebInspectorCollectionChange<ConsoleMessage.ID>> = context.console.messageChanges
+        let _: AsyncStream<WebInspectorCollectionChange<NetworkRequest>> = context.network.requestChanges
+        let _: AsyncStream<WebInspectorCollectionChange<ConsoleMessage>> = context.console.messageChanges
         #expect(context.state == .attached)
 
         let root = try #require(context.rootNode)
@@ -292,7 +292,7 @@ final class ContractDataKitActor {
         #expect(evaluation.object.canRequestProperties)
     }
 
-    func consoleMessageChanges() -> AsyncStream<WebInspectorCollectionChange<ConsoleMessage.ID>> {
+    func consoleMessageChanges() -> AsyncStream<WebInspectorCollectionChange<ConsoleMessage>> {
         modelContext().console.messageChanges
     }
 

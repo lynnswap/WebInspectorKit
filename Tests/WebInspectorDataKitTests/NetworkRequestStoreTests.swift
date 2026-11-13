@@ -62,13 +62,16 @@ func storePublishesInsertionsUpdatesAndResetsInOrder() async throws {
     store.commitUpdate(first)
     #expect(store.requests.isEmpty)
 
-    #expect(await changes.next() == .inserted([first.request.id]))
-    #expect(await changes.next() == .updated([first.request.id]))
-    #expect(await changes.next() == .inserted(restored.map(\.id)))
-    #expect(await changes.next() == .removedAll)
+    // The same identifier is admitted again after the reset. Each change
+    // still names the request object it was published for.
+    let reopened = try insertStoreRequest("first", store: store, context: context)
+    #expect(reopened.request !== first.request)
 
-    let second = try insertStoreRequest("second", store: store, context: context)
-    #expect(await changes.next() == .inserted([second.request.id]))
+    #expect(await changes.next() == .inserted([first.request]))
+    #expect(await changes.next() == .updated([first.request]))
+    #expect(await changes.next() == .inserted(restored))
+    #expect(await changes.next() == .removedAll)
+    #expect(await changes.next() == .inserted([reopened.request]))
 }
 
 @MainActor

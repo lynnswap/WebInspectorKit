@@ -289,7 +289,7 @@ public final class NetworkModelController {
     ///
     /// An `updated` change reports that a request's own properties changed;
     /// each ``NetworkRequest`` is also observable on its own.
-    public var requestChanges: AsyncStream<WebInspectorCollectionChange<NetworkRequest.ID>> {
+    public var requestChanges: AsyncStream<WebInspectorCollectionChange<NetworkRequest>> {
         context.networkRequestChanges
     }
 
@@ -317,7 +317,7 @@ public final class ConsoleModelController {
     }
 
     /// The changes to ``messages``, starting from the moment of the call.
-    public var messageChanges: AsyncStream<WebInspectorCollectionChange<ConsoleMessage.ID>> {
+    public var messageChanges: AsyncStream<WebInspectorCollectionChange<ConsoleMessage>> {
         context.consoleMessageChanges
     }
 }

@@ -35,25 +35,29 @@ windows requests and messages; that belongs to the code that presents them.
 | A filter, sort, section, limit, or offset on a query | Apply it to the collection in your own model |
 
 Both collections are in arrival order and observable. A change stream reports
-`inserted`, `updated`, and `removed` model IDs and `removedAll`. Copy the
-collection when you subscribe and apply every change in order:
+the `inserted`, `updated`, and `removed` model objects and `removedAll`. Copy
+the collection when you subscribe and apply every change in order:
 
 ```swift
 let changes = context.network.requestChanges
-var rows = context.network.requests.map(\.id)
+var rows = context.network.requests
 for await change in changes {
     switch change {
     case .removedAll:
         rows.removeAll()
-    case let .inserted(ids):
-        rows.append(contentsOf: ids)
-    case let .removed(ids):
-        rows.removeAll { ids.contains($0) }
-    case let .updated(ids):
-        reconfigure(ids)
+    case let .inserted(requests):
+        rows.append(contentsOf: requests)
+    case let .removed(requests):
+        rows.removeAll { requests.contains($0) }
+    case let .updated(requests):
+        reconfigure(requests)
     }
 }
 ```
+
+A change carries the objects themselves because a request identifier can be
+admitted again after a clear; the earlier change still names the earlier
+object.
 
 The v0.5.0 notes below describe the query API this replaces.
 

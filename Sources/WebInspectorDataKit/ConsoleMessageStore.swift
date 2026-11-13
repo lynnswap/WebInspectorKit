@@ -17,7 +17,7 @@ final class ConsoleMessageStore {
     @ObservationIgnored private var lastMessageID: ConsoleMessage.ID?
     @ObservationIgnored private var lastMessageIDByTargetID: [WebInspectorTarget.ID: ConsoleMessage.ID] = [:]
     @ObservationIgnored private var nextMessageOrdinal = 0
-    @ObservationIgnored private let changeRelay = WebInspectorAsyncStreamRelay<WebInspectorCollectionChange<ConsoleMessage.ID>>()
+    @ObservationIgnored private let changeRelay = WebInspectorAsyncStreamRelay<WebInspectorCollectionChange<ConsoleMessage>>()
 
     init(runtime: RuntimeModelStore) {
         self.runtime = runtime
@@ -28,7 +28,7 @@ final class ConsoleMessageStore {
     }
 
     /// The changes to `messages`, starting from the moment of the call.
-    var changes: AsyncStream<WebInspectorCollectionChange<ConsoleMessage.ID>> {
+    var changes: AsyncStream<WebInspectorCollectionChange<ConsoleMessage>> {
         changeRelay.makeStream()
     }
 
@@ -65,7 +65,7 @@ final class ConsoleMessageStore {
                 return
             }
             message.updateRepeatCount(count, timestamp: timestamp)
-            changeRelay.yield(.updated([message.id]))
+            changeRelay.yield(.updated([message]))
         case .messagesCleared:
             // WebKit releases its "console" Runtime object group before
             // emitting this event. DataKit owns only the local registrations.
@@ -99,7 +99,7 @@ final class ConsoleMessageStore {
         }
         lastMessageIDByTargetID[targetID] = nil
         unregisterUnreferencedParameters(of: removedMessages)
-        changeRelay.yield(.removed(removedMessages.map(\.id)))
+        changeRelay.yield(.removed(removedMessages))
     }
 
     /// Removes every message before WebKit replays the Console log. The
@@ -148,7 +148,7 @@ final class ConsoleMessageStore {
         if let targetID {
             lastMessageIDByTargetID[targetID] = id
         }
-        changeRelay.yield(.inserted([id]))
+        changeRelay.yield(.inserted([message]))
     }
 
     private func removeAllMessages() {

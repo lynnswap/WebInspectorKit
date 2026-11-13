@@ -1037,11 +1037,12 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
     let oldConsoleMessage = try #require(context.console.messages.first)
     let oldRuntimeContext = try #require(context.executionContexts.first)
     #expect(oldStyles.phase == .loaded)
-    #expect(context.network.requests.count == 1)
+    let oldRequest = try #require(context.registeredRequest(forProxyID: oldRequestID))
+    #expect(context.network.requests == [oldRequest])
     #expect(oldElement.attributes["data-generation"] == "old")
     #expect(oldConsoleMessage.text == "old-console")
     #expect(oldRuntimeContext.id == RuntimeContext.ID(oldRuntimeID))
-    #expect(await networkChanges.next() == .inserted([NetworkRequest.ID(oldRequestID)]))
+    #expect(await networkChanges.next() == .inserted([oldRequest]))
 
     let supersededSubscription = context.orderedEventSubscriptionStateForTesting
     let appliedBaseline = context.eventPumpAppliedSequenceForTesting
@@ -1180,9 +1181,9 @@ func restartSynchronouslyRejectsSupersededOrderedEventsAcrossDomains() async thr
     let freshSubscription = context.orderedEventSubscriptionStateForTesting
     #expect(freshSubscription.generation == linearizedSubscription.generation + 1)
     #expect(freshSubscription.sequence > supersededSubscription.sequence)
-    #expect(context.network.requests.count == 1)
-    #expect(context.registeredRequest(forProxyID: freshRequestID) != nil)
-    #expect(await networkChanges.next() == .inserted([NetworkRequest.ID(freshRequestID)]))
+    let freshRequest = try #require(context.registeredRequest(forProxyID: freshRequestID))
+    #expect(context.network.requests == [freshRequest])
+    #expect(await networkChanges.next() == .inserted([freshRequest]))
     #expect(freshElement.attributes["data-generation"] == "fresh")
     #expect(freshStyles.phase == .needsRefresh)
     #expect(context.console.messages.map(\.text) == ["fresh-console"])

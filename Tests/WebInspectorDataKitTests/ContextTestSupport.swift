@@ -1063,13 +1063,13 @@ final class DOMTreeRevealRequestRecorder {
 
 @MainActor
 @Observable
-final class CollectionChangeRecorder<ID: Hashable & Sendable> {
-    private(set) var changes: [WebInspectorCollectionChange<ID>] = []
+final class CollectionChangeRecorder<Model: Hashable & Sendable> {
+    private(set) var changes: [WebInspectorCollectionChange<Model>] = []
 
     @ObservationIgnored private var task: Task<Void, Never>?
     private var hasStarted = false
 
-    init(stream: AsyncStream<WebInspectorCollectionChange<ID>>) {
+    init(stream: AsyncStream<WebInspectorCollectionChange<Model>>) {
         task = Task { @MainActor [weak self] in
             self?.hasStarted = true
             for await change in stream {
@@ -1106,10 +1106,10 @@ final class CollectionChangeRecorder<ID: Hashable & Sendable> {
 @MainActor
 func changesBeforeClearingRequests(
     in context: WebInspectorContext,
-    _ changes: AsyncStream<WebInspectorCollectionChange<NetworkRequest.ID>>
-) async -> [WebInspectorCollectionChange<NetworkRequest.ID>] {
+    _ changes: AsyncStream<WebInspectorCollectionChange<NetworkRequest>>
+) async -> [WebInspectorCollectionChange<NetworkRequest>] {
     context.clearNetworkRequests()
-    var received: [WebInspectorCollectionChange<NetworkRequest.ID>] = []
+    var received: [WebInspectorCollectionChange<NetworkRequest>] = []
     for await change in changes {
         if change == .removedAll {
             break

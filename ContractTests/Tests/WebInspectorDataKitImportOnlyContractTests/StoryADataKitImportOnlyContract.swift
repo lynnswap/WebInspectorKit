@@ -21,15 +21,15 @@ private final class DataKitImportOnlyConsumer {
     func consume(_ context: WebInspectorContext) async throws {
         let requests = context.network.requests
         let messages = context.console.messages
-        let requestChanges: AsyncStream<WebInspectorCollectionChange<NetworkRequest.ID>> =
+        let requestChanges: AsyncStream<WebInspectorCollectionChange<NetworkRequest>> =
             context.network.requestChanges
-        let messageChanges: AsyncStream<WebInspectorCollectionChange<ConsoleMessage.ID>> =
+        let messageChanges: AsyncStream<WebInspectorCollectionChange<ConsoleMessage>> =
             context.console.messageChanges
         _ = requestChanges
         _ = messageChanges
-        _ = WebInspectorCollectionChange<NetworkRequest.ID>.removedAll
-        _ = WebInspectorCollectionChange<NetworkRequest.ID>.inserted([])
-        _ = WebInspectorCollectionChange<NetworkRequest.ID>.updated([])
+        _ = WebInspectorCollectionChange<NetworkRequest>.removedAll
+        _ = WebInspectorCollectionChange<NetworkRequest>.inserted([])
+        _ = WebInspectorCollectionChange<NetworkRequest>.updated([])
 
         _ = context.state
         _ = context.rootNode?.children

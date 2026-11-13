@@ -62,7 +62,7 @@ package final class NetworkRequestStore {
     @ObservationIgnored private var tombstonedIDs: Set<NetworkRequest.ID>
     /// Advances whenever the collection is reset.
     @ObservationIgnored private(set) var generation: UInt64
-    @ObservationIgnored private let changeRelay = WebInspectorAsyncStreamRelay<WebInspectorCollectionChange<NetworkRequest.ID>>()
+    @ObservationIgnored private let changeRelay = WebInspectorAsyncStreamRelay<WebInspectorCollectionChange<NetworkRequest>>()
 
     init() {
         orderedRegistrations = []
@@ -72,7 +72,7 @@ package final class NetworkRequestStore {
     }
 
     /// The changes to `requests`, starting from the moment of the call.
-    var changes: AsyncStream<WebInspectorCollectionChange<NetworkRequest.ID>> {
+    var changes: AsyncStream<WebInspectorCollectionChange<NetworkRequest>> {
         changeRelay.makeStream()
     }
 
@@ -100,7 +100,7 @@ package final class NetworkRequestStore {
         let request = create()
         precondition(request.id == id, "A Network request must be registered under its own ID.")
         let registration = register(request)
-        changeRelay.yield(.inserted([request.id]))
+        changeRelay.yield(.inserted([request]))
         return .inserted(registration)
     }
 
@@ -109,13 +109,13 @@ package final class NetworkRequestStore {
         guard isCurrent(registration) else {
             return
         }
-        changeRelay.yield(.updated([registration.request.id]))
+        changeRelay.yield(.updated([registration.request]))
     }
 
     func insertResourceTreeRequests(_ newRequests: [NetworkRequest]) {
         guard !newRequests.isEmpty else { return }
         for request in newRequests { _ = register(request) }
-        changeRelay.yield(.inserted(newRequests.map(\.id)))
+        changeRelay.yield(.inserted(newRequests))
     }
 
     func invalidateResourceTreeContent(replacedBy request: Network.Request) {

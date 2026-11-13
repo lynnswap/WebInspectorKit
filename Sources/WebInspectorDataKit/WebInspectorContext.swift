@@ -1229,7 +1229,7 @@ public final class WebInspectorContext {
         networkRequestStore.requests
     }
 
-    package var networkRequestChanges: AsyncStream<WebInspectorCollectionChange<NetworkRequest.ID>> {
+    package var networkRequestChanges: AsyncStream<WebInspectorCollectionChange<NetworkRequest>> {
         networkRequestStore.changes
     }
 
@@ -1237,7 +1237,7 @@ public final class WebInspectorContext {
         consoleStore.messages
     }
 
-    package var consoleMessageChanges: AsyncStream<WebInspectorCollectionChange<ConsoleMessage.ID>> {
+    package var consoleMessageChanges: AsyncStream<WebInspectorCollectionChange<ConsoleMessage>> {
         consoleStore.changes
     }
 

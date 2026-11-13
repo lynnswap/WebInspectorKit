@@ -628,8 +628,8 @@ func webSocketRejectedHandshakePreservesResponseWithoutOpeningAndOrdersTerminalE
     #expect(webSocket.frames.map(\.direction) == [.error("upgrade failed")])
     // The late handshake response published nothing; the error and the close each did.
     #expect(await changesBeforeClearingRequests(in: context, changesAfterRejection) == [
-        .updated([request.id]),
-        .updated([request.id]),
+        .updated([request]),
+        .updated([request]),
     ])
 }
 

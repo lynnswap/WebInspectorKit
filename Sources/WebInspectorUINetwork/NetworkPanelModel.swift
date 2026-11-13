@@ -662,7 +662,7 @@ package final class NetworkPanelModel {
         }
     }
 
-    private func startObserving(_ changes: AsyncStream<WebInspectorCollectionChange<NetworkRequest.ID>>) {
+    private func startObserving(_ changes: AsyncStream<WebInspectorCollectionChange<NetworkRequest>>) {
         requestChangeTask = Task { @MainActor [weak self] in
             for await change in changes {
                 guard let self else {
@@ -673,37 +673,33 @@ package final class NetworkPanelModel {
         }
     }
 
-    private func consume(_ change: WebInspectorCollectionChange<NetworkRequest.ID>) {
+    private func consume(_ change: WebInspectorCollectionChange<NetworkRequest>) {
 #if DEBUG
         rawTransactionDeliveryCountStorageForTesting &+= 1
         resolveRawTransactionDeliveryWaitersForTesting(result: true)
 #endif
         let subjectBeforeTransaction = detailSubject
-        let changedRequestIDs: [NetworkRequest.ID]
+        let changedRequests: [NetworkRequest]
         switch change {
-        case .removedAll, .removed:
-            // Rebuilding from the live collection can run ahead of the feed.
-            // The insertions still buffered then arrive as upserts of
-            // requests that are already registered.
-            rebuildEntries(from: context.network.requests)
-            reconcileSubjectAfterReset(subjectBeforeTransaction)
-            publishListTransaction(
-                topologyChangedEntryIDs: Set(visibleEntryIDs),
-                rebindsStableEntries: true
-            )
+        case .removedAll:
+            rebuildEntriesAfterRemoval(keeping: [], subjectBeforeTransaction: subjectBeforeTransaction)
             return
-        case let .inserted(requestIDs), let .updated(requestIDs):
-            changedRequestIDs = requestIDs
+        case let .removed(removedRequests):
+            let removed = Set(removedRequests)
+            let remaining = orderedEntryIDs
+                .compactMap { entriesByID[$0] }
+                .flatMap(\.requests)
+                .filter { removed.contains($0) == false }
+            rebuildEntriesAfterRemoval(keeping: remaining, subjectBeforeTransaction: subjectBeforeTransaction)
+            return
+        case let .inserted(requests), let .updated(requests):
+            changedRequests = requests
         }
 
         var affectedEntryIDs: Set<NetworkListEntry.ID> = []
         var topologyChangedEntryIDs: Set<NetworkListEntry.ID> = []
 
-        for requestID in changedRequestIDs {
-            guard let request = registrationsByRequestID[requestID]?.request
-                ?? context.registeredRequest(for: requestID) else {
-                continue
-            }
+        for request in changedRequests {
             upsertRequest(
                 request,
                 affectedEntryIDs: &affectedEntryIDs,
@@ -723,6 +719,18 @@ package final class NetworkPanelModel {
         publishListTransaction(
             topologyChangedEntryIDs: topologyChangedEntryIDs,
             rebindsStableEntries: false
+        )
+    }
+
+    private func rebuildEntriesAfterRemoval(
+        keeping requests: [NetworkRequest],
+        subjectBeforeTransaction: NetworkDetailSubject?
+    ) {
+        rebuildEntries(from: requests)
+        reconcileSubjectAfterReset(subjectBeforeTransaction)
+        publishListTransaction(
+            topologyChangedEntryIDs: Set(visibleEntryIDs),
+            rebindsStableEntries: true
         )
     }
 
