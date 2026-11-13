@@ -13,7 +13,7 @@ extension BrowserInspectorCoordinator {
         static let sceneActivityType = "lynnpd.webspector.web-inspector"
 
         let browserWindow: BrowserWindow
-        let inspectorSession: WebInspectorSession
+        let inspector: WebInspector
     }
 }
 
@@ -73,21 +73,21 @@ final class BrowserInspectorCoordinator {
 
     func presentSheet(
         from presenter: UIViewController,
-        inspectorSession: WebInspectorSession
+        inspector: WebInspector
     ) -> Bool {
         guard isPresentingInspector(presenter: presenter) == false else {
             return false
         }
 
         let anchor = resolvePresentationAnchor(from: presenter)
-        let sheetController = WebInspectorViewController(session: inspectorSession)
+        let sheetController = WebInspectorViewController(inspector: inspector)
         sheetController.automaticallyDetachesOnDismiss = false
         if #available(iOS 26.0, *) {
             sheetController.drawsBackground = false
         }
         sheetController.modalPresentationStyle = .pageSheet
         applyDefaultDetents(to: sheetController)
-        bindSheetUserInterfaceStyle(to: sheetController, inspectorSession: inspectorSession)
+        bindSheetUserInterfaceStyle(to: sheetController, inspector: inspector)
         presentedSheetController = sheetController
         sheetObserver.onDismiss = { [weak self, weak sheetController] in
             guard let self else {
@@ -108,7 +108,7 @@ final class BrowserInspectorCoordinator {
     func presentWindow(
         from presenter: UIViewController,
         browserWindow: BrowserWindow,
-        inspectorSession: WebInspectorSession
+        inspector: WebInspector
     ) -> Bool {
         guard isPresentingInspector(presenter: presenter) == false else {
             return false
@@ -120,7 +120,7 @@ final class BrowserInspectorCoordinator {
         Self.inspectorWindowRegistry.setContext(
             BrowserInspectorCoordinator.WindowContext(
                 browserWindow: browserWindow,
-                inspectorSession: inspectorSession
+                inspector: inspector
             )
         )
         let userActivity = Self.makeInspectorWindowUserActivity()
@@ -194,15 +194,15 @@ final class BrowserInspectorCoordinator {
         inspectorWindowRegistry.currentContext
     }
 
-    static func hasInspectorWindow(for inspectorSession: WebInspectorSession) -> Bool {
-        inspectorWindowRegistry.hasWindow(for: inspectorSession)
+    static func hasInspectorWindow(for inspector: WebInspector) -> Bool {
+        inspectorWindowRegistry.hasWindow(for: inspector)
     }
 
     static func setInspectorWindowReleaseHandler(
-        for inspectorSession: WebInspectorSession,
+        for inspector: WebInspector,
         _ handler: (() -> Void)?
     ) {
-        inspectorWindowRegistry.setReleaseHandler(for: inspectorSession, handler)
+        inspectorWindowRegistry.setReleaseHandler(for: inspector, handler)
     }
 
     static func attachInspectorWindowSceneSession(_ sceneSession: UISceneSession) {
@@ -261,17 +261,17 @@ final class BrowserInspectorCoordinator {
 
     private func bindSheetUserInterfaceStyle(
         to sheetController: UIViewController,
-        inspectorSession: WebInspectorSession
+        inspector: WebInspector
     ) {
         cancelSheetUserInterfaceStyleObservation()
-        sheetUserInterfaceStyleObservation = withPortableContinuousObservation { [weak self, weak sheetController, weak inspectorSession] _ in
+        sheetUserInterfaceStyleObservation = withPortableContinuousObservation { [weak self, weak sheetController, weak inspector] _ in
             guard let sheet = sheetController?.sheetPresentationController else {
                 return
             }
-            guard let inspectorSession else {
+            guard let inspector else {
                 return
             }
-            self?.applySheetUserInterfaceStyle(inspectorSession.pageUserInterfaceStyle, to: sheet)
+            self?.applySheetUserInterfaceStyle(inspector.pageUserInterfaceStyle, to: sheet)
         }
     }
 

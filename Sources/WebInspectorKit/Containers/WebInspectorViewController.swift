@@ -1,6 +1,6 @@
 #if canImport(UIKit)
 import UIKit
-import WebKit
+import WebInspectorDataKit
 import WebInspectorUIBase
 
 @MainActor
@@ -110,23 +110,21 @@ private final class WebInspectorPresentationHostWindowObserverView: UIView {
 
 /// A UIKit view controller that presents the built-in WebInspectorKit UI.
 ///
-/// Create an instance, attach it to a `WKWebView`, and present it from your app
-/// UI. The controller adapts between compact tab presentation and regular split
-/// presentation.
-///
-/// Await ``WebInspectorSession/prepare()`` during app setup before creating the UI.
-///
-/// Example:
+/// Create an instance, attach its ``inspector`` to a `WKWebView`, and present
+/// it from your app UI. The controller adapts between compact tab presentation
+/// and regular split presentation.
 ///
 /// ```swift
-/// let inspector = WebInspectorViewController()
-/// inspector.modalPresentationStyle = .pageSheet
-///
-/// Task { @MainActor in
-///     try await inspector.attach(to: webView)
-///     present(inspector, animated: true)
-/// }
+/// let controller = WebInspectorViewController()
+/// controller.modalPresentationStyle = .pageSheet
+/// controller.inspector.attach(to: webView)
+/// present(controller, animated: true)
 /// ```
+///
+/// To inspect another web view, attach the inspector again. To keep inspecting
+/// while the UI is not on screen, keep the ``WebInspector`` and create the
+/// view controller from it each time; the selected tab stays with the
+/// inspector.
 @MainActor
 public final class WebInspectorViewController: UIViewController {
     private enum HostKind {
@@ -134,13 +132,17 @@ public final class WebInspectorViewController: UIViewController {
         case regular
     }
 
-    /// The inspection session backing the view controller.
-    public let session: WebInspectorSession
+    /// The inspector that the view controller presents.
+    public let inspector: WebInspector
+    let session: WebInspectorSession
     private let presentationContentStore: PresentationContentStore
     private let rootPresentationID = UUID()
 
-    /// A Boolean value indicating whether the controller detaches its session
-    /// after the root presentation ends.
+    /// A Boolean value indicating whether the controller detaches its
+    /// inspector after the root presentation ends.
+    ///
+    /// When several view controllers present one inspector, it is detached
+    /// after the last of them is dismissed.
     public var automaticallyDetachesOnDismiss = true
     private var drawsBackgroundStorage = true
     private let presentationLifecycleCoordinator = WebInspectorRootPresentationLifecycleCoordinator()
@@ -175,17 +177,35 @@ public final class WebInspectorViewController: UIViewController {
         }
     }
 
-    /// Creates a view controller backed by an inspection session.
-    public init(session: WebInspectorSession = WebInspectorSession()) {
+    /// Creates a view controller that presents an inspector with a set of
+    /// tabs.
+    ///
+    /// The tabs and the selected tab belong to the inspector's presentation,
+    /// so view controllers that present the same inspector share them.
+    public convenience init(
+        inspector: WebInspector = WebInspector(),
+        tabs: [WebInspectorTab] = [.dom, .network]
+    ) {
+        let session = WebInspectorSession.session(for: inspector)
+        session.interface.setTabs(tabs)
+        self.init(inspector: inspector, session: session)
+    }
+
+    /// Creates a view controller for a session that keeps its own inspector.
+    convenience init(session: WebInspectorSession) {
+        guard let inspector = session.inspector else {
+            preconditionFailure("A session outlives its inspector only while a view controller keeps both.")
+        }
+        self.init(inspector: inspector, session: session)
+    }
+
+    private init(inspector: WebInspector, session: WebInspectorSession) {
+        self.inspector = inspector
         self.session = session
         self.presentationContentStore = PresentationContentStore()
         super.init(nibName: nil, bundle: nil)
         webInspectorSetDrawsBackgroundTraitOverride(drawsBackgroundStorage)
-    }
-
-    /// Creates a view controller with a custom tab set.
-    public convenience init(tabs: [WebInspectorTab]) {
-        self.init(session: WebInspectorSession(tabs: tabs))
+        WebInspectorSession.prepareRuntimesIfNeeded()
     }
 
     @available(*, unavailable)
@@ -275,16 +295,6 @@ public final class WebInspectorViewController: UIViewController {
             return
         }
         finishRootPresentationLifecycle()
-    }
-
-    /// Attaches the backing session to a web view.
-    public func attach(to webView: WKWebView) async throws {
-        try await session.attach(to: webView)
-    }
-
-    /// Detaches the backing session.
-    public func detach() async {
-        await session.detach()
     }
 
     private var effectiveHostKind: HostKind {

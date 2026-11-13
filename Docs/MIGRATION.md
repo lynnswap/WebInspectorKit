@@ -5,20 +5,38 @@ when upgrading WebInspectorKit. Sections are grouped by release, newest first.
 
 ## Unreleased
 
-### Prepare the UIKit runtimes before creating inspector views
+### `WebInspectorViewController` presents a `WebInspector`
 
-Await the shared observation, hosted menu, and syntax preview runtimes during
-asynchronous app setup:
+`WebInspectorSession` and `WebInspectorSession.prepare()` are removed. Create
+the view controller from an inspector and its tabs, and attach the inspector:
 
 ```swift
+// Before
 try await WebInspectorSession.prepare()
+let session = WebInspectorSession(tabs: [.dom, .network, customTab])
+let controller = WebInspectorViewController(session: session)
+try await controller.attach(to: webView)
+
+// After
+let controller = WebInspectorViewController(tabs: [.dom, .network, customTab])
+controller.inspector.attach(to: webView)
 ```
 
-Handle preparation errors before constructing the inspector UI. Repeated calls
-reuse the dependencies' preparation across the process. The inspector's
-initializers remain synchronous after preparation. DataKit, ProxyKit, and
-WebKitRuntime consumers that do not use the built-in UIKit UI do not need this
-UI preparation step.
+- Remove the `prepare()` call. The view controller warms up the observation,
+  hosted menu, and syntax preview runtimes itself, and works before that
+  finishes.
+- `controller.attach(to:)` and `controller.detach()` become
+  `controller.inspector.attach(to:)` and `controller.inspector.detach()`. They
+  return immediately. Remove code that waits for a detach before attaching to
+  another web view; attaching again replaces the current attachment.
+- To keep the inspection while the UI is off screen, keep the `WebInspector`
+  where you kept the session and pass it to
+  `WebInspectorViewController(inspector:tabs:)`. The selected tab stays with
+  the inspector.
+- A custom tab's factory receives the `WebInspector` instead of the session, so
+  the tab can read `inspector.dom`, `inspector.network`, and the other domains.
+- `session.pageUserInterfaceStyle` becomes `inspector.pageUserInterfaceStyle`.
+- `import WebInspectorKit` also provides `WebInspector` and its models.
 
 ### `WebInspector` replaces `WebInspectorContainer` and `WebInspectorContext`
 

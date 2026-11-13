@@ -266,6 +266,41 @@ struct ParentContainerTests {
     }
 
     @Test
+    func viewControllerFollowsAnInspectorThatIsAttachedDirectly() async throws {
+        let inspector = WebInspector()
+        let viewController = WebInspectorViewController(inspector: inspector, tabs: [.network, .dom])
+        let session = viewController.session
+        let initialContextRevision = session.interface.contextBoundContentRevision
+        #expect(viewController.inspector === inspector)
+        #expect(session.interface.tabs == [.network, .dom])
+
+        var installedContext: WebInspectorContext?
+        let wasApplied = try await inspector.attachAndWait(makeContainer: { [self] in
+            let container = try await makeFakeContainer()
+            installedContext = container.mainContext
+            return container
+        })
+
+        #expect(wasApplied)
+        #expect(session.context === installedContext)
+        #expect(session.interface.contextBoundContentRevision > initialContextRevision)
+        await inspector.detachAndWait()
+        #expect(session.context.state == .detached)
+    }
+
+    @Test
+    func inspectorKeepsItsPresentationStateAcrossViewControllers() {
+        let inspector = WebInspector()
+        var first: WebInspectorViewController? = WebInspectorViewController(inspector: inspector)
+        first?.session.interface.selectTab(.network)
+        first = nil
+
+        let second = WebInspectorViewController(inspector: inspector)
+        #expect(second.session === WebInspectorSession.session(for: inspector))
+        #expect(second.session.interface.selectedTab == .network)
+    }
+
+    @Test
     func installingDataContextAdvancesContextEpochAndEvictsRootPresentationContent() {
         let session = makeSessionWithNoOpAttachment()
         let viewController = WebInspectorViewController(session: session)
@@ -643,14 +678,14 @@ struct ParentContainerTests {
     func customTabUsesPublicDescriptorAndCachedViewControllerFactory() throws {
         let customViewController = UIViewController()
         var factoryCallCount = 0
-        var factorySession: WebInspectorSession?
+        var factoryInspector: WebInspector?
         let customTab = WebInspectorTab(
             id: "webinspector_custom_console",
             title: "Console",
             systemImage: "terminal"
-        ) { session in
+        ) { inspector in
             factoryCallCount += 1
-            factorySession = session
+            factoryInspector = inspector
             return customViewController
         }
         let session = WebInspectorSession(tabs: [.dom, customTab, .network])
@@ -710,7 +745,7 @@ struct ParentContainerTests {
         #expect(compactContent === customViewController)
         #expect(reparentedContent === customViewController)
         #expect(reparentedContent.parent == nil)
-        #expect(factorySession === session)
+        #expect(factoryInspector === session.inspector)
         #expect(factoryCallCount == 1)
     }
 

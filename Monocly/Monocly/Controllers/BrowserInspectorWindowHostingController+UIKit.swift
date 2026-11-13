@@ -5,7 +5,7 @@ import WebInspectorKit
 @MainActor
 final class BrowserInspectorWindowHostingController: UIViewController {
     private struct AppliedInspectorContext: Equatable {
-        let inspectorSessionID: ObjectIdentifier
+        let inspectorID: ObjectIdentifier
         let browserWindowID: ObjectIdentifier
     }
 
@@ -39,7 +39,7 @@ final class BrowserInspectorWindowHostingController: UIViewController {
         }
 
         let appliedContext = AppliedInspectorContext(
-            inspectorSessionID: ObjectIdentifier(inspectorContext.inspectorSession),
+            inspectorID: ObjectIdentifier(inspectorContext.inspector),
             browserWindowID: ObjectIdentifier(inspectorContext.browserWindow)
         )
 
@@ -50,7 +50,7 @@ final class BrowserInspectorWindowHostingController: UIViewController {
         removeInspectorContainerIfNeeded()
 
         placeholderLabel.removeFromSuperview()
-        let container = WebInspectorViewController(session: inspectorContext.inspectorSession)
+        let container = WebInspectorViewController(inspector: inspectorContext.inspector)
         container.automaticallyDetachesOnDismiss = false
         addChild(container)
         container.view.translatesAutoresizingMaskIntoConstraints = false

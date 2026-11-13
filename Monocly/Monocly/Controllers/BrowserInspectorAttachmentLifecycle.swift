@@ -1,11 +1,12 @@
 #if canImport(UIKit)
+import Observation
 import OSLog
 import UIKit
 import WebKit
 import WebInspectorKit
 
 @MainActor
-final class BrowserInspectorSessionAttachmentLifecycle {
+final class BrowserInspectorAttachmentLifecycle {
     typealias AttachAction = @MainActor (WKWebView) async throws -> Void
     typealias DetachAction = @MainActor () async -> Void
 
@@ -68,7 +69,7 @@ final class BrowserInspectorSessionAttachmentLifecycle {
     private let browserWindow: BrowserWindow
     // The lifecycle owns the session lease. Effect tasks capture only the
     // pre-bound operations, never this property or the lifecycle itself.
-    private let inspectorSession: WebInspectorSession
+    private let inspector: WebInspector
     private let attachAction: AttachAction
     private let detachAction: DetachAction
     private var phase: AttachmentPhase = .detached
@@ -79,26 +80,30 @@ final class BrowserInspectorSessionAttachmentLifecycle {
 
     init(
         browserWindow: BrowserWindow,
-        inspectorSession: WebInspectorSession,
+        inspector: WebInspector,
         attachAction: AttachAction? = nil,
         detachAction: DetachAction? = nil
     ) {
         self.browserWindow = browserWindow
-        self.inspectorSession = inspectorSession
-        self.attachAction = attachAction ?? { [weak inspectorSession] webView in
-            // The async Session method owns its own call lifetime. Keeping this
-            // capture weak prevents the stored effect task from extending the
-            // lifecycle's Session lease before or after that call.
-            guard let inspectorSession else {
+        self.inspector = inspector
+        // The captures are weak so that a stored effect task does not extend
+        // the lifecycle's hold on the inspector.
+        self.attachAction = attachAction ?? { [weak inspector] webView in
+            guard let inspector else {
                 throw CancellationError()
             }
-            try await inspectorSession.attach(to: webView)
+            inspector.attach(to: webView)
+            await inspector.waitUntilSettled()
+            if case let .failed(error) = inspector.state {
+                throw error
+            }
         }
-        self.detachAction = detachAction ?? { [weak inspectorSession] in
-            guard let inspectorSession else {
+        self.detachAction = detachAction ?? { [weak inspector] in
+            guard let inspector else {
                 return
             }
-            await inspectorSession.detach()
+            inspector.detach()
+            await inspector.waitUntilSettled()
         }
     }
 
@@ -350,5 +355,21 @@ final class BrowserInspectorSessionAttachmentLifecycle {
         subsystem: "Monocly",
         category: "InspectorAttachment"
     )
+}
+
+private extension WebInspector {
+    /// Suspends until the inspector has applied its latest call and is no
+    /// longer attaching.
+    func waitUntilSettled() async {
+        while state == .attaching {
+            await withCheckedContinuation { continuation in
+                withObservationTracking {
+                    _ = state
+                } onChange: {
+                    continuation.resume()
+                }
+            }
+        }
+    }
 }
 #endif

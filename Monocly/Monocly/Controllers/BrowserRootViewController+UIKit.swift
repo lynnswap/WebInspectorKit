@@ -6,15 +6,15 @@ import WebInspectorKit
 @MainActor
 final class BrowserRootViewController: UINavigationController {
     let browserWindow: BrowserWindow
-    let inspectorSession: WebInspectorSession
+    let inspector: WebInspector
     let launchConfiguration: BrowserLaunchConfiguration
-    private let inspectorSessionAttachmentLifecycle: BrowserInspectorSessionAttachmentLifecycle
+    private let inspectorAttachmentLifecycle: BrowserInspectorAttachmentLifecycle
     private var isPreservingInspectorSessionForSceneDisconnection = false
     var onSelectedWebViewInstalledForTesting: ((WKWebView) -> Void)?
 
     init(
         browserWindow: BrowserWindow? = nil,
-        inspectorSession: WebInspectorSession? = nil,
+        inspector: WebInspector? = nil,
         launchConfiguration: BrowserLaunchConfiguration
     ) {
         let resolvedBrowserWindow = browserWindow ?? BrowserWindow(
@@ -24,19 +24,19 @@ final class BrowserRootViewController: UINavigationController {
             ),
             sessionPersistence: .ephemeral
         )
-        let resolvedInspectorSession = inspectorSession ?? WebInspectorSession()
+        let resolvedInspector = inspector ?? WebInspector()
 
         self.browserWindow = resolvedBrowserWindow
-        self.inspectorSession = resolvedInspectorSession
+        self.inspector = resolvedInspector
         self.launchConfiguration = launchConfiguration
-        self.inspectorSessionAttachmentLifecycle = BrowserInspectorSessionAttachmentLifecycle(
+        self.inspectorAttachmentLifecycle = BrowserInspectorAttachmentLifecycle(
             browserWindow: resolvedBrowserWindow,
-            inspectorSession: resolvedInspectorSession
+            inspector: resolvedInspector
         )
 
         let pageViewController = BrowserPageViewController(
             browserWindow: resolvedBrowserWindow,
-            inspectorSession: resolvedInspectorSession,
+            inspector: resolvedInspector,
             launchConfiguration: launchConfiguration
         )
 
@@ -68,7 +68,7 @@ final class BrowserRootViewController: UINavigationController {
     override func viewIsAppearing(_ animated: Bool) {
         super.viewIsAppearing(animated)
         isPreservingInspectorSessionForSceneDisconnection = false
-        inspectorSessionAttachmentLifecycle.request(.attached)
+        inspectorAttachmentLifecycle.request(.attached)
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -79,15 +79,15 @@ final class BrowserRootViewController: UINavigationController {
         if isPreservingInspectorSessionForSceneDisconnection {
             return
         }
-        inspectorSessionAttachmentLifecycle.request(.detached)
+        inspectorAttachmentLifecycle.request(.detached)
     }
 
     isolated deinit {
-        inspectorSessionAttachmentLifecycle.cancel()
+        inspectorAttachmentLifecycle.cancel()
     }
 
     func finalizeInspectorSession() {
-        guard inspectorSessionAttachmentLifecycle.finalize() else {
+        guard inspectorAttachmentLifecycle.finalize() else {
             return
         }
         isPreservingInspectorSessionForSceneDisconnection = false
@@ -98,7 +98,7 @@ final class BrowserRootViewController: UINavigationController {
     }
 
     func waitForInspectorSessionTransitions() async {
-        await inspectorSessionAttachmentLifecycle.waitForTransitions()
+        await inspectorAttachmentLifecycle.waitForTransitions()
     }
 
     private var pageViewController: BrowserPageViewController? {
@@ -106,14 +106,14 @@ final class BrowserRootViewController: UINavigationController {
     }
 
     func setInspectorSessionAttachedForTesting(to webView: WKWebView) {
-        inspectorSessionAttachmentLifecycle.setAttachedForTesting(to: webView)
+        inspectorAttachmentLifecycle.setAttachedForTesting(to: webView)
     }
 
 }
 
 private extension BrowserRootViewController {
     private func selectedWebViewDidChange(to webView: WKWebView) {
-        inspectorSessionAttachmentLifecycle.selectedWebViewDidChange(to: webView)
+        inspectorAttachmentLifecycle.selectedWebViewDidChange(to: webView)
     }
 }
 #endif

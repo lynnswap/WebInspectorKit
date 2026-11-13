@@ -101,7 +101,7 @@ public final class WebInspector {
         to webView: WKWebView,
         configuration: WebInspectorProxy.Configuration = .init()
     ) {
-        attachment.attach {
+        attachment.attach(webView: webView) {
             try await WebInspectorContainer(attachingTo: webView, configuration: configuration)
         }
     }
@@ -119,6 +119,26 @@ public final class WebInspector {
     package var context: WebInspectorContext {
         attachment.context
     }
+
+    /// The web view of the current attachment, when it was made to one.
+    package var inspectedWebView: WKWebView? {
+        attachment.inspectedWebView
+    }
+
+    /// The number of attach and detach calls made so far.
+    package var requestCount: UInt64 {
+        attachment.requestCount
+    }
+
+    /// Called after ``context`` was replaced, in the same step.
+    package var contextDidChange: (@MainActor () -> Void)? {
+        get { attachment.contextDidChange }
+        set { attachment.contextDidChange = newValue }
+    }
+
+    /// State that the presentation layer keeps for as long as the inspector
+    /// lives, such as the selected tab.
+    @ObservationIgnored package var presentationStorage: AnyObject?
 
     /// Replaces the current context with one that is managed elsewhere, such
     /// as a preview or a test fixture.

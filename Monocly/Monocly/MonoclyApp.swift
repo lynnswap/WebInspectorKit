@@ -264,7 +264,6 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
     private(set) var rootViewController: BrowserRootViewController?
     private var closingRootTransitionTasks: [UUID: Task<Void, Never>] = [:]
     private var preservedRootViewController: BrowserRootViewController?
-    private var preparationTask: Task<Void, Never>?
 
     func scene(
         _ scene: UIScene,
@@ -274,27 +273,7 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
         guard let windowScene = scene as? UIWindowScene else {
             return
         }
-        preparationTask?.cancel()
-        preparationTask = Task { @MainActor [weak self] in
-            do {
-                try await WebInspectorSession.prepare()
-                try Task.checkCancellation()
-                self?.connect(windowScene: windowScene)
-            } catch is CancellationError {
-                return
-            } catch {
-                guard let self, !Task.isCancelled else { return }
-                var configuration = UIContentUnavailableConfiguration.empty()
-                configuration.text = "Unable to Start Monocly"
-                configuration.secondaryText = error.localizedDescription
-                let controller = UIViewController()
-                controller.contentUnavailableConfiguration = configuration
-                let window = UIWindow(windowScene: windowScene)
-                window.rootViewController = controller
-                self.window = window
-                window.makeKeyAndVisible()
-            }
-        }
+        connect(windowScene: windowScene)
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
@@ -328,7 +307,7 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
         if let preservedRoot = preservedRootViewController {
             rootViewController = preservedRoot
             BrowserInspectorCoordinator.setInspectorWindowReleaseHandler(
-                for: rootViewController.inspectorSession,
+                for: rootViewController.inspector,
                 nil
             )
             preservedRootViewController = nil
@@ -364,15 +343,13 @@ final class MonoclyMainSceneDelegate: NSObject, UIWindowSceneDelegate {
     }
 
     func disconnect(windowScene: UIWindowScene) {
-        preparationTask?.cancel()
-        preparationTask = nil
         if let rootViewController {
             rootViewController.browserWindow.preserveSession(immediate: true)
-            if BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspectorSession) {
+            if BrowserInspectorCoordinator.hasInspectorWindow(for: rootViewController.inspector) {
                 preservedRootViewController = rootViewController
                 rootViewController.prepareForSceneDisconnectionPreservingInspectorSession()
                 BrowserInspectorCoordinator.setInspectorWindowReleaseHandler(
-                    for: rootViewController.inspectorSession
+                    for: rootViewController.inspector
                 ) { [weak self, rootViewController] in
                     if self?.preservedRootViewController === rootViewController {
                         self?.preservedRootViewController = nil

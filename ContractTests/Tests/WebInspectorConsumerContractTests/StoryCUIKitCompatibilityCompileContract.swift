@@ -10,24 +10,20 @@ func publicUIKitModuleSupportsAttachAndDetachForConsumers() async throws {
     if #available(iOS 26.1, *) {
         try ScreenTimeWorkaround.install()
     }
-    try await WebInspectorSession.prepare()
-    let session = WebInspectorKit.WebInspectorSession()
-    let inspector = WebInspectorKit.WebInspectorViewController(session: session)
+    let inspector = WebInspector()
+    let controller = WebInspectorViewController(inspector: inspector)
 
-    let sessionAttach: @MainActor @Sendable (WKWebView) async throws -> Void = { webView in
-        try await session.attach(to: webView)
+    let attach: @MainActor (WKWebView) -> Void = { webView in
+        controller.inspector.attach(to: webView)
     }
-    let inspectorAttach: @MainActor @Sendable (WKWebView) async throws -> Void = { webView in
-        try await inspector.attach(to: webView)
-    }
-
-    let sessionDetach: @MainActor @Sendable () async -> Void = {
-        await session.detach()
+    let detach: @MainActor () -> Void = {
+        inspector.detach()
     }
 
-    _ = sessionDetach
-    _ = sessionAttach
-    _ = inspectorAttach
+    _ = attach
+    _ = detach
+    #expect(controller.inspector === inspector)
+    #expect(inspector.state == .detached)
     _ = WebInspectorViewController()
 }
 #endif

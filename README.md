@@ -39,16 +39,6 @@ UIKit Web Inspector for `WKWebView`.
 
 ### UIKit
 
-Prepare the shared UI runtimes during asynchronous app setup before constructing
-inspector views:
-
-```swift
-try await WebInspectorSession.prepare()
-```
-
-Await completion and handle preparation failures in your app's startup flow.
-Repeated calls reuse preparation across the process. Then create the inspector:
-
 ```swift
 import UIKit
 import WebKit
@@ -58,50 +48,75 @@ final class BrowserViewController: UIViewController {
     private let pageWebView = WKWebView(frame: .zero)
 
     @objc private func presentInspector() {
-        let inspector = WebInspectorViewController()
-        inspector.modalPresentationStyle = .pageSheet
-        if let sheet = inspector.sheetPresentationController {
+        let controller = WebInspectorViewController()
+        controller.modalPresentationStyle = .pageSheet
+        if let sheet = controller.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
             sheet.selectedDetentIdentifier = .medium
         }
-        Task { @MainActor in
-            try await inspector.attach(to: pageWebView)
-            present(inspector, animated: true)
-        }
+        controller.inspector.attach(to: pageWebView)
+        present(controller, animated: true)
     }
 }
+```
+
+`attach(to:)` returns immediately, and the inspector fills in as the page's state
+arrives. To inspect another web view, call it again; the inspector ends the
+current attachment first. Dismissing the view controller detaches the inspector
+unless `automaticallyDetachesOnDismiss` is `false`.
+
+To keep inspecting while the UI is off screen, keep the `WebInspector` yourself
+and create the view controller from it:
+
+```swift
+let inspector = WebInspector()
+inspector.attach(to: pageWebView)
+
+let controller = WebInspectorViewController(inspector: inspector)
+controller.automaticallyDetachesOnDismiss = false
 ```
 
 Attaching to a loaded page populates Network with the page and frame resources
 that WebKit still retains, then continues recording live requests. Restored
 resources may have no HTTP status, headers, or timing information. This matches
 Web Inspector's resource-tree snapshot; it does not recover every past request.
-If the snapshot fails, `context.network.resourceTreeError` reports
+If the snapshot fails, `inspector.network.resourceTreeError` reports
 the failure while live Network recording continues.
 
 ## Tabs
 
-```swift
-let inspector = WebInspectorViewController(
-    tabs: [.dom, .network]
-)
-```
-
-The built-in tab surface exposes DOM and Network tabs. Apps can also add UIKit
-tabs with a `UIViewController` factory:
+The built-in tab surface exposes DOM and Network tabs. Apps can add UIKit tabs
+with a `UIViewController` factory, which receives the inspector:
 
 ```swift
 let consoleTab = WebInspectorTab(
     id: "app_console",
     title: "Console",
     systemImage: "terminal"
-) { session in
-    ConsoleViewController(inspectorSession: session)
+) { inspector in
+    ConsoleViewController(messages: inspector.console)
 }
 
-let inspector = WebInspectorViewController(
+let controller = WebInspectorViewController(
     tabs: [.dom, .network, consoleTab]
 )
+```
+
+## Custom interfaces
+
+`WebInspector` is usable without the built-in UI. Its domains are observable
+objects that hold the models and the commands of the inspected page:
+
+```swift
+import WebInspectorDataKit
+
+let inspector = WebInspector()
+inspector.attach(to: webView)
+
+inspector.dom.rootNode
+inspector.network.requests
+inspector.console.messages
+try await inspector.runtime.evaluate("document.title")
 ```
 
 ## Native runtime foundation

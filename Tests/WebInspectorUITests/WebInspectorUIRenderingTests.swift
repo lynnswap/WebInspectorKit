@@ -1,7 +1,7 @@
 #if canImport(UIKit)
 import Testing
 import UIKit
-import WebInspectorKit
+@testable import WebInspectorKit
 import WebKitTestWorkarounds
 
 @MainActor

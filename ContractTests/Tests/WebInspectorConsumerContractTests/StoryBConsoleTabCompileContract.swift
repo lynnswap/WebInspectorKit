@@ -6,42 +6,47 @@ import WebKitTestWorkarounds
 
 @MainActor
 @Test
-func customUIKitTabFactoryReceivesWebInspectorSession() async throws {
+func customUIKitTabFactoryReceivesTheInspector() async throws {
     if #available(iOS 26.1, *) {
         try ScreenTimeWorkaround.install()
     }
-    try await WebInspectorSession.prepare()
     let consoleTab = WebInspectorTab(
         id: "contract_console",
         title: "Console",
         systemImage: "terminal"
-    ) { session in
-        ContractConsoleViewController(inspectorSession: session)
+    ) { inspector in
+        ContractConsoleViewController(inspector: inspector)
     }
 
-    let session = WebInspectorSession(tabs: [.dom, .network, consoleTab])
-    let inspector = WebInspectorViewController(session: session)
-    let inspectorWithTabs = WebInspectorViewController(tabs: [.dom, .network, consoleTab])
+    let inspector = WebInspector()
+    let controller = WebInspectorViewController(
+        inspector: inspector,
+        tabs: [.dom, .network, consoleTab]
+    )
 
-    #expect(inspector.session === session)
-    #expect(inspector.automaticallyDetachesOnDismiss)
-    inspector.automaticallyDetachesOnDismiss = false
-    #expect(inspector.automaticallyDetachesOnDismiss == false)
-    #expect(inspectorWithTabs.session.pageUserInterfaceStyle == .unspecified)
+    #expect(controller.inspector === inspector)
+    #expect(controller.automaticallyDetachesOnDismiss)
+    controller.automaticallyDetachesOnDismiss = false
+    #expect(controller.automaticallyDetachesOnDismiss == false)
+    #expect(inspector.pageUserInterfaceStyle == .unspecified)
 }
 
 @MainActor
 private final class ContractConsoleViewController: UIViewController {
-    let inspectorSession: WebInspectorSession
+    let inspector: WebInspector
 
-    init(inspectorSession: WebInspectorSession) {
-        self.inspectorSession = inspectorSession
+    init(inspector: WebInspector) {
+        self.inspector = inspector
         super.init(nibName: nil, bundle: nil)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         nil
+    }
+
+    var messageCount: Int {
+        inspector.console.messages.count
     }
 }
 #endif
