@@ -444,6 +444,17 @@ final class InterfaceModel {
         contextBoundContentRevision &+= 1
     }
 
+    /// Replaces the tabs of an inspector that may already be on screen.
+    ///
+    /// Tabs are equal by ID, so a tab with a known ID can still bring another
+    /// title or factory. Advancing the content revision makes every host
+    /// rebuild its tab items and evict the content it built for the previous
+    /// tabs.
+    func replaceTabs(_ tabs: [WebInspectorTab]) {
+        setTabs(tabs)
+        contextBoundContentRevision &+= 1
+    }
+
     func reachableContentKeys() -> Set<WebInspectorTab.ContentKey> {
         projection.contentKeys(for: .compact, tabs: tabs)
             .union(projection.contentKeys(for: .regular, tabs: tabs))

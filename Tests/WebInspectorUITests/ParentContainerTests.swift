@@ -307,6 +307,25 @@ struct ParentContainerTests {
     }
 
     @Test
+    func replacingTheTabsOfAPresentedInspectorRebuildsItsContent() {
+        let inspector = WebInspector()
+        let first = WebInspectorViewController(
+            inspector: inspector,
+            tabs: [.dom, makeNoOpTab(title: "Old")]
+        )
+        let revisionBeforeReplacement = first.session.interface.contextBoundContentRevision
+
+        // Tabs are equal by ID, so this replaces the definition of a known tab.
+        _ = WebInspectorViewController(
+            inspector: inspector,
+            tabs: [.dom, makeNoOpTab(title: "New")]
+        )
+
+        #expect(first.session.interface.tabs.last?.title == "New")
+        #expect(first.session.interface.contextBoundContentRevision > revisionBeforeReplacement)
+    }
+
+    @Test
     func installingDataContextAdvancesContextEpochAndEvictsRootPresentationContent() {
         let session = makeSessionWithNoOpAttachment()
         let viewController = WebInspectorViewController(session: session)

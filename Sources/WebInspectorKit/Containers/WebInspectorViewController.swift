@@ -195,7 +195,7 @@ public final class WebInspectorViewController: UIViewController {
     ) {
         let session = WebInspectorSession.session(for: inspector)
         if let tabs {
-            session.interface.setTabs(tabs)
+            session.interface.replaceTabs(tabs)
         }
         self.init(inspector: inspector, session: session)
     }
