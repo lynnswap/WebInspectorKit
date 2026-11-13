@@ -5,7 +5,7 @@ import WebInspectorProxyKit
 /// Observable model for one console message.
 @Observable
 @MainActor
-public final class ConsoleMessage: WebInspectorPersistentModel {
+public final class ConsoleMessage: WebInspectorModel {
     /// Stable identity for a console message within a context.
     public struct ID: Comparable, Hashable, Sendable {
         let ordinal: Int

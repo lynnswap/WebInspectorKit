@@ -2,10 +2,10 @@ import Foundation
 import Observation
 import WebInspectorProxyKit
 
-/// Observable model for a DOM node owned by a ``WebInspectorContext``.
+/// Observable model for a DOM node of a ``WebInspector``.
 @Observable
 @MainActor
-public final class DOMNode: WebInspectorPersistentModel {
+public final class DOMNode: WebInspectorModel {
     /// Stable identity for this DOM node model.
     ///
     /// WebKit can reuse the same protocol identity in a later document. A

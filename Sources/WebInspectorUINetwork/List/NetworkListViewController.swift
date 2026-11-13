@@ -247,7 +247,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
     private var activeSearchController: UISearchController?
     private var renderedEmptyPresentation: EmptyPresentation?
 #if DEBUG
-    private struct FetchedResultsTransactionDeliveryWaiter {
+    private struct ListTransactionDeliveryWaiter {
         var id: Int
         var targetCount: Int
         var continuation: CheckedContinuation<Bool, Never>
@@ -256,9 +256,9 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private var deinitHandlerForTesting: (@MainActor () -> Void)?
     private var snapshotUpdateCompletionWaitersForTesting: [CheckedContinuation<Void, Never>] = []
-    private var fetchedResultsTransactionDeliveryWaitersForTesting: [FetchedResultsTransactionDeliveryWaiter] = []
-    private var fetchedResultsTransactionDeliveryWaiterIDStorageForTesting = 0
-    private var fetchedResultsTransactionDeliveryCountStorageForTesting = 0
+    private var listTransactionDeliveryWaitersForTesting: [ListTransactionDeliveryWaiter] = []
+    private var listTransactionDeliveryWaiterIDStorageForTesting = 0
+    private var listTransactionDeliveryCountStorageForTesting = 0
     private var displayRequestIDsEvaluationCountStorageForTesting = 0
     private var snapshotApplyCountStorageForTesting = 0
     private var listProjectionFlushCountStorageForTesting = 0
@@ -345,7 +345,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         selectedEntryObservation?.cancel()
         detachSearchPresentation()
 #if DEBUG
-        resolveFetchedResultsTransactionDeliveryWaitersForTesting(result: false)
+        resolveListTransactionDeliveryWaitersForTesting(result: false)
         deinitHandlerForTesting?()
 #endif
     }
@@ -721,7 +721,7 @@ package final class NetworkListViewController: UICollectionViewController, UISea
 
     private func listFrameDidRequestProjectionCapture() {
 #if DEBUG
-        recordFetchedResultsTransactionDeliveryForTesting()
+        recordListTransactionDeliveryForTesting()
 #endif
         needsListProjectionCapture = true
         guard snapshotCoordinator.isRenderingActive else {
@@ -924,8 +924,8 @@ extension NetworkListViewController {
         listProjectionFlushCountStorageForTesting
     }
 
-    package var fetchedResultsTransactionDeliveryCountForTesting: Int {
-        fetchedResultsTransactionDeliveryCountStorageForTesting
+    package var listTransactionDeliveryCountForTesting: Int {
+        listTransactionDeliveryCountStorageForTesting
     }
 
     package var filterMenuBuildCountForTesting: Int {
@@ -1006,35 +1006,35 @@ extension NetworkListViewController {
         await listSnapshotBuildCoordinator.waitUntilTrackedTasksComplete()
     }
 
-    package func waitForFetchedResultsTransactionDeliveryForTesting(
+    package func waitForListTransactionDeliveryForTesting(
         after baselineCount: Int,
         timeout: Duration = .seconds(1)
     ) async -> Bool {
-        return await waitForFetchedResultsTransactionDeliveryCountForTesting(
+        return await waitForListTransactionDeliveryCountForTesting(
             baselineCount + 1,
             timeout: timeout
         )
     }
 
-    package func waitForFetchedResultsTransactionDeliveryCountForTesting(
+    package func waitForListTransactionDeliveryCountForTesting(
         _ targetCount: Int,
         timeout: Duration = .seconds(10)
     ) async -> Bool {
-        guard fetchedResultsTransactionDeliveryCountStorageForTesting < targetCount else {
+        guard listTransactionDeliveryCountStorageForTesting < targetCount else {
             return true
         }
         return await withCheckedContinuation { continuation in
-            let waiterID = fetchedResultsTransactionDeliveryWaiterIDStorageForTesting
-            fetchedResultsTransactionDeliveryWaiterIDStorageForTesting &+= 1
+            let waiterID = listTransactionDeliveryWaiterIDStorageForTesting
+            listTransactionDeliveryWaiterIDStorageForTesting &+= 1
             let timeoutTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: timeout)
-                self?.resolveFetchedResultsTransactionDeliveryWaiterForTesting(
+                self?.resolveListTransactionDeliveryWaiterForTesting(
                     id: waiterID,
                     result: false
                 )
             }
-            fetchedResultsTransactionDeliveryWaitersForTesting.append(
-                FetchedResultsTransactionDeliveryWaiter(
+            listTransactionDeliveryWaitersForTesting.append(
+                ListTransactionDeliveryWaiter(
                     id: waiterID,
                     targetCount: targetCount,
                     continuation: continuation,
@@ -1064,28 +1064,28 @@ extension NetworkListViewController {
         }
     }
 
-    private func recordFetchedResultsTransactionDeliveryForTesting() {
-        fetchedResultsTransactionDeliveryCountStorageForTesting &+= 1
-        resolveFetchedResultsTransactionDeliveryWaitersForTesting(result: true)
+    private func recordListTransactionDeliveryForTesting() {
+        listTransactionDeliveryCountStorageForTesting &+= 1
+        resolveListTransactionDeliveryWaitersForTesting(result: true)
     }
 
-    private func resolveFetchedResultsTransactionDeliveryWaitersForTesting(result: Bool) {
-        let waiterIDs = fetchedResultsTransactionDeliveryWaitersForTesting.compactMap { waiter in
-            if result == false || fetchedResultsTransactionDeliveryCountStorageForTesting >= waiter.targetCount {
+    private func resolveListTransactionDeliveryWaitersForTesting(result: Bool) {
+        let waiterIDs = listTransactionDeliveryWaitersForTesting.compactMap { waiter in
+            if result == false || listTransactionDeliveryCountStorageForTesting >= waiter.targetCount {
                 return waiter.id
             }
             return nil
         }
         for waiterID in waiterIDs {
-            resolveFetchedResultsTransactionDeliveryWaiterForTesting(id: waiterID, result: result)
+            resolveListTransactionDeliveryWaiterForTesting(id: waiterID, result: result)
         }
     }
 
-    private func resolveFetchedResultsTransactionDeliveryWaiterForTesting(id: Int, result: Bool) {
-        guard let index = fetchedResultsTransactionDeliveryWaitersForTesting.firstIndex(where: { $0.id == id }) else {
+    private func resolveListTransactionDeliveryWaiterForTesting(id: Int, result: Bool) {
+        guard let index = listTransactionDeliveryWaitersForTesting.firstIndex(where: { $0.id == id }) else {
             return
         }
-        let waiter = fetchedResultsTransactionDeliveryWaitersForTesting.remove(at: index)
+        let waiter = listTransactionDeliveryWaitersForTesting.remove(at: index)
         waiter.timeoutTask.cancel()
         waiter.continuation.resume(returning: result)
     }

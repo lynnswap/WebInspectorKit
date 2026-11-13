@@ -60,7 +60,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
         defer { window.isHidden = true }
         await viewController.flushPendingSnapshotUpdateForTesting()
 
-        var transactionBaseline = viewController.fetchedResultsTransactionDeliveryCountForTesting
+        var transactionBaseline = viewController.listTransactionDeliveryCountForTesting
         model.setSearchText("does-not-match")
         #expect(await waitUntilListShows(
             [],
@@ -80,7 +80,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
         #expect(noResults.image != nil)
         #expect(viewController.collectionViewForTesting.isHidden)
 
-        transactionBaseline = viewController.fetchedResultsTransactionDeliveryCountForTesting
+        transactionBaseline = viewController.listTransactionDeliveryCountForTesting
         model.setSearchText("")
         #expect(await waitUntilListShows(
             [try #require(model.displayRequests.first?.id)],
@@ -169,7 +169,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
     }
 
     @Test
-    func visibleListAppliesLiveInsertThroughFetchedResultsTransactions() async throws {
+    func visibleListAppliesLiveInsertThroughListTransactions() async throws {
         let context = makeContext()
         let firstRequest = try #require(await applyRequest(
             to: context,
@@ -186,7 +186,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
 
         let evaluationCountBeforeInsert = listViewController.displayRequestIDsEvaluationCountForTesting
         let snapshotApplyCountBeforeInsert = listViewController.snapshotApplyCountForTesting
-        let transactionDeliveryCountBeforeInsert = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        let transactionDeliveryCountBeforeInsert = listViewController.listTransactionDeliveryCountForTesting
         let secondRequest = try #require(await applyRequest(
             to: context,
             requestID: "2",
@@ -242,7 +242,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
         let targetCaptureBaseline = listViewController.displayRequestIDsEvaluationCountForTesting
         let scheduledFrameBaseline = frameScheduler.scheduledFrameCount
         let insertedRequestCount = 2_305
-        let frameRequestDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        let frameRequestDeliveryBaseline = listViewController.listTransactionDeliveryCountForTesting
         let rawTransactionBaseline = model.rawTransactionDeliveryCountForTesting
         for index in 0..<insertedRequestCount {
             context.seedNetworkRequest(
@@ -260,7 +260,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
             after: rawTransactionBaseline + insertedRequestCount - 1,
             timeout: .seconds(10)
         ))
-        try #require(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+        try #require(await listViewController.waitForListTransactionDeliveryForTesting(
             after: frameRequestDeliveryBaseline
         ))
         #expect(frameScheduler.scheduledFrameCount == scheduledFrameBaseline + 1)
@@ -990,10 +990,10 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
         let indexPath = try #require(listViewController.collectionViewForTesting.indexPathsForVisibleItems.first)
         let cell = try #require(listViewController.networkListCellForTesting(at: indexPath))
         #expect(cell.observedEntryForTesting === originalEntry)
-        let frameRequestBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        let frameRequestBaseline = listViewController.listTransactionDeliveryCountForTesting
 
         model.rebuildEntriesForTesting()
-        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+        #expect(await listViewController.waitForListTransactionDeliveryForTesting(
             after: frameRequestBaseline
         ))
         await listViewController.flushPendingSnapshotUpdateForTesting()
@@ -1166,7 +1166,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
         await applyCompletionScheduler.waitUntilScheduledCompletionCount(1)
         #expect(listViewController.snapshotApplyCountForTesting == 1)
 
-        var transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        var transactionDeliveryBaseline = listViewController.listTransactionDeliveryCountForTesting
         context.seedNetworkRequest(
             requestID: "ready-b",
             url: "https://example.test/ready-b.json",
@@ -1176,7 +1176,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
             responseStatusText: "OK",
             timestamp: 1
         )
-        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+        #expect(await listViewController.waitForListTransactionDeliveryForTesting(
             after: transactionDeliveryBaseline
         ))
         frameScheduler.fireScheduledFrame()
@@ -1187,7 +1187,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
         #expect(listViewController.snapshotApplyCountForTesting == 1)
         try #require(frameScheduler.hasScheduledFrame)
 
-        transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        transactionDeliveryBaseline = listViewController.listTransactionDeliveryCountForTesting
         context.seedNetworkRequest(
             requestID: "latest-c",
             url: "https://example.test/latest-c.json",
@@ -1197,7 +1197,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
             responseStatusText: "OK",
             timestamp: 2
         )
-        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+        #expect(await listViewController.waitForListTransactionDeliveryForTesting(
             after: transactionDeliveryBaseline
         ))
 
@@ -1264,7 +1264,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
         let projectionFlushBaseline = listViewController.listProjectionFlushCountForTesting
         let scheduledFrameBaseline = frameScheduler.scheduledFrameCount
 
-        var transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        var transactionDeliveryBaseline = listViewController.listTransactionDeliveryCountForTesting
         context.seedNetworkRequest(
             requestID: "first-replacement",
             url: "https://example.test/first.json",
@@ -1274,13 +1274,13 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
             responseStatusText: "OK",
             timestamp: 1
         )
-        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+        #expect(await listViewController.waitForListTransactionDeliveryForTesting(
             after: transactionDeliveryBaseline
         ))
         frameScheduler.fireScheduledFrame()
         await snapshotBuilder.waitUntilStartedBuildCount(2)
 
-        transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        transactionDeliveryBaseline = listViewController.listTransactionDeliveryCountForTesting
         context.seedNetworkRequest(
             requestID: "superseded-replacement",
             url: "https://example.test/superseded.json",
@@ -1290,12 +1290,12 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
             responseStatusText: "OK",
             timestamp: 2
         )
-        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+        #expect(await listViewController.waitForListTransactionDeliveryForTesting(
             after: transactionDeliveryBaseline
         ))
         frameScheduler.fireScheduledFrame()
 
-        transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        transactionDeliveryBaseline = listViewController.listTransactionDeliveryCountForTesting
         context.seedNetworkRequest(
             requestID: "latest-replacement",
             url: "https://example.test/latest.json",
@@ -1305,7 +1305,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
             responseStatusText: "OK",
             timestamp: 3
         )
-        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+        #expect(await listViewController.waitForListTransactionDeliveryForTesting(
             after: transactionDeliveryBaseline
         ))
         frameScheduler.fireScheduledFrame()
@@ -1371,7 +1371,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
         }
         defer { renderedFileType.cancel() }
         let snapshotApplyBaseline = listViewController.snapshotApplyCountForTesting
-        let transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        let transactionDeliveryBaseline = listViewController.listTransactionDeliveryCountForTesting
 
         await applyResponseReceived(
             to: context,
@@ -1385,14 +1385,14 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
         #expect(await renderedFileType.waitUntilValue("css"))
         #expect(listViewController.snapshotApplyCountForTesting == snapshotApplyBaseline)
         #expect(
-            listViewController.fetchedResultsTransactionDeliveryCountForTesting
+            listViewController.listTransactionDeliveryCountForTesting
                 == transactionDeliveryBaseline
         )
         #expect(listViewController.displayedRequestIDsForTesting == [request.id])
     }
 
     @Test
-    func visibleListAppliesDescriptorResetThroughFetchedResultsTransactions() async throws {
+    func visibleListAppliesDescriptorResetThroughListTransactions() async throws {
         let context = makeContext()
         _ = try #require(await applyRequest(
             to: context,
@@ -1412,7 +1412,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
 
         let evaluationCountBeforeUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
         let snapshotApplyCountBeforeUpdate = listViewController.snapshotApplyCountForTesting
-        let transactionDeliveryCountBeforeUpdate = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        let transactionDeliveryCountBeforeUpdate = listViewController.listTransactionDeliveryCountForTesting
 
         model.setSearchText("does-not-match")
         let didRenderReset = await waitUntilListShows(
@@ -1447,11 +1447,11 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
 
         let evaluationCountBeforeHiddenUpdate = listViewController.displayRequestIDsEvaluationCountForTesting
         let transactionDeliveryCountBeforeHiddenUpdate = listViewController
-            .fetchedResultsTransactionDeliveryCountForTesting
+            .listTransactionDeliveryCountForTesting
 
         listViewController.suspendRenderingForTesting()
         model.setSearchText("does-not-match")
-        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+        #expect(await listViewController.waitForListTransactionDeliveryForTesting(
             after: transactionDeliveryCountBeforeHiddenUpdate
         ))
 
@@ -1497,7 +1497,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
         frameScheduler.fireScheduledFrame()
         await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
         #expect(listViewController.displayedRequestIDsForTesting == [firstRequest.id])
-        var transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        var transactionDeliveryBaseline = listViewController.listTransactionDeliveryCountForTesting
         let secondRequestID = context.seedNetworkRequest(
             requestID: "second",
             url: "https://example.test/second.json",
@@ -1508,7 +1508,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
             timestamp: 1
         )
         let secondRequest = try #require(context.network.request(for: secondRequestID))
-        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+        #expect(await listViewController.waitForListTransactionDeliveryForTesting(
             after: transactionDeliveryBaseline
         ))
 
@@ -1548,7 +1548,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
         #expect(statistics.maximumActiveBuildCount == 1)
         #expect(listViewController.trackedListSnapshotBuildTaskCountForTesting == 0)
 
-        transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        transactionDeliveryBaseline = listViewController.listTransactionDeliveryCountForTesting
         let thirdRequestID = context.seedNetworkRequest(
             requestID: "third",
             url: "https://example.test/third.json",
@@ -1559,7 +1559,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
             timestamp: 2
         )
         let thirdRequest = try #require(context.network.request(for: thirdRequestID))
-        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+        #expect(await listViewController.waitForListTransactionDeliveryForTesting(
             after: transactionDeliveryBaseline
         ))
         try #require(frameScheduler.hasScheduledFrame)
@@ -1595,7 +1595,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
                 == [thirdRequest.id, secondRequest.id, firstRequest.id]
         )
 
-        transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        transactionDeliveryBaseline = listViewController.listTransactionDeliveryCountForTesting
         let fourthRequestID = context.seedNetworkRequest(
             requestID: "fourth",
             url: "https://example.test/fourth.json",
@@ -1606,7 +1606,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
             timestamp: 3
         )
         let fourthRequest = try #require(context.network.request(for: fourthRequestID))
-        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+        #expect(await listViewController.waitForListTransactionDeliveryForTesting(
             after: transactionDeliveryBaseline
         ))
         try #require(frameScheduler.hasScheduledFrame)
@@ -1694,9 +1694,9 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
         await listViewController.waitForSnapshotPipelineQuiescenceForTesting()
         #expect(listViewController.displayedRequestIDsForTesting == [request.id])
 
-        var transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        var transactionDeliveryBaseline = listViewController.listTransactionDeliveryCountForTesting
         model.setSearchText("does-not-match")
-        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+        #expect(await listViewController.waitForListTransactionDeliveryForTesting(
             after: transactionDeliveryBaseline
         ))
         try #require(frameScheduler.hasScheduledFrame)
@@ -1716,9 +1716,9 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
         #expect(listViewController.hasPendingSnapshotUpdateForTesting == false)
         #expect(frameScheduler.hasScheduledFrame == false)
 
-        transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        transactionDeliveryBaseline = listViewController.listTransactionDeliveryCountForTesting
         model.setSearchText("")
-        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+        #expect(await listViewController.waitForListTransactionDeliveryForTesting(
             after: transactionDeliveryBaseline
         ))
         applyCompletionScheduler.runNextCompletion()
@@ -1791,7 +1791,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
         #expect(applyCompletionScheduler.pendingCompletionCount == 1)
 
         let transactionDeliveryBaseline = listViewController
-            .fetchedResultsTransactionDeliveryCountForTesting
+            .listTransactionDeliveryCountForTesting
         let secondRequestID = context.seedNetworkRequest(
             requestID: "reparent-second",
             url: "https://example.test/reparent-second.json",
@@ -1802,7 +1802,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
             timestamp: 1
         )
         let secondRequest = try #require(context.network.request(for: secondRequestID))
-        #expect(await listViewController.waitForFetchedResultsTransactionDeliveryForTesting(
+        #expect(await listViewController.waitForListTransactionDeliveryForTesting(
             after: transactionDeliveryBaseline
         ))
         try #require(frameScheduler.hasScheduledFrame)
@@ -1991,7 +1991,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
         await listViewController.flushPendingSnapshotUpdateForTesting()
         #expect(listViewController.displayedEntryIDsForTesting == [stableEntryID])
 
-        let transactionDeliveryBaseline = listViewController.fetchedResultsTransactionDeliveryCountForTesting
+        let transactionDeliveryBaseline = listViewController.listTransactionDeliveryCountForTesting
         let entryObservation = withPortableContinuousObservation { _ in
             _ = stableEntry.requests
         }
@@ -2016,7 +2016,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
         ])
 
         #expect(didUpdateStableEntry)
-        #expect(listViewController.fetchedResultsTransactionDeliveryCountForTesting == transactionDeliveryBaseline)
+        #expect(listViewController.listTransactionDeliveryCountForTesting == transactionDeliveryBaseline)
         #expect(listViewController.displayedEntryIDsForTesting == [stableEntryID])
         #expect(model.entry(for: stableEntryID) === stableEntry)
         #expect(stableEntry.requests.map(\.id) == [firstRequest.id, secondRequest.id])
@@ -2066,7 +2066,7 @@ struct NetworkListRenderingTests: NetworkDetailTestSupport {
     }
 
     @Test
-    func listControllerDeallocatesWhileFetchedResultsTransactionTaskIsActive() async throws {
+    func listControllerDeallocatesWhileListTransactionTaskIsActive() async throws {
         let model = NetworkPanelModel(context: makeContext())
         let deinitProbe = UITestDeinitProbe()
         weak var weakViewController: NetworkListViewController?
