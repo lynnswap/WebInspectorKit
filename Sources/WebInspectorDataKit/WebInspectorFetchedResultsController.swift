@@ -41,10 +41,6 @@ final class WebInspectorFetchedResultsSingleSectionSnapshotLedger<
                 state.itemIDs.count == expectedCount,
                 "A fetched-results snapshot ledger must match the current result count."
             )
-            precondition(
-                state.itemIDs.indices.contains(index),
-                "A fetched-results snapshot ledger index must be in bounds."
-            )
             return state.itemIDs[index]
         }
     }

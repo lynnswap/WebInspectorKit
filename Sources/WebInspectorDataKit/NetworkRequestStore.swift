@@ -411,9 +411,7 @@ package final class NetworkRequestStore {
         for registration in orderedRegistrations {
             registration.request.invalidateResponseBodyFetch()
         }
-        let (nextGeneration, overflow) = generation.addingReportingOverflow(1)
-        precondition(!overflow, "Network request store generation exhausted.")
-        generation = nextGeneration
+        generation += 1
         orderedRegistrations = []
         registrationsByID = [:]
         requestAliases = [:]
@@ -610,17 +608,12 @@ package final class NetworkRequestStore {
     }
 
     private func takeFetchedResultRegistrationID() -> UInt64 {
-        precondition(
-            nextFetchedResultRegistrationID < UInt64.max,
-            "Network fetched-result registration identity exhausted."
-        )
         defer { nextFetchedResultRegistrationID += 1 }
         return nextFetchedResultRegistrationID
     }
 
     @discardableResult
     private func nextIndexSequence() -> UInt64 {
-        precondition(indexSequence < UInt64.max, "Network request index sequence exhausted.")
         indexSequence += 1
         return indexSequence
     }

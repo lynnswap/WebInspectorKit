@@ -24,7 +24,6 @@ private actor CSSOperationGate {
             return
         }
 
-        precondition(nextWaiterID < UInt64.max, "CSS operation waiter identity overflowed.")
         nextWaiterID += 1
         let waiterID = nextWaiterID
         try await withTaskCancellationHandler {
@@ -254,10 +253,8 @@ private struct NetworkFrameNavigationTimeline {
     }
 
     private mutating func allocateEpoch() -> UInt64 {
-        let (epoch, overflow) = lastAllocatedEpoch.addingReportingOverflow(1)
-        precondition(!overflow, "Network navigation epoch exhausted.")
-        lastAllocatedEpoch = epoch
-        return epoch
+        lastAllocatedEpoch += 1
+        return lastAllocatedEpoch
     }
 }
 
@@ -1339,10 +1336,6 @@ public final class WebInspectorContext {
     }
 
     private func nextPageHighlightID() -> UInt64 {
-        precondition(
-            nextPageHighlightOperationID < UInt64.max,
-            "WebInspectorContext exhausted page highlight operation identifiers."
-        )
         nextPageHighlightOperationID += 1
         return nextPageHighlightOperationID
     }
@@ -1719,10 +1712,6 @@ public final class WebInspectorContext {
     }
 
     private func nextElementPickerID() -> UInt64 {
-        precondition(
-            nextElementPickerOperationID < UInt64.max,
-            "WebInspectorContext exhausted element picker operation identifiers."
-        )
         nextElementPickerOperationID += 1
         return nextElementPickerOperationID
     }
@@ -2972,9 +2961,7 @@ public final class WebInspectorContext {
     private func beginDOMDocumentLoad() -> UInt64 {
         precondition(domDocumentLoad == nil, "Only one DOM document load may be active.")
         let id = nextDOMDocumentLoadID
-        let (nextID, overflow) = nextDOMDocumentLoadID.addingReportingOverflow(1)
-        precondition(!overflow, "DOM document load identity exhausted.")
-        nextDOMDocumentLoadID = nextID
+        nextDOMDocumentLoadID += 1
         domDocumentLoad = DOMDocumentLoad(id: id, bootstrap: nil)
         return id
     }
@@ -2997,9 +2984,7 @@ public final class WebInspectorContext {
         precondition(load.id == loadID, "DOM bootstrap must belong to the active document load.")
         precondition(load.bootstrap == nil, "DOM document load already owns a bootstrap.")
         let id = nextDOMBootstrapID
-        let (nextID, overflow) = nextDOMBootstrapID.addingReportingOverflow(1)
-        precondition(!overflow, "DOM bootstrap identity exhausted.")
-        nextDOMBootstrapID = nextID
+        nextDOMBootstrapID += 1
         load.bootstrap = DOMBootstrap(id: id, events: [])
         domDocumentLoad = load
         return id
@@ -3058,9 +3043,7 @@ public final class WebInspectorContext {
     }
 
     private func resetNetworkModelsForNewAttachment() {
-        let (nextAttachmentEpoch, overflow) = networkAttachmentEpoch.addingReportingOverflow(1)
-        precondition(!overflow, "Network attachment epoch exhausted.")
-        networkAttachmentEpoch = nextAttachmentEpoch
+        networkAttachmentEpoch += 1
         networkNavigationTimelines = [:]
         pendingNetworkNavigationsByTargetID = [:]
         networkRequestStore.reset(for: .newAttachment)
@@ -3235,9 +3218,7 @@ public final class WebInspectorContext {
     }
 
     private func stopEventPumps() {
-        let (nextGeneration, overflow) = orderedEventSubscriptionGeneration.addingReportingOverflow(1)
-        precondition(!overflow, "Ordered event subscription identity exhausted.")
-        orderedEventSubscriptionGeneration = nextGeneration
+        orderedEventSubscriptionGeneration += 1
         for pump in eventPumps {
             pump.stop()
         }
@@ -6628,7 +6609,6 @@ extension WebInspectorContext {
     }
 
     private func takeNetworkChronologySequence() -> UInt64 {
-        precondition(networkChronologySequence < UInt64.max, "Network chronology sequence exhausted.")
         defer { networkChronologySequence += 1 }
         return networkChronologySequence
     }

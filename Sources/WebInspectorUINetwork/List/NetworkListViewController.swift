@@ -171,10 +171,6 @@ package final class NetworkListViewController: UICollectionViewController, UISea
         }
 
         private func takeNextGeneration() -> UInt64 {
-            precondition(
-                nextGeneration < UInt64.max,
-                "Network list snapshot build generation overflowed."
-            )
             nextGeneration += 1
             return nextGeneration
         }
@@ -1014,7 +1010,6 @@ extension NetworkListViewController {
         after baselineCount: Int,
         timeout: Duration = .seconds(1)
     ) async -> Bool {
-        precondition(baselineCount < Int.max, "Network list transaction delivery count overflowed.")
         return await waitForFetchedResultsTransactionDeliveryCountForTesting(
             baselineCount + 1,
             timeout: timeout

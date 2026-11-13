@@ -76,7 +76,6 @@ package final class TransportReceiver: Sendable {
             guard !$0.isClosed else {
                 return nil as UInt64?
             }
-            precondition($0.tailOrdinal < UInt64.max, "TransportReceiver exhausted its message ordinal space.")
             $0.tailOrdinal += 1
             $0.inputs.append(QueuedInput(ordinal: $0.tailOrdinal, input: input))
             guard $0.transport != nil else {

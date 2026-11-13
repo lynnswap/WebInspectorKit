@@ -588,14 +588,6 @@ public final class WebSocketState {
             }
             lastID = id
         }
-        precondition(
-            timelineEntries.count <= Int.max - entries.count,
-            "WebSocket timeline entry count overflowed."
-        )
-        precondition(
-            frames.count <= Int.max - compatibilityFrames.count,
-            "WebSocket frame count overflowed."
-        )
         timelineEntries.append(contentsOf: entries)
         if compatibilityFrames.isEmpty == false {
             frames.append(contentsOf: compatibilityFrames)
@@ -999,10 +991,6 @@ public final class NetworkBody {
             "Only a response NetworkBody can adopt response metadata."
         )
         invalidateResponseFetch(marksBodyFailed: false)
-        precondition(
-            responseRevision < UInt64.max,
-            "A NetworkBody exhausted its response revision space."
-        )
         responseRevision += 1
         let hints = Self.bodyHints(
             mimeType: response?.mimeType,
@@ -1692,7 +1680,6 @@ public final class NetworkRequest: WebInspectorPersistentModel {
         chronologySequence: UInt64,
         requestHeaderSource: NetworkRequestHeaderSource
     ) {
-        precondition(lifecycleRevision < UInt64.max, "Network request lifecycle revision overflowed.")
         lifecycleRevision += 1
         currentRequest = request
         url = request.url
