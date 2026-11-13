@@ -478,9 +478,7 @@ public actor WebInspectorTestBackend {
         guard eventTermination == nil else {
             return
         }
-        let (nextSequence, overflow) = orderedEventSequence.addingReportingOverflow(1)
-        precondition(!overflow, "Test event sequence exhausted.")
-        orderedEventSequence = nextSequence
+        orderedEventSequence += 1
         let key = EventSubscriptionKey(
             route: target.route,
             targetID: target.id,
@@ -495,7 +493,7 @@ public actor WebInspectorTestBackend {
                 : nil
             for continuation in continuations.values {
                 continuation.yield(WebInspectorProxyOrderedEvent(
-                    sequence: nextSequence,
+                    sequence: orderedEventSequence,
                     event: deliveredEvent
                 ))
             }

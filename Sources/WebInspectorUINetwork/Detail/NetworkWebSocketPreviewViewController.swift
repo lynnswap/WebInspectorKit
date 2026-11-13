@@ -243,7 +243,6 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
     }
 
     private func advanceUserScrollRevision() {
-        precondition(userScrollRevision < UInt64.max, "WebSocket preview user-scroll revision overflowed.")
         userScrollRevision += 1
     }
 
@@ -427,10 +426,6 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
 
     @discardableResult
     private func advanceSnapshotApplyGeneration() -> UInt64 {
-        precondition(
-            latestSnapshotApplyGeneration < UInt64.max,
-            "WebSocket preview snapshot apply generation overflowed."
-        )
         latestSnapshotApplyGeneration += 1
         return latestSnapshotApplyGeneration
     }
@@ -555,15 +550,12 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
         let title: String
         let accessibilityLabel: String
         let accessibilityValue: String
-        switch frame.kind {
-        case .text:
-            guard case let .text(payload) = frame.payload else {
-                preconditionFailure("A text WebSocket frame must carry a text payload.")
-            }
+        switch frame.payload {
+        case let .text(payload):
             title = Self.renderedTextPayload(payload)
             accessibilityLabel = title
             accessibilityValue = [direction, frameKind, time].joined(separator: " · ")
-        case .continuation, .binary, .close, .ping, .pong, .unknown:
+        case .base64Encoded:
             title = byteCountText(frame.payloadLength)
             accessibilityLabel = [frameKind, title].joined(separator: ", ")
             accessibilityValue = [direction, time].joined(separator: ", ")
@@ -793,11 +785,8 @@ package final class NetworkWebSocketPreviewViewController: UICollectionViewContr
               requestEpoch == epoch,
               let entry = webSocket?.timelineEntry(for: entryID),
               case let .frame(frame) = entry.kind,
-              frame.kind == .text else {
+              case let .text(payload) = frame.payload else {
             return nil
-        }
-        guard case let .text(payload) = frame.payload else {
-            preconditionFailure("A text WebSocket frame must carry a text payload.")
         }
         return payload
     }

@@ -68,10 +68,6 @@ package final class ReplyPromise<Value: Sendable>: Sendable {
 
     private static func registerWaiter(in storage: Storage) -> UInt64 {
         storage.state.withLock { state in
-            precondition(
-                state.nextWaiterID < UInt64.max,
-                "ReplyPromise exhausted its waiter identifier space."
-            )
             state.nextWaiterID += 1
             let waiterID = state.nextWaiterID
             state.registeringWaiterIDs.insert(waiterID)

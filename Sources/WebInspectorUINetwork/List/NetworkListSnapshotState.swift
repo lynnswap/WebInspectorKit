@@ -120,10 +120,6 @@ extension NetworkListViewController {
             guard isCurrent(artifact, currentVersion: currentVersion) else {
                 return .stale
             }
-            precondition(
-                submittedBaseline.generation < UInt64.max,
-                "Network list snapshot application identity exhausted."
-            )
             let applicationID = Application.ID(
                 rawValue: submittedBaseline.generation + 1
             )

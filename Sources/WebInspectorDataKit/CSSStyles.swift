@@ -206,16 +206,8 @@ private func cssPropertiesByStyleID(
     in sections: [CSSStyleSection]
 ) -> [CSS.Style.ID: [CSSStyleProperty]] {
     var result: [CSS.Style.ID: [CSSStyleProperty]] = [:]
-    for section in sections {
-        let styleID = section.proxyStyle.id
-        if let existing = result[styleID] {
-            precondition(
-                existing.map(\.name) == section.style.properties.map(\.name),
-                "Sections sharing a CSS style must agree on declaration topology."
-            )
-        } else {
-            result[styleID] = section.style.properties
-        }
+    for section in sections where result[section.proxyStyle.id] == nil {
+        result[section.proxyStyle.id] = section.style.properties
     }
     return result
 }

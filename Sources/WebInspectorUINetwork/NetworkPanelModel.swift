@@ -1310,16 +1310,8 @@ package final class NetworkPanelModel {
         guard rebindsStableEntries || topologyChangedEntryIDs.isEmpty == false else {
             return
         }
-        precondition(
-            nextListTransactionRevision < UInt64.max,
-            "Network list transaction revision overflowed."
-        )
         nextListTransactionRevision += 1
         if rebindsStableEntries {
-            precondition(
-                listEntryIdentityGeneration < UInt64.max,
-                "Network list entry identity generation overflowed."
-            )
             listEntryIdentityGeneration += 1
         }
 #if DEBUG
@@ -1333,10 +1325,6 @@ package final class NetworkPanelModel {
     }
 
     private func takeSelectionIntentID() -> NetworkPanelSelectionIntent.ID {
-        precondition(
-            nextSelectionIntentID < UInt64.max,
-            "Network panel selection intent identity exhausted."
-        )
         defer { nextSelectionIntentID += 1 }
         return NetworkPanelSelectionIntent.ID(rawValue: nextSelectionIntentID)
     }
