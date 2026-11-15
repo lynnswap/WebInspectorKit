@@ -1116,7 +1116,6 @@ func webSocketCreatedRestartsLifecycleClosedByErrorWithoutClosedEvent(
 @MainActor
 @Test
 func legacyWebSocketFramesProjectionPublishesTimelineChangesThroughObservation() async throws {
-    let context = WebInspectorContext.preview()
     let requestID = Network.Request.ID("websocket-legacy-observation")
     let request = NetworkRequest(
         request: Network.Request(id: requestID, url: "wss://example.com/legacy", method: "GET"),

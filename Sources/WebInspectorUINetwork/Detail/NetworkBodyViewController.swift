@@ -9,10 +9,6 @@ import ObservationBridge
 import SyntaxEditorUI
 import UIKit
 
-extension NetworkBodyViewController {
-    typealias PreviewMetadata = NetworkMediaPreviewMetadata
-}
-
 @MainActor
 final class NetworkBodyViewController: UIViewController {
     typealias MoviePreviewPlayerFactory = @MainActor () -> AVPlayer

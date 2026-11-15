@@ -36,12 +36,6 @@ package final class ReplyPromise<Value: Sendable>: Sendable {
         }
     }
 
-    package func valueIgnoringCancellation() async throws -> Value {
-        let storage = storage
-        let waiterID = Self.registerWaiter(in: storage)
-        return try await Self.wait(storage, waiterID: waiterID)
-    }
-
     @discardableResult
     package func fulfill(_ result: Result<Value, any Error>) -> Bool {
         let waiters = storage.state.withLock { state -> [CheckedContinuation<Value, any Error>]? in

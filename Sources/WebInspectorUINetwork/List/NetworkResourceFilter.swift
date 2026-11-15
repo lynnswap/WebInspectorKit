@@ -40,12 +40,6 @@ extension NetworkDisplay {
             return selection
         }
 
-        package static func displaySelection(
-            from activeFilters: Set<NetworkDisplay.ResourceFilter>
-        ) -> Set<NetworkDisplay.ResourceFilter> {
-            activeFilters.isEmpty ? [.all] : activeFilters
-        }
-
         var localizedTitle: String {
             switch self {
             case .all:

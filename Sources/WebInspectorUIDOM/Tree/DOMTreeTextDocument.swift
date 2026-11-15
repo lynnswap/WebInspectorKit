@@ -233,11 +233,6 @@ struct DOMTreeRowIndex {
         rebuildIndex()
     }
 
-    mutating func replaceRows(_ rows: [DOMTreeRowRenderPlan]) {
-        self.rows = rows
-        rebuildIndex()
-    }
-
     func contains(nodeID: DOMNode.ID) -> Bool {
         firstRowIndexByNodeID[nodeID] != nil
     }

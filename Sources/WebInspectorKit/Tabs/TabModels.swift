@@ -37,13 +37,6 @@ extension WebInspectorTab {
                 Self.domElementID(parent: parent)
             }
         }
-
-        var sourceTabID: WebInspectorTab.ID {
-            switch self {
-            case let .tab(tabID), let .customTab(tabID), let .domElement(parent: tabID):
-                tabID
-            }
-        }
     }
 }
 

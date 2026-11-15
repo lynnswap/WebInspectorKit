@@ -601,7 +601,7 @@ func delayedNetworkConsumerUsesEventTimeTargetAfterFrameRetarget() async throws 
     }
 
     let context = WebInspectorContext.preview()
-    await context.apply(oldNetworkEvent)
+    context.apply(oldNetworkEvent)
     let newID = Network.Request.ID("event-time-new")
     await context.apply(.requestWillBeSent(
         id: newID,
@@ -661,7 +661,7 @@ func workerInitiatedRequestSharesOwningFrameNavigationVisit() async throws {
             Issue.record("Expected Network.requestWillBeSent.")
             return
         }
-        await context.apply(networkEvent)
+        context.apply(networkEvent)
     }
 
     let documentVisit = try #require(context.network.requests[0].navigationVisit)
@@ -1419,7 +1419,6 @@ func loadingFinishedClampsNegativeMetricTotals() async throws {
 @MainActor
 @Test
 func loadingFinishedWithoutSecurityConnectionPreservesResponseSecurity() throws {
-    let context = WebInspectorContext.preview()
     let requestID = Network.Request.ID("security-without-completion-connection")
     let security = Network.Security(
         connection: Network.Security.Connection(
@@ -1479,7 +1478,6 @@ func loadingFinishedWithoutSecurityConnectionPreservesResponseSecurity() throws 
     "http://example.com/security-not-reported",
 ])
 func networkSecurityDoesNotInferTransportStateFromURLScheme(_ url: String) throws {
-    let context = WebInspectorContext.preview()
     let requestID = Network.Request.ID(url)
     let request = NetworkRequest(
         request: Network.Request(id: requestID, url: url, method: "GET"),
@@ -1501,7 +1499,6 @@ func networkSecurityDoesNotInferTransportStateFromURLScheme(_ url: String) throw
 @MainActor
 @Test
 func multipartContinuationPreservesFinishedLifecycleAcrossLaterParts() throws {
-    let context = WebInspectorContext.preview()
     let requestID = Network.Request.ID("multipart-continuation")
     let request = NetworkRequest(
         request: Network.Request(
@@ -1861,7 +1858,6 @@ func memoryCacheEventCreatesFinishedCachedRequestFromResponse() async throws {
 @MainActor
 @Test
 func memoryCacheSecurityReplacesExistingResponseSummary() throws {
-    let context = WebInspectorContext.preview()
     let requestID = Network.Request.ID("memory-cache-security-replacement")
     let request = NetworkRequest(
         request: Network.Request(
@@ -2035,7 +2031,6 @@ func responseRequestHeadersRefreshRequestBodyHints() async throws {
 @MainActor
 @Test
 func responseMetadataAndRedirectPreserveResponseBodyIdentity() throws {
-    let context = WebInspectorContext.preview()
     let requestID = Network.Request.ID("stable-response-body")
     let request = NetworkRequest(
         request: Network.Request(

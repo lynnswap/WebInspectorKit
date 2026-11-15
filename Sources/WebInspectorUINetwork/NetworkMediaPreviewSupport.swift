@@ -208,10 +208,6 @@ extension NetworkDisplay {
             }
         }
 
-        private static func isHLSURL(_ url: String?) -> Bool {
-            pathExtension(url) == "m3u8"
-        }
-
         private static func isSupportedImageURL(_ url: String?) -> Bool {
             pathExtension(url).map(knownImagePathExtensions.contains) == true
         }

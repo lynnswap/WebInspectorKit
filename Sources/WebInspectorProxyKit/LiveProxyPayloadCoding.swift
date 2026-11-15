@@ -20,13 +20,6 @@ extension KeyedDecodingContainer {
             )
         )
     }
-
-    func decodeStringOrIntegerIfPresent(forKey key: Key) throws -> String? {
-        guard contains(key), try decodeNil(forKey: key) == false else {
-            return nil
-        }
-        return try decodeStringOrInteger(forKey: key)
-    }
 }
 
 func liveProxyDecode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {

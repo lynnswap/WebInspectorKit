@@ -9,12 +9,6 @@ final class WebInspectorAsyncStreamRelay<Element: Sendable>: Sendable {
 
     private let state = Mutex(State())
 
-    var hasContinuations: Bool {
-        state.withLock { state in
-            state.continuations.isEmpty == false
-        }
-    }
-
     func makeStream() -> AsyncStream<Element> {
         makeStream(initialElementIfAny: nil)
     }

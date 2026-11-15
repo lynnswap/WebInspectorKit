@@ -315,7 +315,6 @@ func networkSecuritySummaryPreservesReportedMetadataExactly() throws {
 @Test
 func networkSecuritySummaryTracksRedirectReuseAndMemoryCacheLifecycles() {
     let id = Network.Request.ID("redirect-reuse-security-summary")
-    let context = WebInspectorContext.preview()
     let responseSecurity = Network.Security(
         connection: Network.Security.Connection(tlsProtocol: "TLS 1.2")
     )

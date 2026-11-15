@@ -401,17 +401,6 @@ public struct CSSStyleProperty: Sendable, Identifiable {
                 self = .disabled
             }
         }
-
-        package var proxyStatus: CSS.Status {
-            switch self {
-            case .active:
-                .active
-            case .inactive:
-                .inactive
-            case .disabled:
-                .disabled
-            }
-        }
     }
 
     /// The stable property identity.

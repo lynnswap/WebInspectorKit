@@ -175,17 +175,6 @@ extension DOMTreeTextView {
             return !voidElementNames.contains(elementName(for: node))
         }
 
-        static func canContainChildNodes(_ node: DOMTreeTextView.RowRenderNode) -> Bool {
-            switch inferredNodeType(for: node) {
-            case .document, .documentFragment:
-                return true
-            case .element:
-                return !voidElementNames.contains(elementName(for: node))
-            default:
-                return false
-            }
-        }
-
         private static func inferredNodeType(for node: DOMTreeTextView.RowRenderNode) -> DOMNode.Kind {
             let name = (node.localName.isEmpty ? node.nodeName : node.localName).lowercased()
             if node.nodeType != .element || name.isEmpty {

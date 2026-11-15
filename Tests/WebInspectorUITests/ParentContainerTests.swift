@@ -529,7 +529,7 @@ struct ParentContainerTests {
 
         let deinitProbe = UITestDeinitProbe()
         finalRoot?.setDeinitHandlerForTesting { deinitProbe.signalDeinit() }
-        weak var releasedRoot = finalRoot
+        weak let releasedRoot = finalRoot
         finalRoot = nil
 
         #expect(await deinitProbe.wait())
@@ -596,7 +596,7 @@ struct ParentContainerTests {
         let scheduledRetirement = try #require(root?.rootPresentationRetirementTaskForTesting)
         let deinitProbe = UITestDeinitProbe()
         root?.setDeinitHandlerForTesting { deinitProbe.signalDeinit() }
-        weak var releasedRoot = root
+        weak let releasedRoot = root
         root = nil
 
         await scheduledRetirement.value
