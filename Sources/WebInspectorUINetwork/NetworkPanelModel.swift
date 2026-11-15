@@ -477,10 +477,6 @@ package final class NetworkPanelModel {
         detailSubject?.selection
     }
 
-    var selectedEntry: NetworkListEntry? {
-        detailSubject?.entry
-    }
-
     var selectedRequest: NetworkRequest? {
         detailSubject?.activeRequest
     }

@@ -1993,13 +1993,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
         [modelContentRowRect(for: row)]
     }
 
-    private func rowHeadRect(for row: DOMTreeRowRenderPlan) -> CGRect? {
-        if row.hasDisclosure {
-            return disclosureHitRect(for: row)
-        }
-        return markupStartRect(for: row) ?? contentRowRects(for: row).first
-    }
-
     private func markupStartRect(for row: DOMTreeRowRenderPlan) -> CGRect? {
         let markupLength = min(1, row.markupRange.length)
         guard markupLength > 0 else {
@@ -2048,13 +2041,6 @@ final class DOMTreeTextView: UIScrollView, UITextInput, UITextInteractionDelegat
 
     private func disclosureAttachmentRange(for row: DOMTreeRowRenderPlan) -> NSRange {
         NSRange(location: row.documentRange.location + row.depth * DOMTreeTextView.IndentMetrics.indentSpacesPerDepth, length: 1)
-    }
-
-    private func disclosureSlotRange(for row: DOMTreeRowRenderPlan) -> NSRange {
-        NSRange(
-            location: row.documentRange.location + row.depth * DOMTreeTextView.IndentMetrics.indentSpacesPerDepth,
-            length: DOMTreeTextView.IndentMetrics.disclosureSlotSpaces
-        )
     }
 
     private func unionRect(_ rects: [CGRect]) -> CGRect? {

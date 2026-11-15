@@ -66,7 +66,7 @@ extension NetworkDetailTestSupport {
         let entryID: NetworkListEntry.ID = try #require(
             model.entryID(containing: request.id)
         )
-        model.selectEntry(try #require(model.entry(for: entryID)))
+        model.selectEntry(model.entry(for: entryID))
     }
 
     func installNavigationVisit(

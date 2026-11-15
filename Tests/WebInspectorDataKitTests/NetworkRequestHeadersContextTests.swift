@@ -266,7 +266,6 @@ struct NetworkRequestHeadersContextTests {
     @MainActor
     @Test
     func headersContextDistinguishesCancellationFailureAndProjectsResourceAndInitiator() throws {
-        let context = WebInspectorContext.preview()
         let nodeID = DOM.Node.ID("42", scopedToTargetRawValue: "page-target")
         let canceled = NetworkRequest(
             request: Network.Request(
@@ -317,7 +316,6 @@ struct NetworkRequestHeadersContextTests {
     @MainActor
     @Test
     func effectiveResponseMIMETypePrefersNonblankProtocolValueThenUniqueHeaderMediaType() {
-        let context = WebInspectorContext.preview()
         let request = NetworkRequest(
             request: Network.Request(
                 id: Network.Request.ID("mime-context"),
@@ -387,7 +385,6 @@ struct NetworkRequestHeadersContextTests {
     @MainActor
     @Test
     func redirectContextUsesFinalQueryAndBodyWhileKeepingInitialInitiator() throws {
-        let context = WebInspectorContext.preview()
         let requestID = Network.Request.ID("redirect-context")
         let request = NetworkRequest(
             request: Network.Request(
@@ -436,7 +433,6 @@ struct NetworkRequestHeadersContextTests {
     @MainActor
     @Test
     func lifecycleReuseRecomputesHeadersContextFromTheNewRequest() {
-        let context = WebInspectorContext.preview()
         let requestID = Network.Request.ID("reused-context")
         let request = NetworkRequest(
             request: Network.Request(
@@ -477,7 +473,6 @@ struct NetworkRequestHeadersContextTests {
     @MainActor
     @Test
     func metricsRequestHeadersRefineFormContextWithoutReplacingBodyIdentity() throws {
-        let context = WebInspectorContext.preview()
         let request = NetworkRequest(
             request: Network.Request(
                 id: Network.Request.ID("metrics-form-context"),
@@ -521,7 +516,6 @@ struct NetworkRequestHeadersContextTests {
     @MainActor
     @Test
     func requestDataDistinguishesUnavailableNilAndCapturedEmptyBodies() throws {
-        let context = WebInspectorContext.preview()
 
         let noPostData = NetworkRequest(
             request: Network.Request(
@@ -647,7 +641,6 @@ struct NetworkRequestHeadersContextTests {
     @MainActor
     @Test
     func memoryCacheWithoutCapturedPostDataDoesNotSynthesizeRequestData() {
-        let context = WebInspectorContext.preview()
         let request = NetworkRequest(
             request: Network.Request(
                 id: Network.Request.ID("cached-context"),

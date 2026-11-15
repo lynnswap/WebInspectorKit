@@ -56,24 +56,5 @@ extension RuntimeContext {
         package var key: RuntimeContext.Key {
             RuntimeContext.Key(runtimeAgentTargetID: runtimeAgentTargetID, contextID: id)
         }
-
-        package static func stableOrder(_ lhs: Self, _ rhs: Self) -> Bool {
-            if lhs.runtimeAgentTargetID != rhs.runtimeAgentTargetID {
-                return lhs.runtimeAgentTargetID.rawValue < rhs.runtimeAgentTargetID.rawValue
-            }
-            if lhs.id != rhs.id {
-                return lhs.id.rawValue < rhs.id.rawValue
-            }
-            if lhs.targetID != rhs.targetID {
-                return lhs.targetID.rawValue < rhs.targetID.rawValue
-            }
-            if lhs.frameID != rhs.frameID {
-                return (lhs.frameID?.rawValue ?? "") < (rhs.frameID?.rawValue ?? "")
-            }
-            if lhs.type != rhs.type {
-                return lhs.type.rawValue < rhs.type.rawValue
-            }
-            return lhs.name < rhs.name
-        }
     }
 }

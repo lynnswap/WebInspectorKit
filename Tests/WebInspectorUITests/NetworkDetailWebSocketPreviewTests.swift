@@ -99,7 +99,7 @@ struct NetworkDetailWebSocketPreviewTests: NetworkDetailTestSupport {
             )),
         ]
         for event in frames {
-            await context.apply(.webSocket(event))
+            context.apply(.webSocket(event))
         }
         await context.apply(.webSocket(.error(
             id: requestID,
