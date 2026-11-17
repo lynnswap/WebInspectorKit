@@ -53,7 +53,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/lynnswap/UIHostingMenu.git",
-            exact: "0.5.14"
+            .upToNextMinor(from: "0.5.15")
         ),
         .package(
             url: "https://github.com/lynnswap/SyntaxEditorUI.git",
