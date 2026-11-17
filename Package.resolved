@@ -1,5 +1,5 @@
 {
-  "originHash" : "61b792dab4e2a63bbfda8bcc791b18fff62c7dbd6506df86abfac7f2646f6892",
+  "originHash" : "8791f649fd23ae1e2ae34f2519db7c274b00b94497d61822ba6920d26ac4d63f",
   "pins" : [
     {
       "identity" : "abibridge",
@@ -231,8 +231,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/lynnswap/UIHostingMenu.git",
       "state" : {
-        "revision" : "c45a3ab649d8c2d0ff2ac2996f5f46df8d1a6645",
-        "version" : "0.5.14"
+        "revision" : "d17d79dab4568be14096aabd177aa5329ccfd66a",
+        "version" : "0.5.15"
       }
     },
     {
