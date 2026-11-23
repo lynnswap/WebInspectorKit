@@ -373,7 +373,10 @@ class RuntimeExecutionTests(unittest.TestCase):
             self.assertEqual(runner.main(), 0)
             self.assertEqual(runner.main(), 0)
         cleanup.assert_called_once()
-        self.assertEqual(cleanup.call_args.args[0], ["xcrun", "simctl", "delete", "first-device"])
+        self.assertEqual(cleanup.call_args.args, (
+            ["xcrun", "simctl", "delete", "first-device"],
+            self.root / "runtime-tests/iOS-18.6/cleanup-retry.log",
+        ))
 
 
 if __name__ == "__main__":

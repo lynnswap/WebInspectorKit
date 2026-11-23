@@ -95,15 +95,15 @@ def select_device(runtime, reuse_simulators):
     return create_device(runtime), True
 
 
-def cleanup_device(udid, runtime, created, diagnostics):
+def cleanup_device(udid, runtime, created, log_path):
     if created:
-        run_logged(["xcrun", "simctl", "delete", udid], diagnostics / "cleanup.log", timeout=30)
+        run_logged(["xcrun", "simctl", "delete", udid], log_path, timeout=30)
     else:
         # The watchdog may already have shut down a stalled test device.
         devices = json.loads(simctl("list", "devices", "available", "--json"))["devices"]
         if any(device["udid"] == udid and device["state"] != "Shutdown"
                for device in devices.get(runtime, [])):
-            run_logged(["xcrun", "simctl", "shutdown", udid], diagnostics / "cleanup.log", timeout=30)
+            run_logged(["xcrun", "simctl", "shutdown", udid], log_path, timeout=30)
 
 
 def cleanup_simulators(build_root):
@@ -111,7 +111,8 @@ def cleanup_simulators(build_root):
     for state_path in sorted((build_root / "runtime-tests").glob("iOS-*/simulator.json")):
         try:
             state = json.loads(state_path.read_text())
-            cleanup_device(state["udid"], state["runtime"], state["created"], state_path.parent)
+            cleanup_device(state["udid"], state["runtime"], state["created"],
+                           state_path.with_name("cleanup-retry.log"))
             state_path.unlink()
         except (subprocess.SubprocessError, OSError, json.JSONDecodeError) as error:
             print(f"::error::{state_path.parent.name} cleanup: {error}", flush=True)
@@ -183,7 +184,7 @@ def run_tests(runtimes, macos_version, build_root, suite, latest_ios_major, *, a
         finally:
             if udid:
                 try:
-                    cleanup_device(udid, case["runtime"], created_device, diagnostics)
+                    cleanup_device(udid, case["runtime"], created_device, diagnostics / "cleanup.log")
                     state_path.unlink(missing_ok=True)
                 except (subprocess.SubprocessError, OSError) as error:
                     passed = False
