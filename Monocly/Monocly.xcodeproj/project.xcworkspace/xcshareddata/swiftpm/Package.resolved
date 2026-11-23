@@ -38,6 +38,15 @@
       }
     },
     {
+      "identity" : "scrollabletabbar",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/lynnswap/ScrollableTabBar.git",
+      "state" : {
+        "revision" : "e6dac260b50fa327329ad4b3a0b4db869022df75",
+        "version" : "0.3.0"
+      }
+    },
+    {
       "identity" : "swift-asn1",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-asn1.git",
