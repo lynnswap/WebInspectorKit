@@ -242,7 +242,7 @@ def main():
                         help="Borrow available shutdown iPhones instead of creating fresh devices")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--prepare-simulator", action="store_true",
-                      help="Start the first selected iOS simulator before building")
+                      help="Start the first selected iOS simulator before testing")
     mode.add_argument("--cleanup-simulator", action="store_true",
                       help="Clean up the simulator saved by --prepare-simulator")
     args = parser.parse_args()
