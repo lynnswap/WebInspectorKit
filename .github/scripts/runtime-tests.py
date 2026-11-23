@@ -95,10 +95,6 @@ def select_device(runtime, reuse_simulators):
     return create_device(runtime), True
 
 
-def simulator_state_path(build_root):
-    return build_root / "runtime-tests" / "prepared-simulator.json"
-
-
 def cleanup_device(udid, runtime, created, diagnostics):
     if created:
         run_logged(["xcrun", "simctl", "delete", udid], diagnostics / "cleanup.log", timeout=30)
@@ -110,36 +106,17 @@ def cleanup_device(udid, runtime, created, diagnostics):
             run_logged(["xcrun", "simctl", "shutdown", udid], diagnostics / "cleanup.log", timeout=30)
 
 
-def prepare_simulator(runtimes, build_root, suite, latest_ios_major, *, all_native_runtimes=False,
-                      reuse_simulators=False):
-    case = test_cases(runtimes, "", suite, latest_ios_major,
-                      all_native_runtimes=all_native_runtimes, platform="iOS")[0]
-    runtime = next(runtime for runtime in runtimes if runtime["identifier"] == case["runtime"])
-    state_path = simulator_state_path(build_root)
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        udid, created = select_device(runtime, reuse_simulators)
-        # Persist ownership before boot so an interrupted build can still clean up.
-        state_path.write_text(json.dumps({"udid": udid, "runtime": case["runtime"], "created": created}) + "\n")
-        run_logged(["xcrun", "simctl", "boot", udid], state_path.parent / "prepare-simulator.log", timeout=60)
-    except (subprocess.SubprocessError, OSError) as error:
-        print(f"::error::Prepare simulator: {error}", flush=True)
-        return 1
-    return 0
-
-
-def cleanup_prepared_simulator(build_root):
-    state_path = simulator_state_path(build_root)
-    if not state_path.exists():
-        return 0
-    try:
-        state = json.loads(state_path.read_text())
-        cleanup_device(state["udid"], state["runtime"], state["created"], state_path.parent)
-        state_path.unlink()
-    except (subprocess.SubprocessError, OSError) as error:
-        print(f"::error::Prepared simulator cleanup: {error}", flush=True)
-        return 1
-    return 0
+def cleanup_simulators(build_root):
+    passed = True
+    for state_path in sorted((build_root / "runtime-tests").glob("iOS-*/simulator.json")):
+        try:
+            state = json.loads(state_path.read_text())
+            cleanup_device(state["udid"], state["runtime"], state["created"], state_path.parent)
+            state_path.unlink()
+        except (subprocess.SubprocessError, OSError, json.JSONDecodeError) as error:
+            print(f"::error::{state_path.parent.name} cleanup: {error}", flush=True)
+            passed = False
+    return 0 if passed else 1
 
 
 def test_selection(case):
@@ -164,8 +141,6 @@ def run_logged(command, path, **options):
 def run_tests(runtimes, macos_version, build_root, suite, latest_ios_major, *, all_native_runtimes=False,
               platform=None, reuse_simulators=False):
     results = []
-    state_path = simulator_state_path(build_root)
-    prepared = json.loads(state_path.read_text()) if platform != "macOS" and state_path.exists() else None
     for case in test_cases(runtimes, macos_version, suite, latest_ios_major,
                            all_native_runtimes=all_native_runtimes, platform=platform):
         label = f"{case['platform']} {case['version']} / {suite}"
@@ -174,17 +149,16 @@ def run_tests(runtimes, macos_version, build_root, suite, latest_ios_major, *, a
         diagnostics.mkdir(parents=True, exist_ok=True)
         udid = None
         created_device = False
-        uses_prepared_device = False
+        state_path = diagnostics / "simulator.json"
         passed = True
         try:
             destination = "platform=macOS,arch=arm64"
             if case["platform"] == "iOS":
                 runtime = next(runtime for runtime in runtimes if runtime["identifier"] == case["runtime"])
-                if prepared and prepared["runtime"] == case["runtime"]:
-                    udid, created_device = prepared["udid"], prepared["created"]
-                    uses_prepared_device = True
-                else:
-                    udid, created_device = select_device(runtime, reuse_simulators)
+                udid, created_device = select_device(runtime, reuse_simulators)
+                # A cancelled job can interrupt the finally block below.
+                state_path.write_text(json.dumps({"udid": udid, "runtime": case["runtime"],
+                                                  "created": created_device}))
                 destination = f"platform=iOS Simulator,id={udid}"
                 # Bound simulator startup so a failed boot does not block later tests.
                 run_logged(["xcrun", "simctl", "bootstatus", udid, "-b"], diagnostics / "boot.log", timeout=300)
@@ -210,9 +184,7 @@ def run_tests(runtimes, macos_version, build_root, suite, latest_ios_major, *, a
             if udid:
                 try:
                     cleanup_device(udid, case["runtime"], created_device, diagnostics)
-                    if uses_prepared_device:
-                        state_path.unlink()
-                        prepared = None
+                    state_path.unlink(missing_ok=True)
                 except (subprocess.SubprocessError, OSError) as error:
                     passed = False
                     print(f"::error::{label} cleanup: {error}", flush=True)
@@ -240,25 +212,18 @@ def main():
                         help="Test only this platform's build products")
     parser.add_argument("--reuse-simulators", action="store_true",
                         help="Borrow available shutdown iPhones instead of creating fresh devices")
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--prepare-simulator", action="store_true",
-                      help="Start the first selected iOS simulator before testing")
-    mode.add_argument("--cleanup-simulator", action="store_true",
-                      help="Clean up the simulator saved by --prepare-simulator")
+    parser.add_argument("--cleanup-simulator", action="store_true",
+                        help="Clean up test simulators left by an interrupted run")
     args = parser.parse_args()
 
     if args.cleanup_simulator:
-        return cleanup_prepared_simulator(args.build_root)
+        return cleanup_simulators(args.build_root)
 
     runtimes = []
     if args.platform != "macOS":
         runtimes = supported_runtimes(json.loads(simctl("list", "runtimes", "--json"))["runtimes"])
         if not runtimes:
             raise ValueError("No available iOS runtime supported by CI is installed.")
-    if args.prepare_simulator:
-        return prepare_simulator(runtimes, args.build_root, args.suite, args.latest_ios_major,
-                                 all_native_runtimes=args.all_native_runtimes,
-                                 reuse_simulators=args.reuse_simulators)
     macos_version = subprocess.check_output(["sw_vers", "-productVersion"], text=True).strip()
     return run_tests(runtimes, macos_version, args.build_root, args.suite, args.latest_ios_major,
                      all_native_runtimes=args.all_native_runtimes, platform=args.platform,
