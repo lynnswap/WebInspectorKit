@@ -1,5 +1,5 @@
 {
-  "originHash" : "fcc5c59df3eb0b2468b705fcd7c1a2f99e3d7216246ce00f02c9784200280f5b",
+  "originHash" : "c294b30569f751007ef47d855bba77d64967dc1ffff4904f294b0145739911cd",
   "pins" : [
     {
       "identity" : "abibridge",
@@ -35,15 +35,6 @@
       "state" : {
         "revision" : "1756608e005be5329af18e903cc8e08a1831f29a",
         "version" : "0.15.17"
-      }
-    },
-    {
-      "identity" : "scrollabletabbar",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/lynnswap/ScrollableTabBar.git",
-      "state" : {
-        "revision" : "7d3488af03fde13a62f6ac61ca50ee668bc1d7de",
-        "version" : "0.2.13"
       }
     },
     {

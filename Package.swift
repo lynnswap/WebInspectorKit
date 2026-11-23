@@ -49,7 +49,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/lynnswap/ScrollableTabBar.git",
-            exact: "0.2.13"
+            .upToNextMinor(from: "0.3.0")
         ),
         .package(
             url: "https://github.com/lynnswap/UIHostingMenu.git",
