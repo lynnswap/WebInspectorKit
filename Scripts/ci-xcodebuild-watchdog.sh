@@ -53,7 +53,7 @@ reap_startup_sample() {
     startup_sample_pid=""
     record_startup_event sample_finished "status=${status}"
     if [ "${status}" -ne 0 ]; then
-        diagnostics_warning "sample exited with status ${status}; see the startup artifact"
+        diagnostics_warning "sample exited with status ${status}"
     fi
 }
 
