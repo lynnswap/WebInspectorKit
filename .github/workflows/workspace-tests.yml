@@ -189,5 +189,5 @@ jobs:
             ${{ runner.temp }}/prepare-*.log
             ${{ runner.temp }}/build-*/Build/Products/*.xctestrun
             ${{ runner.temp }}/runtime-tests
-          retention-days: 1
+          retention-days: 7
           if-no-files-found: ignore
